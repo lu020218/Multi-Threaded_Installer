@@ -4,6 +4,7 @@
 #include <cstring>
 #include <thread>
 #include <algorithm>
+#include <chrono>
 
 namespace MultiThreadedInstaller {
 
@@ -59,18 +60,55 @@ CompressionModule::~CompressionModule() {
 }
 
 CompressionResult CompressionModule::compressFolder(const FolderInfo& folder) {
+    // Performance tracking disabled
+    
+    // Logging disabled
+    // Logging disabled
+    
+    const char* algorithmName = (currentAlgorithm == CompressionAlgorithm::ZSTD_FAST) ? "ZSTD" : "LZMA";
+    // Logging disabled
+    
+    auto startTime = std::chrono::steady_clock::now();
+    CompressionResult result;
+    
     switch (currentAlgorithm) {
         case CompressionAlgorithm::ZSTD_FAST:
-            return compressWithZstd(folder);
+            result = compressWithZstd(folder);
+            break;
         case CompressionAlgorithm::LZMA_HIGH:
-            return compressWithLzma(folder);
+            result = compressWithLzma(folder);
+            break;
         default:
             std::cerr << "Unknown compression algorithm" << std::endl;
             return CompressionResult{};
     }
+    
+    auto endTime = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
+    
+    if (result.compressedSize > 0) {
+        double compressionRatio = static_cast<double>(result.compressedSize) / result.originalSize;
+        double savedSpace = (1.0 - compressionRatio) * 100.0;
+        
+        // Logging disabled
+        // Logging disabled
+        // Logging disabled
+        
+        // 记录性能指标
+        // Performance tracking disabled
+    } else {
+        // Logging disabled
+    }
+    
+    return result;
 }
 
 bool CompressionModule::setCompressionAlgorithm(CompressionAlgorithm algorithm) {
+    const char* oldAlgorithm = (currentAlgorithm == CompressionAlgorithm::ZSTD_FAST) ? "ZSTD" : "LZMA";
+    const char* newAlgorithm = (algorithm == CompressionAlgorithm::ZSTD_FAST) ? "ZSTD" : "LZMA";
+    
+    // Logging disabled
+    
     currentAlgorithm = algorithm;
     return true;
 }
@@ -96,6 +134,8 @@ CompressionResult CompressionModule::compressWithZstd(const FolderInfo& folder) 
     }
     
     // 创建tar格式的数据
+    // Logging disabled
+    auto tarTimer = // Performance tracking disabled
     std::vector<uint8_t> tarData = createTarData(folder);
     if (tarData.empty()) {
         std::cerr << "Failed to create tar data for folder: " << folder.sourcePath << std::endl;
@@ -118,6 +158,9 @@ CompressionResult CompressionModule::compressWithZstd(const FolderInfo& folder) 
     // 执行标准ZSTD压缩（而不是块级压缩）
     size_t compressedBound = ZSTD_compressBound(tarData.size());
     result.compressedData.resize(compressedBound);
+    
+    // Logging disabled
+    auto compressionTimer = // Performance tracking disabled
     
     size_t compressedSize = ZSTD_compress2(zstdContext,
                                           result.compressedData.data(),
@@ -164,6 +207,8 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
     }
     
     // 创建tar格式的数据
+    // Logging disabled
+    auto tarTimer = // Performance tracking disabled
     std::vector<uint8_t> tarData = createTarData(folder);
     if (tarData.empty()) {
         std::cerr << "Failed to create tar data for folder: " << folder.sourcePath << std::endl;
@@ -197,6 +242,9 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
     lzmaStream.avail_out = result.compressedData.size();
     
     // 执行压缩
+    // Logging disabled
+    auto compressionTimer = // Performance tracking disabled
+    
     lzma_ret ret = lzmaLoader->lzma_code_ptr(&lzmaStream, LZMA_FINISH);
     
     if (ret != LZMA_STREAM_END) {
@@ -267,6 +315,12 @@ std::vector<uint8_t> CompressionModule::readFileContent(const std::string& fileP
     std::vector<uint8_t> content(fileSize);
     file.read(reinterpret_cast<char*>(content.data()), fileSize);
     
+    if (!file) {
+        // Logging disabled
+        return {};
+    }
+    
+    // Logging disabled
     return content;
 }
 
@@ -274,11 +328,16 @@ std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder) 
     // 简化的tar格式实现
     // 实际实现中应该使用标准的tar格式
     std::vector<uint8_t> tarData;
+    size_t processedFiles = 0;
+    size_t totalSize = 0;
+    
+    auto progressId = START_PROGRESS("创建TAR数据", folder.files.size());
     
     for (const auto& filePath : folder.files) {
         // 读取文件内容
         std::vector<uint8_t> fileContent = readFileContent(filePath);
         if (fileContent.empty()) {
+            LOG_WARNINGF("CompressionModule", "跳过空文件: %s", filePath.c_str());
             continue;
         }
         
@@ -310,7 +369,21 @@ std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder) 
         
         // 写入文件内容
         tarData.insert(tarData.end(), fileContent.begin(), fileContent.end());
+        
+        totalSize += fileContent.size();
+        processedFiles++;
+        
+        UPDATE_PROGRESS(progressId, processedFiles, relativePath);
+        
+        // 每处理50个文件记录一次进度
+        if (processedFiles % 50 == 0) {
+            // Logging disabled
+        }
     }
+    
+    COMPLETE_PROGRESS(progressId);
+    
+    // Logging disabled
     
     return tarData;
 }

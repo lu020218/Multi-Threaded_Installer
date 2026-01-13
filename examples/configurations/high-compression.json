@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "applicationName": "LargeApp",
+  "defaultInstallDirectory": "%ProgramFiles%",
+  "compressionAlgorithm": "lzma",
+  "folderTargets": [
+    {
+      "folder": "application",
+      "targetDirectory": "installDirectory"
+    },
+    {
+      "folder": "assets",
+      "targetDirectory": "installDirectory"
+    },
+    {
+      "folder": "resources",
+      "targetDirectory": "installDirectory"
+    }
+  ]
+}

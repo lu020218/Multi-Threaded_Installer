@@ -1,0 +1,45 @@
+{
+  "version": "1.0",
+  "applicationName": "AdvancedApp",
+  "defaultInstallDirectory": "%ProgramFiles%",
+  "compressionAlgorithm": "zstd",
+  "folderTargets": [
+    {
+      "folder": "app",
+      "targetDirectory": "installDirectory"
+    },
+    {
+      "folder": "plugins",
+      "targetDirectory": "%AppData%\\Roaming"
+    },
+    {
+      "folder": "config",
+      "targetDirectory": "%ProgramData%"
+    },
+    {
+      "folder": "cache",
+      "targetDirectory": "%LocalAppData%"
+    },
+    {
+      "folder": "docs",
+      "targetDirectory": "%USERPROFILE%\\Documents"
+    }
+  ],
+  "fileMappings": [
+    {
+      "pattern": "*.config",
+      "targetDirectory": "%AppData%\\Roaming",
+      "subPath": "Config"
+    },
+    {
+      "pattern": "*.log",
+      "targetDirectory": "%LocalAppData%",
+      "subPath": "Logs"
+    },
+    {
+      "pattern": "*.ini",
+      "targetDirectory": "%ProgramData%",
+      "subPath": "Settings"
+    }
+  ]
+}

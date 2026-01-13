@@ -3,6 +3,7 @@
 #include "installer/decompression_engine.h"
 #include "installer/file_system_operator.h"
 #include "installer/console_interface.h"
+#include "installer/path_resolver.h"
 #include <iostream>
 
 using namespace MultiThreadedInstaller;
@@ -20,9 +21,9 @@ int main(int argc, char* argv[]) {
     
     console.showInfo("Starting installation process...");
     
-    // 解析嵌入的元数据
+    // 解析嵌入的扩展元数据
     MetadataParser parser;
-    auto metadata = parser.parseEmbeddedMetadata();
+    auto metadata = parser.parseExtendedEmbeddedMetadata();
     
     if (!parser.validateMetadata(metadata)) {
         console.showError("Invalid or corrupted installer metadata");
@@ -30,14 +31,31 @@ int main(int argc, char* argv[]) {
     }
     
     console.showInfo("Found " + std::to_string(metadata.folderCount) + " folders to install");
+    console.showInfo("Application: " + metadata.applicationName);
+    
+    // 创建路径解析器
+    InstallerPathResolver pathResolver;
     
     // 如果没有提供文件夹映射，使用交互模式
+    std::string userSelectedPath;
     if (args.folderMappings.empty() && args.defaultDestination.empty()) {
         console.showInstallerMenu();
-        if (!console.getInstallationPaths(args.folderMappings)) {
-            console.showError("Failed to get installation paths");
-            return 1;
+        
+        // 显示默认安装目录建议
+        std::string defaultPath = pathResolver.expandEnvironmentVariables(metadata.defaultInstallDir);
+        console.showInfo("Suggested installation directory: " + defaultPath);
+        
+        // 获取用户输入的安装目录
+        std::cout << "Enter installation directory (or press Enter to use default): ";
+        std::getline(std::cin, userSelectedPath);
+        
+        if (userSelectedPath.empty()) {
+            userSelectedPath = defaultPath;
         }
+        
+        console.showInfo("Installing to: " + userSelectedPath);
+    } else if (!args.defaultDestination.empty()) {
+        userSelectedPath = args.defaultDestination;
     }
     
     // 创建线程池
@@ -59,13 +77,14 @@ int main(int argc, char* argv[]) {
     bool overallSuccess = true;
     
     // 处理每个文件夹
-    for (size_t i = 0; i < metadata.folderMappings.size(); ++i) {
-        const auto& mapping = metadata.folderMappings[i];
+    for (size_t i = 0; i < metadata.extendedMappings.size(); ++i) {
+        const auto& mapping = metadata.extendedMappings[i];
         
         // 确定目标路径
         std::string targetPath;
         bool foundMapping = false;
         
+        // 首先检查用户是否为此文件夹指定了特定路径
         for (const auto& userMapping : args.folderMappings) {
             if (userMapping.first == mapping.folderName) {
                 targetPath = userMapping.second;
@@ -74,8 +93,23 @@ int main(int argc, char* argv[]) {
             }
         }
         
-        if (!foundMapping && !args.defaultDestination.empty()) {
-            targetPath = args.defaultDestination + "/" + mapping.folderName;
+        // 如果没有找到用户映射，使用路径解析器根据目标目录类型解析路径
+        if (!foundMapping) {
+            if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
+                // 使用用户选择的安装目录
+                targetPath = pathResolver.resolveFinalPath(
+                    userSelectedPath,
+                    mapping.targetDirType,
+                    metadata.applicationName
+                );
+            } else {
+                // 使用环境变量路径
+                targetPath = pathResolver.resolveFinalPath(
+                    mapping.customTargetPath.empty() ? mapping.targetPath : mapping.customTargetPath,
+                    mapping.targetDirType,
+                    metadata.applicationName
+                );
+            }
         }
         
         if (targetPath.empty()) {
@@ -85,6 +119,8 @@ int main(int argc, char* argv[]) {
             overallSuccess = false;
             continue;
         }
+        
+        console.showInfo("Installing folder '" + mapping.folderName + "' to: " + targetPath);
         
         // 创建目标目录
         if (!fsOperator.createDirectoryRecursive(targetPath)) {

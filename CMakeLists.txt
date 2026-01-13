@@ -150,6 +150,7 @@ set(INSTALLER_SOURCES
     src/installer/decompression_engine.cpp
     src/installer/file_system_operator.cpp
     src/installer/console_interface.cpp
+    src/installer/path_resolver.cpp
     src/installer/main.cpp
 )
 
@@ -392,6 +393,14 @@ target_link_libraries(test_packager_integration_pbt ${ZSTD_LIBRARIES} ${LIBLZMA_
 target_include_directories(test_packager_integration_pbt PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
 copy_dlls_to_target(test_packager_integration_pbt)
 
+# Create property-based test executable for path resolver
+add_executable(test_path_resolver_pbt tests/pbt/test_path_resolver_properties.cpp ${COMMON_SOURCES}
+    src/installer/path_resolver.cpp
+)
+target_link_libraries(test_path_resolver_pbt ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_path_resolver_pbt PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_path_resolver_pbt)
+
 # Create test executable for configuration manager
 add_executable(test_configuration_manager tests/test_configuration_manager.cpp ${COMMON_SOURCES}
     src/packager/configuration_loader.cpp
@@ -414,6 +423,39 @@ add_executable(test_packager_integration tests/test_packager_integration.cpp ${C
 target_link_libraries(test_packager_integration ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
 target_include_directories(test_packager_integration PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
 copy_dlls_to_target(test_packager_integration)
+
+# Create test executable for path resolver
+add_executable(test_path_resolver tests/test_path_resolver.cpp ${COMMON_SOURCES}
+    src/installer/path_resolver.cpp
+)
+target_link_libraries(test_path_resolver ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_path_resolver PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_path_resolver)
+
+# Create test executable for installer extensions
+add_executable(test_installer_extensions tests/test_installer_extensions.cpp ${COMMON_SOURCES}
+    src/installer/metadata_parser.cpp
+    src/installer/path_resolver.cpp
+)
+target_link_libraries(test_installer_extensions ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_installer_extensions PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_installer_extensions)
+
+# Create test executable for end-to-end workflow
+add_executable(test_end_to_end_workflow tests/test_end_to_end_workflow.cpp ${COMMON_SOURCES}
+    src/packager/configuration_loader.cpp
+    src/packager/configuration_validator.cpp
+    src/packager/configuration_manager.cpp
+    src/packager/folder_scanner.cpp
+    src/packager/compression_module.cpp
+    src/packager/metadata_generator.cpp
+    src/packager/installer_generator.cpp
+    src/installer/metadata_parser.cpp
+    src/installer/path_resolver.cpp
+)
+target_link_libraries(test_end_to_end_workflow ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_end_to_end_workflow PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_end_to_end_workflow)
 
 # Create full compression test executable
 add_executable(test_full_compression test_full_compression.cpp ${COMMON_SOURCES}
@@ -474,3 +516,6 @@ add_test(NAME ThreadPoolPBTTests COMMAND test_thread_pool_pbt)
 add_test(NAME DecompressionErrorRecoveryTests COMMAND test_decompression_error_recovery)
 add_test(NAME FileSystemOperatorPBTTests COMMAND test_file_system_operator_pbt)
 add_test(NAME StatusReportAccuracyTests COMMAND test_status_report_accuracy)
+add_test(NAME PathResolverTests COMMAND test_path_resolver)
+add_test(NAME PathResolverPBTTests COMMAND test_path_resolver_pbt)
+add_test(NAME EndToEndWorkflowTests COMMAND test_end_to_end_workflow)

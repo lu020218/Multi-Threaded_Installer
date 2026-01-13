@@ -12,11 +12,17 @@ public:
     // 解析嵌入的元数据
     InstallationMetadata parseEmbeddedMetadata();
     
+    // 解析嵌入的扩展元数据
+    ExtendedInstallationMetadata parseExtendedEmbeddedMetadata();
+    
     // 验证元数据的有效性
     bool validateMetadata(const InstallationMetadata& metadata);
     
     // 反序列化二进制元数据 (public for testing)
     InstallationMetadata deserializeMetadata(const std::vector<uint8_t>& data);
+    
+    // 反序列化扩展二进制元数据 (public for testing)
+    ExtendedInstallationMetadata deserializeExtendedMetadata(const std::vector<uint8_t>& data);
     
     // 读取压缩数据
     std::vector<uint8_t> readCompressedData(uint64_t offset, uint64_t size);

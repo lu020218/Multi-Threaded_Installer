@@ -6,6 +6,13 @@
 #include <algorithm>
 #include <chrono>
 
+// Stub macros for disabled logging
+#define START_TIMER(name) 0
+#define START_PROGRESS(name, total) 0
+#define UPDATE_PROGRESS(id, completed, current) do {} while(0)
+#define COMPLETE_PROGRESS(id) do {} while(0)
+#define LOG_WARNINGF(module, format, ...) do {} while(0)
+
 namespace MultiThreadedInstaller {
 
 CompressionModule::CompressionModule() 
@@ -135,7 +142,7 @@ CompressionResult CompressionModule::compressWithZstd(const FolderInfo& folder) 
     
     // 创建tar格式的数据
     // Logging disabled
-    auto tarTimer = // Performance tracking disabled
+    auto tarTimer = START_TIMER("CreateTarData");
     std::vector<uint8_t> tarData = createTarData(folder);
     if (tarData.empty()) {
         std::cerr << "Failed to create tar data for folder: " << folder.sourcePath << std::endl;
@@ -155,27 +162,43 @@ CompressionResult CompressionModule::compressWithZstd(const FolderInfo& folder) 
     // 启用校验和
     ZSTD_CCtx_setParameter(zstdContext, ZSTD_c_checksumFlag, 1);
     
-    // 执行标准ZSTD压缩（而不是块级压缩）
-    size_t compressedBound = ZSTD_compressBound(tarData.size());
-    result.compressedData.resize(compressedBound);
-    
+    // 根据数据大小选择压缩策略
     // Logging disabled
-    auto compressionTimer = // Performance tracking disabled
+    auto compressionTimer = START_TIMER("ZstdCompression");
     
-    size_t compressedSize = ZSTD_compress2(zstdContext,
-                                          result.compressedData.data(),
-                                          result.compressedData.size(),
-                                          tarData.data(),
-                                          tarData.size());
-    
-    if (ZSTD_isError(compressedSize)) {
-        std::cerr << "ZSTD compression failed: " << ZSTD_getErrorName(compressedSize) << std::endl;
-        return CompressionResult{};
+    if (tarData.size() > 128 * 1024 * 1024) {
+        // 大文件（> 128MB）：使用块级压缩以支持并行解压
+        std::cout << "Using block-level compression for large file (" 
+                  << tarData.size() / (1024 * 1024) << " MB)" << std::endl;
+        
+        result.compressedData = compressWithBlocks(tarData);
+        
+        if (result.compressedData.empty()) {
+            std::cerr << "Block compression failed" << std::endl;
+            return CompressionResult{};
+        }
+        
+        result.compressedSize = result.compressedData.size();
+    } else {
+        // 小文件（≤ 128MB）：使用标准ZSTD压缩
+        size_t compressedBound = ZSTD_compressBound(tarData.size());
+        result.compressedData.resize(compressedBound);
+        
+        size_t compressedSize = ZSTD_compress2(zstdContext,
+                                              result.compressedData.data(),
+                                              result.compressedData.size(),
+                                              tarData.data(),
+                                              tarData.size());
+        
+        if (ZSTD_isError(compressedSize)) {
+            std::cerr << "ZSTD compression failed: " << ZSTD_getErrorName(compressedSize) << std::endl;
+            return CompressionResult{};
+        }
+        
+        result.compressedData.resize(compressedSize);
+        result.compressedSize = result.compressedData.size();
     }
     
-    result.compressedData.resize(compressedSize);
-    
-    result.compressedSize = result.compressedData.size();
     result.checksum = calculateChecksum(tarData); // 对原始数据计算校验和
 #else
     // Stub implementation - just copy data with minimal "compression"
@@ -208,7 +231,7 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
     
     // 创建tar格式的数据
     // Logging disabled
-    auto tarTimer = // Performance tracking disabled
+    auto tarTimer = START_TIMER("CreateTarData");
     std::vector<uint8_t> tarData = createTarData(folder);
     if (tarData.empty()) {
         std::cerr << "Failed to create tar data for folder: " << folder.sourcePath << std::endl;
@@ -243,7 +266,7 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
     
     // 执行压缩
     // Logging disabled
-    auto compressionTimer = // Performance tracking disabled
+    auto compressionTimer = START_TIMER("LzmaCompression");
     
     lzma_ret ret = lzmaLoader->lzma_code_ptr(&lzmaStream, LZMA_FINISH);
     

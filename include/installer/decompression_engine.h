@@ -52,6 +52,9 @@ private:
     // Zstandard解压实现
     bool decompressZstd(const DecompressionTask& task);
     
+    // Zstandard块级解压实现
+    bool decompressZstdBlocks(const DecompressionTask& task);
+    
     // LZMA解压实现
     bool decompressLzma(const DecompressionTask& task);
     

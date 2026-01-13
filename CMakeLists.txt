@@ -342,6 +342,25 @@ target_link_libraries(test_full_compression ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIE
 target_include_directories(test_full_compression PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
 copy_dlls_to_target(test_full_compression)
 
+# Create ZSTD block compression test executable
+add_executable(test_zstd_blocks test_zstd_blocks.cpp ${COMMON_SOURCES}
+    src/packager/compression_module.cpp
+    src/installer/decompression_engine.cpp
+    src/installer/thread_pool_manager.cpp
+    src/installer/file_system_operator.cpp
+)
+target_link_libraries(test_zstd_blocks ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_zstd_blocks PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_zstd_blocks)
+
+# Create installer diagnostics tool
+add_executable(diagnose_installer diagnose_installer.cpp ${COMMON_SOURCES}
+    src/installer/metadata_parser.cpp
+)
+target_link_libraries(diagnose_installer ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(diagnose_installer PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(diagnose_installer)
+
 add_test(NAME FolderScannerTests COMMAND test_folder_scanner)
 add_test(NAME CompressionModuleTests COMMAND test_compression_module)
 add_test(NAME MetadataGeneratorTests COMMAND test_metadata_generator)

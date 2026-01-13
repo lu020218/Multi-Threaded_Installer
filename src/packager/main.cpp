@@ -2,40 +2,84 @@
 #include "packager/compression_module.h"
 #include "packager/metadata_generator.h"
 #include "packager/installer_generator.h"
+#include "packager/configuration_manager.h"
 #include "installer/console_interface.h"
 #include <iostream>
+#include <filesystem>
 
 using namespace MultiThreadedInstaller;
+namespace fs = std::filesystem;
+
+void showUsage(const std::string& programName) {
+    std::cout << "Usage: " << programName << " <input_directory> <output_file>\n";
+    std::cout << "\n";
+    std::cout << "Arguments:\n";
+    std::cout << "  input_directory  Directory containing files to package\n";
+    std::cout << "  output_file      Path for the generated installer executable\n";
+    std::cout << "\n";
+    std::cout << "Configuration:\n";
+    std::cout << "  Place a packager.json or .packager.json file in the input directory\n";
+    std::cout << "  to configure packaging options. If no configuration file is found,\n";
+    std::cout << "  default settings will be used.\n";
+}
 
 int main(int argc, char* argv[]) {
     ConsoleInterface console;
     
-    // 解析命令行参数
-    auto args = console.parsePackagerArgs(argc, argv);
-    
-    if (args.showHelp) {
-        console.showPackagerHelp();
-        return 0;
+    // 验证命令行参数数量
+    if (argc != 3) {
+        console.showError("Error: Incorrect number of arguments");
+        showUsage(argv[0]);
+        return 1;
     }
     
-    // 如果没有提供命令行参数，使用交互模式
-    if (args.inputPath.empty() || args.outputPath.empty()) {
-        console.showPackagerMenu();
-        if (!console.getPackagerInput(args.inputPath, args.outputPath, args.algorithm)) {
-            console.showError("Failed to get valid input parameters");
+    std::string inputPath = argv[1];
+    std::string outputPath = argv[2];
+    
+    // 验证输入目录存在
+    if (!fs::exists(inputPath) || !fs::is_directory(inputPath)) {
+        console.showError("Error: Input directory does not exist: " + inputPath);
+        return 1;
+    }
+    
+    // 验证输出文件路径有效
+    fs::path outputFilePath(outputPath);
+    if (outputFilePath.has_parent_path()) {
+        fs::path parentPath = outputFilePath.parent_path();
+        if (!fs::exists(parentPath)) {
+            console.showError("Error: Output directory does not exist: " + parentPath.string());
             return 1;
         }
     }
     
     console.showInfo("Starting packaging process...");
-    console.showInfo("Input directory: " + args.inputPath);
-    console.showInfo("Output file: " + args.outputPath);
+    console.showInfo("Input directory: " + inputPath);
+    console.showInfo("Output file: " + outputPath);
+    
+    // 初始化配置管理器
+    ConfigurationManager configManager;
+    if (!configManager.initialize(inputPath)) {
+        console.showError("Failed to initialize configuration");
+        return 1;
+    }
+    
+    const auto& config = configManager.getConfiguration();
+    
+    // 记录配置信息
+    if (configManager.hasConfigFile()) {
+        console.showInfo("Using configuration file: " + configManager.getConfigFilePath());
+    } else {
+        console.showInfo("No configuration file found, using default settings");
+    }
+    
+    console.showInfo("Application name: " + config.applicationName);
+    console.showInfo("Default install directory: " + config.defaultInstallDir);
     console.showInfo(std::string("Compression algorithm: ") + 
-                    (args.algorithm == CompressionAlgorithm::ZSTD_FAST ? "ZSTD" : "LZMA"));
+                    (config.compressionAlgorithm == CompressionAlgorithm::ZSTD_FAST ? "ZSTD" : "LZMA"));
     
     // 扫描输入目录
     FolderScanner scanner;
-    auto folders = scanner.scanInputDirectory(args.inputPath);
+    auto folders = scanner.scanInputDirectory(inputPath);
     
     if (!scanner.validateFolderStructure(folders)) {
         console.showError("Invalid folder structure");
@@ -44,13 +88,19 @@ int main(int argc, char* argv[]) {
     
     console.showInfo("Found " + std::to_string(folders.size()) + " folders to package");
     
+    // 应用文件夹目标配置
+    configManager.applyFolderTargets(folders);
+    
+    // 记录文件夹目标配置
+    for (const auto& folder : folders) {
+        if (!folder.targetPath.empty()) {
+            console.showInfo("Folder '" + folder.sourcePath + "' will be installed to: " + folder.targetPath);
+        }
+    }
+    
     // 压缩文件夹
     CompressionModule compressor;
-    compressor.setCompressionAlgorithm(args.algorithm);
-    
-    if (args.compressionLevel != -1) {
-        compressor.setCompressionLevel(args.compressionLevel);
-    }
+    compressor.setCompressionAlgorithm(config.compressionAlgorithm);
     
     std::vector<CompressionResult> compressionResults;
     
@@ -69,7 +119,7 @@ int main(int argc, char* argv[]) {
     
     console.showPackagingProgress("Finalizing", 1.0f);
     
-    // 生成元数据
+    // 生成元数据（配置将在任务7中传递）
     MetadataGenerator metadataGen;
     auto metadata = metadataGen.generateMetadata(compressionResults, folders);
     auto serializedMetadata = metadataGen.serializeMetadata(metadata);
@@ -81,13 +131,13 @@ int main(int argc, char* argv[]) {
         compressedDataList.push_back(result.compressedData);
     }
     
-    if (!installerGen.generateInstaller(args.outputPath, serializedMetadata, compressedDataList)) {
+    if (!installerGen.generateInstaller(outputPath, serializedMetadata, compressedDataList)) {
         console.showError("Failed to generate installer");
         return 1;
     }
     
     console.showInfo("Packaging completed successfully!");
-    console.showInfo("Installer created: " + args.outputPath);
+    console.showInfo("Installer created: " + outputPath);
     
     return 0;
 }

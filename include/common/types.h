@@ -14,6 +14,15 @@ enum class CompressionAlgorithm {
     LZMA_HIGH     // 7z LZMA高压缩比模式
 };
 
+// 特殊目录类型枚举
+enum class SpecialDirectoryType {
+    INSTALL_DIRECTORY,  // 用户选择的安装目录
+    PROGRAM_FILES,      // %ProgramFiles%
+    APPDATA_ROAMING,    // %AppData%
+    APPDATA_LOCAL,      // %LocalAppData%
+    PROGRAM_DATA        // %ProgramData%
+};
+
 // 文件夹信息结构
 struct FolderInfo {
     std::string sourcePath;
@@ -25,6 +34,30 @@ struct FolderInfo {
     
     FolderInfo(const std::string& source, const std::string& target)
         : sourcePath(source), targetPath(target), totalSize(0) {}
+};
+
+// 文件夹目标目录配置
+struct FolderTargetConfig {
+    std::string folderName;           // 文件夹名称（相对于输入目录）
+    std::string targetDirectory;      // 目标目录配置字符串
+    SpecialDirectoryType dirType;     // 目标目录类型
+    
+    FolderTargetConfig()
+        : dirType(SpecialDirectoryType::INSTALL_DIRECTORY) {}
+};
+
+// 打包器配置
+struct PackagerConfiguration {
+    std::string applicationName;                    // 应用程序名称
+    std::string defaultInstallDir;                  // 建议的默认安装目录（不含应用程序名）
+    CompressionAlgorithm compressionAlgorithm;      // 压缩算法
+    std::vector<FolderTargetConfig> folderTargets;  // 文件夹目标配置
+    
+    // 默认值
+    PackagerConfiguration() 
+        : applicationName("MyApplication"),
+          defaultInstallDir("%ProgramFiles%"),
+          compressionAlgorithm(CompressionAlgorithm::ZSTD_FAST) {}
 };
 
 // 压缩结果结构
@@ -53,6 +86,16 @@ struct FolderMapping {
                      checksum(0), algorithm(CompressionAlgorithm::ZSTD_FAST) {}
 };
 
+// 扩展的文件夹映射结构（向后兼容）
+struct ExtendedFolderMapping : public FolderMapping {
+    SpecialDirectoryType targetDirType;   // 目标目录类型
+    std::string customTargetPath;         // 自定义目标路径
+    
+    ExtendedFolderMapping() 
+        : FolderMapping(),
+          targetDirType(SpecialDirectoryType::INSTALL_DIRECTORY) {}
+};
+
 // 安装元数据结构
 struct InstallationMetadata {
     uint32_t version;
@@ -61,6 +104,18 @@ struct InstallationMetadata {
     uint64_t totalCompressedSize;
     
     InstallationMetadata() : version(1), folderCount(0), totalCompressedSize(0) {}
+};
+
+// 扩展的安装元数据结构（向后兼容）
+struct ExtendedInstallationMetadata : public InstallationMetadata {
+    std::string applicationName;                    // 应用程序名称
+    std::string defaultInstallDir;                  // 建议的默认安装目录
+    std::vector<ExtendedFolderMapping> extendedMappings; // 扩展的文件夹映射
+    
+    ExtendedInstallationMetadata() 
+        : InstallationMetadata(),
+          applicationName("MyApplication"),
+          defaultInstallDir("%ProgramFiles%") {}
 };
 
 // 二进制元数据头结构

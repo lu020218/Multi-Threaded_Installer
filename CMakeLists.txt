@@ -107,6 +107,7 @@ endif()
 # Include directories
 include_directories(include)
 include_directories(src)
+include_directories(${THIRD_PARTY_DIR}/nlohmann)
 
 # Function to copy DLLs to target directory
 function(copy_dlls_to_target target_name)
@@ -135,6 +136,9 @@ set(PACKAGER_SOURCES
     src/packager/compression_module.cpp
     src/packager/metadata_generator.cpp
     src/packager/installer_generator.cpp
+    src/packager/configuration_loader.cpp
+    src/packager/configuration_validator.cpp
+    src/packager/configuration_manager.cpp
     src/packager/main.cpp
     src/installer/console_interface.cpp
 )
@@ -334,6 +338,83 @@ target_link_libraries(test_console_interface ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARI
 target_include_directories(test_console_interface PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
 copy_dlls_to_target(test_console_interface)
 
+# Create test executable for configuration structures
+add_executable(test_configuration_structures tests/test_configuration_structures.cpp ${COMMON_SOURCES})
+target_link_libraries(test_configuration_structures ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_configuration_structures PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_configuration_structures)
+
+# Create test executable for configuration loader
+add_executable(test_configuration_loader tests/test_configuration_loader.cpp ${COMMON_SOURCES}
+    src/packager/configuration_loader.cpp
+)
+target_link_libraries(test_configuration_loader ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_configuration_loader PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_configuration_loader)
+
+# Create test executable for configuration validator
+add_executable(test_configuration_validator tests/test_configuration_validator.cpp ${COMMON_SOURCES}
+    src/packager/configuration_validator.cpp
+)
+target_link_libraries(test_configuration_validator ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_configuration_validator PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_configuration_validator)
+
+# Create property-based test executable for configuration loader
+add_executable(test_configuration_loader_pbt tests/pbt/test_configuration_loader_properties.cpp ${COMMON_SOURCES}
+    src/packager/configuration_loader.cpp
+)
+target_link_libraries(test_configuration_loader_pbt ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_configuration_loader_pbt PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_configuration_loader_pbt)
+
+# Create property-based test executable for configuration validator
+add_executable(test_configuration_validator_pbt tests/pbt/test_configuration_validator_properties.cpp ${COMMON_SOURCES}
+    src/packager/configuration_validator.cpp
+)
+target_link_libraries(test_configuration_validator_pbt ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_configuration_validator_pbt PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_configuration_validator_pbt)
+
+# Create property-based test executable for metadata generator
+add_executable(test_metadata_generator_pbt tests/pbt/test_metadata_generator_properties.cpp ${COMMON_SOURCES}
+    src/packager/metadata_generator.cpp
+    src/packager/folder_scanner.cpp
+    src/packager/compression_module.cpp
+)
+target_link_libraries(test_metadata_generator_pbt ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_metadata_generator_pbt PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_metadata_generator_pbt)
+
+# Create property-based test executable for packager integration
+add_executable(test_packager_integration_pbt tests/pbt/test_packager_integration_properties.cpp ${COMMON_SOURCES})
+target_link_libraries(test_packager_integration_pbt ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_packager_integration_pbt PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_packager_integration_pbt)
+
+# Create test executable for configuration manager
+add_executable(test_configuration_manager tests/test_configuration_manager.cpp ${COMMON_SOURCES}
+    src/packager/configuration_loader.cpp
+    src/packager/configuration_validator.cpp
+    src/packager/configuration_manager.cpp
+)
+target_link_libraries(test_configuration_manager ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_configuration_manager PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_configuration_manager)
+
+# Create test executable for packager integration
+add_executable(test_packager_integration tests/test_packager_integration.cpp ${COMMON_SOURCES}
+    src/packager/configuration_loader.cpp
+    src/packager/configuration_validator.cpp
+    src/packager/configuration_manager.cpp
+    src/packager/folder_scanner.cpp
+    src/packager/compression_module.cpp
+    src/packager/metadata_generator.cpp
+)
+target_link_libraries(test_packager_integration ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_packager_integration PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_packager_integration)
+
 # Create full compression test executable
 add_executable(test_full_compression test_full_compression.cpp ${COMMON_SOURCES}
     src/packager/compression_module.cpp
@@ -381,6 +462,14 @@ add_test(NAME MetadataManagementTests COMMAND test_metadata_management)
 add_test(NAME InstallerGeneratorTests COMMAND test_installer_generator)
 add_test(NAME ThreadPoolManagerTests COMMAND test_thread_pool_manager)
 add_test(NAME ConsoleInterfaceTests COMMAND test_console_interface)
+add_test(NAME ConfigurationStructuresTests COMMAND test_configuration_structures)
+add_test(NAME ConfigurationLoaderTests COMMAND test_configuration_loader)
+add_test(NAME ConfigurationValidatorTests COMMAND test_configuration_validator)
+add_test(NAME ConfigurationLoaderPBTTests COMMAND test_configuration_loader_pbt)
+add_test(NAME ConfigurationValidatorPBTTests COMMAND test_configuration_validator_pbt)
+add_test(NAME ConfigurationManagerTests COMMAND test_configuration_manager)
+add_test(NAME PackagerIntegrationTests COMMAND test_packager_integration)
+add_test(NAME PackagerIntegrationPBTTests COMMAND test_packager_integration_pbt)
 add_test(NAME ThreadPoolPBTTests COMMAND test_thread_pool_pbt)
 add_test(NAME DecompressionErrorRecoveryTests COMMAND test_decompression_error_recovery)
 add_test(NAME FileSystemOperatorPBTTests COMMAND test_file_system_operator_pbt)

@@ -94,7 +94,12 @@ using ProgressCallback = std::function<void(const std::string&, float)>;
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t VERSION = 1;
-    constexpr size_t DEFAULT_BLOCK_SIZE = 65536;   // 64KB
+    
+    // 块大小配置 (优化后)
+    constexpr size_t DEFAULT_BLOCK_SIZE = 2 * 1024 * 1024;  // 2MB (从 64KB 优化)
+    constexpr size_t MIN_BLOCK_SIZE = 1 * 1024 * 1024;      // 1MB
+    constexpr size_t MAX_BLOCK_SIZE = 8 * 1024 * 1024;      // 8MB
+    
     constexpr int DEFAULT_ZSTD_LEVEL = 1;          // 快速压缩
     constexpr int DEFAULT_LZMA_LEVEL = 5;          // 平衡压缩
 }

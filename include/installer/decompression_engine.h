@@ -58,6 +58,9 @@ private:
     // LZMA解压实现
     bool decompressLzma(const DecompressionTask& task);
     
+    // LZMA块级解压实现
+    bool decompressLzmaBlocks(const DecompressionTask& task);
+    
     // 验证校验和
     bool verifyChecksum(const std::vector<uint8_t>& data, uint32_t expectedChecksum);
     

@@ -69,8 +69,11 @@ private:
     // 创建文件夹的tar格式数据
     std::vector<uint8_t> createTarData(const FolderInfo& folder);
     
-    // 块级压缩实现
+    // 块级压缩实现 (ZSTD)
     std::vector<uint8_t> compressWithBlocks(const std::vector<uint8_t>& data);
+    
+    // 块级压缩实现 (LZMA)
+    std::vector<uint8_t> compressWithBlocksLzma(const std::vector<uint8_t>& data);
     
     // SHA-256校验和计算
     std::vector<uint8_t> calculateSHA256(const std::vector<uint8_t>& data);

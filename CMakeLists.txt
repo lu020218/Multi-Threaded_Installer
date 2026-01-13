@@ -353,6 +353,17 @@ target_link_libraries(test_zstd_blocks ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Th
 target_include_directories(test_zstd_blocks PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
 copy_dlls_to_target(test_zstd_blocks)
 
+# Create LZMA block compression test executable
+add_executable(test_lzma_blocks test_lzma_blocks.cpp ${COMMON_SOURCES}
+    src/packager/compression_module.cpp
+    src/installer/decompression_engine.cpp
+    src/installer/thread_pool_manager.cpp
+    src/installer/file_system_operator.cpp
+)
+target_link_libraries(test_lzma_blocks ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(test_lzma_blocks PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+copy_dlls_to_target(test_lzma_blocks)
+
 # Create installer diagnostics tool
 add_executable(diagnose_installer diagnose_installer.cpp ${COMMON_SOURCES}
     src/installer/metadata_parser.cpp

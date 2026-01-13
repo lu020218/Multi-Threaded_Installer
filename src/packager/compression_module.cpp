@@ -240,45 +240,62 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
     
     result.originalSize = tarData.size();
     
-    // 重新初始化LZMA流以确保干净状态
-    if (lzmaLoader && lzmaLoader->isLoaded()) {
-        lzmaLoader->lzma_end_ptr(&lzmaStream);
-        lzmaStream = LZMA_STREAM_INIT;
-        lzma_ret ret = lzmaLoader->lzma_easy_encoder_ptr(&lzmaStream, compressionLevel, LZMA_CHECK_SHA256);
-        if (ret != LZMA_OK) {
-            std::cerr << "Failed to reinitialize LZMA encoder: " << ret << std::endl;
-            return result;
-        }
-    } else {
-        std::cerr << "LZMA library not loaded" << std::endl;
-        return result;
-    }
-    
-    // 估算压缩后大小（LZMA通常需要更多空间）
-    size_t outputSize = tarData.size() + (tarData.size() / 10) + 1024;
-    result.compressedData.resize(outputSize);
-    
-    // 设置输入和输出缓冲区
-    lzmaStream.next_in = tarData.data();
-    lzmaStream.avail_in = tarData.size();
-    lzmaStream.next_out = result.compressedData.data();
-    lzmaStream.avail_out = result.compressedData.size();
-    
-    // 执行压缩
+    // 根据数据大小选择压缩策略
     // Logging disabled
     auto compressionTimer = START_TIMER("LzmaCompression");
     
-    lzma_ret ret = lzmaLoader->lzma_code_ptr(&lzmaStream, LZMA_FINISH);
-    
-    if (ret != LZMA_STREAM_END) {
-        std::cerr << "LZMA compression failed: " << ret << std::endl;
-        return CompressionResult{};
+    if (tarData.size() > 128 * 1024 * 1024) {
+        // 大文件（> 128MB）：使用块级压缩以支持并行解压
+        std::cout << "Using block-level LZMA compression for large file (" 
+                  << tarData.size() / (1024 * 1024) << " MB)" << std::endl;
+        
+        result.compressedData = compressWithBlocksLzma(tarData);
+        
+        if (result.compressedData.empty()) {
+            std::cerr << "Block LZMA compression failed" << std::endl;
+            return CompressionResult{};
+        }
+        
+        result.compressedSize = result.compressedData.size();
+    } else {
+        // 小文件（≤ 128MB）：使用标准LZMA压缩
+        // 重新初始化LZMA流以确保干净状态
+        if (lzmaLoader && lzmaLoader->isLoaded()) {
+            lzmaLoader->lzma_end_ptr(&lzmaStream);
+            lzmaStream = LZMA_STREAM_INIT;
+            lzma_ret ret = lzmaLoader->lzma_easy_encoder_ptr(&lzmaStream, compressionLevel, LZMA_CHECK_SHA256);
+            if (ret != LZMA_OK) {
+                std::cerr << "Failed to reinitialize LZMA encoder: " << ret << std::endl;
+                return result;
+            }
+        } else {
+            std::cerr << "LZMA library not loaded" << std::endl;
+            return result;
+        }
+        
+        // 估算压缩后大小（LZMA通常需要更多空间）
+        size_t outputSize = tarData.size() + (tarData.size() / 10) + 1024;
+        result.compressedData.resize(outputSize);
+        
+        // 设置输入和输出缓冲区
+        lzmaStream.next_in = tarData.data();
+        lzmaStream.avail_in = tarData.size();
+        lzmaStream.next_out = result.compressedData.data();
+        lzmaStream.avail_out = result.compressedData.size();
+        
+        // 执行压缩
+        lzma_ret ret = lzmaLoader->lzma_code_ptr(&lzmaStream, LZMA_FINISH);
+        
+        if (ret != LZMA_STREAM_END) {
+            std::cerr << "LZMA compression failed: " << ret << std::endl;
+            return CompressionResult{};
+        }
+        
+        // 调整输出大小
+        size_t compressedSize = result.compressedData.size() - lzmaStream.avail_out;
+        result.compressedData.resize(compressedSize);
+        result.compressedSize = compressedSize;
     }
-    
-    // 调整输出大小
-    size_t compressedSize = result.compressedData.size() - lzmaStream.avail_out;
-    result.compressedData.resize(compressedSize);
-    result.compressedSize = compressedSize;
     
     // 计算原始数据的CRC32校验和（与ZSTD保持一致）
     result.checksum = calculateChecksum(tarData);
@@ -468,6 +485,103 @@ std::vector<uint8_t> CompressionModule::compressWithBlocks(const std::vector<uin
         result.insert(result.end(), compressedBlock.begin(), compressedBlock.end());
         currentOffset += compressedSize;
     }
+    
+    return result;
+#else
+    // Stub implementation - just return the original data
+    return data;
+#endif
+}
+
+std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector<uint8_t>& data) {
+#ifdef LibLZMA_FOUND
+    if (!lzmaLoader || !lzmaLoader->isLoaded()) {
+        std::cerr << "LZMA library not loaded" << std::endl;
+        return {};
+    }
+    
+    std::vector<uint8_t> result;
+    
+    // 块头信息：块数量 (4字节)
+    size_t totalBlocks = (data.size() + blockSize - 1) / blockSize;
+    uint32_t blockCount = static_cast<uint32_t>(totalBlocks);
+    
+    result.insert(result.end(), 
+                  reinterpret_cast<const uint8_t*>(&blockCount),
+                  reinterpret_cast<const uint8_t*>(&blockCount) + sizeof(blockCount));
+    
+    // 为每个块的元数据预留空间 (偏移量4字节 + 压缩大小4字节 + 原始大小4字节 + 校验和4字节)
+    size_t metadataOffset = result.size();
+    result.resize(result.size() + totalBlocks * 16); // 16字节每个块的元数据
+    
+    std::cout << "Compressing " << totalBlocks << " blocks with LZMA..." << std::endl;
+    
+    // 压缩每个块
+    size_t currentOffset = result.size();
+    for (size_t i = 0; i < totalBlocks; ++i) {
+        size_t blockStart = i * blockSize;
+        size_t currentBlockSize = (blockSize < (data.size() - blockStart)) ? blockSize : (data.size() - blockStart);
+        
+        // 为每个块创建独立的 LZMA 流
+        lzma_stream stream = LZMA_STREAM_INIT;
+        lzma_ret ret = lzmaLoader->lzma_easy_encoder_ptr(&stream, compressionLevel, LZMA_CHECK_CRC32);
+        
+        if (ret != LZMA_OK) {
+            std::cerr << "Failed to initialize LZMA encoder for block " << i << ": " << ret << std::endl;
+            return {};
+        }
+        
+        // 估算压缩后大小
+        size_t compressedBound = currentBlockSize + (currentBlockSize / 10) + 1024;
+        std::vector<uint8_t> compressedBlock(compressedBound);
+        
+        // 设置输入和输出
+        stream.next_in = data.data() + blockStart;
+        stream.avail_in = currentBlockSize;
+        stream.next_out = compressedBlock.data();
+        stream.avail_out = compressedBlock.size();
+        
+        // 压缩当前块
+        ret = lzmaLoader->lzma_code_ptr(&stream, LZMA_FINISH);
+        
+        if (ret != LZMA_STREAM_END) {
+            std::cerr << "Block " << i << " LZMA compression failed: " << ret << std::endl;
+            lzmaLoader->lzma_end_ptr(&stream);
+            return {};
+        }
+        
+        size_t compressedSize = compressedBlock.size() - stream.avail_out;
+        compressedBlock.resize(compressedSize);
+        
+        // 清理流
+        lzmaLoader->lzma_end_ptr(&stream);
+        
+        // 计算块校验和
+        uint32_t blockChecksum = calculateChecksum(compressedBlock);
+        
+        // 写入块元数据
+        size_t metadataPos = metadataOffset + i * 16;
+        uint32_t offset = static_cast<uint32_t>(currentOffset);
+        uint32_t compSize = static_cast<uint32_t>(compressedSize);
+        uint32_t origSize = static_cast<uint32_t>(currentBlockSize);
+        
+        std::memcpy(result.data() + metadataPos, &offset, sizeof(offset));
+        std::memcpy(result.data() + metadataPos + 4, &compSize, sizeof(compSize));
+        std::memcpy(result.data() + metadataPos + 8, &origSize, sizeof(origSize));
+        std::memcpy(result.data() + metadataPos + 12, &blockChecksum, sizeof(blockChecksum));
+        
+        // 添加压缩块数据
+        result.insert(result.end(), compressedBlock.begin(), compressedBlock.end());
+        currentOffset += compressedSize;
+        
+        // 进度输出
+        if ((i + 1) % 10 == 0 || i == totalBlocks - 1) {
+            std::cout << "  Compressed " << (i + 1) << "/" << totalBlocks << " blocks" << std::endl;
+        }
+    }
+    
+    std::cout << "LZMA block compression complete: " << totalBlocks << " blocks, " 
+              << result.size() << " bytes" << std::endl;
     
     return result;
 #else

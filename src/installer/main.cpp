@@ -5,6 +5,8 @@
 #include "installer/console_interface.h"
 #include "installer/path_resolver.h"
 #include <iostream>
+#include <mutex>
+#include <atomic>
 
 using namespace MultiThreadedInstaller;
 
@@ -74,9 +76,21 @@ int main(int argc, char* argv[]) {
     FileSystemOperator fsOperator;
     
     std::vector<std::string> errors;
-    bool overallSuccess = true;
+    std::mutex errorsMutex;
+    std::atomic<bool> overallSuccess(true);
+    std::atomic<size_t> completedFolders(0);
     
-    // 处理每个文件夹
+    // 准备所有文件夹的解压任务
+    struct FolderTask {
+        std::string folderName;
+        std::string targetPath;
+        DecompressionTask decompTask;
+    };
+    
+    std::vector<FolderTask> folderTasks;
+    folderTasks.reserve(metadata.extendedMappings.size());
+    
+    // 第一阶段：准备所有任务（路径解析、目录创建、数据读取）
     for (size_t i = 0; i < metadata.extendedMappings.size(); ++i) {
         const auto& mapping = metadata.extendedMappings[i];
         
@@ -125,6 +139,7 @@ int main(int argc, char* argv[]) {
         if (targetPath.empty()) {
             std::string error = "No target path specified for folder: " + mapping.folderName;
             console.showError(error);
+            std::lock_guard<std::mutex> lock(errorsMutex);
             errors.push_back(error);
             overallSuccess = false;
             continue;
@@ -136,6 +151,7 @@ int main(int argc, char* argv[]) {
         if (!fsOperator.createDirectoryRecursive(targetPath)) {
             std::string error = "Failed to create target directory: " + targetPath;
             console.showError(error);
+            std::lock_guard<std::mutex> lock(errorsMutex);
             errors.push_back(error);
             overallSuccess = false;
             continue;
@@ -146,25 +162,48 @@ int main(int argc, char* argv[]) {
         if (compressedData.empty()) {
             std::string error = "Failed to read compressed data for folder: " + mapping.folderName;
             console.showError(error);
+            std::lock_guard<std::mutex> lock(errorsMutex);
             errors.push_back(error);
             overallSuccess = false;
             continue;
         }
         
         // 创建解压任务
-        DecompressionTask task;
-        task.compressedData = compressedData;
-        task.targetPath = targetPath;
-        task.expectedChecksum = mapping.checksum;
-        task.originalSize = mapping.originalSize;
-        task.algorithm = mapping.algorithm;
+        FolderTask folderTask;
+        folderTask.folderName = mapping.folderName;
+        folderTask.targetPath = targetPath;
+        folderTask.decompTask.compressedData = std::move(compressedData);
+        folderTask.decompTask.targetPath = targetPath;
+        folderTask.decompTask.expectedChecksum = mapping.checksum;
+        folderTask.decompTask.originalSize = mapping.originalSize;
+        folderTask.decompTask.algorithm = mapping.algorithm;
         
-        // 执行解压
-        if (!decompressor.decompressFolder(task)) {
-            std::string error = "Failed to decompress folder: " + mapping.folderName;
-            console.showError(error);
-            errors.push_back(error);
-            overallSuccess = false;
+        folderTasks.push_back(std::move(folderTask));
+    }
+    
+    // 第二阶段：并行执行所有解压任务
+    if (!folderTasks.empty()) {
+        console.showInfo("Decompressing " + std::to_string(folderTasks.size()) + " folders in parallel...");
+        
+        for (auto& folderTask : folderTasks) {
+            threadPool->enqueue([&folderTask, &decompressor, &console, &errors, &errorsMutex, 
+                                &overallSuccess, &completedFolders, totalFolders = folderTasks.size()]() {
+                // 执行解压
+                if (!decompressor.decompressFolder(folderTask.decompTask)) {
+                    std::string error = "Failed to decompress folder: " + folderTask.folderName;
+                    console.showError(error);
+                    std::lock_guard<std::mutex> lock(errorsMutex);
+                    errors.push_back(error);
+                    overallSuccess = false;
+                } else {
+                    // 更新进度
+                    size_t completed = ++completedFolders;
+                    float progress = static_cast<float>(completed) / totalFolders;
+                    console.showInfo("Progress: " + std::to_string(completed) + "/" + 
+                                   std::to_string(totalFolders) + " folders completed (" + 
+                                   std::to_string(static_cast<int>(progress * 100)) + "%)");
+                }
+            });
         }
     }
     

@@ -1,4 +1,4 @@
-#include "common/lzma_loader.h"
+﻿#include "common/lzma_loader.h"
 #include <iostream>
 
 namespace MultiThreadedInstaller {

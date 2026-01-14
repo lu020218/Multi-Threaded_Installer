@@ -1,4 +1,4 @@
-#include "installer/path_resolver.h"
+﻿#include "installer/path_resolver.h"
 #include <algorithm>
 #include <cctype>
 #include <windows.h>

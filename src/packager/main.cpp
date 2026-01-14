@@ -1,4 +1,4 @@
-#include "packager/folder_scanner.h"
+﻿#include "packager/folder_scanner.h"
 #include "packager/compression_module.h"
 #include "packager/metadata_generator.h"
 #include "packager/installer_generator.h"

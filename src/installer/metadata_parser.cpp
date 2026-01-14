@@ -1,4 +1,4 @@
-#include "installer/metadata_parser.h"
+﻿#include "installer/metadata_parser.h"
 #include <fstream>
 #include <iostream>
 

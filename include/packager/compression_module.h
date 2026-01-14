@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "common/types.h"
 #include "common/lzma_loader.h"

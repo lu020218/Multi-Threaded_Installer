@@ -1,4 +1,4 @@
-#include "packager/folder_scanner.h"
+﻿#include "packager/folder_scanner.h"
 #include <filesystem>
 #include <iostream>
 

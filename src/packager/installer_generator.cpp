@@ -1,4 +1,4 @@
-#include "packager/installer_generator.h"
+﻿#include "packager/installer_generator.h"
 #include <fstream>
 #include <iostream>
 #include <filesystem>

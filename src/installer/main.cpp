@@ -1,4 +1,4 @@
-#include "installer/metadata_parser.h"
+﻿#include "installer/metadata_parser.h"
 #include "installer/thread_pool_manager.h"
 #include "installer/decompression_engine.h"
 #include "installer/file_system_operator.h"

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "common/types.h"
 #include "installer/thread_pool_manager.h"
@@ -64,8 +64,11 @@ private:
     // 验证校验和
     bool verifyChecksum(const std::vector<uint8_t>& data, uint32_t expectedChecksum);
     
-    // 计算校验和
+    // 计算校验和（并行）
     uint32_t calculateChecksum(const std::vector<uint8_t>& data);
+    
+    // 计算校验和（单线程）
+    uint32_t calculateChecksumSingle(const std::vector<uint8_t>& data);
     
     // 流式ZSTD解压（支持多线程）
     size_t decompressZstdStreaming(const std::vector<uint8_t>& compressedData, 

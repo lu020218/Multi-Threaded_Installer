@@ -95,20 +95,30 @@ int main(int argc, char* argv[]) {
         
         // 如果没有找到用户映射，使用路径解析器根据目标目录类型解析路径
         if (!foundMapping) {
+            std::string basePath;
             if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
                 // 使用用户选择的安装目录
-                targetPath = pathResolver.resolveFinalPath(
+                basePath = pathResolver.resolveFinalPath(
                     userSelectedPath,
                     mapping.targetDirType,
                     metadata.applicationName
                 );
             } else {
                 // 使用环境变量路径
-                targetPath = pathResolver.resolveFinalPath(
+                basePath = pathResolver.resolveFinalPath(
                     mapping.customTargetPath.empty() ? mapping.targetPath : mapping.customTargetPath,
                     mapping.targetDirType,
                     metadata.applicationName
                 );
+            }
+            
+            // 将文件夹名称附加到基础路径
+            if (!basePath.empty()) {
+                // 确保路径以分隔符结尾
+                if (basePath.back() != '\\' && basePath.back() != '/') {
+                    basePath += '\\';
+                }
+                targetPath = basePath + mapping.folderName;
             }
         }
         

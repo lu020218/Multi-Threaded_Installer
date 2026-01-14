@@ -1,5 +1,6 @@
 ﻿#include "packager/metadata_generator.h"
 #include <cstring>
+#include <filesystem>
 
 namespace MultiThreadedInstaller {
 
@@ -108,39 +109,22 @@ std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMeta
 std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const ExtendedInstallationMetadata& metadata) {
     std::vector<uint8_t> serialized;
     
-    // 计算字符串数据的总大小
-    size_t stringDataSize = 0;
-    
-    // 基本字段的字符串大小
-    for (const auto& mapping : metadata.folderMappings) {
-        stringDataSize += mapping.folderName.length() + 1;
-        stringDataSize += mapping.targetPath.length() + 1;
-    }
-    
-    // 扩展字段的字符串大小
-    stringDataSize += metadata.applicationName.length() + 1;
-    stringDataSize += metadata.defaultInstallDir.length() + 1;
-    
-    for (const auto& extMapping : metadata.extendedMappings) {
-        stringDataSize += extMapping.customTargetPath.length() + 1;
-    }
-    
-    // 创建二进制头（版本号设为2表示扩展格式）
+    // 创建二进制头
     BinaryMetadata header;
     header.magic = Constants::MAGIC_NUMBER;
-    header.version = 2; // 扩展版本
+    header.version = Constants::VERSION;
     header.folderCount = metadata.folderCount;
-    
-    // 计算元数据大小：头部 + 基本映射 + 扩展字段
-    header.metadataSize = sizeof(BinaryMetadata) + 
-                         metadata.folderMappings.size() * (sizeof(uint64_t) * 4 + sizeof(uint32_t) * 2) + 
-                         metadata.extendedMappings.size() * (sizeof(SpecialDirectoryType) + sizeof(uint32_t)) +
-                         stringDataSize;
-    header.dataOffset = header.metadataSize;
+    header.metadataSize = 0; // 稍后计算
+    header.dataOffset = 0;   // 稍后计算
     
     // 序列化头部
     const uint8_t* headerBytes = reinterpret_cast<const uint8_t*>(&header);
     serialized.insert(serialized.end(), headerBytes, headerBytes + sizeof(BinaryMetadata));
+    
+    // 写入扩展标记 "EXTD" (0x45585444)
+    uint32_t extendedMarker = 0x45585444;
+    const uint8_t* markerBytes = reinterpret_cast<const uint8_t*>(&extendedMarker);
+    serialized.insert(serialized.end(), markerBytes, markerBytes + sizeof(uint32_t));
     
     // 序列化应用程序名称
     uint32_t appNameLen = static_cast<uint32_t>(metadata.applicationName.length());
@@ -154,41 +138,43 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     serialized.insert(serialized.end(), defaultInstallDirLenBytes, defaultInstallDirLenBytes + sizeof(uint32_t));
     serialized.insert(serialized.end(), metadata.defaultInstallDir.begin(), metadata.defaultInstallDir.end());
     
-    // 序列化文件夹映射（基本字段）
-    for (const auto& mapping : metadata.folderMappings) {
-        const uint8_t* offsetBytes = reinterpret_cast<const uint8_t*>(&mapping.offset);
+    // 序列化每个文件夹的映射（基本字段 + 扩展字段）
+    for (size_t i = 0; i < metadata.extendedMappings.size(); ++i) {
+        const auto& extMapping = metadata.extendedMappings[i];
+        
+        // 序列化基本数值字段
+        const uint8_t* offsetBytes = reinterpret_cast<const uint8_t*>(&extMapping.offset);
         serialized.insert(serialized.end(), offsetBytes, offsetBytes + sizeof(uint64_t));
         
-        const uint8_t* compressedSizeBytes = reinterpret_cast<const uint8_t*>(&mapping.compressedSize);
+        const uint8_t* compressedSizeBytes = reinterpret_cast<const uint8_t*>(&extMapping.compressedSize);
         serialized.insert(serialized.end(), compressedSizeBytes, compressedSizeBytes + sizeof(uint64_t));
         
-        const uint8_t* originalSizeBytes = reinterpret_cast<const uint8_t*>(&mapping.originalSize);
+        const uint8_t* originalSizeBytes = reinterpret_cast<const uint8_t*>(&extMapping.originalSize);
         serialized.insert(serialized.end(), originalSizeBytes, originalSizeBytes + sizeof(uint64_t));
         
-        const uint8_t* checksumBytes = reinterpret_cast<const uint8_t*>(&mapping.checksum);
+        const uint8_t* checksumBytes = reinterpret_cast<const uint8_t*>(&extMapping.checksum);
         serialized.insert(serialized.end(), checksumBytes, checksumBytes + sizeof(uint32_t));
         
-        const uint8_t* algorithmBytes = reinterpret_cast<const uint8_t*>(&mapping.algorithm);
+        const uint8_t* algorithmBytes = reinterpret_cast<const uint8_t*>(&extMapping.algorithm);
         serialized.insert(serialized.end(), algorithmBytes, algorithmBytes + sizeof(CompressionAlgorithm));
         
-        uint32_t folderNameLen = static_cast<uint32_t>(mapping.folderName.length());
+        // 序列化文件夹名称
+        uint32_t folderNameLen = static_cast<uint32_t>(extMapping.folderName.length());
         const uint8_t* folderNameLenBytes = reinterpret_cast<const uint8_t*>(&folderNameLen);
         serialized.insert(serialized.end(), folderNameLenBytes, folderNameLenBytes + sizeof(uint32_t));
-        serialized.insert(serialized.end(), mapping.folderName.begin(), mapping.folderName.end());
+        serialized.insert(serialized.end(), extMapping.folderName.begin(), extMapping.folderName.end());
         
-        uint32_t targetPathLen = static_cast<uint32_t>(mapping.targetPath.length());
+        // 序列化目标路径
+        uint32_t targetPathLen = static_cast<uint32_t>(extMapping.targetPath.length());
         const uint8_t* targetPathLenBytes = reinterpret_cast<const uint8_t*>(&targetPathLen);
         serialized.insert(serialized.end(), targetPathLenBytes, targetPathLenBytes + sizeof(uint32_t));
-        serialized.insert(serialized.end(), mapping.targetPath.begin(), mapping.targetPath.end());
-    }
-    
-    // 序列化扩展映射字段
-    for (const auto& extMapping : metadata.extendedMappings) {
-        // 序列化目标目录类型
+        serialized.insert(serialized.end(), extMapping.targetPath.begin(), extMapping.targetPath.end());
+        
+        // 序列化扩展字段：目标目录类型
         const uint8_t* dirTypeBytes = reinterpret_cast<const uint8_t*>(&extMapping.targetDirType);
         serialized.insert(serialized.end(), dirTypeBytes, dirTypeBytes + sizeof(SpecialDirectoryType));
         
-        // 序列化自定义目标路径
+        // 序列化扩展字段：自定义目标路径
         uint32_t customPathLen = static_cast<uint32_t>(extMapping.customTargetPath.length());
         const uint8_t* customPathLenBytes = reinterpret_cast<const uint8_t*>(&customPathLen);
         serialized.insert(serialized.end(), customPathLenBytes, customPathLenBytes + sizeof(uint32_t));
@@ -202,7 +188,12 @@ FolderMapping MetadataGenerator::createFolderMapping(const CompressionResult& re
                                                    const FolderInfo& folderInfo, 
                                                    uint64_t offset) {
     FolderMapping mapping;
-    mapping.folderName = folderInfo.targetPath;
+    
+    // 从sourcePath提取文件夹名称（最后一个路径组件）
+    std::filesystem::path sourcePath(folderInfo.sourcePath);
+    std::string folderName = sourcePath.filename().string();
+    
+    mapping.folderName = folderName;
     mapping.targetPath = folderInfo.targetPath;
     mapping.offset = offset;
     mapping.compressedSize = result.compressedSize;
@@ -219,8 +210,12 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
                                                                     const PackagerConfiguration& config) {
     ExtendedFolderMapping mapping;
     
+    // 从sourcePath提取文件夹名称（最后一个路径组件）
+    std::filesystem::path sourcePath(folderInfo.sourcePath);
+    std::string folderName = sourcePath.filename().string();
+    
     // 填充基类字段
-    mapping.folderName = folderInfo.targetPath;
+    mapping.folderName = folderName;
     mapping.targetPath = folderInfo.targetPath;
     mapping.offset = offset;
     mapping.compressedSize = result.compressedSize;
@@ -233,7 +228,7 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
     mapping.customTargetPath = "";
     
     for (const auto& folderTarget : config.folderTargets) {
-        if (folderTarget.folderName == folderInfo.targetPath) {
+        if (folderTarget.folderName == folderName) {
             mapping.targetDirType = folderTarget.dirType;
             mapping.customTargetPath = folderTarget.targetDirectory;
             break;

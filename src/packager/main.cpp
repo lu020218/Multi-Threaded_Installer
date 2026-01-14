@@ -119,10 +119,10 @@ int main(int argc, char* argv[]) {
     
     console.showPackagingProgress("Finalizing", 1.0f);
     
-    // 生成元数据（配置将在任务7中传递）
+    // 生成扩展元数据（包含配置信息）
     MetadataGenerator metadataGen;
-    auto metadata = metadataGen.generateMetadata(compressionResults, folders);
-    auto serializedMetadata = metadataGen.serializeMetadata(metadata);
+    auto extendedMetadata = metadataGen.generateExtendedMetadata(compressionResults, folders, config);
+    auto serializedMetadata = metadataGen.serializeExtendedMetadata(extendedMetadata);
     
     // 生成安装程序
     InstallerGenerator installerGen;

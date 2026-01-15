@@ -10,58 +10,6 @@ find_package(Threads REQUIRED)
 # Set paths for local third-party libraries
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/third_party")
 
-# Try to find zstd (local installation first, then system)
-find_path(ZSTD_INCLUDE_DIR 
-    NAMES zstd.h
-    PATHS 
-        "${THIRD_PARTY_DIR}/zstd/include"
-        "${THIRD_PARTY_DIR}/zstd/zstd-v1.5.7-win64/include"
-    NO_DEFAULT_PATH
-)
-
-find_library(ZSTD_LIBRARY 
-    NAMES libzstd.dll.a zstd libzstd libzstd_static
-    PATHS 
-        "${THIRD_PARTY_DIR}/zstd/dll"
-        "${THIRD_PARTY_DIR}/zstd/zstd-v1.5.7-win64/dll"
-        "${THIRD_PARTY_DIR}/zstd/static"
-        "${THIRD_PARTY_DIR}/zstd/zstd-v1.5.7-win64/static"
-    NO_DEFAULT_PATH
-)
-
-# If not found locally, try system paths
-if(NOT ZSTD_INCLUDE_DIR OR NOT ZSTD_LIBRARY)
-    find_path(ZSTD_INCLUDE_DIR zstd.h)
-    find_library(ZSTD_LIBRARY zstd)
-endif()
-
-if(ZSTD_INCLUDE_DIR AND ZSTD_LIBRARY)
-    set(ZSTD_FOUND TRUE)
-    set(ZSTD_LIBRARIES ${ZSTD_LIBRARY})
-    set(ZSTD_INCLUDE_DIRS ${ZSTD_INCLUDE_DIR})
-    message(STATUS "Found zstd: ${ZSTD_LIBRARY}")
-    add_definitions(-DZSTD_FOUND)
-    
-    # Find and copy ZSTD DLL for runtime
-    find_file(ZSTD_DLL
-        NAMES libzstd.dll
-        PATHS 
-            "${THIRD_PARTY_DIR}/zstd/dll"
-            "${THIRD_PARTY_DIR}/zstd/zstd-v1.5.7-win64/dll"
-        NO_DEFAULT_PATH
-    )
-    
-    if(ZSTD_DLL)
-        message(STATUS "Found ZSTD DLL: ${ZSTD_DLL}")
-        set(ZSTD_DLL_PATH ${ZSTD_DLL})
-    endif()
-else()
-    set(ZSTD_FOUND FALSE)
-    message(WARNING "zstd library not found - using stub implementation")
-    set(ZSTD_LIBRARIES "")
-    set(ZSTD_INCLUDE_DIRS "")
-endif()
-
 # Try to find liblzma (local installation first, then system)
 find_path(LIBLZMA_INCLUDE_DIR 
     NAMES lzma.h
@@ -111,15 +59,6 @@ include_directories(${THIRD_PARTY_DIR}/nlohmann)
 
 # Function to copy DLLs to target directory
 function(copy_dlls_to_target target_name)
-    if(ZSTD_DLL_PATH)
-        add_custom_command(TARGET ${target_name} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ZSTD_DLL_PATH}"
-            $<TARGET_FILE_DIR:${target_name}>
-            COMMENT "Copying ZSTD DLL to output directory"
-        )
-    endif()
-    
     if(LIBLZMA_DLL_PATH)
         add_custom_command(TARGET ${target_name} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -148,6 +87,7 @@ set(INSTALLER_SOURCES
     src/installer/metadata_parser.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp
+    src/installer/tar_stream_extractor.cpp
     src/installer/file_system_operator.cpp
     src/installer/console_interface.cpp
     src/installer/path_resolver.cpp
@@ -162,13 +102,13 @@ set(COMMON_SOURCES
 
 # Create packager executable
 add_executable(packager ${PACKAGER_SOURCES} ${COMMON_SOURCES})
-target_link_libraries(packager ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
-target_include_directories(packager PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+target_link_libraries(packager ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(packager PRIVATE ${LIBLZMA_INCLUDE_DIRS})
 copy_dlls_to_target(packager)
 
 # Create installer executable
 add_executable(installer ${INSTALLER_SOURCES} ${COMMON_SOURCES})
-target_link_libraries(installer ${ZSTD_LIBRARIES} ${LIBLZMA_LIBRARIES} Threads::Threads)
-target_include_directories(installer PRIVATE ${ZSTD_INCLUDE_DIRS} ${LIBLZMA_INCLUDE_DIRS})
+target_link_libraries(installer ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_include_directories(installer PRIVATE ${LIBLZMA_INCLUDE_DIRS})
 copy_dlls_to_target(installer)
 

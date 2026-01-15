@@ -16,21 +16,10 @@
 namespace MultiThreadedInstaller {
 
 CompressionModule::CompressionModule() 
-    : currentAlgorithm(CompressionAlgorithm::ZSTD_FAST)
-    , compressionLevel(Constants::DEFAULT_ZSTD_LEVEL)
+    : currentAlgorithm(CompressionAlgorithm::LZMA_HIGH)
+    , compressionLevel(Constants::DEFAULT_LZMA_LEVEL)
     , blockSize(Constants::DEFAULT_BLOCK_SIZE)
-    , zstdContext(nullptr)
     , lzmaInitialized(false) {
-    
-#ifdef ZSTD_FOUND
-    // 初始化Zstandard上下文
-    zstdContext = ZSTD_createCCtx();
-    if (!zstdContext) {
-        std::cerr << "Failed to create ZSTD compression context" << std::endl;
-    }
-#else
-    std::cerr << "ZSTD not available - using stub implementation" << std::endl;
-#endif
     
 #ifdef LibLZMA_FOUND
     // 初始化LZMA动态加载器
@@ -54,11 +43,6 @@ CompressionModule::CompressionModule()
 }
 
 CompressionModule::~CompressionModule() {
-#ifdef ZSTD_FOUND
-    if (zstdContext) {
-        ZSTD_freeCCtx(zstdContext);
-    }
-#endif
 #ifdef LibLZMA_FOUND
     if (lzmaInitialized && lzmaLoader && lzmaLoader->isLoaded()) {
         lzmaLoader->lzma_end_ptr(&lzmaStream);
@@ -68,27 +52,12 @@ CompressionModule::~CompressionModule() {
 
 CompressionResult CompressionModule::compressFolder(const FolderInfo& folder) {
     // Performance tracking disabled
-    
-    // Logging disabled
-    // Logging disabled
-    
-    const char* algorithmName = (currentAlgorithm == CompressionAlgorithm::ZSTD_FAST) ? "ZSTD" : "LZMA";
-    // Logging disabled
+    const char* algorithmName = "LZMA";
     
     auto startTime = std::chrono::steady_clock::now();
     CompressionResult result;
     
-    switch (currentAlgorithm) {
-        case CompressionAlgorithm::ZSTD_FAST:
-            result = compressWithZstd(folder);
-            break;
-        case CompressionAlgorithm::LZMA_HIGH:
-            result = compressWithLzma(folder);
-            break;
-        default:
-            std::cerr << "Unknown compression algorithm" << std::endl;
-            return CompressionResult{};
-    }
+    result = compressWithLzma(folder);
     
     auto endTime = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
@@ -96,11 +65,7 @@ CompressionResult CompressionModule::compressFolder(const FolderInfo& folder) {
     if (result.compressedSize > 0) {
         double compressionRatio = static_cast<double>(result.compressedSize) / result.originalSize;
         double savedSpace = (1.0 - compressionRatio) * 100.0;
-        
-        // Logging disabled
-        // Logging disabled
-        // Logging disabled
-        
+    
         // 记录性能指标
         // Performance tracking disabled
     } else {
@@ -111,13 +76,13 @@ CompressionResult CompressionModule::compressFolder(const FolderInfo& folder) {
 }
 
 bool CompressionModule::setCompressionAlgorithm(CompressionAlgorithm algorithm) {
-    const char* oldAlgorithm = (currentAlgorithm == CompressionAlgorithm::ZSTD_FAST) ? "ZSTD" : "LZMA";
-    const char* newAlgorithm = (algorithm == CompressionAlgorithm::ZSTD_FAST) ? "ZSTD" : "LZMA";
+    const char* oldAlgorithm = "LZMA";
+    const char* newAlgorithm = "LZMA";
     
     // Logging disabled
     
-    currentAlgorithm = algorithm;
-    return true;
+    currentAlgorithm = CompressionAlgorithm::LZMA_HIGH;
+    return algorithm == CompressionAlgorithm::LZMA_HIGH;
 }
 
 bool CompressionModule::setCompressionLevel(int level) {
@@ -128,95 +93,6 @@ bool CompressionModule::setCompressionLevel(int level) {
 bool CompressionModule::setBlockSize(size_t blockSize) {
     this->blockSize = blockSize;
     return true;
-}
-
-CompressionResult CompressionModule::compressWithZstd(const FolderInfo& folder) {
-    CompressionResult result;
-    result.algorithm = CompressionAlgorithm::ZSTD_FAST;
-    
-#ifdef ZSTD_FOUND
-    if (!zstdContext) {
-        std::cerr << "ZSTD context not initialized" << std::endl;
-        return result;
-    }
-    
-    // 创建tar格式的数据
-    // Logging disabled
-    auto tarTimer = START_TIMER("CreateTarData");
-    std::vector<uint8_t> tarData = createTarData(folder);
-    if (tarData.empty()) {
-        std::cerr << "Failed to create tar data for folder: " << folder.sourcePath << std::endl;
-        return result;
-    }
-    
-    result.originalSize = tarData.size();
-    
-    // 设置压缩参数 - 快速模式优化
-    ZSTD_CCtx_setParameter(zstdContext, ZSTD_c_compressionLevel, compressionLevel);
-    ZSTD_CCtx_setParameter(zstdContext, ZSTD_c_nbWorkers, std::thread::hardware_concurrency());
-    
-    // 启用块级压缩以支持随机访问
-    ZSTD_CCtx_setParameter(zstdContext, ZSTD_c_jobSize, blockSize);
-    ZSTD_CCtx_setParameter(zstdContext, ZSTD_c_overlapLog, 0); // 无重叠以支持随机访问
-    
-    // 启用校验和
-    ZSTD_CCtx_setParameter(zstdContext, ZSTD_c_checksumFlag, 1);
-    
-    // 根据数据大小选择压缩策略
-    // Logging disabled
-    auto compressionTimer = START_TIMER("ZstdCompression");
-    
-    if (tarData.size() > 128 * 1024 * 1024) {
-        // 大文件（> 128MB）：使用块级压缩以支持并行解压
-        std::cout << "Using block-level compression for large file (" 
-                  << tarData.size() / (1024 * 1024) << " MB)" << std::endl;
-        
-        result.compressedData = compressWithBlocks(tarData);
-        
-        if (result.compressedData.empty()) {
-            std::cerr << "Block compression failed" << std::endl;
-            return CompressionResult{};
-        }
-        
-        result.compressedSize = result.compressedData.size();
-    } else {
-        // 小文件（≤ 128MB）：使用标准ZSTD压缩
-        size_t compressedBound = ZSTD_compressBound(tarData.size());
-        result.compressedData.resize(compressedBound);
-        
-        size_t compressedSize = ZSTD_compress2(zstdContext,
-                                              result.compressedData.data(),
-                                              result.compressedData.size(),
-                                              tarData.data(),
-                                              tarData.size());
-        
-        if (ZSTD_isError(compressedSize)) {
-            std::cerr << "ZSTD compression failed: " << ZSTD_getErrorName(compressedSize) << std::endl;
-            return CompressionResult{};
-        }
-        
-        result.compressedData.resize(compressedSize);
-        result.compressedSize = result.compressedData.size();
-    }
-    
-    result.checksum = calculateChecksum(tarData); // 对原始数据计算校验和
-#else
-    // Stub implementation - just copy data with minimal "compression"
-    std::vector<uint8_t> tarData = createTarData(folder);
-    if (tarData.empty()) {
-        std::cerr << "Failed to create tar data for folder: " << folder.sourcePath << std::endl;
-        return result;
-    }
-    
-    result.originalSize = tarData.size();
-    result.compressedData = tarData; // No actual compression
-    result.compressedSize = tarData.size();
-    result.checksum = calculateChecksum(tarData); // 对原始数据计算校验和
-    
-    std::cout << "Using stub ZSTD implementation (no actual compression)" << std::endl;
-#endif
-    
-    return result;
 }
 
 CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) {
@@ -297,7 +173,7 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
         result.compressedSize = compressedSize;
     }
     
-    // 计算原始数据的CRC32校验和（与ZSTD保持一致）
+    // 计算原始数据的CRC32校验和
     result.checksum = calculateChecksum(tarData);
 #else
     // Stub implementation - just copy data with minimal "compression"
@@ -311,11 +187,8 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
     result.compressedData = tarData; // No actual compression
     result.compressedSize = tarData.size();
     
-    // 计算SHA-256校验和
-    std::vector<uint8_t> sha256Hash = calculateSHA256(result.compressedData);
-    if (sha256Hash.size() >= 4) {
-        result.checksum = *reinterpret_cast<const uint32_t*>(sha256Hash.data());
-    }
+    // Stub checksum uses CRC32 for consistency
+    result.checksum = calculateChecksum(result.compressedData);
     
     std::cout << "Using stub LZMA implementation (no actual compression)" << std::endl;
 #endif
@@ -428,71 +301,6 @@ std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder) 
     return tarData;
 }
 
-std::vector<uint8_t> CompressionModule::compressWithBlocks(const std::vector<uint8_t>& data) {
-#ifdef ZSTD_FOUND
-    std::vector<uint8_t> result;
-    
-    // 块头信息：块数量 (4字节)
-    size_t totalBlocks = (data.size() + blockSize - 1) / blockSize;
-    uint32_t blockCount = static_cast<uint32_t>(totalBlocks);
-    
-    result.insert(result.end(), 
-                  reinterpret_cast<const uint8_t*>(&blockCount),
-                  reinterpret_cast<const uint8_t*>(&blockCount) + sizeof(blockCount));
-    
-    // 为每个块的元数据预留空间 (偏移量4字节 + 压缩大小4字节 + 原始大小4字节 + 校验和4字节)
-    size_t metadataOffset = result.size();
-    result.resize(result.size() + totalBlocks * 16); // 16字节每个块的元数据
-    
-    // 压缩每个块
-    size_t currentOffset = result.size();
-    for (size_t i = 0; i < totalBlocks; ++i) {
-        size_t blockStart = i * blockSize;
-        size_t currentBlockSize = (blockSize < (data.size() - blockStart)) ? blockSize : (data.size() - blockStart);
-        
-        // 压缩当前块
-        size_t compressedBound = ZSTD_compressBound(currentBlockSize);
-        std::vector<uint8_t> compressedBlock(compressedBound);
-        
-        size_t compressedSize = ZSTD_compress2(zstdContext,
-                                              compressedBlock.data(),
-                                              compressedBlock.size(),
-                                              data.data() + blockStart,
-                                              currentBlockSize);
-        
-        if (ZSTD_isError(compressedSize)) {
-            std::cerr << "Block compression failed: " << ZSTD_getErrorName(compressedSize) << std::endl;
-            return {};
-        }
-        
-        compressedBlock.resize(compressedSize);
-        
-        // 计算块校验和
-        uint32_t blockChecksum = calculateChecksum(compressedBlock);
-        
-        // 写入块元数据
-        size_t metadataPos = metadataOffset + i * 16;
-        uint32_t offset = static_cast<uint32_t>(currentOffset);
-        uint32_t compSize = static_cast<uint32_t>(compressedSize);
-        uint32_t origSize = static_cast<uint32_t>(currentBlockSize);
-        
-        std::memcpy(result.data() + metadataPos, &offset, sizeof(offset));
-        std::memcpy(result.data() + metadataPos + 4, &compSize, sizeof(compSize));
-        std::memcpy(result.data() + metadataPos + 8, &origSize, sizeof(origSize));
-        std::memcpy(result.data() + metadataPos + 12, &blockChecksum, sizeof(blockChecksum));
-        
-        // 添加压缩块数据
-        result.insert(result.end(), compressedBlock.begin(), compressedBlock.end());
-        currentOffset += compressedSize;
-    }
-    
-    return result;
-#else
-    // Stub implementation - just return the original data
-    return data;
-#endif
-}
-
 std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector<uint8_t>& data) {
 #ifdef LibLZMA_FOUND
     if (!lzmaLoader || !lzmaLoader->isLoaded()) {
@@ -588,32 +396,6 @@ std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector
     // Stub implementation - just return the original data
     return data;
 #endif
-}
-
-std::vector<uint8_t> CompressionModule::calculateSHA256(const std::vector<uint8_t>& data) {
-    // 简化的SHA-256实现 - 在实际项目中应使用OpenSSL或其他加密库
-    // 这里使用一个简单的哈希函数作为占位符
-    std::vector<uint8_t> hash(32, 0); // SHA-256产生32字节哈希
-    
-    // 简单的哈希算法（不是真正的SHA-256，仅用于演示）
-    uint64_t h = 0x6a09e667f3bcc908ULL; // SHA-256初始值之一
-    
-    for (size_t i = 0; i < data.size(); ++i) {
-        h = h * 31 + data[i];
-        h ^= (h >> 16);
-    }
-    
-    // 将哈希值分布到32字节中
-    for (int i = 0; i < 32; i += 8) {
-        uint64_t chunk = h;
-        for (int j = 0; j < 8 && i + j < 32; ++j) {
-            hash[i + j] = static_cast<uint8_t>(chunk & 0xFF);
-            chunk >>= 8;
-        }
-        h = h * 1103515245 + 12345; // 线性同余生成器
-    }
-    
-    return hash;
 }
 
 } // namespace MultiThreadedInstaller

@@ -34,7 +34,7 @@ public:
     struct PackagerArgs {
         std::string inputPath;
         std::string outputPath;
-        CompressionAlgorithm algorithm = CompressionAlgorithm::ZSTD_FAST;
+        CompressionAlgorithm algorithm = CompressionAlgorithm::LZMA_HIGH;
         int compressionLevel = -1;  // -1表示使用默认值
         int threadCount = -1;       // -1表示使用默认值
         bool verbose = false;

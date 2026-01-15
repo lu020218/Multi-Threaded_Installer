@@ -74,8 +74,7 @@ int main(int argc, char* argv[]) {
     
     console.showInfo("Application name: " + config.applicationName);
     console.showInfo("Default install directory: " + config.defaultInstallDir);
-    console.showInfo(std::string("Compression algorithm: ") + 
-                    (config.compressionAlgorithm == CompressionAlgorithm::ZSTD_FAST ? "ZSTD" : "LZMA"));
+    console.showInfo(std::string("Compression algorithm: LZMA"));
     
     // 扫描输入目录
     FolderScanner scanner;

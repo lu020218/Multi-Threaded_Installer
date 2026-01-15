@@ -46,8 +46,7 @@ A C++ packager and installer system that creates self-extracting installers with
 
 ## Dependencies
 
-- **libzstd** (>= 1.4.0): Zstandard compression library
-- **7z SDK** (>= 19.00): LZMA compression support (optional)
+- **7z SDK / liblzma** (>= 19.00): LZMA compression support
 - **RapidCheck**: Property-based testing framework (for tests)
 - **CMake** (>= 3.16): Build system
 - **C++17** compatible compiler
@@ -68,8 +67,8 @@ make
 ./packager [options] <input_directory> <output_file>
 
 Options:
-  -a, --algorithm <zstd|lzma>    Choose compression algorithm (default: zstd)
-  -l, --level <level>            Compression level (zstd: 1-22, lzma: 0-9)
+  -a, --algorithm <lzma>         Choose compression algorithm (default: lzma)
+  -l, --level <level>            Compression level (lzma: 0-9)
   -t, --threads <count>          Number of compression threads (default: CPU cores)
   -v, --verbose                  Show detailed information
   -h, --help                     Show help message
@@ -101,7 +100,7 @@ Options:
 ## Features
 
 - **Multi-threaded compression and decompression**
-- **Multiple compression algorithms** (Zstandard, LZMA)
+- **Single compression algorithm** (LZMA)
 - **Self-extracting installers**
 - **Cross-platform support** (Windows, Linux, macOS)
 - **Command-line and interactive interfaces**

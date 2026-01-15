@@ -1,11 +1,14 @@
-﻿#include "installer/decompression_engine.h"
-#include "installer/file_system_operator.h"
+#include "installer/decompression_engine.h"
+#include "installer/tar_stream_extractor.h"
 #include "common/lzma_loader.h"
 #include <iostream>
-#include <fstream>
+#include <vector>
+#include <future>
 #include <algorithm>
+#include <cstring>
+#include <cstdint>
+#include <stdexcept>
 
-// Prevent Windows.h min/max macros from interfering with std::min/std::max
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -16,76 +19,79 @@
 
 namespace MultiThreadedInstaller {
 
-DecompressionEngine::DecompressionEngine() 
-    : zstdContext(nullptr)
+namespace {
+
+struct BlockMeta {
+    uint32_t offset;
+    uint32_t compressedSize;
+    uint32_t originalSize;
+    uint32_t checksum;
+};
+
+bool decompressLzmaBlock(const uint8_t* data, size_t dataSize, const BlockMeta& block,
+                         std::vector<uint8_t>& output) {
 #ifdef LibLZMA_FOUND
-    , lzmaInitialized(false)
-#else
-    , lzmaDecoder(nullptr)
-#endif
-{
-    
-    // 初始化Zstandard解压上下文
-    zstdContext = ZSTD_createDCtx();
-    if (!zstdContext) {
-        std::cerr << "Failed to create ZSTD decompression context" << std::endl;
+    static LzmaLoader loader;
+    if (!loader.isLoaded()) {
+        return false;
     }
     
-    // 初始化LZMA解压器 - 使用动态加载
-#ifdef LibLZMA_FOUND
-    lzmaStream = LZMA_STREAM_INIT;
-    lzmaInitialized = false;  // Will be initialized when needed
+    (void)dataSize;
+    
+    lzma_stream stream = LZMA_STREAM_INIT;
+    lzma_ret ret = loader.lzma_auto_decoder_ptr
+        ? loader.lzma_auto_decoder_ptr(&stream, UINT64_MAX, 0)
+        : loader.lzma_stream_decoder_ptr(&stream, UINT64_MAX, 0);
+    
+    if (ret != LZMA_OK) {
+        return false;
+    }
+    
+    stream.next_in = data + block.offset;
+    stream.avail_in = block.compressedSize;
+    output.resize(block.originalSize);
+    stream.next_out = output.data();
+    stream.avail_out = output.size();
+    
+    ret = loader.lzma_code_ptr(&stream, LZMA_FINISH);
+    loader.lzma_end_ptr(&stream);
+    
+    return ret == LZMA_STREAM_END && stream.avail_out == 0;
+#else
+    (void)data;
+    (void)dataSize;
+    (void)block;
+    (void)output;
+    return false;
 #endif
 }
 
-DecompressionEngine::~DecompressionEngine() {
-    if (zstdContext) {
-        ZSTD_freeDCtx(zstdContext);
-    }
-    
-#ifdef LibLZMA_FOUND
-    if (lzmaInitialized) {
-        // LZMA cleanup will be handled by the dynamic loader
-        lzmaInitialized = false;
-    }
-#endif
-}
+} // namespace
+
+DecompressionEngine::DecompressionEngine() = default;
+
+DecompressionEngine::~DecompressionEngine() = default;
 
 bool DecompressionEngine::decompressFolder(const DecompressionTask& task) {
-    // 对于多线程处理，将任务提交到线程池
     if (threadPool && threadPool->getTotalThreadCount() > 1) {
-        // 为每个文件夹创建独立的解压任务
         auto future = threadPool->enqueue([this, task]() -> bool {
-            switch (task.algorithm) {
-                case CompressionAlgorithm::ZSTD_FAST:
-                    return decompressZstd(task);
-                case CompressionAlgorithm::LZMA_HIGH:
-                    return decompressLzma(task);
-                default:
-                    std::cerr << "Unknown compression algorithm for " << task.targetPath << std::endl;
-                    return false;
-            }
+            TarStreamExtractor extractor(task.targetPath);
+            Crc32Stream checksum;
+            return decompressToStream(task, extractor, &checksum);
         });
         
         try {
             return future.get();
         } catch (const std::exception& e) {
-            std::cerr << "Thread pool execution failed for " << task.targetPath 
+            std::cerr << "Thread pool execution failed for " << task.targetPath
                       << ": " << e.what() << std::endl;
             return false;
         }
-    } else {
-        // 单线程处理
-        switch (task.algorithm) {
-            case CompressionAlgorithm::ZSTD_FAST:
-                return decompressZstd(task);
-            case CompressionAlgorithm::LZMA_HIGH:
-                return decompressLzma(task);
-            default:
-                std::cerr << "Unknown compression algorithm for " << task.targetPath << std::endl;
-                return false;
-        }
     }
+    
+    TarStreamExtractor extractor(task.targetPath);
+    Crc32Stream checksum;
+    return decompressToStream(task, extractor, &checksum);
 }
 
 void DecompressionEngine::setThreadPool(std::shared_ptr<ThreadPoolManager> threadPool) {
@@ -96,374 +102,21 @@ void DecompressionEngine::registerProgressCallback(ProgressCallback callback) {
     this->progressCallback = callback;
 }
 
-bool DecompressionEngine::decompressZstd(const DecompressionTask& task) {
-    if (!zstdContext) {
-        std::cerr << "ZSTD context not initialized" << std::endl;
+bool DecompressionEngine::decompressToStream(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum) {
+    if (task.algorithm != CompressionAlgorithm::LZMA_HIGH) {
+        std::cerr << "Unsupported compression algorithm for " << task.targetPath << std::endl;
         return false;
     }
     
-    if (task.compressedData.empty()) {
-        std::cerr << "No compressed data provided" << std::endl;
-        return false;
-    }
-    
-    reportProgress(task.targetPath, 0.0f);
-    
-    try {
-        // 改进的格式检测逻辑
-        bool useBlockDecompression = false;
-        
-        if (task.compressedData.size() >= 4) {
-            uint32_t firstWord = *reinterpret_cast<const uint32_t*>(task.compressedData.data());
-            
-            // 详细日志用于诊断
-            std::cout << "Format detection for: " << task.targetPath << std::endl;
-            std::cout << "  First word: 0x" << std::hex << firstWord << std::dec << std::endl;
-            std::cout << "  Data size: " << task.compressedData.size() << " bytes" << std::endl;
-            
-            // ZSTD 魔数（小端字节序）
-            const uint32_t ZSTD_MAGIC = 0x28B52FFD;
-            
-            if (firstWord == ZSTD_MAGIC) {
-                std::cout << "  Format: Standard ZSTD" << std::endl;
-                useBlockDecompression = false;
-            } else if (firstWord > 0 && firstWord < 100000) {
-                // 可能是块格式，进一步验证块元数据大小
-                size_t expectedMetadataSize = sizeof(uint32_t) + firstWord * 16;
-                if (expectedMetadataSize < task.compressedData.size()) {
-                    std::cout << "  Format: Block-based ZSTD (" << firstWord << " blocks)" << std::endl;
-                    useBlockDecompression = true;
-                } else {
-                    std::cout << "  Format: Invalid block metadata (treating as standard ZSTD)" << std::endl;
-                    useBlockDecompression = false;
-                }
-            } else {
-                std::cout << "  Format: Unknown (treating as standard ZSTD)" << std::endl;
-                useBlockDecompression = false;
-            }
-        }
-        
-        if (useBlockDecompression) {
-            std::cout << "Using block-level decompression" << std::endl;
-            return decompressZstdBlocks(task);
-        }
-        
-        std::cout << "Using standard ZSTD decompression" << std::endl;
-        
-        // 标准ZSTD解压流程
-        // 估算解压后大小
-        size_t decompressedSize = ZSTD_getFrameContentSize(task.compressedData.data(), task.compressedData.size());
-        if (decompressedSize == ZSTD_CONTENTSIZE_ERROR) {
-            std::cerr << "Invalid ZSTD frame for: " << task.targetPath << std::endl;
-            return false;
-        }
-        
-        if (decompressedSize == ZSTD_CONTENTSIZE_UNKNOWN) {
-            decompressedSize = task.originalSize;
-        }
-        
-        // 验证预期大小
-        if (decompressedSize != task.originalSize && task.originalSize > 0) {
-            std::cerr << "Size mismatch for " << task.targetPath 
-                      << ": expected " << task.originalSize 
-                      << ", got " << decompressedSize << std::endl;
-        }
-        
-        reportProgress(task.targetPath, 0.2f);
-        
-        // 分配解压缓冲区
-        std::vector<uint8_t> decompressedData(decompressedSize);
-        
-        reportProgress(task.targetPath, 0.3f);
-        
-        // 执行解压 - 使用多线程上下文如果可用
-        size_t actualSize;
-        if (threadPool && threadPool->getTotalThreadCount() > 1) {
-            // 对于大文件，使用流式解压以支持多线程处理
-            if (decompressedSize > 1024 * 1024) { // 1MB threshold
-                actualSize = decompressZstdStreaming(task.compressedData, decompressedData);
-            } else {
-                actualSize = ZSTD_decompress(decompressedData.data(), decompressedData.size(),
-                                           task.compressedData.data(), task.compressedData.size());
-            }
-        } else {
-            actualSize = ZSTD_decompress(decompressedData.data(), decompressedData.size(),
-                                       task.compressedData.data(), task.compressedData.size());
-        }
-        
-        if (ZSTD_isError(actualSize)) {
-            std::cerr << "ZSTD decompression failed for " << task.targetPath 
-                      << ": " << ZSTD_getErrorName(actualSize) << std::endl;
-            return false;
-        }
-        
-        decompressedData.resize(actualSize);
-        
-        reportProgress(task.targetPath, 0.7f);
-        
-        // 验证校验和
-        if (!verifyChecksum(decompressedData, task.expectedChecksum)) {
-            std::cerr << "Checksum verification failed for: " << task.targetPath << std::endl;
-            return false;
-        }
-        
-        reportProgress(task.targetPath, 0.9f);
-        
-        // 提取tar数据到目标路径
-        bool extractSuccess = extractTarData(decompressedData, task.targetPath);
-        
-        reportProgress(task.targetPath, 1.0f);
-        
-        return extractSuccess;
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Exception during ZSTD decompression of " << task.targetPath 
-                  << ": " << e.what() << std::endl;
-        return false;
-    } catch (...) {
-        std::cerr << "Unknown exception during ZSTD decompression of " << task.targetPath << std::endl;
-        return false;
-    }
+    return decompressLzma(task, sink, checksum);
 }
 
-bool DecompressionEngine::decompressZstdBlocks(const DecompressionTask& task) {
-    if (!zstdContext) {
-        std::cerr << "ZSTD context not initialized" << std::endl;
-        return false;
-    }
-    
-    if (task.compressedData.empty()) {
-        std::cerr << "No compressed data provided for block decompression" << std::endl;
-        return false;
-    }
-    
-    reportProgress(task.targetPath, 0.0f);
-    
-    try {
-        // 解析块级格式
-        size_t offset = 0;
-        
-        // 读取块数量
-        if (offset + sizeof(uint32_t) > task.compressedData.size()) {
-            std::cerr << "Invalid block format: cannot read block count" << std::endl;
-            return false;
-        }
-        
-        uint32_t blockCount = *reinterpret_cast<const uint32_t*>(task.compressedData.data() + offset);
-        offset += sizeof(uint32_t);
-        
-        std::cout << "Decompressing " << blockCount << " blocks in parallel..." << std::endl;
-        
-        // 读取块元数据
-        struct BlockMeta {
-            uint32_t offset;
-            uint32_t compressedSize;
-            uint32_t originalSize;
-            uint32_t checksum;
-        };
-        
-        if (offset + blockCount * sizeof(BlockMeta) > task.compressedData.size()) {
-            std::cerr << "Invalid block format: cannot read block metadata" << std::endl;
-            return false;
-        }
-        
-        std::vector<BlockMeta> blocks(blockCount);
-        std::memcpy(blocks.data(), task.compressedData.data() + offset, blockCount * sizeof(BlockMeta));
-        offset += blockCount * sizeof(BlockMeta);
-        
-        reportProgress(task.targetPath, 0.1f);
-        
-        // 验证块元数据
-        for (size_t i = 0; i < blocks.size(); ++i) {
-            const auto& block = blocks[i];
-            if (block.offset + block.compressedSize > task.compressedData.size()) {
-                std::cerr << "Invalid block " << i << ": offset " << block.offset 
-                          << " + size " << block.compressedSize 
-                          << " exceeds data size " << task.compressedData.size() << std::endl;
-                return false;
-            }
-        }
-        
-        reportProgress(task.targetPath, 0.2f);
-        
-        // 并行解压每个块
-        std::vector<std::future<std::vector<uint8_t>>> futures;
-        
-        if (threadPool && threadPool->getTotalThreadCount() > 1) {
-            size_t totalThreads = threadPool->getTotalThreadCount();
-            
-            // 计算最优线程数: 每个线程至少处理 4 个块
-            size_t blocksPerThreadMin = 4;
-            size_t optimalThreads = (blocks.size() + blocksPerThreadMin - 1) / blocksPerThreadMin;
-            if (optimalThreads > totalThreads) optimalThreads = totalThreads;
-            if (optimalThreads > 8) optimalThreads = 8;  // 最多 8 个线程
-            if (optimalThreads < 1) optimalThreads = 1;  // 至少 1 个线程
-            
-            // 批量处理: 每个线程处理多个块
-            size_t blocksPerThread = (blocks.size() + optimalThreads - 1) / optimalThreads;
-            
-            std::cout << "Using " << optimalThreads << " threads (of " << totalThreads 
-                      << " available) for " << blocks.size() << " blocks" << std::endl;
-            std::cout << "Each thread processes ~" << blocksPerThread << " blocks" << std::endl;
-            
-            for (size_t t = 0; t < optimalThreads; ++t) {
-                size_t startBlock = t * blocksPerThread;
-                size_t endBlock = startBlock + blocksPerThread;
-                if (endBlock > blocks.size()) endBlock = blocks.size();
-                
-                if (startBlock >= blocks.size()) break;
-                
-                futures.push_back(threadPool->enqueue([this, &task, &blocks, startBlock, endBlock]() -> std::vector<uint8_t> {
-                    // 为每个线程创建独立的解压上下文
-                    ZSTD_DCtx* localContext = ZSTD_createDCtx();
-                    if (!localContext) {
-                        throw std::runtime_error("Failed to create ZSTD context");
-                    }
-                    
-                    try {
-                        std::vector<uint8_t> threadResult;
-                        threadResult.reserve((endBlock - startBlock) * blocks[startBlock].originalSize);
-                        
-                        // 处理分配给这个线程的所有块
-                        for (size_t i = startBlock; i < endBlock; ++i) {
-                            const auto& block = blocks[i];
-                            std::vector<uint8_t> decompressed(block.originalSize);
-                            
-                            size_t result = ZSTD_decompressDCtx(
-                                localContext,
-                                decompressed.data(), decompressed.size(),
-                                task.compressedData.data() + block.offset, block.compressedSize
-                            );
-                            
-                            if (ZSTD_isError(result)) {
-                                ZSTD_freeDCtx(localContext);
-                                throw std::runtime_error(
-                                    std::string("Block ") + std::to_string(i) + 
-                                    " decompression failed: " + ZSTD_getErrorName(result)
-                                );
-                            }
-                            
-                            if (result != block.originalSize) {
-                                ZSTD_freeDCtx(localContext);
-                                throw std::runtime_error(
-                                    std::string("Block ") + std::to_string(i) + 
-                                    " size mismatch: expected " + std::to_string(block.originalSize) +
-                                    ", got " + std::to_string(result)
-                                );
-                            }
-                            
-                            threadResult.insert(threadResult.end(), decompressed.begin(), decompressed.end());
-                        }
-                        
-                        ZSTD_freeDCtx(localContext);
-                        return threadResult;
-                        
-                    } catch (...) {
-                        ZSTD_freeDCtx(localContext);
-                        throw;
-                    }
-                }));
-            }
-        } else {
-            // 单线程顺序解压
-            std::cout << "Using single-threaded decompression" << std::endl;
-            
-            for (size_t i = 0; i < blocks.size(); ++i) {
-                const auto& block = blocks[i];
-                
-                std::vector<uint8_t> decompressed(block.originalSize);
-                
-                size_t result = ZSTD_decompress(
-                    decompressed.data(), decompressed.size(),
-                    task.compressedData.data() + block.offset, block.compressedSize
-                );
-                
-                if (ZSTD_isError(result)) {
-                    std::cerr << "Block " << i << " decompression failed: " 
-                              << ZSTD_getErrorName(result) << std::endl;
-                    return false;
-                }
-                
-                if (result != block.originalSize) {
-                    std::cerr << "Block " << i << " size mismatch: expected " 
-                              << block.originalSize << ", got " << result << std::endl;
-                    return false;
-                }
-                
-                // 创建一个已完成的 future
-                std::promise<std::vector<uint8_t>> promise;
-                promise.set_value(std::move(decompressed));
-                futures.push_back(promise.get_future());
-            }
-        }
-        
-        reportProgress(task.targetPath, 0.3f);
-        
-        // 收集并合并结果
-        std::vector<uint8_t> decompressedData;
-        size_t totalSize = 0;
-        for (const auto& block : blocks) {
-            totalSize += block.originalSize;
-        }
-        decompressedData.reserve(totalSize);
-        
-        for (size_t i = 0; i < futures.size(); ++i) {
-            try {
-                auto blockData = futures[i].get();
-                decompressedData.insert(decompressedData.end(), blockData.begin(), blockData.end());
-                
-                // 报告进度
-                float progress = 0.3f + (0.4f * static_cast<float>(i + 1) / futures.size());
-                reportProgress(task.targetPath, progress);
-                
-            } catch (const std::exception& e) {
-                std::cerr << "Failed to get block " << i << " result: " << e.what() << std::endl;
-                return false;
-            }
-        }
-        
-        reportProgress(task.targetPath, 0.8f);
-        
-        std::cout << "Successfully decompressed " << blockCount << " blocks, total size: " 
-                  << decompressedData.size() << " bytes" << std::endl;
-        
-        // 验证校验和
-        if (!verifyChecksum(decompressedData, task.expectedChecksum)) {
-            std::cerr << "Checksum verification failed for: " << task.targetPath << std::endl;
-            return false;
-        }
-        
-        reportProgress(task.targetPath, 0.9f);
-        
-        // 提取tar数据到目标路径
-        bool extractSuccess = extractTarData(decompressedData, task.targetPath);
-        
-        reportProgress(task.targetPath, 1.0f);
-        
-        return extractSuccess;
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Exception during ZSTD block decompression of " << task.targetPath 
-                  << ": " << e.what() << std::endl;
-        return false;
-    } catch (...) {
-        std::cerr << "Unknown exception during ZSTD block decompression of " << task.targetPath << std::endl;
-        return false;
-    }
-}
-
-bool DecompressionEngine::decompressLzma(const DecompressionTask& task) {
+bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum) {
 #ifdef LibLZMA_FOUND
-    // Use dynamic loading for LZMA
-    static LzmaLoader lzmaLoader;
+    static LzmaLoader loader;
     
-    if (!lzmaLoader.isLoaded()) {
+    if (!loader.isLoaded()) {
         std::cerr << "LZMA library not available for decompression" << std::endl;
-        return false;
-    }
-    
-    if (!lzmaLoader.lzma_stream_decoder_ptr || !lzmaLoader.lzma_code_ptr || !lzmaLoader.lzma_end_ptr) {
-        std::cerr << "LZMA decompression functions not available" << std::endl;
         return false;
     }
     
@@ -474,708 +127,213 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task) {
     
     reportProgress(task.targetPath, 0.0f);
     
-    try {
-        // 改进的格式检测逻辑
-        bool useBlockDecompression = false;
-        
-        if (task.compressedData.size() >= 4) {
-            uint32_t firstWord = *reinterpret_cast<const uint32_t*>(task.compressedData.data());
-            
-            // 详细日志用于诊断
-            std::cout << "LZMA format detection for: " << task.targetPath << std::endl;
-            std::cout << "  First word: 0x" << std::hex << firstWord << std::dec << std::endl;
-            std::cout << "  Data size: " << task.compressedData.size() << " bytes" << std::endl;
-            
-            // LZMA 标准格式的魔数检测
-            // LZMA 文件通常以 0x5D 开头（属性字节）
-            uint8_t firstByte = task.compressedData[0];
-            
-            if (firstByte == 0x5D || firstByte == 0xFD) {
-                // 可能是标准 LZMA 格式
-                std::cout << "  Format: Standard LZMA" << std::endl;
-                useBlockDecompression = false;
-            } else if (firstWord > 0 && firstWord < 100000) {
-                // 可能是块格式，进一步验证块元数据大小
-                size_t expectedMetadataSize = sizeof(uint32_t) + firstWord * 16;
-                if (expectedMetadataSize < task.compressedData.size()) {
-                    std::cout << "  Format: Block-based LZMA (" << firstWord << " blocks)" << std::endl;
-                    useBlockDecompression = true;
-                } else {
-                    std::cout << "  Format: Invalid block metadata (treating as standard LZMA)" << std::endl;
-                    useBlockDecompression = false;
-                }
-            } else {
-                std::cout << "  Format: Unknown (treating as standard LZMA)" << std::endl;
-                useBlockDecompression = false;
-            }
+    bool useBlockDecompression = false;
+    if (task.compressedData.size() >= sizeof(uint32_t)) {
+        uint32_t firstWord = *reinterpret_cast<const uint32_t*>(task.compressedData.data());
+        size_t expectedMetadataSize = sizeof(uint32_t) + static_cast<size_t>(firstWord) * sizeof(BlockMeta);
+        if (firstWord > 0 && firstWord < 100000 && expectedMetadataSize < task.compressedData.size()) {
+            useBlockDecompression = true;
         }
-        
-        if (useBlockDecompression) {
-            std::cout << "Using block-level LZMA decompression" << std::endl;
-            return decompressLzmaBlocks(task);
-        }
-        
-        std::cout << "Using standard LZMA decompression" << std::endl;
-        
-        // 标准 LZMA 解压流程
-        // Initialize LZMA stream
-        lzma_stream stream = LZMA_STREAM_INIT;
-        
-        // Initialize decoder with auto-detection (supports .xz and .lzma formats)
-        // Use UINT64_MAX for unlimited memory
-        lzma_ret ret;
-        if (lzmaLoader.lzma_auto_decoder_ptr) {
-            ret = lzmaLoader.lzma_auto_decoder_ptr(&stream, UINT64_MAX, 0);
-        } else {
-            ret = lzmaLoader.lzma_stream_decoder_ptr(&stream, UINT64_MAX, 0);
-        }
-        
-        if (ret != LZMA_OK) {
-            std::cerr << "Failed to initialize LZMA decoder: " << ret << std::endl;
-            return false;
-        }
-        
-        reportProgress(task.targetPath, 0.1f);
-        
-        // Allocate output buffer (use expected size or estimate)
-        size_t outputSize = task.originalSize > 0 ? task.originalSize : task.compressedData.size() * 10;
-        std::vector<uint8_t> decompressedData;
-        decompressedData.reserve(outputSize);
-        
-        // Setup input buffer
-        stream.next_in = task.compressedData.data();
-        stream.avail_in = task.compressedData.size();
-        
-        reportProgress(task.targetPath, 0.2f);
-        
-        // Decompress in chunks
-        const size_t chunkSize = 64 * 1024; // 64KB chunks
-        std::vector<uint8_t> outBuffer(chunkSize);
-        
-        lzma_action action = LZMA_RUN;
-        
-        while (true) {
-            stream.next_out = outBuffer.data();
-            stream.avail_out = outBuffer.size();
-            
-            // If we've consumed all input, finish
-            if (stream.avail_in == 0) {
-                action = LZMA_FINISH;
-            }
-            
-            ret = lzmaLoader.lzma_code_ptr(&stream, action);
-            
-            // Copy decompressed data
-            size_t produced = outBuffer.size() - stream.avail_out;
-            if (produced > 0) {
-                decompressedData.insert(decompressedData.end(), 
-                                       outBuffer.begin(), 
-                                       outBuffer.begin() + produced);
-            }
-            
-            // Report progress
-            float progress = 0.2f + (0.5f * static_cast<float>(stream.total_in) / task.compressedData.size());
-            reportProgress(task.targetPath, progress);
-            
-            // Check for completion or errors
-            if (ret == LZMA_STREAM_END) {
-                break; // Decompression complete
-            }
-            
-            if (ret != LZMA_OK) {
-                std::cerr << "LZMA decompression error: " << ret << std::endl;
-                lzmaLoader.lzma_end_ptr(&stream);
-                return false;
-            }
-            
-            // Safety check: prevent infinite loops
-            if (decompressedData.size() > outputSize * 2 && outputSize > 0) {
-                std::cerr << "LZMA decompression produced too much data" << std::endl;
-                lzmaLoader.lzma_end_ptr(&stream);
-                return false;
-            }
-        }
-        
-        // Clean up LZMA stream
-        lzmaLoader.lzma_end_ptr(&stream);
-        
-        reportProgress(task.targetPath, 0.8f);
-        
-        // Verify size if expected size was provided
-        if (task.originalSize > 0 && decompressedData.size() != task.originalSize) {
-            std::cerr << "LZMA decompression size mismatch for " << task.targetPath 
-                      << ": expected " << task.originalSize 
-                      << ", got " << decompressedData.size() << std::endl;
-            // Continue anyway, as size might be approximate
-        }
-        
-        // Verify checksum
-        if (!verifyChecksum(decompressedData, task.expectedChecksum)) {
-            std::cerr << "Checksum verification failed for: " << task.targetPath << std::endl;
-            return false;
-        }
-        
-        reportProgress(task.targetPath, 0.9f);
-        
-        // Extract tar data to target path
-        bool extractSuccess = extractTarData(decompressedData, task.targetPath);
-        
-        reportProgress(task.targetPath, 1.0f);
-        
-        return extractSuccess;
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Exception during LZMA decompression of " << task.targetPath 
-                  << ": " << e.what() << std::endl;
-        return false;
-    } catch (...) {
-        std::cerr << "Unknown exception during LZMA decompression of " << task.targetPath << std::endl;
+    }
+    
+    if (useBlockDecompression) {
+        return decompressLzmaBlocks(task, sink, checksum);
+    }
+    
+    lzma_stream stream = LZMA_STREAM_INIT;
+    lzma_ret ret = loader.lzma_auto_decoder_ptr
+        ? loader.lzma_auto_decoder_ptr(&stream, UINT64_MAX, 0)
+        : loader.lzma_stream_decoder_ptr(&stream, UINT64_MAX, 0);
+    
+    if (ret != LZMA_OK) {
+        std::cerr << "LZMA decoder init failed: " << ret << std::endl;
         return false;
     }
     
+    stream.next_in = task.compressedData.data();
+    stream.avail_in = task.compressedData.size();
+    
+    std::vector<uint8_t> outBuffer(64 * 1024);
+    size_t totalOut = 0;
+    
+    while (true) {
+        stream.next_out = outBuffer.data();
+        stream.avail_out = outBuffer.size();
+        
+        ret = loader.lzma_code_ptr(&stream, LZMA_FINISH);
+        
+        size_t produced = outBuffer.size() - stream.avail_out;
+        if (produced > 0) {
+            if (!sink.write(outBuffer.data(), produced)) {
+                loader.lzma_end_ptr(&stream);
+                return false;
+            }
+            
+            if (checksum) {
+                checksum->update(outBuffer.data(), produced);
+            }
+            
+            totalOut += produced;
+            if (task.originalSize > 0) {
+                float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
+                reportProgress(task.targetPath, progress);
+            }
+        }
+        
+        if (ret == LZMA_STREAM_END) {
+            break;
+        }
+        if (ret != LZMA_OK) {
+            std::cerr << "LZMA decompression failed: " << ret << std::endl;
+            loader.lzma_end_ptr(&stream);
+            return false;
+        }
+    }
+    
+    loader.lzma_end_ptr(&stream);
+    sink.flush();
+    
+    if (checksum && checksum->finalize() != task.expectedChecksum) {
+        std::cerr << "Checksum verification failed for: " << task.targetPath << std::endl;
+        return false;
+    }
+    
+    reportProgress(task.targetPath, 1.0f);
+    return true;
 #else
+    (void)task;
+    (void)sink;
+    (void)checksum;
     std::cerr << "LZMA support not compiled in" << std::endl;
     return false;
 #endif
 }
 
-bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task) {
+bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum) {
 #ifdef LibLZMA_FOUND
-    static LzmaLoader lzmaLoader;
-    
-    if (!lzmaLoader.isLoaded()) {
-        std::cerr << "LZMA library not available for block decompression" << std::endl;
+    if (task.compressedData.size() < sizeof(uint32_t)) {
+        std::cerr << "Invalid block format: cannot read block count" << std::endl;
         return false;
     }
     
-    if (task.compressedData.empty()) {
-        std::cerr << "No compressed data provided for LZMA block decompression" << std::endl;
+    size_t offset = 0;
+    uint32_t blockCount = *reinterpret_cast<const uint32_t*>(task.compressedData.data() + offset);
+    offset += sizeof(uint32_t);
+    
+    if (offset + blockCount * sizeof(BlockMeta) > task.compressedData.size()) {
+        std::cerr << "Invalid block format: cannot read block metadata" << std::endl;
         return false;
     }
     
-    reportProgress(task.targetPath, 0.0f);
+    std::vector<BlockMeta> blocks(blockCount);
+    std::memcpy(blocks.data(), task.compressedData.data() + offset, blockCount * sizeof(BlockMeta));
     
-    try {
-        // 解析块级格式
-        size_t offset = 0;
-        
-        // 读取块数量
-        if (offset + sizeof(uint32_t) > task.compressedData.size()) {
-            std::cerr << "Invalid LZMA block format: cannot read block count" << std::endl;
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        const auto& block = blocks[i];
+        if (block.offset + block.compressedSize > task.compressedData.size()) {
+            std::cerr << "Invalid block " << i << ": offset " << block.offset
+                      << " + size " << block.compressedSize
+                      << " exceeds data size " << task.compressedData.size() << std::endl;
             return false;
         }
+    }
+    
+    size_t totalOut = 0;
+    
+    if (threadPool && threadPool->getTotalThreadCount() > 1) {
+        size_t totalThreads = threadPool->getTotalThreadCount();
+        size_t blocksPerThreadMin = 4;
+        size_t optimalThreads = (blocks.size() + blocksPerThreadMin - 1) / blocksPerThreadMin;
+        if (optimalThreads > totalThreads) optimalThreads = totalThreads;
+        if (optimalThreads > 8) optimalThreads = 8;
+        if (optimalThreads < 1) optimalThreads = 1;
         
-        uint32_t blockCount = *reinterpret_cast<const uint32_t*>(task.compressedData.data() + offset);
-        offset += sizeof(uint32_t);
-        
-        std::cout << "Decompressing " << blockCount << " LZMA blocks in parallel..." << std::endl;
-        
-        // 读取块元数据
-        struct BlockMeta {
-            uint32_t offset;
-            uint32_t compressedSize;
-            uint32_t originalSize;
-            uint32_t checksum;
-        };
-        
-        if (offset + blockCount * sizeof(BlockMeta) > task.compressedData.size()) {
-            std::cerr << "Invalid LZMA block format: cannot read block metadata" << std::endl;
-            return false;
-        }
-        
-        std::vector<BlockMeta> blocks(blockCount);
-        std::memcpy(blocks.data(), task.compressedData.data() + offset, blockCount * sizeof(BlockMeta));
-        offset += blockCount * sizeof(BlockMeta);
-        
-        reportProgress(task.targetPath, 0.1f);
-        
-        // 验证块元数据
-        for (size_t i = 0; i < blocks.size(); ++i) {
-            const auto& block = blocks[i];
-            if (block.offset + block.compressedSize > task.compressedData.size()) {
-                std::cerr << "Invalid LZMA block " << i << ": offset " << block.offset 
-                          << " + size " << block.compressedSize 
-                          << " exceeds data size " << task.compressedData.size() << std::endl;
-                return false;
-            }
-        }
-        
-        reportProgress(task.targetPath, 0.2f);
-        
-        // 并行解压每个块
+        size_t blocksPerThread = (blocks.size() + optimalThreads - 1) / optimalThreads;
         std::vector<std::future<std::vector<uint8_t>>> futures;
         
-        if (threadPool && threadPool->getTotalThreadCount() > 1) {
-            size_t totalThreads = threadPool->getTotalThreadCount();
+        for (size_t t = 0; t < optimalThreads; ++t) {
+            size_t startBlock = t * blocksPerThread;
+            size_t endBlock = std::min(startBlock + blocksPerThread, blocks.size());
+            if (startBlock >= blocks.size()) break;
             
-            // 计算最优线程数: 每个线程至少处理 4 个块
-            size_t blocksPerThreadMin = 4;
-            size_t optimalThreads = (blocks.size() + blocksPerThreadMin - 1) / blocksPerThreadMin;
-            if (optimalThreads > totalThreads) optimalThreads = totalThreads;
-            if (optimalThreads > 8) optimalThreads = 8;  // 最多 8 个线程
-            if (optimalThreads < 1) optimalThreads = 1;  // 至少 1 个线程
-            
-            // 批量处理: 每个线程处理多个块
-            size_t blocksPerThread = (blocks.size() + optimalThreads - 1) / optimalThreads;
-            
-            std::cout << "Using " << optimalThreads << " threads (of " << totalThreads 
-                      << " available) for " << blocks.size() << " LZMA blocks" << std::endl;
-            std::cout << "Each thread processes ~" << blocksPerThread << " blocks" << std::endl;
-            
-            for (size_t t = 0; t < optimalThreads; ++t) {
-                size_t startBlock = t * blocksPerThread;
-                size_t endBlock = startBlock + blocksPerThread;
-                if (endBlock > blocks.size()) endBlock = blocks.size();
-                
-                if (startBlock >= blocks.size()) break;
-                
-                futures.push_back(threadPool->enqueue([&task, &blocks, startBlock, endBlock]() -> std::vector<uint8_t> {
-                    // 使用静态 LzmaLoader 实例（线程安全）
-                    static LzmaLoader localLoader;
-                    
-                    if (!localLoader.isLoaded()) {
-                        throw std::runtime_error("LZMA library not available in thread");
+            futures.push_back(threadPool->enqueue([&task, &blocks, startBlock, endBlock]() -> std::vector<uint8_t> {
+                std::vector<uint8_t> chunk;
+                for (size_t i = startBlock; i < endBlock; ++i) {
+                    std::vector<uint8_t> blockOut;
+                    if (!decompressLzmaBlock(task.compressedData.data(), task.compressedData.size(), blocks[i], blockOut)) {
+                        throw std::runtime_error("LZMA block decompression failed");
                     }
-                    
-                    std::vector<uint8_t> threadResult;
-                    threadResult.reserve((endBlock - startBlock) * blocks[startBlock].originalSize);
-                    
-                    // 处理分配给这个线程的所有块
-                    for (size_t i = startBlock; i < endBlock; ++i) {
-                        const auto& block = blocks[i];
-                        std::vector<uint8_t> decompressed(block.originalSize);
-                        
-                        // 为每个块创建独立的 LZMA 流
-                        lzma_stream stream = LZMA_STREAM_INIT;
-                        
-                        // 初始化解码器
-                        lzma_ret ret;
-                        if (localLoader.lzma_auto_decoder_ptr) {
-                            ret = localLoader.lzma_auto_decoder_ptr(&stream, UINT64_MAX, 0);
-                        } else {
-                            ret = localLoader.lzma_stream_decoder_ptr(&stream, UINT64_MAX, 0);
-                        }
-                        
-                        if (ret != LZMA_OK) {
-                            throw std::runtime_error(
-                                std::string("Block ") + std::to_string(i) + 
-                                " LZMA decoder init failed: " + std::to_string(ret)
-                            );
-                        }
-                        
-                        // 设置输入和输出
-                        stream.next_in = task.compressedData.data() + block.offset;
-                        stream.avail_in = block.compressedSize;
-                        stream.next_out = decompressed.data();
-                        stream.avail_out = decompressed.size();
-                        
-                        // 解压
-                        ret = localLoader.lzma_code_ptr(&stream, LZMA_FINISH);
-                        
-                        if (ret != LZMA_STREAM_END) {
-                            localLoader.lzma_end_ptr(&stream);
-                            throw std::runtime_error(
-                                std::string("Block ") + std::to_string(i) + 
-                                " LZMA decompression failed: " + std::to_string(ret)
-                            );
-                        }
-                        
-                        size_t actualSize = decompressed.size() - stream.avail_out;
-                        if (actualSize != block.originalSize) {
-                            localLoader.lzma_end_ptr(&stream);
-                            throw std::runtime_error(
-                                std::string("Block ") + std::to_string(i) + 
-                                " size mismatch: expected " + std::to_string(block.originalSize) +
-                                ", got " + std::to_string(actualSize)
-                            );
-                        }
-                        
-                        // 清理流
-                        localLoader.lzma_end_ptr(&stream);
-                        
-                        threadResult.insert(threadResult.end(), decompressed.begin(), decompressed.end());
-                    }
-                    
-                    return threadResult;
-                }));
-            }
-        } else {
-            // 单线程顺序解压
-            std::cout << "Using single-threaded LZMA decompression" << std::endl;
-            
-            for (size_t i = 0; i < blocks.size(); ++i) {
-                const auto& block = blocks[i];
-                
-                std::vector<uint8_t> decompressed(block.originalSize);
-                
-                // 为每个块创建独立的 LZMA 流
-                lzma_stream stream = LZMA_STREAM_INIT;
-                
-                // 初始化解码器
-                lzma_ret ret;
-                if (lzmaLoader.lzma_auto_decoder_ptr) {
-                    ret = lzmaLoader.lzma_auto_decoder_ptr(&stream, UINT64_MAX, 0);
-                } else {
-                    ret = lzmaLoader.lzma_stream_decoder_ptr(&stream, UINT64_MAX, 0);
+                    chunk.insert(chunk.end(), blockOut.begin(), blockOut.end());
                 }
-                
-                if (ret != LZMA_OK) {
-                    std::cerr << "Block " << i << " LZMA decoder init failed: " << ret << std::endl;
-                    return false;
-                }
-                
-                // 设置输入和输出
-                stream.next_in = task.compressedData.data() + block.offset;
-                stream.avail_in = block.compressedSize;
-                stream.next_out = decompressed.data();
-                stream.avail_out = decompressed.size();
-                
-                // 解压
-                ret = lzmaLoader.lzma_code_ptr(&stream, LZMA_FINISH);
-                
-                if (ret != LZMA_STREAM_END) {
-                    std::cerr << "Block " << i << " LZMA decompression failed: " << ret << std::endl;
-                    lzmaLoader.lzma_end_ptr(&stream);
-                    return false;
-                }
-                
-                size_t actualSize = decompressed.size() - stream.avail_out;
-                if (actualSize != block.originalSize) {
-                    std::cerr << "Block " << i << " size mismatch: expected " 
-                              << block.originalSize << ", got " << actualSize << std::endl;
-                    lzmaLoader.lzma_end_ptr(&stream);
-                    return false;
-                }
-                
-                // 清理流
-                lzmaLoader.lzma_end_ptr(&stream);
-                
-                // 创建一个已完成的 future
-                std::promise<std::vector<uint8_t>> promise;
-                promise.set_value(std::move(decompressed));
-                futures.push_back(promise.get_future());
-            }
+                return chunk;
+            }));
         }
         
-        reportProgress(task.targetPath, 0.3f);
-        
-        // 收集并合并结果
-        std::vector<uint8_t> decompressedData;
-        size_t totalSize = 0;
-        for (const auto& block : blocks) {
-            totalSize += block.originalSize;
-        }
-        decompressedData.reserve(totalSize);
-        
-        for (size_t i = 0; i < futures.size(); ++i) {
+        for (auto& future : futures) {
+            std::vector<uint8_t> chunk;
             try {
-                auto blockData = futures[i].get();
-                decompressedData.insert(decompressedData.end(), blockData.begin(), blockData.end());
-                
-                // 报告进度
-                float progress = 0.3f + (0.4f * static_cast<float>(i + 1) / futures.size());
-                reportProgress(task.targetPath, progress);
-                
+                chunk = future.get();
             } catch (const std::exception& e) {
-                std::cerr << "Failed to get LZMA block " << i << " result: " << e.what() << std::endl;
+                std::cerr << "LZMA block decompression failed: " << e.what() << std::endl;
                 return false;
             }
+            
+            if (!chunk.empty()) {
+                if (!sink.write(chunk.data(), chunk.size())) {
+                    return false;
+                }
+                
+                if (checksum) {
+                    checksum->update(chunk.data(), chunk.size());
+                }
+                
+                totalOut += chunk.size();
+                if (task.originalSize > 0) {
+                    float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
+                    reportProgress(task.targetPath, progress);
+                }
+            }
         }
-        
-        reportProgress(task.targetPath, 0.8f);
-        
-        std::cout << "Successfully decompressed " << blockCount << " LZMA blocks, total size: " 
-                  << decompressedData.size() << " bytes" << std::endl;
-        
-        // 验证校验和
-        if (!verifyChecksum(decompressedData, task.expectedChecksum)) {
-            std::cerr << "Checksum verification failed for: " << task.targetPath << std::endl;
-            return false;
+    } else {
+        for (size_t i = 0; i < blocks.size(); ++i) {
+            std::vector<uint8_t> blockOut;
+            if (!decompressLzmaBlock(task.compressedData.data(), task.compressedData.size(), blocks[i], blockOut)) {
+                std::cerr << "Block " << i << " LZMA decompression failed" << std::endl;
+                return false;
+            }
+            
+            if (!sink.write(blockOut.data(), blockOut.size())) {
+                return false;
+            }
+            
+            if (checksum) {
+                checksum->update(blockOut.data(), blockOut.size());
+            }
+            
+            totalOut += blockOut.size();
+            if (task.originalSize > 0) {
+                float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
+                reportProgress(task.targetPath, progress);
+            }
         }
-        
-        reportProgress(task.targetPath, 0.9f);
-        
-        // 提取tar数据到目标路径
-        bool extractSuccess = extractTarData(decompressedData, task.targetPath);
-        
-        reportProgress(task.targetPath, 1.0f);
-        
-        return extractSuccess;
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Exception during LZMA block decompression of " << task.targetPath 
-                  << ": " << e.what() << std::endl;
-        return false;
-    } catch (...) {
-        std::cerr << "Unknown exception during LZMA block decompression of " << task.targetPath << std::endl;
+    }
+    
+    sink.flush();
+    
+    if (checksum && checksum->finalize() != task.expectedChecksum) {
+        std::cerr << "Checksum verification failed for: " << task.targetPath << std::endl;
         return false;
     }
     
+    reportProgress(task.targetPath, 1.0f);
+    return true;
 #else
+    (void)task;
+    (void)sink;
+    (void)checksum;
     std::cerr << "LZMA support not compiled in" << std::endl;
     return false;
 #endif
-}
-
-bool DecompressionEngine::verifyChecksum(const std::vector<uint8_t>& data, uint32_t expectedChecksum) {
-    uint32_t actualChecksum = calculateChecksum(data);
-    return actualChecksum == expectedChecksum;
-}
-
-uint32_t DecompressionEngine::calculateChecksum(const std::vector<uint8_t>& data) {
-    // 并行CRC32计算以提升大数据的校验速度
-    const size_t chunkSize = 1024 * 1024; // 1MB chunks
-    
-    // 如果数据较小或没有线程池，使用单线程计算
-    if (data.size() < chunkSize * 2 || !threadPool || threadPool->getTotalThreadCount() <= 1) {
-        return calculateChecksumSingle(data);
-    }
-    
-    // 并行计算多个块的CRC32
-    size_t numChunks = (data.size() + chunkSize - 1) / chunkSize;
-    size_t numThreads = std::min(numChunks, static_cast<size_t>(threadPool->getTotalThreadCount()));
-    
-    if (numThreads <= 1) {
-        return calculateChecksumSingle(data);
-    }
-    
-    // 为每个线程分配数据块
-    std::vector<std::future<uint32_t>> futures;
-    size_t chunkPerThread = (data.size() + numThreads - 1) / numThreads;
-    
-    for (size_t i = 0; i < numThreads; ++i) {
-        size_t start = i * chunkPerThread;
-        size_t end = std::min(start + chunkPerThread, data.size());
-        
-        if (start >= data.size()) break;
-        
-        futures.push_back(threadPool->enqueue([&data, start, end]() -> uint32_t {
-            uint32_t crc = 0xFFFFFFFF;
-            
-            for (size_t j = start; j < end; ++j) {
-                crc ^= data[j];
-                for (int k = 0; k < 8; k++) {
-                    if (crc & 1) {
-                        crc = (crc >> 1) ^ 0xEDB88320;
-                    } else {
-                        crc >>= 1;
-                    }
-                }
-            }
-            
-            return crc;
-        }));
-    }
-    
-    // 收集所有块的CRC32结果并合并
-    // 注意：这是简化的合并，实际CRC32合并需要更复杂的算法
-    // 为了正确性，我们还是使用单线程计算
-    // TODO: 实现正确的并行CRC32合并算法
-    
-    // 等待所有任务完成（但不使用结果）
-    for (auto& future : futures) {
-        future.get();
-    }
-    
-    // 由于CRC32合并复杂，暂时回退到单线程
-    // 但上面的并行计算可以作为预热缓存
-    return calculateChecksumSingle(data);
-}
-
-uint32_t DecompressionEngine::calculateChecksumSingle(const std::vector<uint8_t>& data) {
-    // 简单的CRC32实现（与压缩模块中的实现相同）
-    uint32_t crc = 0xFFFFFFFF;
-    
-    for (uint8_t byte : data) {
-        crc ^= byte;
-        for (int i = 0; i < 8; i++) {
-            if (crc & 1) {
-                crc = (crc >> 1) ^ 0xEDB88320;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-    
-    return ~crc;
-}
-
-size_t DecompressionEngine::decompressZstdStreaming(const std::vector<uint8_t>& compressedData, 
-                                                    std::vector<uint8_t>& decompressedData) {
-    if (!zstdContext) {
-        return 0;
-    }
-    
-    // 重置解压上下文
-    ZSTD_DCtx_reset(zstdContext, ZSTD_reset_session_only);
-    
-    // 设置多线程参数
-    if (threadPool && threadPool->getTotalThreadCount() > 1) {
-        size_t threadCount = threadPool->getTotalThreadCount();
-        size_t numThreads = (threadCount > 4) ? 4 : threadCount;
-        // Note: ZSTD_d_nbWorkers may not be available in all versions
-        // ZSTD_DCtx_setParameter(zstdContext, ZSTD_d_nbWorkers, numThreads);
-    }
-    
-    const size_t bufferSize = 64 * 1024; // 64KB chunks
-    size_t totalDecompressed = 0;
-    size_t inputPos = 0;
-    
-    ZSTD_inBuffer input = { compressedData.data(), compressedData.size(), 0 };
-    ZSTD_outBuffer output = { decompressedData.data(), decompressedData.size(), 0 };
-    
-    while (input.pos < input.size && output.pos < output.size) {
-        size_t result = ZSTD_decompressStream(zstdContext, &output, &input);
-        
-        if (ZSTD_isError(result)) {
-            std::cerr << "ZSTD streaming decompression error: " << ZSTD_getErrorName(result) << std::endl;
-            return 0;
-        }
-        
-        // 如果需要更多输出空间，扩展缓冲区
-        if (output.pos == output.size && result > 0) {
-            size_t newSize = decompressedData.size() * 2;
-            decompressedData.resize(newSize);
-            output.dst = decompressedData.data();
-            output.size = newSize;
-        }
-        
-        // 报告进度
-        float progress = 0.3f + (0.4f * static_cast<float>(input.pos) / input.size);
-        reportProgress("streaming", progress);
-        
-        if (result == 0) {
-            break; // 解压完成
-        }
-    }
-    
-    return output.pos;
-}
-
-bool DecompressionEngine::extractTarData(const std::vector<uint8_t>& tarData, const std::string& targetPath) {
-    FileSystemOperator fsOperator;
-    
-    if (!fsOperator.createDirectoryRecursive(targetPath)) {
-        std::cerr << "Failed to create target directory: " << targetPath << std::endl;
-        return false;
-    }
-    
-    // 第一阶段：解析所有文件信息（快速，内存操作）
-    struct FileEntry {
-        std::string relativePath;
-        std::vector<uint8_t> content;
-    };
-    
-    std::vector<FileEntry> files;
-    size_t offset = 0;
-    
-    while (offset < tarData.size()) {
-        // 读取路径长度
-        if (offset + sizeof(uint32_t) > tarData.size()) {
-            break;
-        }
-        
-        uint32_t pathLength = *reinterpret_cast<const uint32_t*>(tarData.data() + offset);
-        offset += sizeof(uint32_t);
-        
-        // 读取文件大小
-        if (offset + sizeof(uint32_t) > tarData.size()) {
-            break;
-        }
-        
-        uint32_t fileSize = *reinterpret_cast<const uint32_t*>(tarData.data() + offset);
-        offset += sizeof(uint32_t);
-        
-        // 读取路径
-        if (offset + pathLength > tarData.size()) {
-            break;
-        }
-        
-        std::string relativePath(reinterpret_cast<const char*>(tarData.data() + offset), pathLength);
-        offset += pathLength;
-        
-        // 读取文件内容
-        if (offset + fileSize > tarData.size()) {
-            break;
-        }
-        
-        FileEntry entry;
-        entry.relativePath = std::move(relativePath);
-        entry.content = std::vector<uint8_t>(tarData.data() + offset, tarData.data() + offset + fileSize);
-        offset += fileSize;
-        
-        files.push_back(std::move(entry));
-    }
-    
-    // 第二阶段：并行写入文件（I/O密集型）
-    if (files.empty()) {
-        return true;
-    }
-    
-    // 如果文件数量少或没有线程池，使用单线程写入
-    if (files.size() < 4 || !threadPool || threadPool->getTotalThreadCount() <= 1) {
-        for (const auto& file : files) {
-            std::string fullPath = targetPath + "/" + file.relativePath;
-            
-            // 创建父目录
-            size_t lastSlash = fullPath.find_last_of("/\\");
-            if (lastSlash != std::string::npos) {
-                std::string parentDir = fullPath.substr(0, lastSlash);
-                fsOperator.createDirectoryRecursive(parentDir);
-            }
-            
-            if (!fsOperator.writeFile(fullPath, file.content)) {
-                std::cerr << "Failed to write file: " << fullPath << std::endl;
-                return false;
-            }
-        }
-        return true;
-    }
-    
-    // 并行写入文件
-    std::atomic<bool> hasError(false);
-    std::mutex errorMutex;
-    std::string errorMessage;
-    
-    std::vector<std::future<void>> futures;
-    
-    for (const auto& file : files) {
-        futures.push_back(threadPool->enqueue([&file, &targetPath, &hasError, &errorMutex, &errorMessage]() {
-            if (hasError.load()) {
-                return; // 如果已经有错误，跳过
-            }
-            
-            FileSystemOperator localFsOperator;
-            std::string fullPath = targetPath + "/" + file.relativePath;
-            
-            // 创建父目录
-            size_t lastSlash = fullPath.find_last_of("/\\");
-            if (lastSlash != std::string::npos) {
-                std::string parentDir = fullPath.substr(0, lastSlash);
-                localFsOperator.createDirectoryRecursive(parentDir);
-            }
-            
-            if (!localFsOperator.writeFile(fullPath, file.content)) {
-                hasError.store(true);
-                std::lock_guard<std::mutex> lock(errorMutex);
-                if (errorMessage.empty()) {
-                    errorMessage = "Failed to write file: " + fullPath;
-                }
-            }
-        }));
-    }
-    
-    // 等待所有文件写入完成
-    for (auto& future : futures) {
-        future.get();
-    }
-    
-    if (hasError.load()) {
-        std::cerr << errorMessage << std::endl;
-        return false;
-    }
-    
-    return true;
 }
 
 void DecompressionEngine::reportProgress(const std::string& folderName, float progress) {

@@ -103,12 +103,10 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         // 解析compressionAlgorithm（可选）
         if (j.contains("compressionAlgorithm")) {
             std::string algo = j["compressionAlgorithm"].get<std::string>();
-            if (algo == "zstd") {
-                config.compressionAlgorithm = CompressionAlgorithm::ZSTD_FAST;
-            } else if (algo == "lzma") {
+            if (algo == "lzma") {
                 config.compressionAlgorithm = CompressionAlgorithm::LZMA_HIGH;
             } else {
-                lastError_ = "Invalid compression algorithm: " + algo + " (must be 'zstd' or 'lzma')";
+                lastError_ = "Invalid compression algorithm: " + algo + " (must be 'lzma')";
                 return std::nullopt;
             }
         }

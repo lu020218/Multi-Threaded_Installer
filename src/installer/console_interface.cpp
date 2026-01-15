@@ -1,4 +1,4 @@
-﻿#include "installer/console_interface.h"
+#include "installer/console_interface.h"
 #include <iostream>
 #include <sstream>
 #include <algorithm>
@@ -13,7 +13,7 @@ void ConsoleInterface::showPackagerMenu() {
     std::cout << std::endl;
 }
 
-bool ConsoleInterface::getPackagerInput(std::string& inputPath, std::string& outputPath, 
+bool ConsoleInterface::getPackagerInput(std::string& inputPath, std::string& outputPath,
                                        CompressionAlgorithm& algorithm) {
     inputPath = getUserInput("Enter input directory path: ");
     if (!validatePath(inputPath, true)) {
@@ -27,9 +27,9 @@ bool ConsoleInterface::getPackagerInput(std::string& inputPath, std::string& out
         return false;
     }
     
-    std::string algorithmStr = getUserInput("Choose compression algorithm (zstd/lzma) [zstd]: ");
+    std::string algorithmStr = getUserInput("Choose compression algorithm (lzma) [lzma]: ");
     if (algorithmStr.empty()) {
-        algorithmStr = "zstd";
+        algorithmStr = "lzma";
     }
     
     algorithm = parseCompressionAlgorithm(algorithmStr);
@@ -88,9 +88,9 @@ void ConsoleInterface::showInstallationResult(bool success, const std::vector<st
     std::cout << std::endl;
     
     if (success) {
-        std::cout << "✓ Installation completed successfully!" << std::endl;
+        std::cout << "OK: Installation completed successfully!" << std::endl;
     } else {
-        std::cout << "✗ Installation completed with errors:" << std::endl;
+        std::cout << "ERROR: Installation completed with errors:" << std::endl;
         for (const auto& error : errors) {
             std::cout << "  - " << error << std::endl;
         }
@@ -175,14 +175,13 @@ void ConsoleInterface::showPackagerHelp() {
     std::cout << "Usage: packager [options] <input_directory> <output_file>" << std::endl;
     std::cout << std::endl;
     std::cout << "Options:" << std::endl;
-    std::cout << "  -a, --algorithm <zstd|lzma>    Choose compression algorithm (default: zstd)" << std::endl;
-    std::cout << "  -l, --level <level>            Compression level (zstd: 1-22, lzma: 0-9)" << std::endl;
+    std::cout << "  -a, --algorithm <lzma>         Choose compression algorithm (default: lzma)" << std::endl;
+    std::cout << "  -l, --level <level>            Compression level (lzma: 0-9)" << std::endl;
     std::cout << "  -t, --threads <count>          Number of compression threads (default: CPU cores)" << std::endl;
     std::cout << "  -v, --verbose                  Show detailed information" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
-    std::cout << "  packager -a zstd -l 1 ./input ./output/installer.exe" << std::endl;
     std::cout << "  packager -a lzma -l 5 ./input ./output/installer.exe" << std::endl;
 }
 
@@ -262,13 +261,11 @@ CompressionAlgorithm ConsoleInterface::parseCompressionAlgorithm(const std::stri
         return CompressionAlgorithm::LZMA_HIGH;
     }
     
-    return CompressionAlgorithm::ZSTD_FAST;  // 默认
+    return CompressionAlgorithm::LZMA_HIGH;
 }
 
 std::string ConsoleInterface::compressionAlgorithmToString(CompressionAlgorithm algorithm) {
     switch (algorithm) {
-        case CompressionAlgorithm::ZSTD_FAST:
-            return "ZSTD";
         case CompressionAlgorithm::LZMA_HIGH:
             return "LZMA";
         default:

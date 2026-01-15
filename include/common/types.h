@@ -10,7 +10,6 @@ namespace MultiThreadedInstaller {
 
 // 压缩算法枚举
 enum class CompressionAlgorithm {
-    ZSTD_FAST,    // Zstandard快速模式
     LZMA_HIGH     // 7z LZMA高压缩比模式
 };
 
@@ -54,10 +53,10 @@ struct PackagerConfiguration {
     std::vector<FolderTargetConfig> folderTargets;  // 文件夹目标配置
     
     // 默认值
-    PackagerConfiguration() 
+    PackagerConfiguration()
         : applicationName("MyApplication"),
           defaultInstallDir("%ProgramFiles%"),
-          compressionAlgorithm(CompressionAlgorithm::ZSTD_FAST) {}
+          compressionAlgorithm(CompressionAlgorithm::LZMA_HIGH) {}
 };
 
 // 压缩结果结构
@@ -68,8 +67,8 @@ struct CompressionResult {
     size_t compressedSize;
     CompressionAlgorithm algorithm;
     
-    CompressionResult() : checksum(0), originalSize(0), compressedSize(0), 
-                         algorithm(CompressionAlgorithm::ZSTD_FAST) {}
+    CompressionResult() : checksum(0), originalSize(0), compressedSize(0),
+                         algorithm(CompressionAlgorithm::LZMA_HIGH) {}
 };
 
 // 文件夹映射结构
@@ -82,8 +81,8 @@ struct FolderMapping {
     uint32_t checksum;
     CompressionAlgorithm algorithm;
     
-    FolderMapping() : offset(0), compressedSize(0), originalSize(0), 
-                     checksum(0), algorithm(CompressionAlgorithm::ZSTD_FAST) {}
+    FolderMapping() : offset(0), compressedSize(0), originalSize(0),
+                     checksum(0), algorithm(CompressionAlgorithm::LZMA_HIGH) {}
 };
 
 // 扩展的文件夹映射结构（向后兼容）
@@ -138,8 +137,8 @@ struct DecompressionTask {
     size_t originalSize;
     CompressionAlgorithm algorithm;
     
-    DecompressionTask() : expectedChecksum(0), originalSize(0), 
-                         algorithm(CompressionAlgorithm::ZSTD_FAST) {}
+    DecompressionTask() : expectedChecksum(0), originalSize(0),
+                         algorithm(CompressionAlgorithm::LZMA_HIGH) {}
 };
 
 // 进度回调函数类型
@@ -155,8 +154,7 @@ namespace Constants {
     constexpr size_t MIN_BLOCK_SIZE = 1 * 1024 * 1024;      // 1MB
     constexpr size_t MAX_BLOCK_SIZE = 8 * 1024 * 1024;      // 8MB
     
-    constexpr int DEFAULT_ZSTD_LEVEL = 1;          // 快速压缩
-    constexpr int DEFAULT_LZMA_LEVEL = 5;          // 平衡压缩
+    constexpr int DEFAULT_LZMA_LEVEL = 9;          // 平衡压缩
 }
 
 } // namespace MultiThreadedInstaller

@@ -9,8 +9,65 @@
 #include <atomic>
 #include <chrono>
 #include <iomanip>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+#include <algorithm>
+#include <memory>
 
 using namespace MultiThreadedInstaller;
+
+namespace {
+
+struct FileWriter {
+    std::string path;
+    uint64_t start;
+    uint64_t end;
+    std::fstream stream;
+    std::mutex mutex;
+};
+
+struct BlockInfo {
+    uint32_t blockId;
+    uint64_t compressedOffset;
+    uint64_t compressedSize;
+    uint64_t originalSize;
+    uint64_t startOffset;
+};
+
+struct BlockSegment {
+    size_t fileIndex;
+    uint64_t blockOffset;
+    uint64_t fileOffset;
+    uint64_t size;
+};
+
+bool openFileWithSize(const std::string& path, uint64_t size, std::fstream& stream) {
+    std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+    if (!file) {
+        std::ofstream create(path, std::ios::binary | std::ios::trunc);
+        if (!create) {
+            return false;
+        }
+        create.close();
+        file.open(path, std::ios::binary | std::ios::in | std::ios::out);
+        if (!file) {
+            return false;
+        }
+    }
+    
+    if (size > 0) {
+        file.seekp(static_cast<std::streamoff>(size - 1));
+        char zero = 0;
+        file.write(&zero, 1);
+        file.flush();
+    }
+    
+    stream = std::move(file);
+    return static_cast<bool>(stream);
+}
+
+} // namespace
 
 int main(int argc, char* argv[]) {
     ConsoleInterface console;
@@ -83,6 +140,7 @@ int main(int argc, char* argv[]) {
     
     std::vector<std::string> errors;
     std::mutex errorsMutex;
+    std::mutex progressMutex;
     std::atomic<bool> overallSuccess(true);
     std::atomic<size_t> completedFolders(0);
     
@@ -90,6 +148,8 @@ int main(int argc, char* argv[]) {
     struct FolderTask {
         std::string folderName;
         std::string targetPath;
+        ExtendedFolderMapping mapping;
+        bool useIndex = false;
         DecompressionTask decompTask;
     };
     
@@ -132,13 +192,17 @@ int main(int argc, char* argv[]) {
                 );
             }
             
-            // 将文件夹名称附加到基础路径
+            // 将文件夹名称附加到基础路径（安装目录不需要额外层级）
             if (!basePath.empty()) {
-                // 确保路径以分隔符结尾
-                if (basePath.back() != '\\' && basePath.back() != '/') {
-                    basePath += '\\';
+                if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
+                    targetPath = basePath;
+                } else {
+                    // 确保路径以分隔符结尾
+                    if (basePath.back() != '\\' && basePath.back() != '/') {
+                        basePath += '\\';
+                    }
+                    targetPath = basePath + mapping.folderName;
                 }
-                targetPath = basePath + mapping.folderName;
             }
         }
         
@@ -163,46 +227,272 @@ int main(int argc, char* argv[]) {
             continue;
         }
         
-        // 从嵌入数据中读取压缩数据
-        std::vector<uint8_t> compressedData = parser.readCompressedData(mapping.offset, mapping.compressedSize);
-        if (compressedData.empty()) {
-            std::string error = "Failed to read compressed data for folder: " + mapping.folderName;
-            console.showError(error);
-            std::lock_guard<std::mutex> lock(errorsMutex);
-            errors.push_back(error);
-            overallSuccess = false;
-            continue;
-        }
-        
         // 创建解压任务
         FolderTask folderTask;
         folderTask.folderName = mapping.folderName;
         folderTask.targetPath = targetPath;
-        folderTask.decompTask.compressedData = std::move(compressedData);
-        folderTask.decompTask.targetPath = targetPath;
-        folderTask.decompTask.expectedChecksum = mapping.checksum;
-        folderTask.decompTask.originalSize = mapping.originalSize;
-        folderTask.decompTask.algorithm = mapping.algorithm;
+        folderTask.mapping = mapping;
+        folderTask.useIndex = !mapping.fileIndex.empty() && !mapping.blockIndex.empty();
+        
+        if (!folderTask.useIndex) {
+            std::vector<uint8_t> compressedData = parser.readCompressedData(mapping.offset, mapping.compressedSize);
+            if (compressedData.empty()) {
+                std::string error = "Failed to read compressed data for folder: " + mapping.folderName;
+                console.showError(error);
+                std::lock_guard<std::mutex> lock(errorsMutex);
+                errors.push_back(error);
+                overallSuccess = false;
+                continue;
+            }
+            
+            folderTask.decompTask.compressedData = std::move(compressedData);
+            folderTask.decompTask.targetPath = targetPath;
+            folderTask.decompTask.expectedChecksum = mapping.checksum;
+            folderTask.decompTask.originalSize = mapping.originalSize;
+            folderTask.decompTask.algorithm = mapping.algorithm;
+        }
         
         folderTasks.push_back(std::move(folderTask));
     }
+    
+    auto installWithIndex = [&](const FolderTask& folderTask) -> bool {
+        const auto& mapping = folderTask.mapping;
+        if (mapping.fileIndex.empty() || mapping.blockIndex.empty()) {
+            return false;
+        }
+        
+        std::vector<std::unique_ptr<FileWriter>> writers;
+        writers.reserve(mapping.fileIndex.size());
+        
+        uint64_t totalBytes = 0;
+        for (const auto& fileEntry : mapping.fileIndex) {
+            std::filesystem::path fullPath = std::filesystem::path(folderTask.targetPath) / fileEntry.relativePath;
+            FileSystemOperator fsOp;
+            std::filesystem::path parent = fullPath.parent_path();
+            if (!parent.empty()) {
+                if (!fsOp.createDirectoryRecursive(parent.string())) {
+                    return false;
+                }
+            }
+            
+            std::fstream stream;
+            if (!openFileWithSize(fullPath.string(), fileEntry.size, stream)) {
+                return false;
+            }
+            
+            auto writer = std::make_unique<FileWriter>();
+            writer->path = fullPath.string();
+            writer->start = fileEntry.offset;
+            writer->end = fileEntry.offset + fileEntry.size;
+            writer->stream = std::move(stream);
+            writers.push_back(std::move(writer));
+            totalBytes += fileEntry.size;
+        }
+        
+        std::vector<FileWriter*> writerPtrs;
+        writerPtrs.reserve(writers.size());
+        for (const auto& writer : writers) {
+            writerPtrs.push_back(writer.get());
+        }
+        
+        std::vector<size_t> fileOrder(writerPtrs.size());
+        for (size_t i = 0; i < fileOrder.size(); ++i) {
+            fileOrder[i] = i;
+        }
+        std::sort(fileOrder.begin(), fileOrder.end(),
+                  [&](size_t a, size_t b) { return writerPtrs[a]->start < writerPtrs[b]->start; });
+        
+        std::vector<BlockInfo> blocks;
+        blocks.reserve(mapping.blockIndex.size());
+        for (const auto& blockEntry : mapping.blockIndex) {
+            BlockInfo block;
+            block.blockId = blockEntry.blockId;
+            block.compressedOffset = blockEntry.offset;
+            block.compressedSize = blockEntry.compressedSize;
+            block.originalSize = blockEntry.originalSize;
+            block.startOffset = 0;
+            blocks.push_back(block);
+        }
+        std::sort(blocks.begin(), blocks.end(),
+                  [](const BlockInfo& a, const BlockInfo& b) { return a.blockId < b.blockId; });
+        
+        uint64_t cumulative = 0;
+        for (auto& block : blocks) {
+            block.startOffset = cumulative;
+            cumulative += block.originalSize;
+        }
+        
+        std::vector<std::vector<BlockSegment>> segments(blocks.size());
+        size_t fileIdx = 0;
+        for (size_t i = 0; i < blocks.size(); ++i) {
+            uint64_t blockStart = blocks[i].startOffset;
+            uint64_t blockEnd = blockStart + blocks[i].originalSize;
+            
+            while (fileIdx < fileOrder.size() && writerPtrs[fileOrder[fileIdx]]->end <= blockStart) {
+                ++fileIdx;
+            }
+            
+            size_t k = fileIdx;
+            while (k < fileOrder.size()) {
+                FileWriter* writer = writerPtrs[fileOrder[k]];
+                if (writer->start >= blockEnd) {
+                    break;
+                }
+                
+                uint64_t overlapStart = std::max(blockStart, writer->start);
+                uint64_t overlapEnd = std::min(blockEnd, writer->end);
+                if (overlapEnd > overlapStart) {
+                    BlockSegment seg;
+                    seg.fileIndex = fileOrder[k];
+                    seg.blockOffset = overlapStart - blockStart;
+                    seg.fileOffset = overlapStart - writer->start;
+                    seg.size = overlapEnd - overlapStart;
+                    segments[i].push_back(seg);
+                }
+                
+                if (writer->end <= blockEnd) {
+                    ++k;
+                } else {
+                    break;
+                }
+            }
+            
+            while (fileIdx < fileOrder.size() && writerPtrs[fileOrder[fileIdx]]->end <= blockEnd) {
+                ++fileIdx;
+            }
+        }
+        
+        std::atomic<uint64_t> writtenBytes(0);
+        
+        if (threadPool && threadPool->getTotalThreadCount() > 1) {
+            std::atomic<bool> blockFailed(false);
+            std::vector<std::future<bool>> futures;
+            futures.reserve(blocks.size());
+            
+            for (size_t i = 0; i < blocks.size(); ++i) {
+                futures.push_back(threadPool->enqueue([&, i]() -> bool {
+                    if (blockFailed.load()) {
+                        return true;
+                    }
+                    
+                    const auto& block = blocks[i];
+                    std::vector<uint8_t> compressedData = parser.readCompressedData(
+                        mapping.offset + block.compressedOffset,
+                        block.compressedSize
+                    );
+                    if (compressedData.empty()) {
+                        blockFailed.store(true);
+                        return false;
+                    }
+                    
+                    std::vector<uint8_t> decompressed;
+                    if (!decompressor.decompressLzmaBlockData(compressedData, block.originalSize, decompressed)) {
+                        blockFailed.store(true);
+                        return false;
+                    }
+                    
+                    uint64_t blockWritten = 0;
+                    for (const auto& seg : segments[i]) {
+                        FileWriter* writer = writerPtrs[seg.fileIndex];
+                        std::lock_guard<std::mutex> lock(writer->mutex);
+                        writer->stream.seekp(static_cast<std::streamoff>(seg.fileOffset));
+                        writer->stream.write(reinterpret_cast<const char*>(decompressed.data() + seg.blockOffset),
+                                             static_cast<std::streamsize>(seg.size));
+                        if (!writer->stream) {
+                            blockFailed.store(true);
+                            return false;
+                        }
+                        blockWritten += seg.size;
+                    }
+                    
+                    if (totalBytes > 0 && blockWritten > 0) {
+                        uint64_t current = writtenBytes.fetch_add(blockWritten) + blockWritten;
+                        float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
+                        std::lock_guard<std::mutex> lock(progressMutex);
+                        console.showInstallationProgress(folderTask.folderName, progress);
+                    }
+                    
+                    return true;
+                }));
+            }
+            
+            for (auto& future : futures) {
+                if (!future.get()) {
+                    return false;
+                }
+            }
+        } else {
+            for (size_t i = 0; i < blocks.size(); ++i) {
+                const auto& block = blocks[i];
+                std::vector<uint8_t> compressedData = parser.readCompressedData(
+                    mapping.offset + block.compressedOffset,
+                    block.compressedSize
+                );
+                if (compressedData.empty()) {
+                    return false;
+                }
+                
+                std::vector<uint8_t> decompressed;
+                if (!decompressor.decompressLzmaBlockData(compressedData, block.originalSize, decompressed)) {
+                    return false;
+                }
+                
+                uint64_t blockWritten = 0;
+                for (const auto& seg : segments[i]) {
+                    FileWriter* writer = writerPtrs[seg.fileIndex];
+                    std::lock_guard<std::mutex> lock(writer->mutex);
+                    writer->stream.seekp(static_cast<std::streamoff>(seg.fileOffset));
+                    writer->stream.write(reinterpret_cast<const char*>(decompressed.data() + seg.blockOffset),
+                                         static_cast<std::streamsize>(seg.size));
+                    if (!writer->stream) {
+                        return false;
+                    }
+                    blockWritten += seg.size;
+                }
+                
+                if (totalBytes > 0 && blockWritten > 0) {
+                    uint64_t current = writtenBytes.fetch_add(blockWritten) + blockWritten;
+                    float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
+                    std::lock_guard<std::mutex> lock(progressMutex);
+                    console.showInstallationProgress(folderTask.folderName, progress);
+                }
+            }
+        }
+        
+        for (auto& writer : writers) {
+            writer->stream.flush();
+        }
+        
+        console.showInstallationProgress(folderTask.folderName, 1.0f);
+        return true;
+    };
     
     // 第二阶段：并行执行所有解压任务
     if (!folderTasks.empty()) {
         console.showInfo("Decompressing " + std::to_string(folderTasks.size()) + " folders in parallel...");
         
+        std::vector<FolderTask*> indexedTasks;
+        std::vector<FolderTask*> regularTasks;
         for (auto& folderTask : folderTasks) {
-            threadPool->enqueue([&folderTask, &decompressor, &console, &errors, &errorsMutex, 
+            if (folderTask.useIndex) {
+                indexedTasks.push_back(&folderTask);
+            } else {
+                regularTasks.push_back(&folderTask);
+            }
+        }
+        
+        for (auto* folderTask : regularTasks) {
+            threadPool->enqueue([folderTask, &decompressor, &console, &errors, &errorsMutex, 
                                 &overallSuccess, &completedFolders, totalFolders = folderTasks.size()]() {
-                // 执行解压
-                if (!decompressor.decompressFolder(folderTask.decompTask)) {
-                    std::string error = "Failed to decompress folder: " + folderTask.folderName;
+                bool ok = decompressor.decompressFolder(folderTask->decompTask);
+                
+                if (!ok) {
+                    std::string error = "Failed to decompress folder: " + folderTask->folderName;
                     console.showError(error);
                     std::lock_guard<std::mutex> lock(errorsMutex);
                     errors.push_back(error);
                     overallSuccess = false;
                 } else {
-                    // 更新进度
                     size_t completed = ++completedFolders;
                     float progress = static_cast<float>(completed) / totalFolders;
                     console.showInfo("Progress: " + std::to_string(completed) + "/" + 
@@ -210,6 +500,23 @@ int main(int argc, char* argv[]) {
                                    std::to_string(static_cast<int>(progress * 100)) + "%)");
                 }
             });
+        }
+        
+        for (auto* folderTask : indexedTasks) {
+            bool ok = installWithIndex(*folderTask);
+            if (!ok) {
+                std::string error = "Failed to decompress folder: " + folderTask->folderName;
+                console.showError(error);
+                std::lock_guard<std::mutex> lock(errorsMutex);
+                errors.push_back(error);
+                overallSuccess = false;
+            } else {
+                size_t completed = ++completedFolders;
+                float progress = static_cast<float>(completed) / folderTasks.size();
+                console.showInfo("Progress: " + std::to_string(completed) + "/" + 
+                               std::to_string(folderTasks.size()) + " folders completed (" + 
+                               std::to_string(static_cast<int>(progress * 100)) + "%)");
+            }
         }
     }
     

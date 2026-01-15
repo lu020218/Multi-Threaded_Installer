@@ -111,6 +111,42 @@ bool DecompressionEngine::decompressToStream(const DecompressionTask& task, Stre
     return decompressLzma(task, sink, checksum);
 }
 
+bool DecompressionEngine::decompressLzmaBlockData(const std::vector<uint8_t>& compressedData,
+                                                  size_t originalSize,
+                                                  std::vector<uint8_t>& output) {
+#ifdef LibLZMA_FOUND
+    static LzmaLoader loader;
+    if (!loader.isLoaded()) {
+        return false;
+    }
+    
+    lzma_stream stream = LZMA_STREAM_INIT;
+    lzma_ret ret = loader.lzma_auto_decoder_ptr
+        ? loader.lzma_auto_decoder_ptr(&stream, UINT64_MAX, 0)
+        : loader.lzma_stream_decoder_ptr(&stream, UINT64_MAX, 0);
+    
+    if (ret != LZMA_OK) {
+        return false;
+    }
+    
+    stream.next_in = compressedData.data();
+    stream.avail_in = compressedData.size();
+    output.resize(originalSize);
+    stream.next_out = output.data();
+    stream.avail_out = output.size();
+    
+    ret = loader.lzma_code_ptr(&stream, LZMA_FINISH);
+    loader.lzma_end_ptr(&stream);
+    
+    return ret == LZMA_STREAM_END && stream.avail_out == 0;
+#else
+    (void)compressedData;
+    (void)originalSize;
+    (void)output;
+    return false;
+#endif
+}
+
 bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum) {
 #ifdef LibLZMA_FOUND
     static LzmaLoader loader;

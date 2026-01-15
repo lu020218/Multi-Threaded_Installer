@@ -4,6 +4,29 @@
 
 The packager supports configuration files to specify packaging and installation options. This document provides a complete reference for all available configuration options.
 
+## New Schema (packager.json)
+
+```json
+{
+  "Version": "1.0",
+  "AppName": "MyDesktopApp",
+  "InstallDir": "%ProgramFiles%",
+  "compressionAlgorithm": "lzma",
+  "Folder": {
+    "InstallDir": "bin",
+    "Roaming": "plugins",
+    "Local": "userdata"
+  },
+  "Registry": [{
+    "key": "InstallState",
+    "value": "finished",
+    "path": "HKEY_CURRENT_USER\\Software\\MyDesktopApp"
+  }],
+  "AutoStartup": true,
+  "DesktopIcons": true
+}
+```
+
 ## Configuration File Location
 
 The packager searches for configuration files in the following order:
@@ -28,7 +51,7 @@ Configuration files must be in JSON format with UTF-8 encoding.
 | `version` | string | No | "1.0" | Configuration file version |
 | `applicationName` | string | **Yes** | - | Application name (used for directory naming) |
 | `defaultInstallDirectory` | string | No | "%ProgramFiles%" | Suggested default installation directory (without app name) |
-| `compressionAlgorithm` | string | No | "zstd" | Compression algorithm: "zstd" or "lzma" |
+| `compressionAlgorithm` | string | No | "lzma" | Compression algorithm: "lzma" |
 | `folderTargets` | array | No | [] | Folder-level target directory configurations |
 | `fileMappings` | array | No | [] | File-level mapping rules (optional feature) |
 
@@ -83,7 +106,7 @@ The installer intelligently handles application name appending:
 
 ## Compression Algorithms
 
-### ZSTD (Default)
+### LZMA (Default)
 
 - **Value**: `"zstd"`
 - **Characteristics**: Fast compression and decompression, good compression ratio
@@ -102,7 +125,7 @@ The installer intelligently handles application name appending:
   "version": "1.0",
   "applicationName": "MyApplication",
   "defaultInstallDirectory": "%ProgramFiles%",
-  "compressionAlgorithm": "zstd",
+  "compressionAlgorithm": "lzma",
   "folderTargets": [
     {
       "folder": "app",
@@ -145,7 +168,7 @@ The installer intelligently handles application name appending:
 ```
 
 This minimal configuration:
-- Uses ZSTD compression (default)
+- Uses LZMA compression (default)
 - Suggests `%ProgramFiles%\SimpleApp\` as installation directory
 - Installs all folders to the user-selected installation directory
 
@@ -157,7 +180,7 @@ This minimal configuration:
 {
   "applicationName": "MyDesktopApp",
   "defaultInstallDirectory": "%ProgramFiles%",
-  "compressionAlgorithm": "zstd",
+  "compressionAlgorithm": "lzma",
   "folderTargets": [
     {
       "folder": "bin",
@@ -260,7 +283,7 @@ The packager validates configuration files and reports errors for:
    - All fields must match their specified types
 
 3. **Invalid Values**
-   - `compressionAlgorithm` must be "zstd" or "lzma"
+   - `compressionAlgorithm` must be "lzma"
    - Folder names must exist in the input directory
    - Target directory paths must be valid
 
@@ -345,7 +368,7 @@ WARNING: Multiple configuration files found, using highest priority: packager.js
 
 4. **Test with different user selections**: Verify your application works when users choose custom installation directories
 
-5. **Use ZSTD for most cases**: Unless download size is critical, ZSTD provides the best balance
+5. **Use LZMA for most cases**: Unless download size is critical, LZMA provides the best balance
 
 6. **Keep configuration simple**: Only configure folders that need special locations
 

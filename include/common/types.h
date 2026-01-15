@@ -45,18 +45,32 @@ struct FolderTargetConfig {
         : dirType(SpecialDirectoryType::INSTALL_DIRECTORY) {}
 };
 
+// 注册表配置
+struct RegistryEntry {
+    std::string path;   // 注册表路径
+    std::string key;    // 键名
+    std::string value;  // 值
+};
+
 // 打包器配置
 struct PackagerConfiguration {
+    std::string version;                           // 配置版本
     std::string applicationName;                    // 应用程序名称
     std::string defaultInstallDir;                  // 建议的默认安装目录（不含应用程序名）
     CompressionAlgorithm compressionAlgorithm;      // 压缩算法
     std::vector<FolderTargetConfig> folderTargets;  // 文件夹目标配置
+    std::vector<RegistryEntry> registry;           // 注册表配置（预留）
+    bool autoStartup;                              // 默认开机自启动（预留）
+    bool desktopIcons;                             // 默认创建桌面图标（预留）
     
     // 默认值
-    PackagerConfiguration()
-        : applicationName("MyApplication"),
+    PackagerConfiguration() 
+        : version("1.0"),
+          applicationName("MyApplication"),
           defaultInstallDir("%ProgramFiles%"),
-          compressionAlgorithm(CompressionAlgorithm::LZMA_HIGH) {}
+          compressionAlgorithm(CompressionAlgorithm::LZMA_HIGH),
+          autoStartup(false),
+          desktopIcons(false) {}
 };
 
 // 文件索引条目
@@ -171,7 +185,7 @@ namespace Constants {
     constexpr uint32_t VERSION = 2;
     
     // 块大小配置 (优化后)
-    constexpr size_t DEFAULT_BLOCK_SIZE = 32 * 1024 * 1024;  // 2MB (从 64KB 优化)
+    constexpr size_t DEFAULT_BLOCK_SIZE = 16 * 1024 * 1024;  // 2MB (从 64KB 优化)
     constexpr size_t MIN_BLOCK_SIZE = 4 * 1024 * 1024;      // 1MB
     constexpr size_t MAX_BLOCK_SIZE = 128 * 1024 * 1024;      // 8MB
     

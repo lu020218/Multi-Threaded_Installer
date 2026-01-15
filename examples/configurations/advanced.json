@@ -4,12 +4,13 @@
   "InstallDir": "%ProgramFiles%",
   "Folder": {
     "InstallDir": "bin",
-    "Roaming": "plugins",
-    "Local": "userdata"
+    "Roaming": "plugins"
   },
-  "Registry": {
-    "key": "value"
-  },
+  "Registry": [{
+    "key": "InstallState",
+    "value": "finished",
+    "path": "HKEY_CURRENT_USER\\Software\\MyDesktopApp"
+  }],
   "AutoStartup": true,
   "DesktopIcons": true
 }

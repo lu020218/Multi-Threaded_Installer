@@ -88,17 +88,26 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         // 创建配置对象（使用默认值）
         PackagerConfiguration config;
         
-        // 解析applicationName（必需字段）
-        if (!j.contains("applicationName")) {
-            lastError_ = "Missing required field 'applicationName' in configuration file";
-            return std::nullopt;
-        }
-        config.applicationName = j["applicationName"].get<std::string>();
-        
-        // 解析defaultInstallDirectory（可选）
-        if (j.contains("defaultInstallDirectory")) {
-            config.defaultInstallDir = j["defaultInstallDirectory"].get<std::string>();
-        }
+    // 解析 Version（必需字段）
+    if (!j.contains("Version")) {
+        lastError_ = "Missing required field 'Version' in configuration file";
+        return std::nullopt;
+    }
+    config.version = j["Version"].get<std::string>();
+    
+    // 解析 AppName（必需字段）
+    if (!j.contains("AppName")) {
+        lastError_ = "Missing required field 'AppName' in configuration file";
+        return std::nullopt;
+    }
+    config.applicationName = j["AppName"].get<std::string>();
+    
+    // 解析 InstallDir（必需字段）
+    if (!j.contains("InstallDir")) {
+        lastError_ = "Missing required field 'InstallDir' in configuration file";
+        return std::nullopt;
+    }
+    config.defaultInstallDir = j["InstallDir"].get<std::string>();
         
         // 解析compressionAlgorithm（可选）
         if (j.contains("compressionAlgorithm")) {
@@ -111,23 +120,64 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
             }
         }
         
-        // 解析folderTargets（可选）
-        if (j.contains("folderTargets") && j["folderTargets"].is_array()) {
-            for (const auto& target : j["folderTargets"]) {
-                FolderTargetConfig ftc;
-                
-                if (target.contains("folder")) {
-                    ftc.folderName = target["folder"].get<std::string>();
-                }
-                
-                if (target.contains("targetDirectory")) {
-                    ftc.targetDirectory = target["targetDirectory"].get<std::string>();
-                    ftc.dirType = parseDirectoryType(ftc.targetDirectory);
-                }
-                
-                config.folderTargets.push_back(ftc);
-            }
+    // 解析 Folder（可选）
+    if (j.contains("Folder") && j["Folder"].is_object()) {
+        const auto& folderObj = j["Folder"];
+        
+        if (folderObj.contains("InstallDir") && folderObj["InstallDir"].is_string()) {
+            FolderTargetConfig ftc;
+            ftc.folderName = folderObj["InstallDir"].get<std::string>();
+            ftc.targetDirectory = "installDirectory";
+            ftc.dirType = SpecialDirectoryType::INSTALL_DIRECTORY;
+            config.folderTargets.push_back(ftc);
         }
+        
+        if (folderObj.contains("Roaming") && folderObj["Roaming"].is_string()) {
+            FolderTargetConfig ftc;
+            ftc.folderName = folderObj["Roaming"].get<std::string>();
+            ftc.targetDirectory = "%AppData%\\Roaming";
+            ftc.dirType = SpecialDirectoryType::APPDATA_ROAMING;
+            config.folderTargets.push_back(ftc);
+        }
+        
+        if (folderObj.contains("Local") && folderObj["Local"].is_string()) {
+            FolderTargetConfig ftc;
+            ftc.folderName = folderObj["Local"].get<std::string>();
+            ftc.targetDirectory = "%LocalAppData%";
+            ftc.dirType = SpecialDirectoryType::APPDATA_LOCAL;
+            config.folderTargets.push_back(ftc);
+        }
+    }
+    
+    // 解析 Registry（可选）
+    if (j.contains("Registry") && j["Registry"].is_array()) {
+        for (const auto& entry : j["Registry"]) {
+            if (!entry.is_object()) {
+                continue;
+            }
+            RegistryEntry reg;
+            if (entry.contains("path") && entry["path"].is_string()) {
+                reg.path = entry["path"].get<std::string>();
+            }
+            if (entry.contains("key") && entry["key"].is_string()) {
+                reg.key = entry["key"].get<std::string>();
+            }
+            if (entry.contains("value") && entry["value"].is_string()) {
+                reg.value = entry["value"].get<std::string>();
+            }
+            config.registry.push_back(reg);
+        }
+    }
+    
+    // 解析 AutoStartup（可选）
+    if (j.contains("AutoStartup") && j["AutoStartup"].is_boolean()) {
+        config.autoStartup = j["AutoStartup"].get<bool>();
+    }
+    
+    // 解析 DesktopIcons（可选）
+    if (j.contains("DesktopIcons") && j["DesktopIcons"].is_boolean()) {
+        config.desktopIcons = j["DesktopIcons"].get<bool>();
+    }
         
         return config;
         

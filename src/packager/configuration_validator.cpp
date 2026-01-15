@@ -13,6 +13,14 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
     
     ValidationResult result;
     
+    // 验证配置版本
+    if (config.version.empty()) {
+        result.errors.push_back("ERROR: Missing required field 'Version'\n"
+                                "  Reason: Version is required\n"
+                                "  Suggestion: Add \"Version\": \"1.0\" to the configuration file");
+        result.isValid = false;
+    }
+    
     // 验证应用程序名称
     if (!validateApplicationName(config.applicationName, result.errors)) {
         result.isValid = false;
@@ -35,6 +43,22 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
     if (!config.defaultInstallDir.empty()) {
         if (!validateTargetDirectory(config.defaultInstallDir, result.errors)) {
             result.isValid = false;
+        }
+    } else {
+        result.errors.push_back("ERROR: Missing required field 'InstallDir'\n"
+                                "  Reason: Default install directory is required\n"
+                                "  Suggestion: Add \"InstallDir\": \"%ProgramFiles%\" to the configuration file");
+        result.isValid = false;
+    }
+    
+    // 验证注册表配置（结构完整性）
+    for (const auto& reg : config.registry) {
+        if (reg.path.empty() || reg.key.empty()) {
+            result.errors.push_back("ERROR: Invalid Registry entry\n"
+                                    "  Reason: Registry 'path' and 'key' are required\n"
+                                    "  Suggestion: Provide both \"path\" and \"key\" in Registry entries");
+            result.isValid = false;
+            break;
         }
     }
     

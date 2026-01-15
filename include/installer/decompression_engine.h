@@ -20,6 +20,11 @@ public:
     // 流式解压到输出接口
     bool decompressToStream(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum);
     
+    // 解压单个 LZMA 块
+    bool decompressLzmaBlockData(const std::vector<uint8_t>& compressedData,
+                                 size_t originalSize,
+                                 std::vector<uint8_t>& output);
+    
     // 设置线程池
     void setThreadPool(std::shared_ptr<ThreadPoolManager> threadPool);
     

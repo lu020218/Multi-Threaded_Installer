@@ -108,82 +108,62 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
     // 创建tar格式的数据
     // Logging disabled
     auto tarTimer = START_TIMER("CreateTarData");
-    std::vector<uint8_t> tarData = createTarData(folder);
+    std::vector<FileIndexEntry> fileIndex;
+    std::vector<uint8_t> tarData = createTarData(folder, fileIndex);
     if (tarData.empty()) {
         std::cerr << "Failed to create tar data for folder: " << folder.sourcePath << std::endl;
         return result;
     }
     
     result.originalSize = tarData.size();
+    result.fileIndex = std::move(fileIndex);
     
-    // 根据数据大小选择压缩策略
+    // 块级压缩
     // Logging disabled
     auto compressionTimer = START_TIMER("LzmaCompression");
     
-    if (tarData.size() > 128 * 1024 * 1024) {
-        // 大文件（> 128MB）：使用块级压缩以支持并行解压
-        std::cout << "Using block-level LZMA compression for large file (" 
-                  << tarData.size() / (1024 * 1024) << " MB)" << std::endl;
-        
-        result.compressedData = compressWithBlocksLzma(tarData);
-        
-        if (result.compressedData.empty()) {
-            std::cerr << "Block LZMA compression failed" << std::endl;
-            return CompressionResult{};
-        }
-        
-        result.compressedSize = result.compressedData.size();
-    } else {
-        // 小文件（≤ 128MB）：使用标准LZMA压缩
-        // 重新初始化LZMA流以确保干净状态
-        if (lzmaLoader && lzmaLoader->isLoaded()) {
-            lzmaLoader->lzma_end_ptr(&lzmaStream);
-            lzmaStream = LZMA_STREAM_INIT;
-            lzma_ret ret = lzmaLoader->lzma_easy_encoder_ptr(&lzmaStream, compressionLevel, LZMA_CHECK_SHA256);
-            if (ret != LZMA_OK) {
-                std::cerr << "Failed to reinitialize LZMA encoder: " << ret << std::endl;
-                return result;
+    result.compressedData = compressWithBlocksLzma(tarData);
+    
+    if (result.compressedData.empty()) {
+        std::cerr << "Block LZMA compression failed" << std::endl;
+        return CompressionResult{};
+    }
+    
+    result.compressedSize = result.compressedData.size();
+    
+    // 解析块索引
+    if (result.compressedData.size() >= sizeof(uint32_t)) {
+        uint32_t blockCount = *reinterpret_cast<const uint32_t*>(result.compressedData.data());
+        size_t metaOffset = sizeof(uint32_t);
+        size_t metaSize = static_cast<size_t>(blockCount) * 16;
+        if (blockCount > 0 && metaOffset + metaSize <= result.compressedData.size()) {
+            result.blockIndex.reserve(blockCount);
+            for (uint32_t i = 0; i < blockCount; ++i) {
+                size_t base = metaOffset + i * 16;
+                BlockIndexEntry entry;
+                entry.blockId = i;
+                entry.offset = *reinterpret_cast<const uint32_t*>(result.compressedData.data() + base);
+                entry.compressedSize = *reinterpret_cast<const uint32_t*>(result.compressedData.data() + base + 4);
+                entry.originalSize = *reinterpret_cast<const uint32_t*>(result.compressedData.data() + base + 8);
+                entry.checksum = *reinterpret_cast<const uint32_t*>(result.compressedData.data() + base + 12);
+                result.blockIndex.push_back(entry);
             }
-        } else {
-            std::cerr << "LZMA library not loaded" << std::endl;
-            return result;
         }
-        
-        // 估算压缩后大小（LZMA通常需要更多空间）
-        size_t outputSize = tarData.size() + (tarData.size() / 10) + 1024;
-        result.compressedData.resize(outputSize);
-        
-        // 设置输入和输出缓冲区
-        lzmaStream.next_in = tarData.data();
-        lzmaStream.avail_in = tarData.size();
-        lzmaStream.next_out = result.compressedData.data();
-        lzmaStream.avail_out = result.compressedData.size();
-        
-        // 执行压缩
-        lzma_ret ret = lzmaLoader->lzma_code_ptr(&lzmaStream, LZMA_FINISH);
-        
-        if (ret != LZMA_STREAM_END) {
-            std::cerr << "LZMA compression failed: " << ret << std::endl;
-            return CompressionResult{};
-        }
-        
-        // 调整输出大小
-        size_t compressedSize = result.compressedData.size() - lzmaStream.avail_out;
-        result.compressedData.resize(compressedSize);
-        result.compressedSize = compressedSize;
     }
     
     // 计算原始数据的CRC32校验和
     result.checksum = calculateChecksum(tarData);
 #else
     // Stub implementation - just copy data with minimal "compression"
-    std::vector<uint8_t> tarData = createTarData(folder);
+    std::vector<FileIndexEntry> fileIndex;
+    std::vector<uint8_t> tarData = createTarData(folder, fileIndex);
     if (tarData.empty()) {
         std::cerr << "Failed to create tar data for folder: " << folder.sourcePath << std::endl;
         return result;
     }
     
     result.originalSize = tarData.size();
+    result.fileIndex = std::move(fileIndex);
     result.compressedData = tarData; // No actual compression
     result.compressedSize = tarData.size();
     
@@ -237,7 +217,8 @@ std::vector<uint8_t> CompressionModule::readFileContent(const std::string& fileP
     return content;
 }
 
-std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder) {
+std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder,
+                                                      std::vector<FileIndexEntry>& fileIndex) {
     // 简化的tar格式实现
     // 实际实现中应该使用标准的tar格式
     std::vector<uint8_t> tarData;
@@ -266,6 +247,14 @@ std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder) 
         // 添加文件头信息（简化格式）
         uint32_t pathLength = static_cast<uint32_t>(relativePath.length());
         uint32_t fileSize = static_cast<uint32_t>(fileContent.size());
+        
+        // 记录文件索引（内容起始偏移）
+        FileIndexEntry entry;
+        entry.relativePath = relativePath;
+        entry.offset = static_cast<uint64_t>(
+            tarData.size() + sizeof(uint32_t) + sizeof(uint32_t) + relativePath.size());
+        entry.size = static_cast<uint64_t>(fileContent.size());
+        fileIndex.push_back(std::move(entry));
         
         // 写入路径长度
         tarData.insert(tarData.end(), 

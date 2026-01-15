@@ -7,11 +7,14 @@
 #include <iostream>
 #include <mutex>
 #include <atomic>
+#include <chrono>
+#include <iomanip>
 
 using namespace MultiThreadedInstaller;
 
 int main(int argc, char* argv[]) {
     ConsoleInterface console;
+    auto startTime = std::chrono::steady_clock::now();
     
     // 解析命令行参数
     auto args = console.parseInstallerArgs(argc, argv);
@@ -25,6 +28,9 @@ int main(int argc, char* argv[]) {
     
     // 解析嵌入的扩展元数据
     MetadataParser parser;
+    if (!args.dataPackagePath.empty()) {
+        parser.setDataPackagePath(args.dataPackagePath);
+    }
     auto metadata = parser.parseExtendedEmbeddedMetadata();
     
     if (!parser.validateMetadata(metadata)) {
@@ -215,9 +221,17 @@ int main(int argc, char* argv[]) {
     
     if (overallSuccess) {
         console.showInfo("Installation completed successfully!");
+        auto endTime = std::chrono::steady_clock::now();
+        std::chrono::duration<double> elapsed = endTime - startTime;
+        std::cout << "Total time: " << std::fixed << std::setprecision(2) << elapsed.count()
+                  << " seconds" << std::endl;
         return 0;
     } else {
         console.showError("Installation completed with errors");
+        auto endTime = std::chrono::steady_clock::now();
+        std::chrono::duration<double> elapsed = endTime - startTime;
+        std::cout << "Total time: " << std::fixed << std::setprecision(2) << elapsed.count()
+                  << " seconds" << std::endl;
         return 1;
     }
 }

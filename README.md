@@ -8,35 +8,35 @@ A C++ packager and installer system that creates self-extracting installers with
 ├── CMakeLists.txt              # Build configuration
 ├── README.md                   # This file
 ├── include/                    # Header files
-│   ├── common/
-│   │   └── types.h            # Core data structures and enums
-│   ├── packager/              # Packager component headers
-│   │   ├── folder_scanner.h
-│   │   ├── compression_module.h
-│   │   ├── metadata_generator.h
-│   │   └── installer_generator.h
-│   └── installer/             # Installer component headers
-│       ├── metadata_parser.h
-│       ├── thread_pool_manager.h
-│       ├── decompression_engine.h
-│       ├── file_system_operator.h
-│       └── console_interface.h
+�?  ├── common/
+�?  �?  └── types.h            # Core data structures and enums
+�?  ├── packager/              # Packager component headers
+�?  �?  ├── folder_scanner.h
+�?  �?  ├── compression_module.h
+�?  �?  ├── metadata_generator.h
+�?  �?  └── installer_generator.h
+�?  └── installer/             # Installer component headers
+�?      ├── metadata_parser.h
+�?      ├── thread_pool_manager.h
+�?      ├── decompression_engine.h
+�?      ├── file_system_operator.h
+�?      └── console_interface.h
 ├── src/                       # Source files
-│   ├── common/
-│   │   └── types.cpp
-│   ├── packager/              # Packager implementation
-│   │   ├── main.cpp
-│   │   ├── folder_scanner.cpp
-│   │   ├── compression_module.cpp
-│   │   ├── metadata_generator.cpp
-│   │   └── installer_generator.cpp
-│   └── installer/             # Installer implementation
-│       ├── main.cpp
-│       ├── metadata_parser.cpp
-│       ├── thread_pool_manager.cpp
-│       ├── decompression_engine.cpp
-│       ├── file_system_operator.cpp
-│       └── console_interface.cpp
+�?  ├── common/
+�?  �?  └── types.cpp
+�?  ├── packager/              # Packager implementation
+�?  �?  ├── main.cpp
+�?  �?  ├── folder_scanner.cpp
+�?  �?  ├── compression_module.cpp
+�?  �?  ├── metadata_generator.cpp
+�?  �?  └── installer_generator.cpp
+�?  └── installer/             # Installer implementation
+�?      ├── main.cpp
+�?      ├── metadata_parser.cpp
+�?      ├── thread_pool_manager.cpp
+�?      ├── decompression_engine.cpp
+�?      ├── file_system_operator.cpp
+�?      └── console_interface.cpp
 └── tests/                     # Test files
     ├── test_main.cpp          # Unit test runner
     ├── test_*.cpp             # Unit test files
@@ -69,6 +69,7 @@ make
 Options:
   -a, --algorithm <lzma>         Choose compression algorithm (default: lzma)
   -l, --level <level>            Compression level (lzma: 0-9)
+  -p, --data-out <file>          Write external data package
   -t, --threads <count>          Number of compression threads (default: CPU cores)
   -v, --verbose                  Show detailed information
   -h, --help                     Show help message
@@ -80,6 +81,7 @@ Options:
 
 Options:
   -d, --destination <directory>  Default installation directory
+  -p, --data-package <file>      Use external data package
   -t, --threads <count>          Number of decompression threads (default: CPU cores)
   -f, --force                    Force overwrite existing files
   -s, --silent                   Silent installation mode
@@ -114,3 +116,5 @@ The system consists of two main components:
 2. **Installer**: Parses embedded metadata, decompresses folders using multiple threads, and installs files to target directories
 
 Both components share common data structures and use a modular design for maintainability and extensibility.
+
+

@@ -109,40 +109,33 @@ std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMeta
 std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const ExtendedInstallationMetadata& metadata) {
     std::vector<uint8_t> serialized;
     
-    // 创建二进制头
     BinaryMetadata header;
     header.magic = Constants::MAGIC_NUMBER;
     header.version = Constants::VERSION;
     header.folderCount = metadata.folderCount;
-    header.metadataSize = 0; // 稍后计算
-    header.dataOffset = 0;   // 稍后计算
+    header.metadataSize = 0;
+    header.dataOffset = 0;
     
-    // 序列化头部
     const uint8_t* headerBytes = reinterpret_cast<const uint8_t*>(&header);
     serialized.insert(serialized.end(), headerBytes, headerBytes + sizeof(BinaryMetadata));
     
-    // 写入扩展标记 "EXTD" (0x45585444)
     uint32_t extendedMarker = 0x45585444;
     const uint8_t* markerBytes = reinterpret_cast<const uint8_t*>(&extendedMarker);
     serialized.insert(serialized.end(), markerBytes, markerBytes + sizeof(uint32_t));
     
-    // 序列化应用程序名称
     uint32_t appNameLen = static_cast<uint32_t>(metadata.applicationName.length());
     const uint8_t* appNameLenBytes = reinterpret_cast<const uint8_t*>(&appNameLen);
     serialized.insert(serialized.end(), appNameLenBytes, appNameLenBytes + sizeof(uint32_t));
     serialized.insert(serialized.end(), metadata.applicationName.begin(), metadata.applicationName.end());
     
-    // 序列化默认安装目录
     uint32_t defaultInstallDirLen = static_cast<uint32_t>(metadata.defaultInstallDir.length());
     const uint8_t* defaultInstallDirLenBytes = reinterpret_cast<const uint8_t*>(&defaultInstallDirLen);
     serialized.insert(serialized.end(), defaultInstallDirLenBytes, defaultInstallDirLenBytes + sizeof(uint32_t));
     serialized.insert(serialized.end(), metadata.defaultInstallDir.begin(), metadata.defaultInstallDir.end());
     
-    // 序列化每个文件夹的映射（基本字段 + 扩展字段）
     for (size_t i = 0; i < metadata.extendedMappings.size(); ++i) {
         const auto& extMapping = metadata.extendedMappings[i];
         
-        // 序列化基本数值字段
         const uint8_t* offsetBytes = reinterpret_cast<const uint8_t*>(&extMapping.offset);
         serialized.insert(serialized.end(), offsetBytes, offsetBytes + sizeof(uint64_t));
         
@@ -158,28 +151,66 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
         const uint8_t* algorithmBytes = reinterpret_cast<const uint8_t*>(&extMapping.algorithm);
         serialized.insert(serialized.end(), algorithmBytes, algorithmBytes + sizeof(CompressionAlgorithm));
         
-        // 序列化文件夹名称
         uint32_t folderNameLen = static_cast<uint32_t>(extMapping.folderName.length());
         const uint8_t* folderNameLenBytes = reinterpret_cast<const uint8_t*>(&folderNameLen);
         serialized.insert(serialized.end(), folderNameLenBytes, folderNameLenBytes + sizeof(uint32_t));
         serialized.insert(serialized.end(), extMapping.folderName.begin(), extMapping.folderName.end());
         
-        // 序列化目标路径
         uint32_t targetPathLen = static_cast<uint32_t>(extMapping.targetPath.length());
         const uint8_t* targetPathLenBytes = reinterpret_cast<const uint8_t*>(&targetPathLen);
         serialized.insert(serialized.end(), targetPathLenBytes, targetPathLenBytes + sizeof(uint32_t));
         serialized.insert(serialized.end(), extMapping.targetPath.begin(), extMapping.targetPath.end());
         
-        // 序列化扩展字段：目标目录类型
         const uint8_t* dirTypeBytes = reinterpret_cast<const uint8_t*>(&extMapping.targetDirType);
         serialized.insert(serialized.end(), dirTypeBytes, dirTypeBytes + sizeof(SpecialDirectoryType));
         
-        // 序列化扩展字段：自定义目标路径
         uint32_t customPathLen = static_cast<uint32_t>(extMapping.customTargetPath.length());
         const uint8_t* customPathLenBytes = reinterpret_cast<const uint8_t*>(&customPathLen);
         serialized.insert(serialized.end(), customPathLenBytes, customPathLenBytes + sizeof(uint32_t));
         serialized.insert(serialized.end(), extMapping.customTargetPath.begin(), extMapping.customTargetPath.end());
+        
+        uint32_t fileCount = static_cast<uint32_t>(extMapping.fileIndex.size());
+        const uint8_t* fileCountBytes = reinterpret_cast<const uint8_t*>(&fileCount);
+        serialized.insert(serialized.end(), fileCountBytes, fileCountBytes + sizeof(uint32_t));
+        
+        for (const auto& fileEntry : extMapping.fileIndex) {
+            uint32_t pathLen = static_cast<uint32_t>(fileEntry.relativePath.length());
+            const uint8_t* pathLenBytes = reinterpret_cast<const uint8_t*>(&pathLen);
+            serialized.insert(serialized.end(), pathLenBytes, pathLenBytes + sizeof(uint32_t));
+            serialized.insert(serialized.end(), fileEntry.relativePath.begin(), fileEntry.relativePath.end());
+            
+            const uint8_t* entryOffsetBytes = reinterpret_cast<const uint8_t*>(&fileEntry.offset);
+            serialized.insert(serialized.end(), entryOffsetBytes, entryOffsetBytes + sizeof(uint64_t));
+            
+            const uint8_t* entrySizeBytes = reinterpret_cast<const uint8_t*>(&fileEntry.size);
+            serialized.insert(serialized.end(), entrySizeBytes, entrySizeBytes + sizeof(uint64_t));
+        }
+        
+        uint32_t blockCount = static_cast<uint32_t>(extMapping.blockIndex.size());
+        const uint8_t* blockCountBytes = reinterpret_cast<const uint8_t*>(&blockCount);
+        serialized.insert(serialized.end(), blockCountBytes, blockCountBytes + sizeof(uint32_t));
+        
+        for (const auto& blockEntry : extMapping.blockIndex) {
+            const uint8_t* blockIdBytes = reinterpret_cast<const uint8_t*>(&blockEntry.blockId);
+            serialized.insert(serialized.end(), blockIdBytes, blockIdBytes + sizeof(uint32_t));
+            
+            const uint8_t* blockOffsetBytes = reinterpret_cast<const uint8_t*>(&blockEntry.offset);
+            serialized.insert(serialized.end(), blockOffsetBytes, blockOffsetBytes + sizeof(uint64_t));
+            
+            const uint8_t* compSizeBytes = reinterpret_cast<const uint8_t*>(&blockEntry.compressedSize);
+            serialized.insert(serialized.end(), compSizeBytes, compSizeBytes + sizeof(uint64_t));
+            
+            const uint8_t* origSizeBytes = reinterpret_cast<const uint8_t*>(&blockEntry.originalSize);
+            serialized.insert(serialized.end(), origSizeBytes, origSizeBytes + sizeof(uint64_t));
+            
+            const uint8_t* blockChecksumBytes = reinterpret_cast<const uint8_t*>(&blockEntry.checksum);
+            serialized.insert(serialized.end(), blockChecksumBytes, blockChecksumBytes + sizeof(uint32_t));
+        }
     }
+    
+    header.metadataSize = static_cast<uint64_t>(serialized.size());
+    header.dataOffset = header.metadataSize;
+    std::memcpy(serialized.data(), &header, sizeof(BinaryMetadata));
     
     return serialized;
 }
@@ -247,3 +278,5 @@ uint64_t MetadataGenerator::calculateTotalCompressedSize(const std::vector<Compr
 }
 
 } // namespace MultiThreadedInstaller
+
+

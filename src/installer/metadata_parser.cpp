@@ -12,7 +12,7 @@
 namespace MultiThreadedInstaller {
 
 InstallationMetadata MetadataParser::parseEmbeddedMetadata() {
-    std::vector<uint8_t> embeddedData = readEmbeddedData();
+    std::vector<uint8_t> embeddedData = dataPackagePath_.empty() ? readEmbeddedData() : readExternalMetadata();
     if (embeddedData.empty()) {
         std::cerr << "No embedded data found" << std::endl;
         return InstallationMetadata{};
@@ -22,7 +22,7 @@ InstallationMetadata MetadataParser::parseEmbeddedMetadata() {
 }
 
 ExtendedInstallationMetadata MetadataParser::parseExtendedEmbeddedMetadata() {
-    std::vector<uint8_t> embeddedData = readEmbeddedData();
+    std::vector<uint8_t> embeddedData = dataPackagePath_.empty() ? readEmbeddedData() : readExternalMetadata();
     if (embeddedData.empty()) {
         std::cerr << "No embedded data found" << std::endl;
         return ExtendedInstallationMetadata{};
@@ -214,7 +214,6 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         return metadata;
     }
     
-    // 解析头部
     const BinaryMetadata* header = reinterpret_cast<const BinaryMetadata*>(data.data());
     
     if (!validateHeader(*header)) {
@@ -224,126 +223,171 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     metadata.version = header->version;
     metadata.folderCount = header->folderCount;
     
-    // 解析文件夹映射
     size_t offset = sizeof(BinaryMetadata);
     
-    // 尝试读取扩展字段（applicationName 和 defaultInstallDir）
-    // 这些字段在基本元数据之后
-    bool hasExtendedFields = false;
-    
-    // 首先检查是否有扩展字段标记
-    if (offset + sizeof(uint32_t) <= data.size()) {
-        uint32_t extendedMarker = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        // 使用特殊标记 0x45585444 ("EXTD") 来标识扩展元数据
-        if (extendedMarker == 0x45585444) {
-            hasExtendedFields = true;
-            offset += sizeof(uint32_t);
-            
-            // 读取 applicationName
-            if (offset + sizeof(uint32_t) <= data.size()) {
-                uint32_t appNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-                offset += sizeof(uint32_t);
-                
-                if (offset + appNameLen <= data.size()) {
-                    metadata.applicationName = std::string(reinterpret_cast<const char*>(data.data() + offset), appNameLen);
-                    offset += appNameLen;
-                }
-            }
-            
-            // 读取 defaultInstallDir
-            if (offset + sizeof(uint32_t) <= data.size()) {
-                uint32_t installDirLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-                offset += sizeof(uint32_t);
-                
-                if (offset + installDirLen <= data.size()) {
-                    metadata.defaultInstallDir = std::string(reinterpret_cast<const char*>(data.data() + offset), installDirLen);
-                    offset += installDirLen;
-                }
-            }
-        }
+    if (offset + sizeof(uint32_t) > data.size()) {
+        std::cerr << "Missing extended marker" << std::endl;
+        return metadata;
     }
     
-    // 解析文件夹映射（扩展或基本）
+    uint32_t extendedMarker = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+    if (extendedMarker != 0x45585444) {
+        std::cerr << "Invalid extended marker" << std::endl;
+        return metadata;
+    }
+    offset += sizeof(uint32_t);
+    
+    if (offset + sizeof(uint32_t) > data.size()) {
+        std::cerr << "Missing application name length" << std::endl;
+        return metadata;
+    }
+    uint32_t appNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+    offset += sizeof(uint32_t);
+    if (offset + appNameLen > data.size()) {
+        std::cerr << "Insufficient data for application name" << std::endl;
+        return metadata;
+    }
+    metadata.applicationName = std::string(reinterpret_cast<const char*>(data.data() + offset), appNameLen);
+    offset += appNameLen;
+    
+    if (offset + sizeof(uint32_t) > data.size()) {
+        std::cerr << "Missing install dir length" << std::endl;
+        return metadata;
+    }
+    uint32_t installDirLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+    offset += sizeof(uint32_t);
+    if (offset + installDirLen > data.size()) {
+        std::cerr << "Insufficient data for install dir" << std::endl;
+        return metadata;
+    }
+    metadata.defaultInstallDir = std::string(reinterpret_cast<const char*>(data.data() + offset), installDirLen);
+    offset += installDirLen;
+    
     for (uint32_t i = 0; i < header->folderCount; ++i) {
         ExtendedFolderMapping mapping;
         
-        // 检查是否有足够的数据读取数值字段
-        if (offset + sizeof(uint64_t) * 3 + sizeof(uint32_t) * 3 > data.size()) {
-            std::cerr << "Insufficient data for folder mapping " << i << " numeric fields" << std::endl;
-            break;
+        if (offset + sizeof(uint64_t) * 3 + sizeof(uint32_t) > data.size()) {
+            std::cerr << "Insufficient data for folder mapping numeric fields" << std::endl;
+            return metadata;
         }
         
-        // 读取数值字段
         mapping.offset = *reinterpret_cast<const uint64_t*>(data.data() + offset);
         offset += sizeof(uint64_t);
-        
         mapping.compressedSize = *reinterpret_cast<const uint64_t*>(data.data() + offset);
         offset += sizeof(uint64_t);
-        
         mapping.originalSize = *reinterpret_cast<const uint64_t*>(data.data() + offset);
         offset += sizeof(uint64_t);
-        
         mapping.checksum = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
-        
         mapping.algorithm = *reinterpret_cast<const CompressionAlgorithm*>(data.data() + offset);
         offset += sizeof(CompressionAlgorithm);
         
-        // 读取文件夹名称
         if (offset + sizeof(uint32_t) > data.size()) {
             std::cerr << "Insufficient data for folder name length" << std::endl;
-            break;
+            return metadata;
         }
-        
         uint32_t folderNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
-        
         if (offset + folderNameLen > data.size()) {
             std::cerr << "Insufficient data for folder name" << std::endl;
-            break;
+            return metadata;
         }
-        
         mapping.folderName = std::string(reinterpret_cast<const char*>(data.data() + offset), folderNameLen);
         offset += folderNameLen;
         
-        // 读取目标路径
         if (offset + sizeof(uint32_t) > data.size()) {
             std::cerr << "Insufficient data for target path length" << std::endl;
-            break;
+            return metadata;
         }
-        
         uint32_t targetPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
-        
         if (offset + targetPathLen > data.size()) {
             std::cerr << "Insufficient data for target path" << std::endl;
-            break;
+            return metadata;
         }
-        
         mapping.targetPath = std::string(reinterpret_cast<const char*>(data.data() + offset), targetPathLen);
         offset += targetPathLen;
         
-        // 如果有扩展字段，读取 targetDirType 和 customTargetPath
-        if (hasExtendedFields) {
-            if (offset + sizeof(SpecialDirectoryType) <= data.size()) {
-                mapping.targetDirType = *reinterpret_cast<const SpecialDirectoryType*>(data.data() + offset);
-                offset += sizeof(SpecialDirectoryType);
+        if (offset + sizeof(SpecialDirectoryType) > data.size()) {
+            std::cerr << "Insufficient data for target dir type" << std::endl;
+            return metadata;
+        }
+        mapping.targetDirType = *reinterpret_cast<const SpecialDirectoryType*>(data.data() + offset);
+        offset += sizeof(SpecialDirectoryType);
+        
+        if (offset + sizeof(uint32_t) > data.size()) {
+            std::cerr << "Insufficient data for custom path length" << std::endl;
+            return metadata;
+        }
+        uint32_t customPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+        if (offset + customPathLen > data.size()) {
+            std::cerr << "Insufficient data for custom path" << std::endl;
+            return metadata;
+        }
+        mapping.customTargetPath = std::string(reinterpret_cast<const char*>(data.data() + offset), customPathLen);
+        offset += customPathLen;
+        
+        if (offset + sizeof(uint32_t) > data.size()) {
+            std::cerr << "Insufficient data for file count" << std::endl;
+            return metadata;
+        }
+        uint32_t fileCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+        mapping.fileIndex.reserve(fileCount);
+        for (uint32_t f = 0; f < fileCount; ++f) {
+            if (offset + sizeof(uint32_t) > data.size()) {
+                std::cerr << "Insufficient data for file path length" << std::endl;
+                return metadata;
             }
-            
-            if (offset + sizeof(uint32_t) <= data.size()) {
-                uint32_t customPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-                offset += sizeof(uint32_t);
-                
-                if (offset + customPathLen <= data.size()) {
-                    mapping.customTargetPath = std::string(reinterpret_cast<const char*>(data.data() + offset), customPathLen);
-                    offset += customPathLen;
-                }
+            uint32_t pathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+            offset += sizeof(uint32_t);
+            if (offset + pathLen > data.size()) {
+                std::cerr << "Insufficient data for file path" << std::endl;
+                return metadata;
             }
+            FileIndexEntry fileEntry;
+            fileEntry.relativePath = std::string(reinterpret_cast<const char*>(data.data() + offset), pathLen);
+            offset += pathLen;
+            if (offset + sizeof(uint64_t) * 2 > data.size()) {
+                std::cerr << "Insufficient data for file entry" << std::endl;
+                return metadata;
+            }
+            fileEntry.offset = *reinterpret_cast<const uint64_t*>(data.data() + offset);
+            offset += sizeof(uint64_t);
+            fileEntry.size = *reinterpret_cast<const uint64_t*>(data.data() + offset);
+            offset += sizeof(uint64_t);
+            mapping.fileIndex.push_back(std::move(fileEntry));
+        }
+        
+        if (offset + sizeof(uint32_t) > data.size()) {
+            std::cerr << "Insufficient data for block count" << std::endl;
+            return metadata;
+        }
+        uint32_t blockCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+        mapping.blockIndex.reserve(blockCount);
+        for (uint32_t b = 0; b < blockCount; ++b) {
+            if (offset + sizeof(uint32_t) + sizeof(uint64_t) * 3 + sizeof(uint32_t) > data.size()) {
+                std::cerr << "Insufficient data for block entry" << std::endl;
+                return metadata;
+            }
+            BlockIndexEntry blockEntry;
+            blockEntry.blockId = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+            offset += sizeof(uint32_t);
+            blockEntry.offset = *reinterpret_cast<const uint64_t*>(data.data() + offset);
+            offset += sizeof(uint64_t);
+            blockEntry.compressedSize = *reinterpret_cast<const uint64_t*>(data.data() + offset);
+            offset += sizeof(uint64_t);
+            blockEntry.originalSize = *reinterpret_cast<const uint64_t*>(data.data() + offset);
+            offset += sizeof(uint64_t);
+            blockEntry.checksum = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+            offset += sizeof(uint32_t);
+            mapping.blockIndex.push_back(std::move(blockEntry));
         }
         
         metadata.extendedMappings.push_back(mapping);
         
-        // 同时填充基类的 folderMappings 以保持向后兼容
         FolderMapping baseMapping;
         baseMapping.folderName = mapping.folderName;
         baseMapping.targetPath = mapping.targetPath;
@@ -355,7 +399,6 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         metadata.folderMappings.push_back(baseMapping);
     }
     
-    // 计算总压缩大小
     metadata.totalCompressedSize = 0;
     for (const auto& mapping : metadata.folderMappings) {
         metadata.totalCompressedSize += mapping.compressedSize;
@@ -365,6 +408,10 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
 }
 
 std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_t size) {
+    if (!dataPackagePath_.empty()) {
+        return readExternalCompressedData(offset, size);
+    }
+    
     std::string executablePath = getCurrentExecutablePath();
     if (executablePath.empty()) {
         return {};
@@ -421,6 +468,64 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
     return compressedData;
 }
 
+std::vector<uint8_t> MetadataParser::readExternalMetadata() {
+    std::ifstream file(dataPackagePath_, std::ios::binary);
+    if (!file) {
+        std::cerr << "Failed to open data package: " << dataPackagePath_ << std::endl;
+        return {};
+    }
+    
+    DataPackageHeader header;
+    file.read(reinterpret_cast<char*>(&header), sizeof(DataPackageHeader));
+    if (!file || header.magic != Constants::DATA_MAGIC_NUMBER) {
+        std::cerr << "Invalid data package header" << std::endl;
+        return {};
+    }
+    
+    file.seekg(static_cast<std::streamoff>(header.metadataOffset));
+    std::vector<uint8_t> metadata(header.metadataSize);
+    file.read(reinterpret_cast<char*>(metadata.data()), header.metadataSize);
+    
+    if (file.gcount() != static_cast<std::streamsize>(header.metadataSize)) {
+        std::cerr << "Failed to read complete metadata from data package" << std::endl;
+        return {};
+    }
+    
+    return metadata;
+}
+
+std::vector<uint8_t> MetadataParser::readExternalCompressedData(uint64_t offset, uint64_t size) {
+    std::ifstream file(dataPackagePath_, std::ios::binary);
+    if (!file) {
+        std::cerr << "Failed to open data package: " << dataPackagePath_ << std::endl;
+        return {};
+    }
+    
+    DataPackageHeader header;
+    file.read(reinterpret_cast<char*>(&header), sizeof(DataPackageHeader));
+    if (!file || header.magic != Constants::DATA_MAGIC_NUMBER) {
+        std::cerr << "Invalid data package header" << std::endl;
+        return {};
+    }
+    
+    uint64_t absoluteOffset = header.dataOffset + offset;
+    if (absoluteOffset + size > header.dataOffset + header.dataSize) {
+        std::cerr << "Invalid data offset or size for data package" << std::endl;
+        return {};
+    }
+    
+    file.seekg(static_cast<std::streamoff>(absoluteOffset));
+    std::vector<uint8_t> compressedData(size);
+    file.read(reinterpret_cast<char*>(compressedData.data()), size);
+    
+    if (file.gcount() != static_cast<std::streamsize>(size)) {
+        std::cerr << "Failed to read complete compressed data from data package" << std::endl;
+        return {};
+    }
+    
+    return compressedData;
+}
+
 bool MetadataParser::validateHeader(const BinaryMetadata& header) {
     if (header.magic != Constants::MAGIC_NUMBER) {
         std::cerr << "Invalid magic number in metadata header" << std::endl;
@@ -452,3 +557,4 @@ std::string MetadataParser::getCurrentExecutablePath() {
 }
 
 } // namespace MultiThreadedInstaller
+

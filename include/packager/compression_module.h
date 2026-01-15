@@ -52,7 +52,8 @@ private:
     std::vector<uint8_t> readFileContent(const std::string& filePath);
     
     // 创建文件夹的tar格式数据
-    std::vector<uint8_t> createTarData(const FolderInfo& folder);
+    std::vector<uint8_t> createTarData(const FolderInfo& folder,
+                                       std::vector<FileIndexEntry>& fileIndex);
     
     // 块级压缩实现 (LZMA)
     std::vector<uint8_t> compressWithBlocksLzma(const std::vector<uint8_t>& data);

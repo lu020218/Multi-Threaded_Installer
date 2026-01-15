@@ -27,6 +27,9 @@ public:
     // 读取压缩数据
     std::vector<uint8_t> readCompressedData(uint64_t offset, uint64_t size);
     
+    // 设置外部数据包路径
+    void setDataPackagePath(const std::string& dataPackagePath) { dataPackagePath_ = dataPackagePath; }
+    
 private:
     // 数据定位结构，与InstallerGenerator中的结构相同
     struct DataLocator {
@@ -43,11 +46,19 @@ private:
     // 从当前可执行文件读取嵌入的数据
     std::vector<uint8_t> readEmbeddedData();
     
+    // 从外部数据包读取元数据
+    std::vector<uint8_t> readExternalMetadata();
+    
+    // 从外部数据包读取压缩数据
+    std::vector<uint8_t> readExternalCompressedData(uint64_t offset, uint64_t size);
+    
     // 验证魔数和版本
     bool validateHeader(const BinaryMetadata& header);
     
     // 获取当前可执行文件路径
     std::string getCurrentExecutablePath();
+    
+    std::string dataPackagePath_;
 };
 
 } // namespace MultiThreadedInstaller

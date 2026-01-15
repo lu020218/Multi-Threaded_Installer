@@ -34,6 +34,7 @@ public:
     struct PackagerArgs {
         std::string inputPath;
         std::string outputPath;
+        std::string dataPackagePath;
         CompressionAlgorithm algorithm = CompressionAlgorithm::LZMA_HIGH;
         int compressionLevel = -1;  // -1表示使用默认值
         int threadCount = -1;       // -1表示使用默认值
@@ -43,6 +44,7 @@ public:
     
     struct InstallerArgs {
         std::string defaultDestination;
+        std::string dataPackagePath;
         std::vector<std::pair<std::string, std::string>> folderMappings;
         int threadCount = -1;       // -1表示使用默认值
         bool force = false;

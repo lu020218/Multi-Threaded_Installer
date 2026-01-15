@@ -6,6 +6,8 @@
 #include "installer/console_interface.h"
 #include <iostream>
 #include <filesystem>
+#include <chrono>
+#include <iomanip>
 
 using namespace MultiThreadedInstaller;
 namespace fs = std::filesystem;
@@ -25,16 +27,22 @@ void showUsage(const std::string& programName) {
 
 int main(int argc, char* argv[]) {
     ConsoleInterface console;
+    auto startTime = std::chrono::steady_clock::now();
+    auto args = console.parsePackagerArgs(argc, argv);
     
-    // 验证命令行参数数量
-    if (argc != 3) {
-        console.showError("Error: Incorrect number of arguments");
+    if (args.showHelp) {
+        console.showPackagerHelp();
+        return 0;
+    }
+    
+    if (args.inputPath.empty() || args.outputPath.empty()) {
+        console.showError("Error: Missing required arguments");
         showUsage(argv[0]);
         return 1;
     }
     
-    std::string inputPath = argv[1];
-    std::string outputPath = argv[2];
+    std::string inputPath = args.inputPath;
+    std::string outputPath = args.outputPath;
     
     // 验证输入目录存在
     if (!fs::exists(inputPath) || !fs::is_directory(inputPath)) {
@@ -100,6 +108,9 @@ int main(int argc, char* argv[]) {
     // 压缩文件夹
     CompressionModule compressor;
     compressor.setCompressionAlgorithm(config.compressionAlgorithm);
+    if (args.compressionLevel >= 0) {
+        compressor.setCompressionLevel(args.compressionLevel);
+    }
     
     std::vector<CompressionResult> compressionResults;
     
@@ -135,8 +146,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
+    if (!args.dataPackagePath.empty()) {
+        if (!installerGen.generateDataPackage(args.dataPackagePath, serializedMetadata, compressedDataList)) {
+            console.showError("Failed to generate data package");
+            return 1;
+        }
+        console.showInfo("Data package created: " + args.dataPackagePath);
+    }
+    
     console.showInfo("Packaging completed successfully!");
     console.showInfo("Installer created: " + outputPath);
+    
+    auto endTime = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = endTime - startTime;
+    std::cout << "Total time: " << std::fixed << std::setprecision(2) << elapsed.count()
+              << " seconds" << std::endl;
     
     return 0;
 }

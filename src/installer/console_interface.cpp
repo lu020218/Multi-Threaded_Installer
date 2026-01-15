@@ -125,6 +125,8 @@ ConsoleInterface::PackagerArgs ConsoleInterface::parsePackagerArgs(int argc, cha
             args.showHelp = true;
         } else if (arg == "-v" || arg == "--verbose") {
             args.verbose = true;
+        } else if ((arg == "-p" || arg == "--data-out") && i + 1 < argc) {
+            args.dataPackagePath = argv[++i];
         } else if ((arg == "-a" || arg == "--algorithm") && i + 1 < argc) {
             args.algorithm = parseCompressionAlgorithm(argv[++i]);
         } else if ((arg == "-l" || arg == "--level") && i + 1 < argc) {
@@ -151,6 +153,8 @@ ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, c
             args.showHelp = true;
         } else if (arg == "-v" || arg == "--verbose") {
             args.verbose = true;
+        } else if ((arg == "-p" || arg == "--data-package") && i + 1 < argc) {
+            args.dataPackagePath = argv[++i];
         } else if (arg == "-s" || arg == "--silent") {
             args.silent = true;
         } else if (arg == "-f" || arg == "--force") {
@@ -177,6 +181,7 @@ void ConsoleInterface::showPackagerHelp() {
     std::cout << "Options:" << std::endl;
     std::cout << "  -a, --algorithm <lzma>         Choose compression algorithm (default: lzma)" << std::endl;
     std::cout << "  -l, --level <level>            Compression level (lzma: 0-9)" << std::endl;
+    std::cout << "  -p, --data-out <file>          Write external data package" << std::endl;
     std::cout << "  -t, --threads <count>          Number of compression threads (default: CPU cores)" << std::endl;
     std::cout << "  -v, --verbose                  Show detailed information" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
@@ -191,6 +196,7 @@ void ConsoleInterface::showInstallerHelp() {
     std::cout << std::endl;
     std::cout << "Options:" << std::endl;
     std::cout << "  -d, --destination <directory>  Default installation directory" << std::endl;
+    std::cout << "  -p, --data-package <file>      Use external data package" << std::endl;
     std::cout << "  -t, --threads <count>          Number of decompression threads (default: CPU cores)" << std::endl;
     std::cout << "  -f, --force                    Force overwrite existing files" << std::endl;
     std::cout << "  -s, --silent                   Silent installation mode" << std::endl;

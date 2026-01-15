@@ -16,6 +16,11 @@ public:
                           const std::vector<uint8_t>& metadata,
                           const std::vector<std::vector<uint8_t>>& compressedData);
     
+    // 生成外部数据包
+    bool generateDataPackage(const std::string& outputPath,
+                            const std::vector<uint8_t>& metadata,
+                            const std::vector<std::vector<uint8_t>>& compressedData);
+    
     // 嵌入安装程序模板
     bool embedInstallerTemplate(const std::string& templatePath);
     

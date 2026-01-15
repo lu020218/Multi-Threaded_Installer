@@ -18,6 +18,44 @@ bool InstallerGenerator::generateInstaller(const std::string& outputPath,
     return createSelfExtractingExecutable(outputPath, metadata, compressedData);
 }
 
+bool InstallerGenerator::generateDataPackage(const std::string& outputPath,
+                                             const std::vector<uint8_t>& metadata,
+                                             const std::vector<std::vector<uint8_t>>& compressedData) {
+    try {
+        std::ofstream outFile(outputPath, std::ios::binary);
+        if (!outFile) {
+            std::cerr << "Failed to create data package: " << outputPath << std::endl;
+            return false;
+        }
+        
+        uint64_t metadataOffset = sizeof(DataPackageHeader);
+        uint64_t dataOffset = metadataOffset + metadata.size();
+        uint64_t totalDataSize = 0;
+        for (const auto& data : compressedData) {
+            totalDataSize += data.size();
+        }
+        
+        DataPackageHeader header;
+        header.metadataOffset = metadataOffset;
+        header.metadataSize = metadata.size();
+        header.dataOffset = dataOffset;
+        header.dataSize = totalDataSize;
+        
+        outFile.write(reinterpret_cast<const char*>(&header), sizeof(DataPackageHeader));
+        outFile.write(reinterpret_cast<const char*>(metadata.data()), metadata.size());
+        for (const auto& data : compressedData) {
+            outFile.write(reinterpret_cast<const char*>(data.data()), data.size());
+        }
+        
+        outFile.close();
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Error creating data package: " << e.what() << std::endl;
+        return false;
+    }
+}
+
 bool InstallerGenerator::embedInstallerTemplate(const std::string& templatePath) {
     // 验证模板文件是否存在
     if (!std::filesystem::exists(templatePath)) {

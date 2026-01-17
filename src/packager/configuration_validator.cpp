@@ -61,6 +61,26 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
             break;
         }
     }
+
+    // 验证安装状态配置
+    if ((config.installState.mode == InstallStateMode::REGISTRY ||
+         config.installState.mode == InstallStateMode::BOTH) &&
+        config.installState.registryPath.empty()) {
+        result.errors.push_back("ERROR: InstallState.RegistryPath is required for Registry mode");
+        result.isValid = false;
+    }
+    
+    if ((config.installState.mode == InstallStateMode::FILE ||
+         config.installState.mode == InstallStateMode::BOTH) &&
+        config.installState.filePath.empty()) {
+        result.errors.push_back("ERROR: InstallState.FilePath is required for File mode");
+        result.isValid = false;
+    }
+    
+    if (config.installState.useMutex && config.installState.mutexName.empty()) {
+        result.errors.push_back("ERROR: InstallState.MutexName is required when UseMutex is true");
+        result.isValid = false;
+    }
     
     return result;
 }

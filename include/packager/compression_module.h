@@ -37,6 +37,7 @@ private:
     lzma_stream lzmaStream;
     bool lzmaInitialized;
     std::unique_ptr<LzmaLoader> lzmaLoader;
+    bool lzmaSupportsMt;
 #else
     void* lzmaStream; // Stub
     bool lzmaInitialized;

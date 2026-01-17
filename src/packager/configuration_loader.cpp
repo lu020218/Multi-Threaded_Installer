@@ -3,6 +3,8 @@
 #include <fstream>
 #include <filesystem>
 #include <cstdlib>
+#include <algorithm>
+#include <cctype>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -162,10 +164,61 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
             if (entry.contains("key") && entry["key"].is_string()) {
                 reg.key = entry["key"].get<std::string>();
             }
-            if (entry.contains("value") && entry["value"].is_string()) {
-                reg.value = entry["value"].get<std::string>();
+            if (entry.contains("value")) {
+                if (entry["value"].is_number_integer() || entry["value"].is_number_unsigned()) {
+                    reg.type = RegistryValueType::DWORD;
+                    reg.value = std::to_string(entry["value"].get<uint32_t>());
+                } else if (entry["value"].is_string()) {
+                    reg.value = entry["value"].get<std::string>();
+                }
+            }
+            if (entry.contains("type") && entry["type"].is_string()) {
+                std::string type = entry["type"].get<std::string>();
+                std::transform(type.begin(), type.end(), type.begin(), ::tolower);
+                if (type == "dword") {
+                    reg.type = RegistryValueType::DWORD;
+                } else if (type == "expand" || type == "expand_string") {
+                    reg.type = RegistryValueType::EXPAND_STRING;
+                } else {
+                    reg.type = RegistryValueType::STRING;
+                }
             }
             config.registry.push_back(reg);
+        }
+    }
+    
+    // 解析 InstallState（可选）
+    config.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + config.applicationName;
+    config.installState.filePath = "%ProgramData%\\" + config.applicationName + "\\install.state";
+    config.installState.mutexName = "Global\\" + config.applicationName + "_Install";
+    
+    if (j.contains("InstallState") && j["InstallState"].is_object()) {
+        const auto& state = j["InstallState"];
+        if (state.contains("Mode") && state["Mode"].is_string()) {
+            std::string mode = state["Mode"].get<std::string>();
+            std::transform(mode.begin(), mode.end(), mode.begin(), ::tolower);
+            if (mode == "registry") {
+                config.installState.mode = InstallStateMode::REGISTRY;
+            } else if (mode == "file") {
+                config.installState.mode = InstallStateMode::FILE;
+            } else if (mode == "both") {
+                config.installState.mode = InstallStateMode::BOTH;
+            }
+        }
+        if (state.contains("RegistryPath") && state["RegistryPath"].is_string()) {
+            config.installState.registryPath = state["RegistryPath"].get<std::string>();
+        }
+        if (state.contains("RegistryKey") && state["RegistryKey"].is_string()) {
+            config.installState.registryKey = state["RegistryKey"].get<std::string>();
+        }
+        if (state.contains("FilePath") && state["FilePath"].is_string()) {
+            config.installState.filePath = state["FilePath"].get<std::string>();
+        }
+        if (state.contains("UseMutex") && state["UseMutex"].is_boolean()) {
+            config.installState.useMutex = state["UseMutex"].get<bool>();
+        }
+        if (state.contains("MutexName") && state["MutexName"].is_string()) {
+            config.installState.mutexName = state["MutexName"].get<std::string>();
         }
     }
     

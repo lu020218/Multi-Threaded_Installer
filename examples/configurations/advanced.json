@@ -7,10 +7,23 @@
     "Roaming": "plugins"
   },
   "Registry": [{
-    "key": "InstallState",
-    "value": "finished",
+    "key": "InstallDir",
+    "value": "%InstallDir%",
+    "path": "HKEY_CURRENT_USER\\Software\\MyDesktopApp"
+  },
+  {
+    "key": "Version",
+    "value": "%Version%",
     "path": "HKEY_CURRENT_USER\\Software\\MyDesktopApp"
   }],
-  "AutoStartup": true,
-  "DesktopIcons": true
+  "AutoStartup": false,
+  "DesktopIcons": true,
+  "InstallState": {
+    "Mode": "Registry",
+    "RegistryPath": "HKEY_CURRENT_USER\\Software\\MyDesktopApp",
+    "RegistryKey": "InstallState",
+    "FilePath": "%ProgramData%\\MyDesktopApp\\install.state",
+    "UseMutex": true,
+    "MutexName": "Global\\MyDesktopApp_Install"
+  }
 }

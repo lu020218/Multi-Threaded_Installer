@@ -19,12 +19,17 @@ CompressionModule::CompressionModule()
     : currentAlgorithm(CompressionAlgorithm::LZMA_HIGH)
     , compressionLevel(Constants::DEFAULT_LZMA_LEVEL)
     , blockSize(Constants::DEFAULT_BLOCK_SIZE)
-    , lzmaInitialized(false) {
+    , lzmaInitialized(false)
+    , lzmaSupportsMt(false) {
     
 #ifdef LibLZMA_FOUND
     // 初始化LZMA动态加载器
     lzmaLoader = std::make_unique<LzmaLoader>();
     if (lzmaLoader->isLoaded()) {
+        lzmaSupportsMt = lzmaLoader->supportsMultiThreadedCompression();
+        std::cout << "LZMA multi-threaded encoder: " 
+                  << (lzmaSupportsMt ? "supported" : "not supported") << std::endl;
+        
         // 初始化LZMA流
         lzmaStream = LZMA_STREAM_INIT;
         lzma_ret ret = lzmaLoader->lzma_easy_encoder_ptr(&lzmaStream, Constants::DEFAULT_LZMA_LEVEL, LZMA_CHECK_SHA256);
@@ -321,7 +326,19 @@ std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector
         
         // 为每个块创建独立的 LZMA 流
         lzma_stream stream = LZMA_STREAM_INIT;
-        lzma_ret ret = lzmaLoader->lzma_easy_encoder_ptr(&stream, compressionLevel, LZMA_CHECK_CRC32);
+        lzma_ret ret = LZMA_OK;
+        
+        if (lzmaSupportsMt && lzmaLoader->lzma_stream_encoder_mt_ptr) {
+            lzma_mt mtOptions{};
+            unsigned int hwThreads = std::thread::hardware_concurrency();
+            mtOptions.threads = (hwThreads == 0) ? 1 : hwThreads;
+            mtOptions.preset = static_cast<uint32_t>(compressionLevel);
+            mtOptions.check = LZMA_CHECK_CRC32;
+            mtOptions.block_size = static_cast<uint64_t>(currentBlockSize);
+            ret = lzmaLoader->lzma_stream_encoder_mt_ptr(&stream, &mtOptions);
+        } else {
+            ret = lzmaLoader->lzma_easy_encoder_ptr(&stream, compressionLevel, LZMA_CHECK_CRC32);
+        }
         
         if (ret != LZMA_OK) {
             std::cerr << "Failed to initialize LZMA encoder for block " << i << ": " << ret << std::endl;

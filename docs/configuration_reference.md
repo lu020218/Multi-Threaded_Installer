@@ -11,19 +11,32 @@ The packager supports configuration files to specify packaging and installation 
   "Version": "1.0",
   "AppName": "MyDesktopApp",
   "InstallDir": "%ProgramFiles%",
-  "compressionAlgorithm": "lzma",
   "Folder": {
     "InstallDir": "bin",
     "Roaming": "plugins",
     "Local": "userdata"
   },
   "Registry": [{
-    "key": "InstallState",
-    "value": "finished",
+    "key": "InstallDir",
+    "value": "%InstallDir%",
+    "path": "HKEY_CURRENT_USER\\Software\\MyDesktopApp",
+    "type": "expand"
+  },
+  {
+    "key": "Version",
+    "value": "%Version%",
     "path": "HKEY_CURRENT_USER\\Software\\MyDesktopApp"
   }],
-  "AutoStartup": true,
-  "DesktopIcons": true
+  "AutoStartup": false,
+  "DesktopIcons": true,
+  "InstallState": {
+    "Mode": "Registry",
+    "RegistryPath": "HKEY_CURRENT_USER\\Software\\MyDesktopApp",
+    "RegistryKey": "InstallState",
+    "FilePath": "%ProgramData%\\MyDesktopApp\\install.state",
+    "UseMutex": true,
+    "MutexName": "Global\\MyDesktopApp_Install"
+  }
 }
 ```
 
@@ -48,31 +61,48 @@ Configuration files must be in JSON format with UTF-8 encoding.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `version` | string | No | "1.0" | Configuration file version |
-| `applicationName` | string | **Yes** | - | Application name (used for directory naming) |
-| `defaultInstallDirectory` | string | No | "%ProgramFiles%" | Suggested default installation directory (without app name) |
-| `compressionAlgorithm` | string | No | "lzma" | Compression algorithm: "lzma" |
-| `folderTargets` | array | No | [] | Folder-level target directory configurations |
-| `fileMappings` | array | No | [] | File-level mapping rules (optional feature) |
+| `Version` | string | No | "1.0" | Configuration file version |
+| `AppName` | string | **Yes** | - | Application name (used for directory naming) |
+| `InstallDir` | string | No | "%ProgramFiles%" | Suggested default installation directory (without app name) |
+| `Folder` | object | No | {} | Folder-level target directory configurations |
+| `Registry` | array | No | [] | Registry entries to write after install |
+| `AutoStartup` | bool | No | false | Default auto-start behavior |
+| `DesktopIcons` | bool | No | false | Default desktop icon behavior |
+| `InstallState` | object | No | { Mode: "Registry", UseMutex: true } | Install state signaling configuration |
 
 ### Folder Target Configuration
 
-Each item in the `folderTargets` array has the following structure:
+`Folder` supports these keys:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `folder` | string | **Yes** | Folder name (relative to input directory) |
-| `targetDirectory` | string | **Yes** | Target directory type or path |
+| `InstallDir` | string | No | Folder to install under the main install directory |
+| `Roaming` | string | No | Folder to install under %AppData%\\Roaming |
+| `Local` | string | No | Folder to install under %LocalAppData% |
 
-### File Mapping Rule (Optional)
+### Registry Entries
 
-Each item in the `fileMappings` array has the following structure:
+Each item in `Registry` supports:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `pattern` | string | **Yes** | File matching pattern (supports wildcards) |
-| `targetDirectory` | string | **Yes** | Target directory type or path |
-| `subPath` | string | No | "" | Subdirectory within target directory |
+| `path` | string | **Yes** | Registry path, e.g. `HKEY_CURRENT_USER\\Software\\MyApp` |
+| `key` | string | **Yes** | Value name |
+| `value` | string or number | **Yes** | Value data (supports `%InstallDir%`, `%Version%`, `%AppName%`) |
+| `type` | string | No | `string` (default), `dword`, `expand` |
+
+### Install State
+
+`InstallState` supports:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `Mode` | string | No | `Registry`, `File`, or `Both` |
+| `RegistryPath` | string | No | Path for install state registry value |
+| `RegistryKey` | string | No | Value name for install state |
+| `FilePath` | string | No | File path for install state |
+| `UseMutex` | bool | No | Whether to create a named mutex during install |
+| `MutexName` | string | No | Named mutex |
 
 ## Target Directory Values
 
@@ -108,12 +138,6 @@ The installer intelligently handles application name appending:
 
 ### LZMA (Default)
 
-- **Value**: `"zstd"`
-- **Characteristics**: Fast compression and decompression, good compression ratio
-- **Best for**: General-purpose applications, quick installations
-
-### LZMA
-
 - **Value**: `"lzma"`
 - **Characteristics**: Higher compression ratio, slower compression/decompression
 - **Best for**: Applications where download size is critical
@@ -122,40 +146,34 @@ The installer intelligently handles application name appending:
 
 ```json
 {
-  "version": "1.0",
-  "applicationName": "MyApplication",
-  "defaultInstallDirectory": "%ProgramFiles%",
-  "compressionAlgorithm": "lzma",
-  "folderTargets": [
-    {
-      "folder": "app",
-      "targetDirectory": "installDirectory"
-    },
-    {
-      "folder": "plugins",
-      "targetDirectory": "%AppData%\\Roaming"
-    },
-    {
-      "folder": "config",
-      "targetDirectory": "%ProgramData%"
-    },
-    {
-      "folder": "docs",
-      "targetDirectory": "%USERPROFILE%\\Documents"
-    }
-  ],
-  "fileMappings": [
-    {
-      "pattern": "*.config",
-      "targetDirectory": "%AppData%\\Roaming",
-      "subPath": "Config"
-    },
-    {
-      "pattern": "*.log",
-      "targetDirectory": "%LocalAppData%",
-      "subPath": "Logs"
-    }
-  ]
+  "Version": "1.0",
+  "AppName": "MyApplication",
+  "InstallDir": "%ProgramFiles%",
+  "Folder": {
+    "InstallDir": "bin",
+    "Roaming": "plugins",
+    "Local": "userdata"
+  },
+  "Registry": [{
+    "key": "InstallDir",
+    "value": "%InstallDir%",
+    "path": "HKEY_CURRENT_USER\\Software\\MyApplication"
+  },
+  {
+    "key": "Version",
+    "value": "%Version%",
+    "path": "HKEY_CURRENT_USER\\Software\\MyApplication"
+  }],
+  "AutoStartup": false,
+  "DesktopIcons": true,
+  "InstallState": {
+    "Mode": "Registry",
+    "RegistryPath": "HKEY_CURRENT_USER\\Software\\MyApplication",
+    "RegistryKey": "InstallState",
+    "FilePath": "%ProgramData%\\MyApplication\\install.state",
+    "UseMutex": true,
+    "MutexName": "Global\\MyApplication_Install"
+  }
 }
 ```
 
@@ -163,7 +181,7 @@ The installer intelligently handles application name appending:
 
 ```json
 {
-  "applicationName": "SimpleApp"
+  "AppName": "SimpleApp"
 }
 ```
 
@@ -178,95 +196,66 @@ This minimal configuration:
 
 ```json
 {
-  "applicationName": "MyDesktopApp",
-  "defaultInstallDirectory": "%ProgramFiles%",
-  "compressionAlgorithm": "lzma",
-  "folderTargets": [
-    {
-      "folder": "bin",
-      "targetDirectory": "installDirectory"
-    },
-    {
-      "folder": "resources",
-      "targetDirectory": "installDirectory"
-    }
-  ]
+  "Version": "1.0",
+  "AppName": "MyDesktopApp",
+  "InstallDir": "%ProgramFiles%",
+  "Folder": {
+    "InstallDir": "bin"
+  }
 }
 ```
 
 **Installation Result** (user accepts default):
-- `bin/` → `C:\Program Files\MyDesktopApp\bin\`
-- `resources/` → `C:\Program Files\MyDesktopApp\resources\`
+- `bin/` -> `C:\Program Files\MyDesktopApp\bin\`
 
 ### Scenario 2: Application with User-Specific Data
 
 ```json
 {
-  "applicationName": "DataApp",
-  "defaultInstallDirectory": "%ProgramFiles%",
-  "folderTargets": [
-    {
-      "folder": "program",
-      "targetDirectory": "installDirectory"
-    },
-    {
-      "folder": "userdata",
-      "targetDirectory": "%AppData%\\Roaming"
-    },
-    {
-      "folder": "cache",
-      "targetDirectory": "%LocalAppData%"
-    }
-  ]
+  "Version": "1.0",
+  "AppName": "DataApp",
+  "InstallDir": "%ProgramFiles%",
+  "Folder": {
+    "InstallDir": "program",
+    "Roaming": "userdata",
+    "Local": "cache"
+  }
 }
 ```
 
 **Installation Result**:
-- `program/` → `C:\Program Files\DataApp\program\`
-- `userdata/` → `C:\Users\[User]\AppData\Roaming\DataApp\userdata\`
-- `cache/` → `C:\Users\[User]\AppData\Local\DataApp\cache\`
+- `program/` -> `C:\Program Files\DataApp\program\`
+- `userdata/` -> `C:\Users\[User]\AppData\Roaming\DataApp\userdata\`
+- `cache/` -> `C:\Users\[User]\AppData\Local\DataApp\cache\`
 
 ### Scenario 3: Multi-User Application
 
 ```json
 {
-  "applicationName": "SharedApp",
-  "defaultInstallDirectory": "%ProgramFiles%",
-  "folderTargets": [
-    {
-      "folder": "app",
-      "targetDirectory": "installDirectory"
-    },
-    {
-      "folder": "shared_config",
-      "targetDirectory": "%ProgramData%"
-    },
-    {
-      "folder": "user_settings",
-      "targetDirectory": "%AppData%\\Roaming"
-    }
-  ]
+  "Version": "1.0",
+  "AppName": "SharedApp",
+  "InstallDir": "%ProgramFiles%",
+  "Folder": {
+    "InstallDir": "app",
+    "Roaming": "user_settings"
+  }
 }
 ```
 
 **Installation Result**:
-- `app/` → `C:\Program Files\SharedApp\app\`
-- `shared_config/` → `C:\ProgramData\SharedApp\shared_config\`
-- `user_settings/` → `C:\Users\[User]\AppData\Roaming\SharedApp\user_settings\`
+- `app/` -> `C:\Program Files\SharedApp\app\`
+- `user_settings/` -> `C:\Users\[User]\AppData\Roaming\SharedApp\user_settings\`
 
 ### Scenario 4: High Compression for Distribution
 
 ```json
 {
-  "applicationName": "LargeApp",
-  "defaultInstallDirectory": "%ProgramFiles%",
-  "compressionAlgorithm": "lzma",
-  "folderTargets": [
-    {
-      "folder": "application",
-      "targetDirectory": "installDirectory"
-    }
-  ]
+  "Version": "1.0",
+  "AppName": "LargeApp",
+  "InstallDir": "%ProgramFiles%",
+  "Folder": {
+    "InstallDir": "application"
+  }
 }
 ```
 
@@ -277,15 +266,15 @@ Uses LZMA compression for smaller download size at the cost of slower installati
 The packager validates configuration files and reports errors for:
 
 1. **Missing Required Fields**
-   - `applicationName` is required
+   - `AppName` is required
 
 2. **Invalid Field Types**
    - All fields must match their specified types
 
 3. **Invalid Values**
-   - `compressionAlgorithm` must be "lzma"
    - Folder names must exist in the input directory
    - Target directory paths must be valid
+   - InstallState fields must be valid when provided
 
 4. **Invalid Characters in Application Name**
    - Application name cannot contain: `\ / : * ? " < > |`
@@ -297,20 +286,9 @@ The packager validates configuration files and reports errors for:
 ```
 ERROR: Missing required field in configuration file
   File: C:\project\packager.json
-  Field: applicationName
+  Field: AppName
   Reason: Application name is required
-  Suggestion: Add "applicationName": "YourAppName" to the configuration file
-```
-
-### Invalid Compression Algorithm
-
-```
-ERROR: Invalid configuration value
-  File: C:\project\packager.json
-  Field: compressionAlgorithm
-  Value: "invalid"
-  Reason: Compression algorithm must be "zstd" or "lzma"
-  Suggestion: Change to "zstd" or "lzma"
+  Suggestion: Add "AppName": "YourAppName" to the configuration file
 ```
 
 ### Folder Not Found
@@ -318,7 +296,7 @@ ERROR: Invalid configuration value
 ```
 ERROR: Configuration validation failed
   File: C:\project\packager.json
-  Field: folderTargets[0].folder
+  Field: Folder.InstallDir
   Value: "nonexistent"
   Reason: Folder does not exist in input directory
   Suggestion: Verify folder name matches a folder in the input directory
@@ -333,7 +311,6 @@ The packager logs configuration-related information:
 ```
 INFO: Configuration file found: C:\project\packager.json
 INFO: Application name: MyApplication
-INFO: Compression algorithm: zstd
 INFO: Default install directory: %ProgramFiles%
 INFO: Folder targets: 3 configured
 ```
@@ -343,7 +320,6 @@ INFO: Folder targets: 3 configured
 ```
 INFO: No configuration file found, using defaults
 INFO: Application name: MyApplication (default)
-INFO: Compression algorithm: zstd (default)
 INFO: Default install directory: %ProgramFiles% (default)
 ```
 
@@ -356,15 +332,15 @@ WARNING: Multiple configuration files found, using highest priority: packager.js
 
 ## Best Practices
 
-1. **Always specify `applicationName`**: This is required and used for directory naming
+1. **Always specify `AppName`**: This is required and used for directory naming
 
 2. **Use environment variables for system directories**: Prefer `%ProgramFiles%` over hardcoded paths like `C:\Program Files`
 
 3. **Organize by data type**: 
-   - Program files → `installDirectory` or `%ProgramFiles%`
-   - User-specific data → `%AppData%\Roaming`
-   - Temporary/cache data → `%LocalAppData%`
-   - Shared data → `%ProgramData%`
+   - Program files -> `%ProgramFiles%`
+   - User-specific data -> `%AppData%\Roaming`
+   - Temporary/cache data -> `%LocalAppData%`
+   - Shared data -> `%ProgramData%`
 
 4. **Test with different user selections**: Verify your application works when users choose custom installation directories
 
@@ -409,7 +385,7 @@ WARNING: Multiple configuration files found, using highest priority: packager.js
 **Problem**: Files installed to wrong location
 
 **Solutions**:
-- Verify `applicationName` is set correctly
+- Verify `AppName` is set correctly
 - Check installer logs for path resolution
 - Ensure target directory doesn't already contain app name
 

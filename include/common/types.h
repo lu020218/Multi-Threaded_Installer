@@ -22,6 +22,35 @@ enum class SpecialDirectoryType {
     PROGRAM_DATA        // %ProgramData%
 };
 
+// 安装状态写入方式
+enum class InstallStateMode {
+    REGISTRY,
+    FILE,
+    BOTH
+};
+
+// 注册表值类型
+enum class RegistryValueType {
+    STRING,
+    DWORD,
+    EXPAND_STRING
+};
+
+// 安装状态配置
+struct InstallStateConfig {
+    InstallStateMode mode;
+    std::string registryPath;
+    std::string registryKey;
+    std::string filePath;
+    bool useMutex;
+    std::string mutexName;
+    
+    InstallStateConfig()
+        : mode(InstallStateMode::REGISTRY),
+          registryKey("InstallState"),
+          useMutex(true) {}
+};
+
 // 文件夹信息结构
 struct FolderInfo {
     std::string sourcePath;
@@ -50,6 +79,10 @@ struct RegistryEntry {
     std::string path;   // 注册表路径
     std::string key;    // 键名
     std::string value;  // 值
+    RegistryValueType type; // 值类型
+    
+    RegistryEntry()
+        : type(RegistryValueType::STRING) {}
 };
 
 // 打包器配置
@@ -62,6 +95,7 @@ struct PackagerConfiguration {
     std::vector<RegistryEntry> registry;           // 注册表配置（预留）
     bool autoStartup;                              // 默认开机自启动（预留）
     bool desktopIcons;                             // 默认创建桌面图标（预留）
+    InstallStateConfig installState;               // 安装状态写入配置
     
     // 默认值
     PackagerConfiguration() 
@@ -142,13 +176,21 @@ struct InstallationMetadata {
 // 扩展的安装元数据结构（向后兼容）
 struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::string applicationName;                    // 应用程序名称
+    std::string configVersion;                      // 配置版本
     std::string defaultInstallDir;                  // 建议的默认安装目录
+    bool autoStartup;                               // 默认开机自启动
+    bool desktopIcons;                              // 默认创建桌面图标
+    InstallStateConfig installState;               // 安装状态写入配置
     std::vector<ExtendedFolderMapping> extendedMappings; // 扩展的文件夹映射
+    std::vector<RegistryEntry> registry;            // 注册表写入配置
     
     ExtendedInstallationMetadata() 
         : InstallationMetadata(),
           applicationName("MyApplication"),
-          defaultInstallDir("%ProgramFiles%") {}
+          configVersion("1.0"),
+          defaultInstallDir("%ProgramFiles%"),
+          autoStartup(false),
+          desktopIcons(false) {}
 };
 
 // 二进制元数据头结构
@@ -182,7 +224,7 @@ using ProgressCallback = std::function<void(const std::string&, float)>;
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;  // "MTDP"
-    constexpr uint32_t VERSION = 2;
+    constexpr uint32_t VERSION = 5;
     
     // 块大小配置 (优化后)
     constexpr size_t DEFAULT_BLOCK_SIZE = 16 * 1024 * 1024;  // 2MB (从 64KB 优化)

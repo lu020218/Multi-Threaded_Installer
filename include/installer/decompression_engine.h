@@ -15,10 +15,16 @@ public:
     ~DecompressionEngine();
     
     // 解压文件夹
-    bool decompressFolder(const DecompressionTask& task);
+    struct LegacyStageTiming {
+        long long decompressNs = 0;
+        long long writeNs = 0;
+    };
+    
+    bool decompressFolder(const DecompressionTask& task, LegacyStageTiming* timing = nullptr);
     
     // 流式解压到输出接口
-    bool decompressToStream(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum);
+    bool decompressToStream(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
+                            LegacyStageTiming* timing);
     
     // 解压单个 LZMA 块
     bool decompressLzmaBlockData(const std::vector<uint8_t>& compressedData,
@@ -36,10 +42,12 @@ private:
     ProgressCallback progressCallback;
     
     // LZMA解压实现（流式）
-    bool decompressLzma(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum);
+    bool decompressLzma(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
+                        LegacyStageTiming* timing);
     
     // LZMA块级解压实现（流式）
-    bool decompressLzmaBlocks(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum);
+    bool decompressLzmaBlocks(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
+                              LegacyStageTiming* timing);
     
     
     // 报告进度

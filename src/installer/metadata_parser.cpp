@@ -262,6 +262,145 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     }
     metadata.defaultInstallDir = std::string(reinterpret_cast<const char*>(data.data() + offset), installDirLen);
     offset += installDirLen;
+
+    if (offset + sizeof(uint32_t) > data.size()) {
+        std::cerr << "Missing config version length" << std::endl;
+        return metadata;
+    }
+    uint32_t configVersionLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+    offset += sizeof(uint32_t);
+    if (offset + configVersionLen > data.size()) {
+        std::cerr << "Insufficient data for config version" << std::endl;
+        return metadata;
+    }
+    metadata.configVersion = std::string(reinterpret_cast<const char*>(data.data() + offset), configVersionLen);
+    offset += configVersionLen;
+
+    if (offset + sizeof(uint8_t) * 2 > data.size()) {
+        std::cerr << "Missing startup/desktop flags" << std::endl;
+        return metadata;
+    }
+    metadata.autoStartup = data[offset] != 0;
+    metadata.desktopIcons = data[offset + 1] != 0;
+    offset += sizeof(uint8_t) * 2;
+
+    if (offset + sizeof(uint8_t) * 2 > data.size()) {
+        std::cerr << "Missing install state flags" << std::endl;
+        return metadata;
+    }
+    metadata.installState.mode = static_cast<InstallStateMode>(data[offset]);
+    metadata.installState.useMutex = data[offset + 1] != 0;
+    offset += sizeof(uint8_t) * 2;
+
+    if (offset + sizeof(uint32_t) > data.size()) {
+        std::cerr << "Missing install state registry path length" << std::endl;
+        return metadata;
+    }
+    uint32_t regPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+    offset += sizeof(uint32_t);
+    if (offset + regPathLen > data.size()) {
+        std::cerr << "Insufficient data for install state registry path" << std::endl;
+        return metadata;
+    }
+    metadata.installState.registryPath = std::string(reinterpret_cast<const char*>(data.data() + offset), regPathLen);
+    offset += regPathLen;
+
+    if (offset + sizeof(uint32_t) > data.size()) {
+        std::cerr << "Missing install state registry key length" << std::endl;
+        return metadata;
+    }
+    uint32_t regKeyLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+    offset += sizeof(uint32_t);
+    if (offset + regKeyLen > data.size()) {
+        std::cerr << "Insufficient data for install state registry key" << std::endl;
+        return metadata;
+    }
+    metadata.installState.registryKey = std::string(reinterpret_cast<const char*>(data.data() + offset), regKeyLen);
+    offset += regKeyLen;
+
+    if (offset + sizeof(uint32_t) > data.size()) {
+        std::cerr << "Missing install state file path length" << std::endl;
+        return metadata;
+    }
+    uint32_t filePathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+    offset += sizeof(uint32_t);
+    if (offset + filePathLen > data.size()) {
+        std::cerr << "Insufficient data for install state file path" << std::endl;
+        return metadata;
+    }
+    metadata.installState.filePath = std::string(reinterpret_cast<const char*>(data.data() + offset), filePathLen);
+    offset += filePathLen;
+
+    if (offset + sizeof(uint32_t) > data.size()) {
+        std::cerr << "Missing install state mutex name length" << std::endl;
+        return metadata;
+    }
+    uint32_t mutexNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+    offset += sizeof(uint32_t);
+    if (offset + mutexNameLen > data.size()) {
+        std::cerr << "Insufficient data for install state mutex name" << std::endl;
+        return metadata;
+    }
+    metadata.installState.mutexName = std::string(reinterpret_cast<const char*>(data.data() + offset), mutexNameLen);
+    offset += mutexNameLen;
+
+    if (offset + sizeof(uint32_t) > data.size()) {
+        std::cerr << "Missing registry entry count" << std::endl;
+        return metadata;
+    }
+    uint32_t registryCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+    offset += sizeof(uint32_t);
+    metadata.registry.reserve(registryCount);
+    for (uint32_t r = 0; r < registryCount; ++r) {
+        if (offset + sizeof(uint32_t) > data.size()) {
+            std::cerr << "Missing registry path length" << std::endl;
+            return metadata;
+        }
+        uint32_t pathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+        if (offset + pathLen > data.size()) {
+            std::cerr << "Insufficient data for registry path" << std::endl;
+            return metadata;
+        }
+        RegistryEntry reg;
+        reg.path = std::string(reinterpret_cast<const char*>(data.data() + offset), pathLen);
+        offset += pathLen;
+        
+        if (offset + sizeof(uint32_t) > data.size()) {
+            std::cerr << "Missing registry key length" << std::endl;
+            return metadata;
+        }
+        uint32_t keyLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+        if (offset + keyLen > data.size()) {
+            std::cerr << "Insufficient data for registry key" << std::endl;
+            return metadata;
+        }
+        reg.key = std::string(reinterpret_cast<const char*>(data.data() + offset), keyLen);
+        offset += keyLen;
+        
+        if (offset + sizeof(uint8_t) > data.size()) {
+            std::cerr << "Missing registry value type" << std::endl;
+            return metadata;
+        }
+        reg.type = static_cast<RegistryValueType>(data[offset]);
+        offset += sizeof(uint8_t);
+        
+        if (offset + sizeof(uint32_t) > data.size()) {
+            std::cerr << "Missing registry value length" << std::endl;
+            return metadata;
+        }
+        uint32_t valueLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+        if (offset + valueLen > data.size()) {
+            std::cerr << "Insufficient data for registry value" << std::endl;
+            return metadata;
+        }
+        reg.value = std::string(reinterpret_cast<const char*>(data.data() + offset), valueLen);
+        offset += valueLen;
+        
+        metadata.registry.push_back(std::move(reg));
+    }
     
     for (uint32_t i = 0; i < header->folderCount; ++i) {
         ExtendedFolderMapping mapping;

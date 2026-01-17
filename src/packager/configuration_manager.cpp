@@ -11,12 +11,24 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory) {
     
     // 尝试加载配置文件
     auto configOpt = loader_.loadConfiguration(inputDirectory);
+    auto applyInstallStateDefaults = [](PackagerConfiguration& config) {
+        if (config.installState.registryPath.empty()) {
+            config.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + config.applicationName;
+        }
+        if (config.installState.filePath.empty()) {
+            config.installState.filePath = "%ProgramData%\\" + config.applicationName + "\\install.state";
+        }
+        if (config.installState.mutexName.empty()) {
+            config.installState.mutexName = "Global\\" + config.applicationName + "_Install";
+        }
+    };
     
     if (configOpt.has_value()) {
         // 配置文件存在，进行验证
         hasConfigFile_ = true;
         configFilePath_ = loader_.getLoadedConfigPath();
         config_ = configOpt.value();
+        applyInstallStateDefaults(config_);
         
         // 验证配置
         auto validationResult = validator_.validate(config_, inputDirectory);
@@ -42,6 +54,7 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory) {
         hasConfigFile_ = false;
         configFilePath_.clear();
         config_ = PackagerConfiguration();  // 使用默认值
+        applyInstallStateDefaults(config_);
         
         // 检查是否有加载错误（例如JSON解析错误）
         std::string loaderError = loader_.getLastError();

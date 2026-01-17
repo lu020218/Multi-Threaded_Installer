@@ -109,6 +109,9 @@ copy_dlls_to_target(packager)
 # Create installer executable
 add_executable(installer ${INSTALLER_SOURCES} ${COMMON_SOURCES})
 target_link_libraries(installer ${LIBLZMA_LIBRARIES} Threads::Threads)
+if(WIN32)
+    target_link_libraries(installer ole32 shell32)
+endif()
 target_include_directories(installer PRIVATE ${LIBLZMA_INCLUDE_DIRS})
 copy_dlls_to_target(installer)
 

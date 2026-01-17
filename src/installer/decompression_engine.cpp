@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstdint>
 #include <stdexcept>
+#include <chrono>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -72,12 +73,12 @@ DecompressionEngine::DecompressionEngine() = default;
 
 DecompressionEngine::~DecompressionEngine() = default;
 
-bool DecompressionEngine::decompressFolder(const DecompressionTask& task) {
+bool DecompressionEngine::decompressFolder(const DecompressionTask& task, LegacyStageTiming* timing) {
     if (threadPool && threadPool->getTotalThreadCount() > 1) {
-        auto future = threadPool->enqueue([this, task]() -> bool {
+        auto future = threadPool->enqueue([this, task, timing]() -> bool {
             TarStreamExtractor extractor(task.targetPath);
             Crc32Stream checksum;
-            return decompressToStream(task, extractor, &checksum);
+            return decompressToStream(task, extractor, &checksum, timing);
         });
         
         try {
@@ -91,7 +92,7 @@ bool DecompressionEngine::decompressFolder(const DecompressionTask& task) {
     
     TarStreamExtractor extractor(task.targetPath);
     Crc32Stream checksum;
-    return decompressToStream(task, extractor, &checksum);
+    return decompressToStream(task, extractor, &checksum, timing);
 }
 
 void DecompressionEngine::setThreadPool(std::shared_ptr<ThreadPoolManager> threadPool) {
@@ -102,13 +103,14 @@ void DecompressionEngine::registerProgressCallback(ProgressCallback callback) {
     this->progressCallback = callback;
 }
 
-bool DecompressionEngine::decompressToStream(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum) {
+bool DecompressionEngine::decompressToStream(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
+                                             LegacyStageTiming* timing) {
     if (task.algorithm != CompressionAlgorithm::LZMA_HIGH) {
         std::cerr << "Unsupported compression algorithm for " << task.targetPath << std::endl;
         return false;
     }
     
-    return decompressLzma(task, sink, checksum);
+    return decompressLzma(task, sink, checksum, timing);
 }
 
 bool DecompressionEngine::decompressLzmaBlockData(const std::vector<uint8_t>& compressedData,
@@ -147,7 +149,8 @@ bool DecompressionEngine::decompressLzmaBlockData(const std::vector<uint8_t>& co
 #endif
 }
 
-bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum) {
+bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
+                                         LegacyStageTiming* timing) {
 #ifdef LibLZMA_FOUND
     static LzmaLoader loader;
     
@@ -173,7 +176,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
     }
     
     if (useBlockDecompression) {
-        return decompressLzmaBlocks(task, sink, checksum);
+        return decompressLzmaBlocks(task, sink, checksum, timing);
     }
     
     lzma_stream stream = LZMA_STREAM_INIT;
@@ -196,13 +199,23 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
         stream.next_out = outBuffer.data();
         stream.avail_out = outBuffer.size();
         
+        auto decompressStart = std::chrono::steady_clock::now();
         ret = loader.lzma_code_ptr(&stream, LZMA_FINISH);
+        auto decompressEnd = std::chrono::steady_clock::now();
+        if (timing) {
+            timing->decompressNs += std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count();
+        }
         
         size_t produced = outBuffer.size() - stream.avail_out;
         if (produced > 0) {
+            auto writeStart = std::chrono::steady_clock::now();
             if (!sink.write(outBuffer.data(), produced)) {
                 loader.lzma_end_ptr(&stream);
                 return false;
+            }
+            auto writeEnd = std::chrono::steady_clock::now();
+            if (timing) {
+                timing->writeNs += std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count();
             }
             
             if (checksum) {
@@ -245,7 +258,8 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
 #endif
 }
 
-bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum) {
+bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
+                                               LegacyStageTiming* timing) {
 #ifdef LibLZMA_FOUND
     if (task.compressedData.size() < sizeof(uint32_t)) {
         std::cerr << "Invalid block format: cannot read block count" << std::endl;
@@ -277,11 +291,12 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
     size_t totalOut = 0;
     
     if (threadPool && threadPool->getTotalThreadCount() > 1) {
+        std::atomic<long long> decompressNs(0);
+        std::atomic<long long> writeNs(0);
         size_t totalThreads = threadPool->getTotalThreadCount();
         size_t blocksPerThreadMin = 4;
         size_t optimalThreads = (blocks.size() + blocksPerThreadMin - 1) / blocksPerThreadMin;
         if (optimalThreads > totalThreads) optimalThreads = totalThreads;
-        if (optimalThreads > 8) optimalThreads = 8;
         if (optimalThreads < 1) optimalThreads = 1;
         
         size_t blocksPerThread = (blocks.size() + optimalThreads - 1) / optimalThreads;
@@ -292,13 +307,16 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
             size_t endBlock = std::min(startBlock + blocksPerThread, blocks.size());
             if (startBlock >= blocks.size()) break;
             
-            futures.push_back(threadPool->enqueue([&task, &blocks, startBlock, endBlock]() -> std::vector<uint8_t> {
+            futures.push_back(threadPool->enqueue([&task, &blocks, startBlock, endBlock, &decompressNs]() -> std::vector<uint8_t> {
                 std::vector<uint8_t> chunk;
                 for (size_t i = startBlock; i < endBlock; ++i) {
+                    auto decompressStart = std::chrono::steady_clock::now();
                     std::vector<uint8_t> blockOut;
                     if (!decompressLzmaBlock(task.compressedData.data(), task.compressedData.size(), blocks[i], blockOut)) {
                         throw std::runtime_error("LZMA block decompression failed");
                     }
+                    auto decompressEnd = std::chrono::steady_clock::now();
+                    decompressNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count());
                     chunk.insert(chunk.end(), blockOut.begin(), blockOut.end());
                 }
                 return chunk;
@@ -315,9 +333,12 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
             }
             
             if (!chunk.empty()) {
+                auto writeStart = std::chrono::steady_clock::now();
                 if (!sink.write(chunk.data(), chunk.size())) {
                     return false;
                 }
+                auto writeEnd = std::chrono::steady_clock::now();
+                writeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count());
                 
                 if (checksum) {
                     checksum->update(chunk.data(), chunk.size());
@@ -330,16 +351,31 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
                 }
             }
         }
+        
+        if (timing) {
+            timing->decompressNs += decompressNs.load();
+            timing->writeNs += writeNs.load();
+        }
     } else {
         for (size_t i = 0; i < blocks.size(); ++i) {
+            auto decompressStart = std::chrono::steady_clock::now();
             std::vector<uint8_t> blockOut;
             if (!decompressLzmaBlock(task.compressedData.data(), task.compressedData.size(), blocks[i], blockOut)) {
                 std::cerr << "Block " << i << " LZMA decompression failed" << std::endl;
                 return false;
             }
+            auto decompressEnd = std::chrono::steady_clock::now();
+            if (timing) {
+                timing->decompressNs += std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count();
+            }
             
+            auto writeStart = std::chrono::steady_clock::now();
             if (!sink.write(blockOut.data(), blockOut.size())) {
                 return false;
+            }
+            auto writeEnd = std::chrono::steady_clock::now();
+            if (timing) {
+                timing->writeNs += std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count();
             }
             
             if (checksum) {

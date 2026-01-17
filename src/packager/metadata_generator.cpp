@@ -31,7 +31,12 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     
     // 设置配置信息
     metadata.applicationName = config.applicationName;
+    metadata.configVersion = config.version;
     metadata.defaultInstallDir = config.defaultInstallDir;
+    metadata.autoStartup = config.autoStartup;
+    metadata.desktopIcons = config.desktopIcons;
+    metadata.installState = config.installState;
+    metadata.registry = config.registry;
     
     uint64_t currentOffset = 0;
     for (size_t i = 0; i < results.size() && i < folderInfos.size(); ++i) {
@@ -132,6 +137,65 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     const uint8_t* defaultInstallDirLenBytes = reinterpret_cast<const uint8_t*>(&defaultInstallDirLen);
     serialized.insert(serialized.end(), defaultInstallDirLenBytes, defaultInstallDirLenBytes + sizeof(uint32_t));
     serialized.insert(serialized.end(), metadata.defaultInstallDir.begin(), metadata.defaultInstallDir.end());
+
+    uint32_t configVersionLen = static_cast<uint32_t>(metadata.configVersion.length());
+    const uint8_t* configVersionLenBytes = reinterpret_cast<const uint8_t*>(&configVersionLen);
+    serialized.insert(serialized.end(), configVersionLenBytes, configVersionLenBytes + sizeof(uint32_t));
+    serialized.insert(serialized.end(), metadata.configVersion.begin(), metadata.configVersion.end());
+
+    uint8_t autoStartupFlag = metadata.autoStartup ? 1 : 0;
+    uint8_t desktopIconsFlag = metadata.desktopIcons ? 1 : 0;
+    serialized.push_back(autoStartupFlag);
+    serialized.push_back(desktopIconsFlag);
+
+    uint8_t installMode = static_cast<uint8_t>(metadata.installState.mode);
+    uint8_t installMutex = metadata.installState.useMutex ? 1 : 0;
+    serialized.push_back(installMode);
+    serialized.push_back(installMutex);
+    
+    uint32_t regPathLen = static_cast<uint32_t>(metadata.installState.registryPath.length());
+    const uint8_t* regPathLenBytes = reinterpret_cast<const uint8_t*>(&regPathLen);
+    serialized.insert(serialized.end(), regPathLenBytes, regPathLenBytes + sizeof(uint32_t));
+    serialized.insert(serialized.end(), metadata.installState.registryPath.begin(), metadata.installState.registryPath.end());
+    
+    uint32_t regKeyLen = static_cast<uint32_t>(metadata.installState.registryKey.length());
+    const uint8_t* regKeyLenBytes = reinterpret_cast<const uint8_t*>(&regKeyLen);
+    serialized.insert(serialized.end(), regKeyLenBytes, regKeyLenBytes + sizeof(uint32_t));
+    serialized.insert(serialized.end(), metadata.installState.registryKey.begin(), metadata.installState.registryKey.end());
+    
+    uint32_t filePathLen = static_cast<uint32_t>(metadata.installState.filePath.length());
+    const uint8_t* filePathLenBytes = reinterpret_cast<const uint8_t*>(&filePathLen);
+    serialized.insert(serialized.end(), filePathLenBytes, filePathLenBytes + sizeof(uint32_t));
+    serialized.insert(serialized.end(), metadata.installState.filePath.begin(), metadata.installState.filePath.end());
+    
+    uint32_t mutexNameLen = static_cast<uint32_t>(metadata.installState.mutexName.length());
+    const uint8_t* mutexNameLenBytes = reinterpret_cast<const uint8_t*>(&mutexNameLen);
+    serialized.insert(serialized.end(), mutexNameLenBytes, mutexNameLenBytes + sizeof(uint32_t));
+    serialized.insert(serialized.end(), metadata.installState.mutexName.begin(), metadata.installState.mutexName.end());
+
+    uint32_t registryCount = static_cast<uint32_t>(metadata.registry.size());
+    const uint8_t* registryCountBytes = reinterpret_cast<const uint8_t*>(&registryCount);
+    serialized.insert(serialized.end(), registryCountBytes, registryCountBytes + sizeof(uint32_t));
+    
+    for (const auto& reg : metadata.registry) {
+        uint32_t pathLen = static_cast<uint32_t>(reg.path.length());
+        const uint8_t* pathLenBytes = reinterpret_cast<const uint8_t*>(&pathLen);
+        serialized.insert(serialized.end(), pathLenBytes, pathLenBytes + sizeof(uint32_t));
+        serialized.insert(serialized.end(), reg.path.begin(), reg.path.end());
+        
+        uint32_t keyLen = static_cast<uint32_t>(reg.key.length());
+        const uint8_t* keyLenBytes = reinterpret_cast<const uint8_t*>(&keyLen);
+        serialized.insert(serialized.end(), keyLenBytes, keyLenBytes + sizeof(uint32_t));
+        serialized.insert(serialized.end(), reg.key.begin(), reg.key.end());
+        
+        uint8_t valueType = static_cast<uint8_t>(reg.type);
+        serialized.push_back(valueType);
+        
+        uint32_t valueLen = static_cast<uint32_t>(reg.value.length());
+        const uint8_t* valueLenBytes = reinterpret_cast<const uint8_t*>(&valueLen);
+        serialized.insert(serialized.end(), valueLenBytes, valueLenBytes + sizeof(uint32_t));
+        serialized.insert(serialized.end(), reg.value.begin(), reg.value.end());
+    }
     
     for (size_t i = 0; i < metadata.extendedMappings.size(); ++i) {
         const auto& extMapping = metadata.extendedMappings[i];
@@ -253,6 +317,8 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
     mapping.originalSize = result.originalSize;
     mapping.checksum = result.checksum;
     mapping.algorithm = result.algorithm;
+    mapping.fileIndex = result.fileIndex;
+    mapping.blockIndex = result.blockIndex;
     
     // 查找该文件夹的目标配置
     mapping.targetDirType = SpecialDirectoryType::INSTALL_DIRECTORY; // 默认值

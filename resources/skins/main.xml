@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window size="600,450" caption="0,0,0,35" roundcorner="5,5">
+    <!-- 字体定义 -->
+    <Font id="0" name="Arial" size="12"/>
+    <Font id="1" name="Arial" size="16" bold="true"/>
+    <Font id="2" name="Arial" size="20" bold="true"/>
+    
+    <!-- 默认属性 - 使用纯色代替图片 -->
+    <Default name="Button" normalimage="" hotimage="" 
+             pushedimage="" textcolor="#FFFFFFFF" font="0" bkcolor="#FF4A90E2"/>
+    
+    <VerticalLayout bkcolor="#FFFFFFFF">
+        <!-- 标题栏 -->
+        <HorizontalLayout height="35" bkcolor="#FF4A90E2">
+            <Control width="10"/>
+            <Label name="title" text="安装向导" textcolor="#FFFFFFFF" font="1"/>
+            <Control/>  <!-- 弹簧 -->
+            <Button name="minbtn" width="28" height="22" text="-" normalimage="" bkcolor="#FF4A90E2" textcolor="#FFFFFFFF" tabstop="false"/>
+            <Button name="closebtn" width="28" height="22" text="X" normalimage="" bkcolor="#FF4A90E2" textcolor="#FFFFFFFF" tabstop="false"/>
+            <Control width="5"/>
+        </HorizontalLayout>
+        
+        <!-- 内容区域 - 使用TabLayout切换页面 -->
+        <TabLayout name="pages" padding="0,0,0,0">
+            <!-- 页面将通过Include标签引入 -->
+            <Include source="skins/welcome_page.xml"/>
+            <Include source="skins/progress_page.xml"/>
+            <Include source="skins/completion_page.xml"/>
+        </TabLayout>
+    </VerticalLayout>
+</Window>

@@ -1,4 +1,4 @@
-#include "installer/install_state_utils.h"
+﻿#include "installer/install_state_utils.h"
 #include "installer/file_system_operator.h"
 #include "installer/installer_helpers.h"
 #include "installer/registry_utils.h"

@@ -1,4 +1,4 @@
-#include "installer/installer_helpers.h"
+﻿#include "installer/installer_helpers.h"
 #include "installer/file_system_operator.h"
 #include <algorithm>
 #include <cctype>

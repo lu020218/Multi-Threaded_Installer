@@ -59,6 +59,9 @@ private:
     // 将数据附加到可执行文件
     bool appendDataToExecutable(const std::string& executablePath,
                                const std::vector<uint8_t>& data);
+    
+    // 复制运行时依赖文件（DLL和resources）
+    bool copyRuntimeDependencies(const std::string& installerPath);
 };
 
 } // namespace MultiThreadedInstaller

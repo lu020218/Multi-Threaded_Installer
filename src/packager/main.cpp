@@ -68,6 +68,10 @@ int main(int argc, char* argv[]) {
     ConfigurationManager configManager;
     if (!configManager.initialize(inputPath)) {
         console.showError("Failed to initialize configuration");
+        std::string error = configManager.getLastError();
+        if (!error.empty()) {
+            console.showError("Configuration error: " + error);
+        }
         return 1;
     }
     

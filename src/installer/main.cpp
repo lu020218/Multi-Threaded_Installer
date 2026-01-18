@@ -8,6 +8,15 @@
 #include "installer/install_state_utils.h"
 #include "installer/registry_utils.h"
 #include "installer/uninstall_manager.h"
+
+#ifdef GUI_ENABLED
+#include "gui/gui_manager.h"
+#include "installer/embedded_resources.h"
+#include <Windows.h>
+#include <Shlwapi.h>
+#pragma comment(lib, "Shlwapi.lib")
+#endif
+
 #include <iostream>
 #include <mutex>
 #include <atomic>
@@ -19,6 +28,8 @@
 #include <algorithm>
 #include <cctype>
 #include <memory>
+#include <io.h>
+#include <fcntl.h>
 
 using namespace MultiThreadedInstaller;
 
@@ -80,9 +91,41 @@ std::vector<std::string> collectFilesRecursive(const std::string& rootPath) {
     return files;
 }
 
+#ifdef GUI_ENABLED
+// 将字符串转换为宽字符串
+std::wstring stringToWString(const std::string& str) {
+    if (str.empty()) return std::wstring();
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0);
+    std::wstring wstrTo(size_needed, 0);
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &wstrTo[0], size_needed);
+    return wstrTo;
+}
+
+// 从元数据创建InstallConfig
+InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata& metadata) {
+    InstallConfig config;
+    config.applicationName = stringToWString(metadata.applicationName);
+    config.version = stringToWString(metadata.configVersion);
+    config.defaultInstallPath = stringToWString(metadata.defaultInstallDir);
+    config.logoResourceId = L"logo.png";  // 默认logo
+    config.licenseText = L"";  // 将从resources/license.txt加载
+    config.webPageUrl = L"";  // 可以从配置中扩展
+    config.executableName = stringToWString(metadata.applicationName + ".exe");
+    
+    // 计算所需磁盘空间
+    uint64_t totalSize = 0;
+    for (const auto& mapping : metadata.extendedMappings) {
+        totalSize += mapping.originalSize;
+    }
+    config.requiredDiskSpace = totalSize;
+    
+    return config;
+}
+#endif
+
 } // namespace
 
-int main(int argc, char* argv[]) {
+int runConsoleInstaller(int argc, char* argv[]) {
     ConsoleInterface console;
     auto startTime = std::chrono::steady_clock::now();
     
@@ -925,4 +968,184 @@ int main(int argc, char* argv[]) {
                   << " seconds" << std::endl;
         return 1;
     }
+}
+
+#ifdef GUI_ENABLED
+// GUI模式入口点
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
+    // 初始化COM库（用于文件对话框）
+    HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    if (FAILED(hr)) {
+        MessageBoxW(NULL, L"Failed to initialize COM library", L"Error", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    
+    // 解析元数据以获取配置信息
+    MetadataParser parser;
+    auto metadata = parser.parseExtendedEmbeddedMetadata();
+    
+    if (!parser.validateMetadata(metadata)) {
+        MessageBoxW(NULL, L"Invalid or corrupted installer metadata", L"Error", MB_OK | MB_ICONERROR);
+        CoUninitialize();
+        return 1;
+    }
+    
+    // 创建InstallConfig
+    InstallConfig config = createInstallConfigFromMetadata(metadata);
+    
+    // 提取嵌入的GUI资源到临时目录
+    EmbeddedResourceManager resourceMgr;
+    std::string tempResourcePath = resourceMgr.extractResources();
+    
+    // 创建并显示GUI
+    CPaintManagerUI::SetInstance(hInstance);
+    
+    CDuiString resourcePath;
+    if (!tempResourcePath.empty()) {
+        // 使用提取的临时资源
+        // MBCS build: keep resource path as narrow string
+#if defined(UNICODE) || defined(_UNICODE)
+        int size = MultiByteToWideChar(CP_UTF8, 0, tempResourcePath.c_str(), -1, NULL, 0);
+        if (size > 0) {
+            std::vector<wchar_t> wpath(size);
+            MultiByteToWideChar(CP_UTF8, 0, tempResourcePath.c_str(), -1, wpath.data(), size);
+            resourcePath = wpath.data();
+        }
+#else
+        resourcePath = tempResourcePath.c_str();
+#endif
+        if (!resourcePath.IsEmpty()) {
+            TCHAR lastChar = resourcePath.GetAt(resourcePath.GetLength() - 1);
+            if (lastChar != _T('\\') && lastChar != _T('/')) {
+                resourcePath += _T("\\");
+            }
+        }
+        std::cout << "Using extracted resources from: " << tempResourcePath << std::endl;
+    }
+    
+    // 如果提取失败，尝试使用当前目录的resources
+    if (resourcePath.IsEmpty()) {
+        CDuiString instancePath = CPaintManagerUI::GetInstancePath();
+        resourcePath = instancePath + _T("resources\\");  // 确保路径以反斜杠结尾
+        
+        // 调试输出：显示路径信息
+        std::wcout << L"Instance path: " << instancePath.GetData() << std::endl;
+        std::wcout << L"Resource path: " << resourcePath.GetData() << std::endl;
+        std::wcout << L"Path exists: " << (PathFileExists(resourcePath) ? L"YES" : L"NO") << std::endl;
+        
+        if (!PathFileExists(resourcePath)) {
+            // 尝试检查 main.xml 文件
+            CDuiString mainXmlPath = resourcePath + _T("skins\\main.xml");
+            std::wcout << L"Checking main.xml at: " << mainXmlPath.GetData() << std::endl;
+            std::wcout << L"main.xml exists: " << (PathFileExists(mainXmlPath) ? L"YES" : L"NO") << std::endl;
+            
+            // resources目录不存在，显示错误消息
+            TCHAR errorMsg[1024];
+            _stprintf_s(errorMsg, 1024,
+                       _T("GUI资源文件未找到。\n\n")
+                       _T("无法提取嵌入的资源，也找不到外部资源目录。\n")
+                       _T("安装程序将以控制台模式运行。\n\n")
+                       _T("调试信息：\n")
+                       _T("实例路径: %s\n")
+                       _T("资源路径: %s"),
+                       instancePath.GetData(),
+                       resourcePath.GetData());
+            
+            MessageBox(NULL, errorMsg, _T("资源文件缺失"), MB_OK | MB_ICONWARNING);
+            
+            // 清理并回退到控制台模式
+            CoUninitialize();
+            
+            // 运行控制台安装程序
+            char** argv_console = new char*[2];
+            argv_console[0] = const_cast<char*>("installer.exe");
+            argv_console[1] = nullptr;
+            return runConsoleInstaller(1, argv_console);
+        }
+    }
+    
+    CPaintManagerUI::SetResourcePath(resourcePath);
+    std::wcout << L"Set resource path to: " << resourcePath.GetData() << std::endl;
+    
+    // 设置资源类型为文件系统
+    CPaintManagerUI::SetResourceType(UILIB_FILE);
+    std::wcout << L"Set resource type to UILIB_FILE" << std::endl;
+    
+    GUIManager* pFrame = new GUIManager();
+    if (pFrame == NULL) {
+        std::wcout << L"ERROR: Failed to create GUIManager" << std::endl;
+        CoUninitialize();
+        return 1;
+    }
+    std::wcout << L"Created GUIManager successfully" << std::endl;
+    
+    pFrame->SetInstallConfig(config);
+    std::wcout << L"Set install config" << std::endl;
+    
+    std::wcout << L"About to call Create()..." << std::endl;
+    HWND hwnd = NULL;
+    try {
+        hwnd = pFrame->Create(NULL, _T("安装向导"), UI_WNDSTYLE_FRAME, 0L, 0, 0, 800, 600);
+    } catch (const std::exception& e) {
+        std::wcout << L"ERROR: Exception during Create(): " << e.what() << std::endl;
+        delete pFrame;
+        CoUninitialize();
+        return 1;
+    } catch (...) {
+        std::wcout << L"ERROR: Unknown exception during Create()" << std::endl;
+        delete pFrame;
+        CoUninitialize();
+        return 1;
+    }
+    
+    if (hwnd == NULL) {
+        std::wcout << L"ERROR: Create() returned NULL" << std::endl;
+        
+        // 尝试获取更多错误信息
+        DWORD error = GetLastError();
+        std::wcout << L"GetLastError() = " << error << std::endl;
+        
+        delete pFrame;
+        CoUninitialize();
+        return 1;
+    }
+    std::wcout << L"Create() succeeded, hwnd = " << hwnd << std::endl;
+    
+    pFrame->CenterWindow();
+    std::wcout << L"Centered window" << std::endl;
+    
+    pFrame->ShowWindow(true);
+    std::wcout << L"Showed window, entering message loop..." << std::endl;
+    
+    CPaintManagerUI::MessageLoop();
+    
+    std::wcout << L"Message loop exited" << std::endl;
+    CoUninitialize();
+    return 0;
+}
+#endif
+
+// 主入口点 - 根据命令行参数选择GUI或控制台模式
+int main(int argc, char* argv[]) {
+#ifdef GUI_ENABLED
+    // 检查是否有-s（静默）标志
+    bool silentMode = false;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-s" || arg == "--silent") {
+            silentMode = true;
+            break;
+        }
+    }
+    
+    // 如果不是静默模式，使用GUI
+    if (!silentMode) {
+        // 转换为wWinMain参数
+        HINSTANCE hInstance = GetModuleHandle(NULL);
+        return wWinMain(hInstance, NULL, GetCommandLineW(), SW_SHOWNORMAL);
+    }
+#endif
+    
+    // 静默模式或未启用GUI - 使用控制台模式
+    return runConsoleInstaller(argc, argv);
 }

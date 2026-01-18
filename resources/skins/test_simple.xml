@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window size="400,300">
+    <VerticalLayout bkcolor="#FFFFFFFF">
+        <Label text="Hello World" height="50" textcolor="#FF000000"/>
+        <Button name="test_button" text="Test Button" width="100" height="30"/>
+    </VerticalLayout>
+</Window>

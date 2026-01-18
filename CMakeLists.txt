@@ -4,6 +4,25 @@ project(MultiThreadedInstaller VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# GUI option
+option(BUILD_GUI "Build with GUI support using DuiLib" ON)
+
+# Static linking option for Windows
+if(WIN32)
+    # When using DuiLib static library, we must use static runtime
+    option(STATIC_LINK_RUNTIME "Statically link C/C++ runtime libraries" ON)
+    
+    if(STATIC_LINK_RUNTIME)
+        # Use static runtime library
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        message(STATUS "Using static C/C++ runtime library")
+    else()
+        # Use dynamic runtime library (default)
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        message(STATUS "Using dynamic C/C++ runtime library")
+    endif()
+endif()
+
 # Find required packages
 find_package(Threads REQUIRED)
 
@@ -57,6 +76,58 @@ include_directories(include)
 include_directories(src)
 include_directories(${THIRD_PARTY_DIR}/nlohmann)
 
+# DuiLib configuration for GUI
+if(BUILD_GUI)
+    message(STATUS "Configuring GUI support with DuiLib...")
+    
+    # Add DuiLib include directory
+    set(DUILIB_INCLUDE_DIR ${THIRD_PARTY_DIR}/DuiLib_Ultimate/DuiLib)
+    include_directories(${DUILIB_INCLUDE_DIR})
+    message(STATUS "DuiLib include directory: ${DUILIB_INCLUDE_DIR}")
+    
+    # Use static library for single-file installer
+    set(USE_DUILIB_STATIC ON CACHE BOOL "Use DuiLib static library")
+    
+    if(USE_DUILIB_STATIC)
+        # Use static library
+        set(DUILIB_LIB ${THIRD_PARTY_DIR}/DuiLib_Ultimate/lib_static/DuiLib.lib)
+        if(EXISTS ${DUILIB_LIB})
+            message(STATUS "Using DuiLib static library: ${DUILIB_LIB}")
+            add_definitions(-DUILIB_STATIC)
+        else()
+            message(FATAL_ERROR "DuiLib static library not found at ${DUILIB_LIB}")
+        endif()
+    else()
+        # Use dynamic library (old behavior)
+        if(CMAKE_BUILD_TYPE MATCHES Debug)
+            set(DUILIB_LIB ${THIRD_PARTY_DIR}/DuiLib_Ultimate/lib/DuiLib_d.lib)
+        else()
+            set(DUILIB_LIB ${THIRD_PARTY_DIR}/DuiLib_Ultimate/lib/DuiLib.lib)
+        endif()
+        
+        # Check if DuiLib library exists
+        if(NOT EXISTS ${DUILIB_LIB})
+            # Try the release version as fallback
+            set(DUILIB_LIB ${THIRD_PARTY_DIR}/DuiLib_Ultimate/lib/DuiLib.lib)
+            if(NOT EXISTS ${DUILIB_LIB})
+                message(WARNING "DuiLib library not found at ${DUILIB_LIB}. GUI support will be disabled.")
+                set(BUILD_GUI OFF)
+            else()
+                message(STATUS "Using DuiLib library (fallback to release): ${DUILIB_LIB}")
+            endif()
+        else()
+            message(STATUS "Using DuiLib library: ${DUILIB_LIB}")
+        endif()
+    endif()
+    
+    # Define required Windows libraries for GUI
+    set(GUI_WINDOWS_LIBS
+        comctl32.lib    # Common Controls
+        GdiPlus.lib     # GDI+ for graphics
+        Imm32.lib       # Input Method Manager
+    )
+endif()
+
 # Function to copy DLLs to target directory
 function(copy_dlls_to_target target_name)
     if(LIBLZMA_DLL_PATH)
@@ -66,6 +137,23 @@ function(copy_dlls_to_target target_name)
             $<TARGET_FILE_DIR:${target_name}>
             COMMENT "Copying LZMA DLL to output directory"
         )
+    endif()
+    
+    # Copy DuiLib DLL only if using dynamic library
+    if(BUILD_GUI AND NOT USE_DUILIB_STATIC)
+        set(DUILIB_DLL_PATH "${THIRD_PARTY_DIR}/DuiLib_Ultimate/bin/DuiLib.dll")
+        if(EXISTS ${DUILIB_DLL_PATH})
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${DUILIB_DLL_PATH}"
+                $<TARGET_FILE_DIR:${target_name}>
+                COMMENT "Copying DuiLib DLL to output directory"
+            )
+        else()
+            message(WARNING "DuiLib.dll not found at ${DUILIB_DLL_PATH}")
+        endif()
+    elseif(BUILD_GUI AND USE_DUILIB_STATIC)
+        message(STATUS "Using DuiLib static library - no DLL copy needed")
     endif()
 endfunction()
 
@@ -98,6 +186,30 @@ set(INSTALLER_SOURCES
     src/installer/main.cpp
 )
 
+# GUI source files (only if BUILD_GUI is enabled)
+if(BUILD_GUI)
+    set(GUI_SOURCES
+        # Core GUI management
+        src/gui/gui_manager.cpp
+        src/gui/page_controller.cpp
+        src/gui/installation_worker.cpp
+        
+        # Page controllers
+        src/gui/welcome_page_controller.cpp
+        src/gui/progress_page_controller.cpp
+        src/gui/completion_page_controller.cpp
+        
+        # Dialogs and helpers
+        src/gui/license_dialog.cpp
+        src/gui/gui_helpers.cpp
+        
+        # Embedded resources manager
+        src/installer/embedded_resources.cpp
+    )
+    list(APPEND INSTALLER_SOURCES ${GUI_SOURCES})
+    message(STATUS "Added ${CMAKE_CURRENT_LIST_LENGTH} GUI source files to installer")
+endif()
+
 # Common source files
 set(COMMON_SOURCES
     src/common/types.cpp
@@ -119,3 +231,222 @@ endif()
 target_include_directories(installer PRIVATE ${LIBLZMA_INCLUDE_DIRS})
 copy_dlls_to_target(installer)
 
+# Add GUI support to installer if enabled
+if(BUILD_GUI)
+    # Add GUI preprocessor definition
+    target_compile_definitions(installer PRIVATE GUI_ENABLED)
+    
+    # Configure character set to match DuiLib (MBCS)
+    if(MSVC)
+        target_compile_definitions(installer PRIVATE _MBCS)
+        # Remove Unicode definitions if present
+        target_compile_definitions(installer PRIVATE UNICODE=0 _UNICODE=0)
+        message(STATUS "Configured installer for MBCS character set (required for DuiLib)")
+    endif()
+    
+    # Link DuiLib and required Windows libraries
+    target_link_libraries(installer 
+        ${DUILIB_LIB}
+        ${GUI_WINDOWS_LIBS}
+    )
+    
+    # Embed application manifest for DPI awareness and common controls (Task 11.3)
+    if(MSVC)
+        # Set the manifest file for the installer executable
+        set_target_properties(installer PROPERTIES
+            LINK_FLAGS "/MANIFEST:EMBED /MANIFESTINPUT:${CMAKE_SOURCE_DIR}/src/installer/installer.exe.manifest"
+        )
+        message(STATUS "Embedding application manifest: ${CMAKE_SOURCE_DIR}/src/installer/installer.exe.manifest")
+    endif()
+    
+    # Copy resources directory to output directory (Task 11.2)
+    # This ensures XML layouts and images are available at runtime
+    add_custom_command(TARGET installer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/resources
+        $<TARGET_FILE_DIR:installer>/resources
+        COMMENT "Copying GUI resources (XML layouts and images) to output directory"
+    )
+    
+    # Verify critical resource files exist
+    set(CRITICAL_RESOURCES
+        resources/skins/main.xml
+        resources/skins/welcome_page.xml
+        resources/skins/progress_page.xml
+        resources/skins/completion_page.xml
+        resources/skins/license.xml
+        resources/license.txt
+    )
+    
+    foreach(RESOURCE ${CRITICAL_RESOURCES})
+        if(NOT EXISTS ${CMAKE_SOURCE_DIR}/${RESOURCE})
+            message(WARNING "Critical resource file missing: ${RESOURCE}")
+        endif()
+    endforeach()
+    
+    message(STATUS "GUI support enabled for installer")
+    message(STATUS "  - DuiLib library: ${DUILIB_LIB}")
+    message(STATUS "  - Windows GUI libraries: ${GUI_WINDOWS_LIBS}")
+    message(STATUS "  - Resources will be copied from: ${CMAKE_SOURCE_DIR}/resources")
+endif()
+
+# Testing configuration
+option(BUILD_TESTS "Build test executables" ON)
+
+if(BUILD_TESTS)
+    message(STATUS "Configuring tests...")
+    
+    # Test for GUI helpers (basic functionality)
+    add_executable(test_gui_helpers tests/test_gui_helpers.cpp ${COMMON_SOURCES})
+    target_link_libraries(test_gui_helpers ${LIBLZMA_LIBRARIES} Threads::Threads)
+    target_include_directories(test_gui_helpers PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+    
+    if(BUILD_GUI)
+        # Add GUI-specific tests
+        target_compile_definitions(test_gui_helpers PRIVATE GUI_ENABLED)
+        target_link_libraries(test_gui_helpers 
+            ${DUILIB_LIB}
+            ${GUI_WINDOWS_LIBS}
+            ole32 shell32
+        )
+        
+        # Add GUI helper sources to test
+        target_sources(test_gui_helpers PRIVATE src/gui/gui_helpers.cpp)
+        
+        # Test for page navigation
+        add_executable(test_page_navigation 
+            tests/test_page_navigation.cpp 
+            src/gui/page_controller.cpp
+            src/gui/installation_worker.cpp
+            src/installer/decompression_engine.cpp
+            src/installer/thread_pool_manager.cpp
+            src/installer/tar_stream_extractor.cpp
+            src/installer/file_system_operator.cpp
+            src/installer/path_resolver.cpp
+            src/installer/metadata_parser.cpp
+            ${COMMON_SOURCES}
+        )
+        target_compile_definitions(test_page_navigation PRIVATE GUI_ENABLED)
+        target_link_libraries(test_page_navigation 
+            ${DUILIB_LIB}
+            ${GUI_WINDOWS_LIBS}
+            ${LIBLZMA_LIBRARIES}
+            Threads::Threads
+            ole32 shell32
+        )
+        target_include_directories(test_page_navigation PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+        
+        # Test for disk space validation
+        add_executable(test_disk_space_validation 
+            tests/test_disk_space_validation.cpp 
+            src/gui/gui_helpers.cpp
+            ${COMMON_SOURCES}
+        )
+        target_compile_definitions(test_disk_space_validation PRIVATE GUI_ENABLED)
+        target_link_libraries(test_disk_space_validation 
+            ${DUILIB_LIB}
+            ${GUI_WINDOWS_LIBS}
+            ${LIBLZMA_LIBRARIES}
+            Threads::Threads
+            ole32 shell32
+        )
+        target_include_directories(test_disk_space_validation PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+        
+        # Test for license dialog
+        add_executable(test_license_dialog 
+            tests/test_license_dialog.cpp 
+            ${COMMON_SOURCES}
+        )
+        target_compile_definitions(test_license_dialog PRIVATE GUI_ENABLED)
+        target_link_libraries(test_license_dialog 
+            ${DUILIB_LIB}
+            ${GUI_WINDOWS_LIBS}
+            ${LIBLZMA_LIBRARIES}
+            Threads::Threads
+            ole32 shell32
+        )
+        target_include_directories(test_license_dialog PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+        
+        # Test for installation flow
+        add_executable(test_installation_flow 
+            tests/test_installation_flow.cpp 
+            src/gui/page_controller.cpp
+            src/gui/installation_worker.cpp
+            src/gui/gui_helpers.cpp
+            src/installer/decompression_engine.cpp
+            src/installer/thread_pool_manager.cpp
+            src/installer/tar_stream_extractor.cpp
+            src/installer/file_system_operator.cpp
+            src/installer/path_resolver.cpp
+            src/installer/metadata_parser.cpp
+            ${COMMON_SOURCES}
+        )
+        target_compile_definitions(test_installation_flow PRIVATE GUI_ENABLED)
+        target_link_libraries(test_installation_flow 
+            ${DUILIB_LIB}
+            ${GUI_WINDOWS_LIBS}
+            ${LIBLZMA_LIBRARIES}
+            Threads::Threads
+            ole32 shell32
+        )
+        target_include_directories(test_installation_flow PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+        
+        # Test for cancellation flow
+        add_executable(test_cancellation_flow 
+            tests/test_cancellation_flow.cpp 
+            src/gui/page_controller.cpp
+            src/gui/installation_worker.cpp
+            src/installer/decompression_engine.cpp
+            src/installer/thread_pool_manager.cpp
+            src/installer/tar_stream_extractor.cpp
+            src/installer/file_system_operator.cpp
+            src/installer/path_resolver.cpp
+            src/installer/metadata_parser.cpp
+            ${COMMON_SOURCES}
+        )
+        target_compile_definitions(test_cancellation_flow PRIVATE GUI_ENABLED)
+        target_link_libraries(test_cancellation_flow 
+            ${DUILIB_LIB}
+            ${GUI_WINDOWS_LIBS}
+            ${LIBLZMA_LIBRARIES}
+            Threads::Threads
+            ole32 shell32
+        )
+        target_include_directories(test_cancellation_flow PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+        
+        # Test for high DPI display
+        add_executable(test_high_dpi 
+            tests/test_high_dpi.cpp 
+            ${COMMON_SOURCES}
+        )
+        target_compile_definitions(test_high_dpi PRIVATE GUI_ENABLED)
+        target_link_libraries(test_high_dpi 
+            ${DUILIB_LIB}
+            ${GUI_WINDOWS_LIBS}
+            ${LIBLZMA_LIBRARIES}
+            Threads::Threads
+            ole32 shell32
+            Shcore.lib
+        )
+        target_include_directories(test_high_dpi PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+        
+        # Test for keyboard operations
+        add_executable(test_keyboard_operations 
+            tests/test_keyboard_operations.cpp 
+            ${COMMON_SOURCES}
+        )
+        target_compile_definitions(test_keyboard_operations PRIVATE GUI_ENABLED)
+        target_link_libraries(test_keyboard_operations 
+            ${DUILIB_LIB}
+            ${GUI_WINDOWS_LIBS}
+            ${LIBLZMA_LIBRARIES}
+            Threads::Threads
+            ole32 shell32
+        )
+        target_include_directories(test_keyboard_operations PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+        
+        message(STATUS "GUI tests configured")
+    endif()
+    
+    message(STATUS "Tests configured successfully")
+endif()

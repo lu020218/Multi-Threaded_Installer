@@ -135,6 +135,11 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
             std::cerr << "Warning: Failed to set executable permissions" << std::endl;
         }
         
+        // 复制必需的运行时文件（DLL和resources）
+        if (!copyRuntimeDependencies(outputPath)) {
+            std::cerr << "Warning: Failed to copy some runtime dependencies" << std::endl;
+        }
+        
         std::cout << "Successfully created installer: " << outputPath << std::endl;
         std::cout << "  Executable size: " << executableSize << " bytes" << std::endl;
         std::cout << "  Metadata size: " << metadata.size() << " bytes" << std::endl;
@@ -250,6 +255,111 @@ bool InstallerGenerator::appendDataToExecutable(const std::string& executablePat
         
     } catch (const std::exception& e) {
         std::cerr << "Error appending data to executable: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPath) {
+    try {
+        std::filesystem::path installerFile(installerPath);
+        std::filesystem::path outputDir = installerFile.parent_path();
+        
+        // 如果输出目录为空，使用当前目录
+        if (outputDir.empty()) {
+            outputDir = ".";
+        }
+        
+        bool allSuccess = true;
+        
+        // 查找模板安装程序的目录（通常是 build/Release 或 build/Debug）
+        std::filesystem::path templateDir;
+        if (!installerTemplatePath.empty()) {
+            templateDir = std::filesystem::path(installerTemplatePath).parent_path();
+        } else {
+            // 尝试常见的构建目录
+            std::vector<std::string> possibleDirs = {
+                "build/Release",
+                "build/Debug",
+                "build",
+                "."
+            };
+            
+            for (const auto& dir : possibleDirs) {
+                // 检查是否存在liblzma.dll（必需的运行时依赖）
+                if (std::filesystem::exists(std::filesystem::path(dir) / "liblzma.dll")) {
+                    templateDir = dir;
+                    break;
+                }
+            }
+        }
+        
+        if (templateDir.empty()) {
+            std::cerr << "Warning: Could not find template directory with runtime dependencies" << std::endl;
+            return false;
+        }
+        
+        std::cout << "Copying runtime dependencies from: " << templateDir << std::endl;
+        
+        // 复制 DuiLib.dll（仅在使用动态库时）
+        // 注意：如果使用静态库编译，则不需要复制DuiLib.dll
+        std::filesystem::path duilib = templateDir / "DuiLib.dll";
+        if (std::filesystem::exists(duilib)) {
+            std::filesystem::path dest = outputDir / "DuiLib.dll";
+            try {
+                std::filesystem::copy_file(duilib, dest, std::filesystem::copy_options::overwrite_existing);
+                std::cout << "  Copied: DuiLib.dll" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "  Failed to copy DuiLib.dll: " << e.what() << std::endl;
+                // 不设置allSuccess=false，因为可能使用静态库
+                std::cout << "  Note: If using static DuiLib, this is expected" << std::endl;
+            }
+        } else {
+            std::cout << "  DuiLib.dll not found - assuming static linking" << std::endl;
+        }
+        
+        // 复制 liblzma.dll
+        std::filesystem::path liblzma = templateDir / "liblzma.dll";
+        if (std::filesystem::exists(liblzma)) {
+            std::filesystem::path dest = outputDir / "liblzma.dll";
+            try {
+                std::filesystem::copy_file(liblzma, dest, std::filesystem::copy_options::overwrite_existing);
+                std::cout << "  Copied: liblzma.dll" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "  Failed to copy liblzma.dll: " << e.what() << std::endl;
+                allSuccess = false;
+            }
+        } else {
+            std::cerr << "  Warning: liblzma.dll not found at " << liblzma << std::endl;
+            allSuccess = false;
+        }
+        
+        // 复制 resources 目录
+        std::filesystem::path resourcesDir = templateDir / "resources";
+        if (std::filesystem::exists(resourcesDir) && std::filesystem::is_directory(resourcesDir)) {
+            std::filesystem::path destResources = outputDir / "resources";
+            try {
+                // 如果目标目录存在，先删除
+                if (std::filesystem::exists(destResources)) {
+                    std::filesystem::remove_all(destResources);
+                }
+                
+                // 递归复制整个 resources 目录
+                std::filesystem::copy(resourcesDir, destResources, 
+                                     std::filesystem::copy_options::recursive);
+                std::cout << "  Copied: resources/ directory" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "  Failed to copy resources directory: " << e.what() << std::endl;
+                allSuccess = false;
+            }
+        } else {
+            std::cerr << "  Warning: resources directory not found at " << resourcesDir << std::endl;
+            allSuccess = false;
+        }
+        
+        return allSuccess;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Error copying runtime dependencies: " << e.what() << std::endl;
         return false;
     }
 }

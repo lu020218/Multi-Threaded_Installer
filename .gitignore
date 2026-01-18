@@ -1,3 +1,6 @@
 /build
 /.kiro
 /.kiro
+/third_party/DuiLib_Ultimate
+/test_output
+/tests

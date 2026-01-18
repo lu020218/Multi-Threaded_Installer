@@ -1,4 +1,4 @@
-#include "installer/registry_utils.h"
+﻿#include "installer/registry_utils.h"
 #include <algorithm>
 #include <cctype>
 #include <iostream>

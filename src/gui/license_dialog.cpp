@@ -3,6 +3,7 @@
 #include "../../include/gui/license_dialog.h"
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 
 using namespace DuiLib;
 
@@ -47,7 +48,7 @@ CDuiString LicenseDialog::GetSkinFolder() {
 }
 
 CDuiString LicenseDialog::GetSkinFile() {
-    return _T("skins\\license.xml");
+    return _T("license.xml");
 }
 
 LPCTSTR LicenseDialog::GetWindowClassName() const {
@@ -89,9 +90,14 @@ void LicenseDialog::InitWindow() {
 
 std::wstring LicenseDialog::LoadLicenseText() {
     // 尝试从资源目录加载许可协议文本
-    std::wstring licensePath = CPaintManagerUI::GetResourcePath() + _T("\\license.txt");
+    CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
+    std::wstring licensePath = resourcePath + _T("license.txt");
     
     std::wifstream file(licensePath);
+    if (!file.is_open()) {
+        std::filesystem::path fallback = std::filesystem::path(resourcePath.GetData()) / ".." / "license.txt";
+        file.open(fallback.wstring());
+    }
     if (!file.is_open()) {
         // 如果文件不存在，返回默认文本
         return L"许可协议文本未找到。\n\n请确保 resources/license.txt 文件存在。";

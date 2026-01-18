@@ -1001,6 +1001,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     CPaintManagerUI::SetInstance(hInstance);
     
     CDuiString resourcePath;
+    CDuiString resourceBasePath;
     if (!tempResourcePath.empty()) {
         // 使用提取的临时资源
         // MBCS build: keep resource path as narrow string
@@ -1009,16 +1010,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         if (size > 0) {
             std::vector<wchar_t> wpath(size);
             MultiByteToWideChar(CP_UTF8, 0, tempResourcePath.c_str(), -1, wpath.data(), size);
-            resourcePath = wpath.data();
+            resourceBasePath = wpath.data();
         }
 #else
-        resourcePath = tempResourcePath.c_str();
+        resourceBasePath = tempResourcePath.c_str();
 #endif
+        resourcePath = resourceBasePath;
         if (!resourcePath.IsEmpty()) {
             TCHAR lastChar = resourcePath.GetAt(resourcePath.GetLength() - 1);
             if (lastChar != _T('\\') && lastChar != _T('/')) {
                 resourcePath += _T("\\");
             }
+            resourcePath += _T("skins\\");
         }
         std::cout << "Using extracted resources from: " << tempResourcePath << std::endl;
     }
@@ -1026,7 +1029,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     // 如果提取失败，尝试使用当前目录的resources
     if (resourcePath.IsEmpty()) {
         CDuiString instancePath = CPaintManagerUI::GetInstancePath();
-        resourcePath = instancePath + _T("resources\\");  // 确保路径以反斜杠结尾
+        resourceBasePath = instancePath + _T("resources\\");  // 确保路径以反斜杠结尾
+        resourcePath = resourceBasePath + _T("skins\\");
         
         // 调试输出：显示路径信息
         std::wcout << L"Instance path: " << instancePath.GetData() << std::endl;
@@ -1035,7 +1039,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         
         if (!PathFileExists(resourcePath)) {
             // 尝试检查 main.xml 文件
-            CDuiString mainXmlPath = resourcePath + _T("skins\\main.xml");
+            CDuiString mainXmlPath = resourcePath + _T("main.xml");
             std::wcout << L"Checking main.xml at: " << mainXmlPath.GetData() << std::endl;
             std::wcout << L"main.xml exists: " << (PathFileExists(mainXmlPath) ? L"YES" : L"NO") << std::endl;
             
@@ -1049,7 +1053,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                        _T("实例路径: %s\n")
                        _T("资源路径: %s"),
                        instancePath.GetData(),
-                       resourcePath.GetData());
+                       resourceBasePath.GetData());
             
             MessageBox(NULL, errorMsg, _T("资源文件缺失"), MB_OK | MB_ICONWARNING);
             

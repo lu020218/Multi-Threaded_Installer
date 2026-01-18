@@ -82,7 +82,7 @@ CDuiString GUIManager::GetSkinFolder() {
 
 // ��ȡƤ���ļ���
 CDuiString GUIManager::GetSkinFile() {
-    return _T("skins\\main.xml");
+    return _T("main.xml");
 }
 
 // ��ȡ��������
@@ -237,6 +237,15 @@ void GUIManager::Notify(TNotifyUI& msg) {
 
 // ����Windows��Ϣ
 LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg == WM_CLOSE) {
+        DestroyWindow(m_hWnd);
+        PostQuitMessage(0);
+        return 0;
+    }
+    if (uMsg == WM_DESTROY) {
+        PostQuitMessage(0);
+        return 0;
+    }
     // �����Զ�����Ϣ
     if (uMsg == WM_INSTALLATION_PROGRESS) {
         ProgressMessageData* pData = reinterpret_cast<ProgressMessageData*>(lParam);
@@ -329,25 +338,22 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
 // ��װ��ť�������
 void GUIManager::OnInstallButtonClick() {
-    // TODO: �ں���������ʵ�������İ�װ�߼�
-    // 1. ��֤��װ·��
-    // 2. �л�������ҳ��
-    // 3. �����װ�����߳�
-    
-    // ��ʱʵ�֣���ʾ��Ϣ��
-    ::MessageBox(m_hWnd, _T("��װ���ܽ��ں���������ʵ��"), _T("��ʾ"), MB_OK | MB_ICONINFORMATION);
+    // TODO: implement the full install flow.
+    ::MessageBox(m_hWnd, _T("Installation is not implemented yet."), _T("Info"),
+                 MB_OK | MB_ICONINFORMATION);
 }
+
 
 // ȡ����ť�������
 void GUIManager::OnCancelButtonClick() {
-    // ʹ��GUIHelpers��ʾȷ�϶Ի���
     if (GUIHelpers::ShowConfirmDialog(
         m_hWnd,
-        L"ȷ��",
-        L"ȷ��Ҫ�˳���װ������")) {
+        L"Exit",
+        L"Exit the installer?")) {
         Close();
     }
 }
+
 
 // �����ť�������
 void GUIManager::OnBrowseButtonClick() {
@@ -379,9 +385,10 @@ void GUIManager::OnBrowseButtonClick() {
 
 // ���Э�����ӵ������
 void GUIManager::OnLicenseLinkClick() {
-    // TODO: �ں���������ʵ�����Э��Ի���
-    ::MessageBox(m_hWnd, _T("���Э��Ի����ں���������ʵ��"), _T("��ʾ"), MB_OK | MB_ICONINFORMATION);
+    ::MessageBox(m_hWnd, _T("License dialog is not implemented yet."), _T("Info"),
+                 MB_OK | MB_ICONINFORMATION);
 }
+
 
 // ��ɰ�ť�������
 void GUIManager::OnFinishButtonClick() {
@@ -433,18 +440,17 @@ void GUIManager::OnFinishButtonClick() {
 
 // ����ҳ��ȡ����ť�������
 void GUIManager::OnCancelProgressButtonClick() {
-    // ʹ��GUIHelpers��ʾȷ�϶Ի���
     if (GUIHelpers::ShowConfirmDialog(
         m_hWnd,
-        L"ȷ��",
-        L"ȷ��Ҫȡ����װ���Ѱ�װ���ļ����������")) {
-        
-        // TODO: �������߳�ֹͣ
+        L"Cancel",
+        L"Cancel installation and exit?")) {
+        // TODO: request cancellation from worker.
         // if (m_pWorker) {
         //     m_pWorker->RequestCancellation();
         // }
     }
 }
+
 
 // ���Э�鸴ѡ��״̬�仯����
 void GUIManager::OnLicenseCheckboxChanged() {

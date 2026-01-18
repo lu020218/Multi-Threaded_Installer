@@ -91,6 +91,10 @@ set(INSTALLER_SOURCES
     src/installer/file_system_operator.cpp
     src/installer/console_interface.cpp
     src/installer/path_resolver.cpp
+    src/installer/installer_helpers.cpp
+    src/installer/registry_utils.cpp
+    src/installer/install_state_utils.cpp
+    src/installer/uninstall_manager.cpp
     src/installer/main.cpp
 )
 

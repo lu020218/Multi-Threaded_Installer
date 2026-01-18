@@ -51,6 +51,7 @@ public:
         bool silent = false;
         bool verbose = false;
         bool showHelp = false;
+        bool uninstall = false;
     };
     
     // 解析打包器命令行参数

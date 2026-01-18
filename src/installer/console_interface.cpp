@@ -159,6 +159,8 @@ ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, c
             args.silent = true;
         } else if (arg == "-f" || arg == "--force") {
             args.force = true;
+        } else if (arg == "--uninstall") {
+            args.uninstall = true;
         } else if ((arg == "-d" || arg == "--destination") && i + 1 < argc) {
             args.defaultDestination = argv[++i];
         } else if ((arg == "-t" || arg == "--threads") && i + 1 < argc) {
@@ -200,6 +202,7 @@ void ConsoleInterface::showInstallerHelp() {
     std::cout << "  -t, --threads <count>          Number of decompression threads (default: CPU cores)" << std::endl;
     std::cout << "  -f, --force                    Force overwrite existing files" << std::endl;
     std::cout << "  -s, --silent                   Silent installation mode" << std::endl;
+    std::cout << "  --uninstall                    Uninstall using saved manifest" << std::endl;
     std::cout << "  -v, --verbose                  Show detailed information" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
     std::cout << std::endl;
@@ -210,6 +213,7 @@ void ConsoleInterface::showInstallerHelp() {
     std::cout << "  installer -d C:\\Program Files\\MyApp" << std::endl;
     std::cout << "  installer folderA=C:\\App\\A folderB=C:\\App\\B" << std::endl;
     std::cout << "  installer -s -f -d C:\\Program Files\\MyApp" << std::endl;
+    std::cout << "  uninstall.exe (runs uninstall automatically)" << std::endl;
 }
 
 void ConsoleInterface::clearScreen() {

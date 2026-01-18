@@ -4,6 +4,7 @@
 #include "installer/file_system_operator.h"
 #include "installer/console_interface.h"
 #include "installer/path_resolver.h"
+#include <json.hpp>
 #include <iostream>
 #include <mutex>
 #include <atomic>
@@ -24,9 +25,12 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <objbase.h>
+#else
+#include <unistd.h>
 #endif
 
 using namespace MultiThreadedInstaller;
+using json = nlohmann::json;
 
 namespace {
 
@@ -68,6 +72,9 @@ struct FolderTiming {
     bool indexed = false;
     std::string folderName;
 };
+
+void applyInstallState(const InstallStateConfig& config, const std::string& stateValue,
+                       InstallerPathResolver& resolver);
 
 std::filesystem::path toLongPath(const std::filesystem::path& path) {
 #ifdef _WIN32
@@ -252,6 +259,620 @@ bool createDesktopShortcut(const std::string& appName, const std::filesystem::pa
     (void)exePath;
     return false;
 #endif
+}
+
+std::string getCurrentExecutablePath() {
+#ifdef _WIN32
+    char buffer[MAX_PATH];
+    DWORD len = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
+    if (len == 0) {
+        return "";
+    }
+    return std::string(buffer, len);
+#else
+    char buffer[1024];
+    ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (len <= 0) {
+        return "";
+    }
+    buffer[len] = '\0';
+    return std::string(buffer);
+#endif
+}
+
+std::string getDefaultManifestPath(const std::string& appName, InstallerPathResolver& resolver) {
+    std::string base = "%ProgramData%\\" + appName;
+    std::string expanded = resolver.expandEnvironmentVariables(base);
+    if (expanded.empty()) {
+        return "";
+    }
+    std::filesystem::path path(expanded);
+    path /= "install.manifest.json";
+    return path.string();
+}
+
+std::string getLocalManifestPath(const std::string& exePath) {
+    if (exePath.empty()) {
+        return "";
+    }
+    std::filesystem::path path(exePath);
+    std::filesystem::path parent = path.parent_path();
+    if (parent.empty()) {
+        return "";
+    }
+    parent /= "install.manifest.json";
+    return parent.string();
+}
+
+bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath) {
+    struct DataLocator {
+        uint32_t magic;
+        uint64_t metadataOffset;
+        uint64_t metadataSize;
+        uint64_t dataOffset;
+        uint64_t dataSize;
+    };
+    
+    std::ifstream in(toLongPath(std::filesystem::path(sourcePath)), std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    
+    in.seekg(0, std::ios::end);
+    std::streampos fileSize = in.tellg();
+    size_t locatorSize = sizeof(DataLocator) + sizeof(uint32_t);
+    if (fileSize < static_cast<std::streampos>(locatorSize)) {
+        return false;
+    }
+    
+    in.seekg(-static_cast<std::streamoff>(sizeof(uint32_t)), std::ios::end);
+    uint32_t endMagic = 0;
+    in.read(reinterpret_cast<char*>(&endMagic), sizeof(uint32_t));
+    if (endMagic != Constants::MAGIC_NUMBER) {
+        return false;
+    }
+    
+    in.seekg(-static_cast<std::streamoff>(locatorSize), std::ios::end);
+    DataLocator locator{};
+    in.read(reinterpret_cast<char*>(&locator), sizeof(DataLocator));
+    if (locator.magic != Constants::MAGIC_NUMBER || locator.metadataOffset == 0) {
+        return false;
+    }
+    
+    if (locator.metadataOffset >= static_cast<uint64_t>(fileSize)) {
+        return false;
+    }
+    
+    std::ofstream out(toLongPath(std::filesystem::path(targetPath)), std::ios::binary | std::ios::trunc);
+    if (!out) {
+        return false;
+    }
+    
+    in.seekg(0, std::ios::beg);
+    const size_t bufSize = 1024 * 1024;
+    std::vector<char> buffer(bufSize);
+    uint64_t remaining = locator.metadataOffset;
+    while (remaining > 0) {
+        size_t chunk = remaining > bufSize ? bufSize : static_cast<size_t>(remaining);
+        in.read(buffer.data(), static_cast<std::streamsize>(chunk));
+        if (!in) {
+            return false;
+        }
+        out.write(buffer.data(), static_cast<std::streamsize>(chunk));
+        if (!out) {
+            return false;
+        }
+        remaining -= chunk;
+    }
+    return true;
+}
+
+bool writeManifest(const std::string& manifestPath,
+                   const std::string& appName,
+                   const std::string& configVersion,
+                   const std::string& installDir,
+                   const std::vector<std::string>& filePaths,
+                   const std::vector<RegistryEntry>& registry,
+                   bool autoStartup,
+                   bool desktopIcons,
+                   const InstallStateConfig& installState,
+                   const std::string& uninstallPath) {
+    if (manifestPath.empty()) {
+        return false;
+    }
+    
+    json root;
+    root["version"] = "1.0";
+    root["appName"] = appName;
+    root["configVersion"] = configVersion;
+    root["installDir"] = installDir;
+    root["uninstallPath"] = uninstallPath;
+    root["files"] = filePaths;
+    root["autoStartup"] = autoStartup;
+    root["desktopIcons"] = desktopIcons;
+    
+    json reg = json::array();
+    for (const auto& entry : registry) {
+        json item;
+        item["path"] = entry.path;
+        item["key"] = entry.key;
+        item["value"] = entry.value;
+        item["type"] = static_cast<int>(entry.type);
+        reg.push_back(item);
+    }
+    root["registry"] = reg;
+    
+    json state;
+    state["mode"] = static_cast<int>(installState.mode);
+    state["registryPath"] = installState.registryPath;
+    state["registryKey"] = installState.registryKey;
+    state["filePath"] = installState.filePath;
+    state["useMutex"] = installState.useMutex;
+    state["mutexName"] = installState.mutexName;
+    root["installState"] = state;
+    
+    std::filesystem::path path(manifestPath);
+    std::filesystem::path parent = path.parent_path();
+    if (!parent.empty()) {
+        FileSystemOperator fs;
+        if (!fs.createDirectoryRecursive(parent.string())) {
+            return false;
+        }
+    }
+    
+    std::ofstream out(toLongPath(path), std::ios::binary | std::ios::trunc);
+    if (!out) {
+        return false;
+    }
+    std::string payload = root.dump(2);
+    out.write(payload.c_str(), static_cast<std::streamsize>(payload.size()));
+    return static_cast<bool>(out);
+}
+
+bool readManifest(const std::string& manifestPath, json& outManifest) {
+    if (manifestPath.empty()) {
+        return false;
+    }
+    std::ifstream in(toLongPath(std::filesystem::path(manifestPath)), std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (content.empty()) {
+        return false;
+    }
+    outManifest = json::parse(content, nullptr, false);
+    return !outManifest.is_discarded();
+}
+
+bool deleteRegistryValue(const RegistryEntry& entry) {
+#ifdef _WIN32
+    if (entry.path.empty() || entry.key.empty()) {
+        return false;
+    }
+    
+    std::string path = entry.path;
+    std::string pathUpper = path;
+    std::transform(pathUpper.begin(), pathUpper.end(), pathUpper.begin(), ::toupper);
+    
+    HKEY root = nullptr;
+    std::string subkey;
+    const std::string hkcu = "HKEY_CURRENT_USER\\";
+    const std::string hklm = "HKEY_LOCAL_MACHINE\\";
+    const std::string hkcuShort = "HKCU\\";
+    const std::string hklmShort = "HKLM\\";
+    
+    if (pathUpper.rfind(hkcu, 0) == 0) {
+        root = HKEY_CURRENT_USER;
+        subkey = path.substr(hkcu.size());
+    } else if (pathUpper.rfind(hklm, 0) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        subkey = path.substr(hklm.size());
+    } else if (pathUpper.rfind(hkcuShort, 0) == 0) {
+        root = HKEY_CURRENT_USER;
+        subkey = path.substr(hkcuShort.size());
+    } else if (pathUpper.rfind(hklmShort, 0) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        subkey = path.substr(hklmShort.size());
+    } else {
+        return false;
+    }
+    
+    HKEY key = nullptr;
+    LONG status = RegOpenKeyExA(root, subkey.c_str(), 0, KEY_SET_VALUE, &key);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+    
+    status = RegDeleteValueA(key, entry.key.c_str());
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS;
+#else
+    (void)entry;
+    return false;
+#endif
+}
+
+bool removeAutoStartup(const std::string& appName) {
+#ifdef _WIN32
+    HKEY key = nullptr;
+    LONG status = RegOpenKeyExA(HKEY_CURRENT_USER,
+                                "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                                0, KEY_SET_VALUE, &key);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+    status = RegDeleteValueA(key, appName.c_str());
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS;
+#else
+    (void)appName;
+    return false;
+#endif
+}
+
+bool deleteDesktopShortcut(const std::string& appName) {
+#ifdef _WIN32
+    PWSTR desktopPath = nullptr;
+    HRESULT hr = SHGetKnownFolderPath(FOLDERID_Desktop, KF_FLAG_DEFAULT, nullptr, &desktopPath);
+    if (FAILED(hr) || !desktopPath) {
+        return false;
+    }
+    std::wstring linkPath = std::wstring(desktopPath) + L"\\" + toWideUtf8(appName) + L".lnk";
+    CoTaskMemFree(desktopPath);
+    return DeleteFileW(linkPath.c_str()) != 0;
+#else
+    (void)appName;
+    return false;
+#endif
+}
+
+bool scheduleSelfDelete() {
+#ifdef _WIN32
+    std::string exePath = getCurrentExecutablePath();
+    if (exePath.empty()) {
+        return false;
+    }
+    std::wstring wide = toWideUtf8(exePath);
+    if (wide.empty()) {
+        return false;
+    }
+    return MoveFileExW(wide.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT) != 0;
+#else
+    return false;
+#endif
+}
+
+bool scheduleSelfDeleteImmediate(const std::vector<std::string>& cleanupRoots,
+                                 const std::string& manifestPath) {
+#ifdef _WIN32
+    std::string exePath = getCurrentExecutablePath();
+    if (exePath.empty()) {
+        return false;
+    }
+    
+    char tempPath[MAX_PATH] = {0};
+    DWORD len = GetTempPathA(MAX_PATH, tempPath);
+    if (len == 0 || len >= MAX_PATH) {
+        return false;
+    }
+    
+    char tempFile[MAX_PATH] = {0};
+    if (GetTempFileNameA(tempPath, "un", 0, tempFile) == 0) {
+        return false;
+    }
+    
+    std::string scriptPath = std::string(tempFile) + ".cmd";
+    std::ofstream script(scriptPath, std::ios::binary | std::ios::trunc);
+    if (!script) {
+        return false;
+    }
+    
+    script << "@echo off\n";
+    script << ":repeat\n";
+    script << "del /f /q \"" << exePath << "\" >nul 2>&1\n";
+    script << "if exist \"" << exePath << "\" (\n";
+    script << "  ping 127.0.0.1 -n 2 >nul\n";
+    script << "  goto repeat\n";
+    script << ")\n";
+    if (!manifestPath.empty()) {
+        script << "if exist \"" << manifestPath << "\" del /f /q \"" << manifestPath << "\" >nul 2>&1\n";
+    }
+    for (const auto& root : cleanupRoots) {
+        if (root.empty()) {
+            continue;
+        }
+        script << "if exist \"" << root << "\" (\n";
+        script << "  for /f \"delims=\" %%d in ('dir /ad /b /s \"" << root << "\" ^| sort /r') do rmdir \"%%d\" 2>nul\n";
+        script << "  rmdir \"" << root << "\" 2>nul\n";
+        script << ")\n";
+    }
+    script << "del /f /q \"%~f0\" >nul 2>&1\n";
+    script.close();
+    
+    std::string cmd = "cmd.exe /c start \"\" /b \"" + scriptPath + "\"";
+    STARTUPINFOA si{};
+    PROCESS_INFORMATION pi{};
+    si.cb = sizeof(si);
+    BOOL ok = CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                             CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    if (ok) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    return ok == TRUE;
+#else
+    return false;
+#endif
+}
+
+bool cleanupEmptyDirectoriesCmd(const std::string& root) {
+#ifdef _WIN32
+    if (root.empty()) {
+        return false;
+    }
+    
+    std::string cmd = "cmd.exe /c \"";
+    cmd += "del /f /q /a \"" + root + "\\\\desktop.ini\" /s >nul 2>&1 & ";
+    cmd += "del /f /q /a \"" + root + "\\\\thumbs.db\" /s >nul 2>&1 & ";
+    cmd += "for /f \\\"delims=\\\" %%d in ('dir /ad /b /s \\\"" + root + "\\\" ^| sort /r') do rmdir \\\"%%d\\\" 2>nul & ";
+    cmd += "rmdir \\\"" + root + "\\\" 2>nul\"";
+    
+    STARTUPINFOA si{};
+    PROCESS_INFORMATION pi{};
+    si.cb = sizeof(si);
+    BOOL ok = CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                             CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    if (!ok) {
+        return false;
+    }
+    DWORD wait = WaitForSingleObject(pi.hProcess, 30000);
+    if (wait == WAIT_TIMEOUT) {
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+#else
+    (void)root;
+    return false;
+#endif
+}
+
+bool removeInstallStateArtifacts(const InstallStateConfig& config, InstallerPathResolver& resolver) {
+    bool ok = true;
+    if (config.mode == InstallStateMode::REGISTRY || config.mode == InstallStateMode::BOTH) {
+        RegistryEntry entry;
+        entry.path = config.registryPath;
+        entry.key = config.registryKey.empty() ? "InstallState" : config.registryKey;
+        ok = deleteRegistryValue(entry) && ok;
+    }
+    if (config.mode == InstallStateMode::FILE || config.mode == InstallStateMode::BOTH) {
+        std::string expanded = resolver.expandEnvironmentVariables(config.filePath);
+        if (!expanded.empty()) {
+            std::filesystem::remove(toLongPath(std::filesystem::path(expanded)));
+        }
+    }
+    return ok;
+}
+
+bool uninstallFromManifest(const std::string& manifestPath, InstallerPathResolver& resolver, ConsoleInterface& console) {
+    json manifest;
+    if (!readManifest(manifestPath, manifest)) {
+        console.showError("Failed to read manifest: " + manifestPath);
+        return false;
+    }
+    console.showInfo("Loaded manifest: " + manifestPath);
+    
+    std::string appName = manifest.value("appName", "");
+    std::string installDir = manifest.value("installDir", "");
+    bool autoStartup = manifest.value("autoStartup", false);
+    bool desktopIcons = manifest.value("desktopIcons", false);
+    
+    InstallStateConfig installState;
+    if (manifest.contains("installState")) {
+        const auto& state = manifest["installState"];
+        installState.mode = static_cast<InstallStateMode>(state.value("mode", 0));
+        installState.registryPath = state.value("registryPath", "");
+        installState.registryKey = state.value("registryKey", "");
+        installState.filePath = state.value("filePath", "");
+        installState.useMutex = state.value("useMutex", true);
+        installState.mutexName = state.value("mutexName", "");
+    }
+    
+    applyInstallState(installState, "uninstalling", resolver);
+    
+    if (autoStartup && !appName.empty()) {
+        removeAutoStartup(appName);
+    }
+    if (desktopIcons && !appName.empty()) {
+        deleteDesktopShortcut(appName);
+    }
+    
+    if (manifest.contains("registry") && manifest["registry"].is_array()) {
+        for (const auto& reg : manifest["registry"]) {
+            RegistryEntry entry;
+            entry.path = reg.value("path", "");
+            entry.key = reg.value("key", "");
+            deleteRegistryValue(entry);
+        }
+    }
+    
+    std::vector<std::string> files;
+    if (manifest.contains("files") && manifest["files"].is_array()) {
+        for (const auto& item : manifest["files"]) {
+            if (item.is_string()) {
+                files.push_back(item.get<std::string>());
+            }
+        }
+    }
+    console.showInfo("Manifest files: " + std::to_string(files.size()));
+    
+    std::vector<std::string> cleanupRoots;
+    if (!appName.empty()) {
+        std::string appLower = appName;
+        std::transform(appLower.begin(), appLower.end(), appLower.begin(), ::tolower);
+        for (const auto& file : files) {
+            std::filesystem::path path(file);
+            for (const auto& part : path) {
+                std::string partStr = part.string();
+                std::string partLower = partStr;
+                std::transform(partLower.begin(), partLower.end(), partLower.begin(), ::tolower);
+                if (partLower == appLower) {
+                    std::filesystem::path root;
+                    for (const auto& build : path) {
+                        root /= build;
+                        if (build == part) {
+                            cleanupRoots.push_back(root.string());
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    if (!installDir.empty()) {
+        cleanupRoots.push_back(installDir);
+    }
+    std::sort(cleanupRoots.begin(), cleanupRoots.end());
+    cleanupRoots.erase(std::unique(cleanupRoots.begin(), cleanupRoots.end()), cleanupRoots.end());
+    console.showInfo("Cleanup roots: " + std::to_string(cleanupRoots.size()));
+    for (const auto& root : cleanupRoots) {
+        console.showInfo("Cleanup root: " + root);
+    }
+    
+    for (const auto& file : files) {
+        std::filesystem::path path(file);
+        if (!std::filesystem::remove(toLongPath(path))) {
+            if (std::filesystem::exists(path)) {
+                console.showWarning("Failed to remove file: " + file);
+            }
+        }
+    }
+    
+    auto hasNonIgnoredFiles = [](const std::filesystem::path& rootPath) -> bool {
+        if (!std::filesystem::exists(rootPath)) {
+            return false;
+        }
+        std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(toLongPath(rootPath), options)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            std::string name = entry.path().filename().string();
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+            if (name == "desktop.ini" || name == "thumbs.db") {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    };
+    
+    for (const auto& root : cleanupRoots) {
+        console.showInfo("Cleanup cmd start: " + root);
+        if (!cleanupEmptyDirectoriesCmd(root)) {
+            console.showWarning("Cleanup cmd failed or timed out: " + root);
+        } else {
+            console.showInfo("Cleanup cmd done: " + root);
+        }
+        std::vector<std::filesystem::path> emptyDirs;
+        std::filesystem::path rootPath(root);
+        if (!std::filesystem::exists(rootPath)) {
+            continue;
+        }
+        std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(toLongPath(rootPath), options)) {
+            if (entry.is_regular_file()) {
+                std::string name = entry.path().filename().string();
+                std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+                if (name == "desktop.ini" || name == "thumbs.db") {
+                    std::error_code ec;
+                    std::filesystem::remove(toLongPath(entry.path()), ec);
+                }
+            }
+            if (entry.is_directory()) {
+                emptyDirs.push_back(entry.path());
+            }
+        }
+        std::sort(emptyDirs.begin(), emptyDirs.end(), [](const auto& a, const auto& b) {
+            return a.native().size() > b.native().size();
+        });
+        for (const auto& dir : emptyDirs) {
+            std::error_code ec;
+            std::filesystem::remove(toLongPath(dir), ec);
+            if (ec && std::filesystem::exists(dir)) {
+                console.showWarning("Failed to remove empty directory: " + dir.string());
+            }
+        }
+        std::error_code ec;
+        std::filesystem::remove(toLongPath(rootPath), ec);
+        if (ec && std::filesystem::exists(rootPath)) {
+            console.showWarning("Failed to remove root directory: " + rootPath.string());
+        }
+        
+        if (!hasNonIgnoredFiles(rootPath)) {
+            std::error_code removeEc;
+            std::filesystem::remove_all(toLongPath(rootPath), removeEc);
+            if (removeEc && std::filesystem::exists(rootPath)) {
+                console.showWarning("Failed to remove empty root tree: " + rootPath.string());
+            } else if (!removeEc) {
+                console.showInfo("Removed empty root tree: " + rootPath.string());
+            }
+        } else {
+            console.showWarning("Root not empty after cleanup: " + rootPath.string());
+        }
+    }
+    
+    removeInstallStateArtifacts(installState, resolver);
+    applyInstallState(installState, "uninstalled", resolver);
+    if (!std::filesystem::remove(toLongPath(std::filesystem::path(manifestPath)))) {
+        if (std::filesystem::exists(manifestPath)) {
+            console.showWarning("Failed to remove manifest: " + manifestPath);
+        }
+    }
+    if (!appName.empty()) {
+        std::string defaultPath = getDefaultManifestPath(appName, resolver);
+        if (!defaultPath.empty() && defaultPath != manifestPath) {
+            std::filesystem::remove(toLongPath(std::filesystem::path(defaultPath)));
+        }
+    }
+    
+    std::filesystem::path exePath(getCurrentExecutablePath());
+    std::string exeName = exePath.filename().string();
+    std::transform(exeName.begin(), exeName.end(), exeName.begin(), ::tolower);
+    if (exeName == "uninstall.exe") {
+        if (!scheduleSelfDeleteImmediate(cleanupRoots, manifestPath)) {
+            if (!scheduleSelfDelete()) {
+                console.showWarning("Failed to schedule uninstall.exe removal");
+            }
+        } else {
+            console.showInfo("Scheduled immediate uninstall.exe removal");
+        }
+    }
+    console.showInfo("Uninstall completed");
+    return true;
+}
+
+std::vector<std::string> collectFilesRecursive(const std::string& rootPath) {
+    std::vector<std::string> files;
+    if (rootPath.empty()) {
+        return files;
+    }
+    std::filesystem::path root(rootPath);
+    if (!std::filesystem::exists(root)) {
+        return files;
+    }
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+        if (entry.is_regular_file()) {
+            files.push_back(entry.path().string());
+        }
+    }
+    return files;
 }
 
 bool applyInstallStateRegistry(const InstallStateConfig& config, const std::string& stateValue) {
@@ -495,12 +1116,60 @@ int main(int argc, char* argv[]) {
     
     // 解析命令行参数
     auto args = console.parseInstallerArgs(argc, argv);
+    if (!args.uninstall) {
+        std::filesystem::path exePath = getCurrentExecutablePath();
+        std::string exeName = exePath.filename().string();
+        std::transform(exeName.begin(), exeName.end(), exeName.begin(), ::tolower);
+        if (exeName == "uninstall.exe") {
+            args.uninstall = true;
+        }
+    }
     
     if (args.showHelp) {
         console.showInstallerHelp();
         return 0;
     }
     
+    if (args.uninstall) {
+        console.showInfo("Starting uninstall process...");
+        InstallerPathResolver pathResolver;
+        std::string exePath = getCurrentExecutablePath();
+        std::string localManifest = getLocalManifestPath(exePath);
+        if (!localManifest.empty() && std::filesystem::exists(localManifest)) {
+            bool ok = uninstallFromManifest(localManifest, pathResolver, console);
+            return ok ? 0 : 1;
+        }
+        std::string fallbackAppName;
+        if (!exePath.empty()) {
+            std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
+            if (!exeDir.empty()) {
+                fallbackAppName = exeDir.filename().string();
+            }
+        }
+        if (fallbackAppName.empty()) {
+            std::filesystem::path exeName = std::filesystem::path(exePath).filename();
+            fallbackAppName = exeName.stem().string();
+        }
+        if (!fallbackAppName.empty()) {
+            std::string manifestPath = getDefaultManifestPath(fallbackAppName, pathResolver);
+            if (!manifestPath.empty() && std::filesystem::exists(manifestPath)) {
+                bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
+                return ok ? 0 : 1;
+            }
+        }
+        MetadataParser parser;
+        auto metadata = parser.parseExtendedEmbeddedMetadata();
+        if (parser.validateMetadata(metadata)) {
+            std::string manifestPath = getDefaultManifestPath(metadata.applicationName, pathResolver);
+            if (!manifestPath.empty() && std::filesystem::exists(manifestPath)) {
+                bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
+                return ok ? 0 : 1;
+            }
+        }
+        console.showError("Manifest not found for uninstall");
+        return 1;
+    }
+
     console.showInfo("Starting installation process...");
     
     // 解析嵌入的扩展元数据
@@ -1205,6 +1874,56 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        std::vector<std::string> installedFiles;
+        for (const auto& folderTask : folderTasks) {
+            auto files = collectFilesRecursive(folderTask.targetPath);
+            installedFiles.insert(installedFiles.end(), files.begin(), files.end());
+        }
+        std::sort(installedFiles.begin(), installedFiles.end());
+        installedFiles.erase(std::unique(installedFiles.begin(), installedFiles.end()), installedFiles.end());
+        
+        std::string uninstallPath;
+        if (!installRootPath.empty()) {
+            std::filesystem::path target = std::filesystem::path(installRootPath) / "uninstall.exe";
+            std::string currentExe = getCurrentExecutablePath();
+            std::error_code ec;
+            if (!currentExe.empty() && std::filesystem::exists(currentExe)) {
+                if (createUninstallStub(currentExe, target.string())) {
+                    uninstallPath = target.string();
+                } else {
+                    std::filesystem::copy_file(currentExe, target,
+                                               std::filesystem::copy_options::overwrite_existing, ec);
+                    if (ec) {
+                        console.showWarning("Failed to create uninstall.exe");
+                    } else {
+                        uninstallPath = target.string();
+                    }
+                }
+            }
+        }
+        if (!uninstallPath.empty()) {
+            installedFiles.erase(std::remove(installedFiles.begin(), installedFiles.end(), uninstallPath),
+                                 installedFiles.end());
+        }
+        
+        std::string manifestPath = getDefaultManifestPath(metadata.applicationName, pathResolver);
+        if (!writeManifest(manifestPath, metadata.applicationName, metadata.configVersion,
+                           installRootPath, installedFiles, metadata.registry,
+                           metadata.autoStartup, metadata.desktopIcons,
+                           metadata.installState, uninstallPath)) {
+            console.showWarning("Failed to write install manifest");
+        }
+        
+        if (!installRootPath.empty()) {
+            std::filesystem::path localPath = std::filesystem::path(installRootPath) / "install.manifest.json";
+            if (!writeManifest(localPath.string(), metadata.applicationName, metadata.configVersion,
+                               installRootPath, installedFiles, metadata.registry,
+                               metadata.autoStartup, metadata.desktopIcons,
+                               metadata.installState, uninstallPath)) {
+                console.showWarning("Failed to write local install manifest");
+            }
+        }
+        
         if (!metadata.registry.empty()) {
             applyRegistryEntries(metadata.registry, installRootPath,
                                  metadata.configVersion, metadata.applicationName);

@@ -1,5 +1,57 @@
 ﻿#include "common/lzma_loader.h"
 #include <iostream>
+#include <string>
+#include <vector>
+
+#ifdef _WIN32
+namespace {
+
+std::string getEnvVar(const char* name) {
+    char buffer[32767];
+    DWORD len = GetEnvironmentVariableA(name, buffer, static_cast<DWORD>(sizeof(buffer)));
+    if (len == 0 || len >= sizeof(buffer)) {
+        return {};
+    }
+    return std::string(buffer, len);
+}
+
+std::string getExecutableDir() {
+    char path[MAX_PATH];
+    DWORD len = GetModuleFileNameA(NULL, path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) {
+        return {};
+    }
+    std::string exePath(path, len);
+    size_t pos = exePath.find_last_of("\/");
+    if (pos == std::string::npos) {
+        return {};
+    }
+    return exePath.substr(0, pos);
+}
+
+std::string getCurrentDir() {
+    char buffer[MAX_PATH];
+    DWORD len = GetCurrentDirectoryA(MAX_PATH, buffer);
+    if (len == 0 || len >= MAX_PATH) {
+        return {};
+    }
+    return std::string(buffer, len);
+}
+
+bool fileExists(const std::string& path) {
+    DWORD attrs = GetFileAttributesA(path.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+HMODULE tryLoadLibrary(const std::string& path) {
+    if (path.empty() || !fileExists(path)) {
+        return nullptr;
+    }
+    return LoadLibraryA(path.c_str());
+}
+
+} // namespace
+#endif
 
 namespace MultiThreadedInstaller {
 
@@ -32,8 +84,35 @@ LzmaLoader::~LzmaLoader() {
 
 bool LzmaLoader::loadLibrary() {
 #ifdef _WIN32
-    // Try to load liblzma.dll
-    hModule = LoadLibraryA("liblzma.dll");
+    std::vector<std::string> candidates;
+    std::string envPath = getEnvVar("LZMA_DLL_PATH");
+    if (!envPath.empty()) {
+        candidates.push_back(envPath);
+    }
+    std::string envDir = getEnvVar("LZMA_DLL_DIR");
+    if (!envDir.empty()) {
+        candidates.push_back(envDir + "\\liblzma.dll");
+    }
+    std::string exeDir = getExecutableDir();
+    if (!exeDir.empty()) {
+        candidates.push_back(exeDir + "\\liblzma.dll");
+    }
+    std::string cwd = getCurrentDir();
+    if (!cwd.empty()) {
+        candidates.push_back(cwd + "\\liblzma.dll");
+    }
+
+    for (const auto& path : candidates) {
+        hModule = tryLoadLibrary(path);
+        if (hModule) {
+            std::cout << "Loaded liblzma.dll from: " << path << std::endl;
+            break;
+        }
+    }
+
+    if (!hModule) {
+        hModule = LoadLibraryA("liblzma.dll");
+    }
     if (!hModule) {
         std::cerr << "Failed to load liblzma.dll" << std::endl;
         return false;

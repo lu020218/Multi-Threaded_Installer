@@ -1,6 +1,8 @@
 #include "installer/decompression_engine.h"
 #include "installer/tar_stream_extractor.h"
-#include "common/lzma_loader.h"
+#ifdef LibLZMA_FOUND
+#include <lzma.h>
+#endif
 #include <iostream>
 #include <vector>
 #include <future>
@@ -32,17 +34,10 @@ struct BlockMeta {
 bool decompressLzmaBlock(const uint8_t* data, size_t dataSize, const BlockMeta& block,
                          std::vector<uint8_t>& output) {
 #ifdef LibLZMA_FOUND
-    static LzmaLoader loader;
-    if (!loader.isLoaded()) {
-        return false;
-    }
-    
     (void)dataSize;
     
     lzma_stream stream = LZMA_STREAM_INIT;
-    lzma_ret ret = loader.lzma_auto_decoder_ptr
-        ? loader.lzma_auto_decoder_ptr(&stream, UINT64_MAX, 0)
-        : loader.lzma_stream_decoder_ptr(&stream, UINT64_MAX, 0);
+    lzma_ret ret = lzma_auto_decoder(&stream, UINT64_MAX, 0);
     
     if (ret != LZMA_OK) {
         return false;
@@ -54,8 +49,8 @@ bool decompressLzmaBlock(const uint8_t* data, size_t dataSize, const BlockMeta& 
     stream.next_out = output.data();
     stream.avail_out = output.size();
     
-    ret = loader.lzma_code_ptr(&stream, LZMA_FINISH);
-    loader.lzma_end_ptr(&stream);
+    ret = lzma_code(&stream, LZMA_FINISH);
+    lzma_end(&stream);
     
     return ret == LZMA_STREAM_END && stream.avail_out == 0;
 #else
@@ -117,15 +112,8 @@ bool DecompressionEngine::decompressLzmaBlockData(const std::vector<uint8_t>& co
                                                   size_t originalSize,
                                                   std::vector<uint8_t>& output) {
 #ifdef LibLZMA_FOUND
-    static LzmaLoader loader;
-    if (!loader.isLoaded()) {
-        return false;
-    }
-    
     lzma_stream stream = LZMA_STREAM_INIT;
-    lzma_ret ret = loader.lzma_auto_decoder_ptr
-        ? loader.lzma_auto_decoder_ptr(&stream, UINT64_MAX, 0)
-        : loader.lzma_stream_decoder_ptr(&stream, UINT64_MAX, 0);
+    lzma_ret ret = lzma_auto_decoder(&stream, UINT64_MAX, 0);
     
     if (ret != LZMA_OK) {
         return false;
@@ -137,8 +125,8 @@ bool DecompressionEngine::decompressLzmaBlockData(const std::vector<uint8_t>& co
     stream.next_out = output.data();
     stream.avail_out = output.size();
     
-    ret = loader.lzma_code_ptr(&stream, LZMA_FINISH);
-    loader.lzma_end_ptr(&stream);
+    ret = lzma_code(&stream, LZMA_FINISH);
+    lzma_end(&stream);
     
     return ret == LZMA_STREAM_END && stream.avail_out == 0;
 #else
@@ -152,13 +140,6 @@ bool DecompressionEngine::decompressLzmaBlockData(const std::vector<uint8_t>& co
 bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
                                          LegacyStageTiming* timing) {
 #ifdef LibLZMA_FOUND
-    static LzmaLoader loader;
-    
-    if (!loader.isLoaded()) {
-        std::cerr << "LZMA library not available for decompression" << std::endl;
-        return false;
-    }
-    
     if (task.compressedData.empty()) {
         std::cerr << "No compressed data provided for LZMA decompression" << std::endl;
         return false;
@@ -180,9 +161,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
     }
     
     lzma_stream stream = LZMA_STREAM_INIT;
-    lzma_ret ret = loader.lzma_auto_decoder_ptr
-        ? loader.lzma_auto_decoder_ptr(&stream, UINT64_MAX, 0)
-        : loader.lzma_stream_decoder_ptr(&stream, UINT64_MAX, 0);
+    lzma_ret ret = lzma_auto_decoder(&stream, UINT64_MAX, 0);
     
     if (ret != LZMA_OK) {
         std::cerr << "LZMA decoder init failed: " << ret << std::endl;
@@ -200,7 +179,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
         stream.avail_out = outBuffer.size();
         
         auto decompressStart = std::chrono::steady_clock::now();
-        ret = loader.lzma_code_ptr(&stream, LZMA_FINISH);
+        ret = lzma_code(&stream, LZMA_FINISH);
         auto decompressEnd = std::chrono::steady_clock::now();
         if (timing) {
             timing->decompressNs += std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count();
@@ -210,7 +189,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
         if (produced > 0) {
             auto writeStart = std::chrono::steady_clock::now();
             if (!sink.write(outBuffer.data(), produced)) {
-                loader.lzma_end_ptr(&stream);
+                lzma_end(&stream);
                 return false;
             }
             auto writeEnd = std::chrono::steady_clock::now();
@@ -234,12 +213,12 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
         }
         if (ret != LZMA_OK) {
             std::cerr << "LZMA decompression failed: " << ret << std::endl;
-            loader.lzma_end_ptr(&stream);
+            lzma_end(&stream);
             return false;
         }
     }
     
-    loader.lzma_end_ptr(&stream);
+    lzma_end(&stream);
     sink.flush();
     
     if (checksum && checksum->finalize() != task.expectedChecksum) {

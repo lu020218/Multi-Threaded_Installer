@@ -18,26 +18,36 @@ find_path(LIBLZMA_INCLUDE_DIR
     NO_DEFAULT_PATH
 )
 
-# For Windows, we'll use dynamic loading instead of linking
+# For Windows, prefer static linking if available
 if(LIBLZMA_INCLUDE_DIR)
     set(LibLZMA_FOUND TRUE)
-    set(LIBLZMA_LIBRARIES "")  # No libraries to link, we'll use dynamic loading
     set(LIBLZMA_INCLUDE_DIRS ${LIBLZMA_INCLUDE_DIR})
     message(STATUS "Found liblzma headers: ${LIBLZMA_INCLUDE_DIR}")
     add_definitions(-DLibLZMA_FOUND)
     
-    # Copy DLL to output directory for runtime
-    find_file(LIBLZMA_DLL
-        NAMES liblzma.dll
-        PATHS 
-            "${THIRD_PARTY_DIR}/xz/bin_x86-64"
-            "${THIRD_PARTY_DIR}/xz/bin_i686-sse2"
-        NO_DEFAULT_PATH
-    )
-    
-    if(LIBLZMA_DLL)
-        message(STATUS "Found liblzma DLL: ${LIBLZMA_DLL}")
-        set(LIBLZMA_DLL_PATH ${LIBLZMA_DLL})
+    if(WIN32)
+        set(LIBLZMA_STATIC_LIB "${THIRD_PARTY_DIR}/xz/lib_static/lzma.lib")
+        if(EXISTS ${LIBLZMA_STATIC_LIB})
+            set(LIBLZMA_LIBRARIES ${LIBLZMA_STATIC_LIB})
+            set(LIBLZMA_STATIC ON)
+            message(STATUS "Using liblzma static library: ${LIBLZMA_STATIC_LIB}")
+        else()
+            # Fallback to dynamic DLL if static lib not found
+            set(LIBLZMA_LIBRARIES "")
+            find_file(LIBLZMA_DLL
+                NAMES liblzma.dll
+                PATHS 
+                    "${THIRD_PARTY_DIR}/xz/bin_x86-64"
+                    "${THIRD_PARTY_DIR}/xz/bin_i686-sse2"
+                NO_DEFAULT_PATH
+            )
+            if(LIBLZMA_DLL)
+                message(STATUS "Found liblzma DLL: ${LIBLZMA_DLL}")
+                set(LIBLZMA_DLL_PATH ${LIBLZMA_DLL})
+            endif()
+        endif()
+    else()
+        set(LIBLZMA_LIBRARIES "")  # Use system paths on non-Windows below
     endif()
 else()
     # If not found locally, try system paths
@@ -101,13 +111,15 @@ set(INSTALLER_SOURCES
 # Common source files
 set(COMMON_SOURCES
     src/common/types.cpp
-    src/common/lzma_loader.cpp
 )
 
 # Create packager executable
 add_executable(packager ${PACKAGER_SOURCES} ${COMMON_SOURCES})
 target_link_libraries(packager ${LIBLZMA_LIBRARIES} Threads::Threads)
 target_include_directories(packager PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+if(LIBLZMA_STATIC)
+    target_compile_definitions(packager PRIVATE LZMA_API_STATIC)
+endif()
 copy_dlls_to_target(packager)
 
 # Create installer executable
@@ -117,5 +129,8 @@ if(WIN32)
     target_link_libraries(installer ole32 shell32)
 endif()
 target_include_directories(installer PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+if(LIBLZMA_STATIC)
+    target_compile_definitions(installer PRIVATE LZMA_API_STATIC)
+endif()
 copy_dlls_to_target(installer)
 

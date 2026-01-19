@@ -1,8 +1,6 @@
 ﻿#pragma once
 
 #include "common/types.h"
-#include "common/lzma_loader.h"
-#include <memory>
 
 #ifdef LibLZMA_FOUND
 #include <lzma.h>
@@ -36,7 +34,6 @@ private:
 #ifdef LibLZMA_FOUND
     lzma_stream lzmaStream;
     bool lzmaInitialized;
-    std::unique_ptr<LzmaLoader> lzmaLoader;
     bool lzmaSupportsMt;
 #else
     void* lzmaStream; // Stub

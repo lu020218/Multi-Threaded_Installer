@@ -285,8 +285,9 @@ bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPat
             };
             
             for (const auto& dir : possibleDirs) {
-                // 检查是否存在liblzma.dll（必需的运行时依赖）
-                if (std::filesystem::exists(std::filesystem::path(dir) / "liblzma.dll")) {
+                // Prefer directories that contain an installer template.
+                if (std::filesystem::exists(std::filesystem::path(dir) / "installer.exe") ||
+                    std::filesystem::exists(std::filesystem::path(dir) / "installer")) {
                     templateDir = dir;
                     break;
                 }
@@ -315,22 +316,6 @@ bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPat
             }
         } else {
             std::cout << "  DuiLib.dll not found - assuming static linking" << std::endl;
-        }
-        
-        // 复制 liblzma.dll
-        std::filesystem::path liblzma = templateDir / "liblzma.dll";
-        if (std::filesystem::exists(liblzma)) {
-            std::filesystem::path dest = outputDir / "liblzma.dll";
-            try {
-                std::filesystem::copy_file(liblzma, dest, std::filesystem::copy_options::overwrite_existing);
-                std::cout << "  Copied: liblzma.dll" << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "  Failed to copy liblzma.dll: " << e.what() << std::endl;
-                allSuccess = false;
-            }
-        } else {
-            std::cerr << "  Warning: liblzma.dll not found at " << liblzma << std::endl;
-            allSuccess = false;
         }
         
         // 复制 resources 目录

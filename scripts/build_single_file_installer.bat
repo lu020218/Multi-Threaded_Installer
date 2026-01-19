@@ -30,10 +30,6 @@ echo [2/3] Checking resources...
 if not exist "build\Release\DuiLib.dll" (
     echo WARNING: DuiLib.dll not found (assuming static DuiLib)
 )
-if not exist "build\Release\liblzma.dll" (
-    echo ERROR: liblzma.dll not found
-    exit /b 1
-)
 if not exist "build\Release\resources\skins\main.xml" (
     echo ERROR: Resources not found
     exit /b 1

@@ -9,10 +9,7 @@ param(
     [string]$ResourceDir = "build\Release\resources",
     
     [Parameter(Mandatory=$false)]
-    [string]$DuiLibDll = "build\Release\DuiLib.dll",
-    
-    [Parameter(Mandatory=$false)]
-    [string]$LibLzmaDll = "build\Release\liblzma.dll"
+    [string]$DuiLibDll = "build\Release\DuiLib.dll"
 )
 
 Write-Host "=== Embedding Resources into Installer ===" -ForegroundColor Cyan
@@ -69,14 +66,7 @@ if (Test-Path $DuiLibDll) {
     Write-Host "WARNING: DuiLib.dll not found at $DuiLibDll" -ForegroundColor Yellow
 }
 
-# Embed liblzma.dll
-if (Test-Path $LibLzmaDll) {
-    Write-Host "Embedding liblzma.dll..." -ForegroundColor Yellow
-    $data = [System.IO.File]::ReadAllBytes($LibLzmaDll)
-    Append-BinaryData -TargetFile $InstallerPath -Data $data -ResourceName "LIBLZMA_DLL"
-} else {
-    Write-Host "WARNING: liblzma.dll not found at $LibLzmaDll" -ForegroundColor Yellow
-}
+# liblzma.dll is linked statically; no embedding required.
 
 # Embed XML files
 if (Test-Path "$ResourceDir\skins") {

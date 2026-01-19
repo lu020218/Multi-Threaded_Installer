@@ -62,17 +62,7 @@ if exist "build\Release\DuiLib.dll" (
     echo   WARNING: DuiLib.dll not found
 )
 
-REM Copy liblzma.dll
-if exist "build\Release\liblzma.dll" (
-    copy /Y "build\Release\liblzma.dll" "%OUTPUT_DIR%\" >nul
-    if errorlevel 1 (
-        echo   ERROR: Failed to copy liblzma.dll
-    ) else (
-        echo   OK: Copied liblzma.dll
-    )
-) else (
-    echo   WARNING: liblzma.dll not found
-)
+REM liblzma is linked statically; no DLL to copy
 
 REM Copy resources directory
 if exist "build\Release\resources" (

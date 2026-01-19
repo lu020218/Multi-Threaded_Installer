@@ -109,10 +109,7 @@ if exist docs\TROUBLESHOOTING.md copy docs\TROUBLESHOOTING.md %DIST_DIR%\docs\ >
 echo   [OK] Copied documentation
 
 REM Copy any required DLLs
-if exist %BUILD_DIR%\Release\liblzma.dll (
-    copy %BUILD_DIR%\Release\liblzma.dll %DIST_DIR%\ > nul
-    echo   [OK] Copied liblzma.dll
-)
+REM liblzma is linked statically; no DLL to copy
 if exist %BUILD_DIR%\Release\libzstd.dll (
     copy %BUILD_DIR%\Release\libzstd.dll %DIST_DIR%\ > nul
     echo   [OK] Copied libzstd.dll

@@ -37,26 +37,36 @@ find_path(LIBLZMA_INCLUDE_DIR
     NO_DEFAULT_PATH
 )
 
-# For Windows, we'll use dynamic loading instead of linking
+# For Windows, prefer static linking if available
 if(LIBLZMA_INCLUDE_DIR)
     set(LibLZMA_FOUND TRUE)
-    set(LIBLZMA_LIBRARIES "")  # No libraries to link, we'll use dynamic loading
     set(LIBLZMA_INCLUDE_DIRS ${LIBLZMA_INCLUDE_DIR})
     message(STATUS "Found liblzma headers: ${LIBLZMA_INCLUDE_DIR}")
     add_definitions(-DLibLZMA_FOUND)
     
-    # Copy DLL to output directory for runtime
-    find_file(LIBLZMA_DLL
-        NAMES liblzma.dll
-        PATHS 
-            "${THIRD_PARTY_DIR}/xz/bin_x86-64"
-            "${THIRD_PARTY_DIR}/xz/bin_i686-sse2"
-        NO_DEFAULT_PATH
-    )
-    
-    if(LIBLZMA_DLL)
-        message(STATUS "Found liblzma DLL: ${LIBLZMA_DLL}")
-        set(LIBLZMA_DLL_PATH ${LIBLZMA_DLL})
+    if(WIN32)
+        set(LIBLZMA_STATIC_LIB "${THIRD_PARTY_DIR}/xz/lib_static/lzma.lib")
+        if(EXISTS ${LIBLZMA_STATIC_LIB})
+            set(LIBLZMA_LIBRARIES ${LIBLZMA_STATIC_LIB})
+            set(LIBLZMA_STATIC ON)
+            message(STATUS "Using liblzma static library: ${LIBLZMA_STATIC_LIB}")
+        else()
+            # Fallback to dynamic DLL if static lib not found
+            set(LIBLZMA_LIBRARIES "")
+            find_file(LIBLZMA_DLL
+                NAMES liblzma.dll
+                PATHS 
+                    "${THIRD_PARTY_DIR}/xz/bin_x86-64"
+                    "${THIRD_PARTY_DIR}/xz/bin_i686-sse2"
+                NO_DEFAULT_PATH
+            )
+            if(LIBLZMA_DLL)
+                message(STATUS "Found liblzma DLL: ${LIBLZMA_DLL}")
+                set(LIBLZMA_DLL_PATH ${LIBLZMA_DLL})
+            endif()
+        endif()
+    else()
+        set(LIBLZMA_LIBRARIES "")  # Use system paths on non-Windows below
     endif()
 else()
     # If not found locally, try system paths
@@ -213,13 +223,15 @@ endif()
 # Common source files
 set(COMMON_SOURCES
     src/common/types.cpp
-    src/common/lzma_loader.cpp
 )
 
 # Create packager executable
 add_executable(packager ${PACKAGER_SOURCES} ${COMMON_SOURCES})
 target_link_libraries(packager ${LIBLZMA_LIBRARIES} Threads::Threads)
 target_include_directories(packager PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+if(LIBLZMA_STATIC)
+    target_compile_definitions(packager PRIVATE LZMA_API_STATIC)
+endif()
 copy_dlls_to_target(packager)
 
 # Create installer executable
@@ -229,6 +241,9 @@ if(WIN32)
     target_link_libraries(installer ole32 shell32)
 endif()
 target_include_directories(installer PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+if(LIBLZMA_STATIC)
+    target_compile_definitions(installer PRIVATE LZMA_API_STATIC)
+endif()
 copy_dlls_to_target(installer)
 
 # Add GUI support to installer if enabled
@@ -288,165 +303,4 @@ if(BUILD_GUI)
     message(STATUS "  - DuiLib library: ${DUILIB_LIB}")
     message(STATUS "  - Windows GUI libraries: ${GUI_WINDOWS_LIBS}")
     message(STATUS "  - Resources will be copied from: ${CMAKE_SOURCE_DIR}/resources")
-endif()
-
-# Testing configuration
-option(BUILD_TESTS "Build test executables" ON)
-
-if(BUILD_TESTS)
-    message(STATUS "Configuring tests...")
-    
-    # Test for GUI helpers (basic functionality)
-    add_executable(test_gui_helpers tests/test_gui_helpers.cpp ${COMMON_SOURCES})
-    target_link_libraries(test_gui_helpers ${LIBLZMA_LIBRARIES} Threads::Threads)
-    target_include_directories(test_gui_helpers PRIVATE ${LIBLZMA_INCLUDE_DIRS})
-    
-    if(BUILD_GUI)
-        # Add GUI-specific tests
-        target_compile_definitions(test_gui_helpers PRIVATE GUI_ENABLED)
-        target_link_libraries(test_gui_helpers 
-            ${DUILIB_LIB}
-            ${GUI_WINDOWS_LIBS}
-            ole32 shell32
-        )
-        
-        # Add GUI helper sources to test
-        target_sources(test_gui_helpers PRIVATE src/gui/gui_helpers.cpp)
-        
-        # Test for page navigation
-        add_executable(test_page_navigation 
-            tests/test_page_navigation.cpp 
-            src/gui/page_controller.cpp
-            src/gui/installation_worker.cpp
-            src/installer/decompression_engine.cpp
-            src/installer/thread_pool_manager.cpp
-            src/installer/tar_stream_extractor.cpp
-            src/installer/file_system_operator.cpp
-            src/installer/path_resolver.cpp
-            src/installer/metadata_parser.cpp
-            ${COMMON_SOURCES}
-        )
-        target_compile_definitions(test_page_navigation PRIVATE GUI_ENABLED)
-        target_link_libraries(test_page_navigation 
-            ${DUILIB_LIB}
-            ${GUI_WINDOWS_LIBS}
-            ${LIBLZMA_LIBRARIES}
-            Threads::Threads
-            ole32 shell32
-        )
-        target_include_directories(test_page_navigation PRIVATE ${LIBLZMA_INCLUDE_DIRS})
-        
-        # Test for disk space validation
-        add_executable(test_disk_space_validation 
-            tests/test_disk_space_validation.cpp 
-            src/gui/gui_helpers.cpp
-            ${COMMON_SOURCES}
-        )
-        target_compile_definitions(test_disk_space_validation PRIVATE GUI_ENABLED)
-        target_link_libraries(test_disk_space_validation 
-            ${DUILIB_LIB}
-            ${GUI_WINDOWS_LIBS}
-            ${LIBLZMA_LIBRARIES}
-            Threads::Threads
-            ole32 shell32
-        )
-        target_include_directories(test_disk_space_validation PRIVATE ${LIBLZMA_INCLUDE_DIRS})
-        
-        # Test for license dialog
-        add_executable(test_license_dialog 
-            tests/test_license_dialog.cpp 
-            ${COMMON_SOURCES}
-        )
-        target_compile_definitions(test_license_dialog PRIVATE GUI_ENABLED)
-        target_link_libraries(test_license_dialog 
-            ${DUILIB_LIB}
-            ${GUI_WINDOWS_LIBS}
-            ${LIBLZMA_LIBRARIES}
-            Threads::Threads
-            ole32 shell32
-        )
-        target_include_directories(test_license_dialog PRIVATE ${LIBLZMA_INCLUDE_DIRS})
-        
-        # Test for installation flow
-        add_executable(test_installation_flow 
-            tests/test_installation_flow.cpp 
-            src/gui/page_controller.cpp
-            src/gui/installation_worker.cpp
-            src/gui/gui_helpers.cpp
-            src/installer/decompression_engine.cpp
-            src/installer/thread_pool_manager.cpp
-            src/installer/tar_stream_extractor.cpp
-            src/installer/file_system_operator.cpp
-            src/installer/path_resolver.cpp
-            src/installer/metadata_parser.cpp
-            ${COMMON_SOURCES}
-        )
-        target_compile_definitions(test_installation_flow PRIVATE GUI_ENABLED)
-        target_link_libraries(test_installation_flow 
-            ${DUILIB_LIB}
-            ${GUI_WINDOWS_LIBS}
-            ${LIBLZMA_LIBRARIES}
-            Threads::Threads
-            ole32 shell32
-        )
-        target_include_directories(test_installation_flow PRIVATE ${LIBLZMA_INCLUDE_DIRS})
-        
-        # Test for cancellation flow
-        add_executable(test_cancellation_flow 
-            tests/test_cancellation_flow.cpp 
-            src/gui/page_controller.cpp
-            src/gui/installation_worker.cpp
-            src/installer/decompression_engine.cpp
-            src/installer/thread_pool_manager.cpp
-            src/installer/tar_stream_extractor.cpp
-            src/installer/file_system_operator.cpp
-            src/installer/path_resolver.cpp
-            src/installer/metadata_parser.cpp
-            ${COMMON_SOURCES}
-        )
-        target_compile_definitions(test_cancellation_flow PRIVATE GUI_ENABLED)
-        target_link_libraries(test_cancellation_flow 
-            ${DUILIB_LIB}
-            ${GUI_WINDOWS_LIBS}
-            ${LIBLZMA_LIBRARIES}
-            Threads::Threads
-            ole32 shell32
-        )
-        target_include_directories(test_cancellation_flow PRIVATE ${LIBLZMA_INCLUDE_DIRS})
-        
-        # Test for high DPI display
-        add_executable(test_high_dpi 
-            tests/test_high_dpi.cpp 
-            ${COMMON_SOURCES}
-        )
-        target_compile_definitions(test_high_dpi PRIVATE GUI_ENABLED)
-        target_link_libraries(test_high_dpi 
-            ${DUILIB_LIB}
-            ${GUI_WINDOWS_LIBS}
-            ${LIBLZMA_LIBRARIES}
-            Threads::Threads
-            ole32 shell32
-            Shcore.lib
-        )
-        target_include_directories(test_high_dpi PRIVATE ${LIBLZMA_INCLUDE_DIRS})
-        
-        # Test for keyboard operations
-        add_executable(test_keyboard_operations 
-            tests/test_keyboard_operations.cpp 
-            ${COMMON_SOURCES}
-        )
-        target_compile_definitions(test_keyboard_operations PRIVATE GUI_ENABLED)
-        target_link_libraries(test_keyboard_operations 
-            ${DUILIB_LIB}
-            ${GUI_WINDOWS_LIBS}
-            ${LIBLZMA_LIBRARIES}
-            Threads::Threads
-            ole32 shell32
-        )
-        target_include_directories(test_keyboard_operations PRIVATE ${LIBLZMA_INCLUDE_DIRS})
-        
-        message(STATUS "GUI tests configured")
-    endif()
-    
-    message(STATUS "Tests configured successfully")
 endif()

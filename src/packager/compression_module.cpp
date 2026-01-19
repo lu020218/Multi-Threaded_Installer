@@ -23,24 +23,18 @@ CompressionModule::CompressionModule()
     , lzmaSupportsMt(false) {
     
 #ifdef LibLZMA_FOUND
-    // 初始化LZMA动态加载器
-    lzmaLoader = std::make_unique<LzmaLoader>();
-    if (lzmaLoader->isLoaded()) {
-        lzmaSupportsMt = lzmaLoader->supportsMultiThreadedCompression();
-        std::cout << "LZMA multi-threaded encoder: " 
-                  << (lzmaSupportsMt ? "supported" : "not supported") << std::endl;
-        
-        // 初始化LZMA流
-        lzmaStream = LZMA_STREAM_INIT;
-        lzma_ret ret = lzmaLoader->lzma_easy_encoder_ptr(&lzmaStream, Constants::DEFAULT_LZMA_LEVEL, LZMA_CHECK_SHA256);
-        if (ret == LZMA_OK) {
-            lzmaInitialized = true;
-            std::cout << "LZMA encoder initialized successfully" << std::endl;
-        } else {
-            std::cerr << "Failed to initialize LZMA encoder: " << ret << std::endl;
-        }
+#if LZMA_VERSION >= 500200
+    lzmaSupportsMt = true;
+#else
+    lzmaSupportsMt = false;
+#endif
+    lzmaStream = LZMA_STREAM_INIT;
+    lzma_ret ret = lzma_easy_encoder(&lzmaStream, Constants::DEFAULT_LZMA_LEVEL, LZMA_CHECK_SHA256);
+    if (ret == LZMA_OK) {
+        lzmaInitialized = true;
+        std::cout << "LZMA encoder initialized successfully" << std::endl;
     } else {
-        std::cerr << "LZMA library not loaded - using stub implementation" << std::endl;
+        std::cerr << "Failed to initialize LZMA encoder: " << ret << std::endl;
     }
 #else
     std::cerr << "LZMA not available - using stub implementation" << std::endl;
@@ -49,8 +43,8 @@ CompressionModule::CompressionModule()
 
 CompressionModule::~CompressionModule() {
 #ifdef LibLZMA_FOUND
-    if (lzmaInitialized && lzmaLoader && lzmaLoader->isLoaded()) {
-        lzmaLoader->lzma_end_ptr(&lzmaStream);
+    if (lzmaInitialized) {
+        lzma_end(&lzmaStream);
     }
 #endif
 }
@@ -105,7 +99,7 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
     result.algorithm = CompressionAlgorithm::LZMA_HIGH;
     
 #ifdef LibLZMA_FOUND
-    if (!lzmaInitialized || !lzmaLoader || !lzmaLoader->isLoaded()) {
+    if (!lzmaInitialized) {
         std::cerr << "LZMA encoder not initialized or library not loaded" << std::endl;
         return result;
     }
@@ -297,11 +291,6 @@ std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder,
 
 std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector<uint8_t>& data) {
 #ifdef LibLZMA_FOUND
-    if (!lzmaLoader || !lzmaLoader->isLoaded()) {
-        std::cerr << "LZMA library not loaded" << std::endl;
-        return {};
-    }
-    
     std::vector<uint8_t> result;
     
     // 块头信息：块数量 (4字节)
@@ -328,17 +317,21 @@ std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector
         lzma_stream stream = LZMA_STREAM_INIT;
         lzma_ret ret = LZMA_OK;
         
-        if (lzmaSupportsMt && lzmaLoader->lzma_stream_encoder_mt_ptr) {
+        #if LZMA_VERSION >= 500200
+        if (lzmaSupportsMt) {
             lzma_mt mtOptions{};
             unsigned int hwThreads = std::thread::hardware_concurrency();
             mtOptions.threads = (hwThreads == 0) ? 1 : hwThreads;
             mtOptions.preset = static_cast<uint32_t>(compressionLevel);
             mtOptions.check = LZMA_CHECK_CRC32;
             mtOptions.block_size = static_cast<uint64_t>(currentBlockSize);
-            ret = lzmaLoader->lzma_stream_encoder_mt_ptr(&stream, &mtOptions);
+            ret = lzma_stream_encoder_mt(&stream, &mtOptions);
         } else {
-            ret = lzmaLoader->lzma_easy_encoder_ptr(&stream, compressionLevel, LZMA_CHECK_CRC32);
+            ret = lzma_easy_encoder(&stream, compressionLevel, LZMA_CHECK_CRC32);
         }
+#else
+        ret = lzma_easy_encoder(&stream, compressionLevel, LZMA_CHECK_CRC32);
+#endif
         
         if (ret != LZMA_OK) {
             std::cerr << "Failed to initialize LZMA encoder for block " << i << ": " << ret << std::endl;
@@ -356,11 +349,11 @@ std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector
         stream.avail_out = compressedBlock.size();
         
         // 压缩当前块
-        ret = lzmaLoader->lzma_code_ptr(&stream, LZMA_FINISH);
+        ret = lzma_code(&stream, LZMA_FINISH);
         
         if (ret != LZMA_STREAM_END) {
             std::cerr << "Block " << i << " LZMA compression failed: " << ret << std::endl;
-            lzmaLoader->lzma_end_ptr(&stream);
+            lzma_end(&stream);
             return {};
         }
         
@@ -368,7 +361,7 @@ std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector
         compressedBlock.resize(compressedSize);
         
         // 清理流
-        lzmaLoader->lzma_end_ptr(&stream);
+        lzma_end(&stream);
         
         // 计算块校验和
         uint32_t blockChecksum = calculateChecksum(compressedBlock);

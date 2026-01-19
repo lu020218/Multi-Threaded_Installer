@@ -46,15 +46,6 @@ std::string EmbeddedResourceManager::extractResources() {
         }
     }
     
-    // 提取 liblzma.dll
-    auto liblzma = getEmbeddedResource("LIBLZMA_DLL");
-    if (!liblzma.empty()) {
-        if (extractFile("liblzma.dll", liblzma)) {
-            std::cout << "  Extracted: liblzma.dll" << std::endl;
-            anyExtracted = true;
-        }
-    }
-    
     // 提取 XML 资源
     const char* xmlFiles[] = {
         "main.xml",

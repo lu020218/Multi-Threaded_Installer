@@ -67,22 +67,7 @@ else {
     $allSuccess = $false
 }
 
-# Copy liblzma.dll
-$liblzma = "build\Release\liblzma.dll"
-if (Test-Path $liblzma) {
-    try {
-        Copy-Item $liblzma -Destination $outputDir -Force
-        Write-Host "  OK: Copied liblzma.dll" -ForegroundColor Gray
-    }
-    catch {
-        Write-Host "  ERROR: Failed to copy liblzma.dll - $_" -ForegroundColor Red
-        $allSuccess = $false
-    }
-}
-else {
-    Write-Host "  WARNING: liblzma.dll not found at $liblzma" -ForegroundColor Yellow
-    $allSuccess = $false
-}
+# liblzma is linked statically; no DLL to copy
 
 # Copy resources directory
 $resources = "build\Release\resources"

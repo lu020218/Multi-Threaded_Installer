@@ -151,7 +151,7 @@ foreach ($Doc in $DocsToInclude) {
 
 # Copy any required DLLs
 $DllsDir = Join-Path $BuildDir "Release"
-$RequiredDlls = @("liblzma.dll", "libzstd.dll")
+$RequiredDlls = @("libzstd.dll")
 
 foreach ($Dll in $RequiredDlls) {
     $DllPath = Join-Path $DllsDir $Dll

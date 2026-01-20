@@ -18,7 +18,10 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <unordered_set>
 #include <memory>
+#include <io.h>
+#include <fcntl.h>
 
 using namespace MultiThreadedInstaller;
 
@@ -356,26 +359,35 @@ int main(int argc, char* argv[]) {
         std::vector<std::unique_ptr<FileWriter>> writers;
         writers.reserve(mapping.fileIndex.size());
         
+        // Create directories once to reduce repeated filesystem work.
+        std::unordered_set<std::string> parentDirs;
+        parentDirs.reserve(mapping.fileIndex.size());
+        for (const auto& fileEntry : mapping.fileIndex) {
+            std::filesystem::path fullPath = std::filesystem::path(folderTask.targetPath) / fileEntry.relativePath;
+            std::filesystem::path parent = fullPath.parent_path();
+            if (!parent.empty()) {
+                parentDirs.insert(parent.string());
+            }
+        }
+        FileSystemOperator fsOp;
+        for (const auto& dir : parentDirs) {
+            if (!fsOp.createDirectoryRecursive(dir)) {
+                console.showError("Failed to create directory: " + dir);
+                return false;
+            }
+        }
+
         uint64_t totalBytes = 0;
         for (const auto& fileEntry : mapping.fileIndex) {
             std::filesystem::path fullPath = std::filesystem::path(folderTask.targetPath) / fileEntry.relativePath;
-            FileSystemOperator fsOp;
-            std::filesystem::path parent = fullPath.parent_path();
-            if (!parent.empty()) {
-                if (!fsOp.createDirectoryRecursive(parent.string())) {
-                    console.showError("Failed to create directory: " + parent.string());
-                    return false;
-                }
-            }
-            
-            std::fstream stream;
-            if (!ensureFileWithSize(fullPath, fileEntry.size)) {
-                console.showError("Failed to create file: " + fullPath.string());
+            std::string fullPathStr = fullPath.string();
+            if (!ensureFileWithSize(fullPath, fileEntry.size, metadata.sparseFileThresholdBytes)) {
+                console.showError("Failed to create file: " + fullPathStr);
                 return false;
             }
             
             auto writer = std::make_unique<FileWriter>();
-            writer->path = fullPath.string();
+            writer->path = std::move(fullPathStr);
             writer->start = fileEntry.offset;
             writer->end = fileEntry.offset + fileEntry.size;
             writers.push_back(std::move(writer));

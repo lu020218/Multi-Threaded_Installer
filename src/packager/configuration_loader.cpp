@@ -231,6 +231,17 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
     if (j.contains("DesktopIcons") && j["DesktopIcons"].is_boolean()) {
         config.desktopIcons = j["DesktopIcons"].get<bool>();
     }
+
+    // 解析 SparseFileThresholdBytes（可选）
+    if (j.contains("SparseFileThresholdBytes")) {
+        if (j["SparseFileThresholdBytes"].is_number_unsigned() ||
+            j["SparseFileThresholdBytes"].is_number_integer()) {
+            config.sparseFileThresholdBytes = j["SparseFileThresholdBytes"].get<uint64_t>();
+        } else {
+            lastError_ = "Invalid SparseFileThresholdBytes: must be an integer byte size";
+            return std::nullopt;
+        }
+    }
         
         return config;
         

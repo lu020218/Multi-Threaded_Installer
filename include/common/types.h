@@ -95,6 +95,7 @@ struct PackagerConfiguration {
     std::vector<RegistryEntry> registry;           // 注册表配置（预留）
     bool autoStartup;                              // 默认开机自启动（预留）
     bool desktopIcons;                             // 默认创建桌面图标（预留）
+    uint64_t sparseFileThresholdBytes;             // 稀疏文件阈值（字节）
     InstallStateConfig installState;               // 安装状态写入配置
     
     // 默认值
@@ -104,7 +105,8 @@ struct PackagerConfiguration {
           defaultInstallDir("%ProgramFiles%"),
           compressionAlgorithm(CompressionAlgorithm::LZMA_HIGH),
           autoStartup(false),
-          desktopIcons(false) {}
+          desktopIcons(false),
+          sparseFileThresholdBytes(4 * 1024 * 1024) {}
 };
 
 // 文件索引条目
@@ -180,6 +182,7 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::string defaultInstallDir;                  // 建议的默认安装目录
     bool autoStartup;                               // 默认开机自启动
     bool desktopIcons;                              // 默认创建桌面图标
+    uint64_t sparseFileThresholdBytes;             // 稀疏文件阈值（字节）
     InstallStateConfig installState;               // 安装状态写入配置
     std::vector<ExtendedFolderMapping> extendedMappings; // 扩展的文件夹映射
     std::vector<RegistryEntry> registry;            // 注册表写入配置
@@ -190,7 +193,8 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
           configVersion("1.0"),
           defaultInstallDir("%ProgramFiles%"),
           autoStartup(false),
-          desktopIcons(false) {}
+          desktopIcons(false),
+          sparseFileThresholdBytes(4 * 1024 * 1024) {}
 };
 
 // 二进制元数据头结构
@@ -224,7 +228,7 @@ using ProgressCallback = std::function<void(const std::string&, float)>;
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;  // "MTDP"
-    constexpr uint32_t VERSION = 5;
+    constexpr uint32_t VERSION = 6;
     
     // 块大小配置 (优化后)
     constexpr size_t DEFAULT_BLOCK_SIZE = 16 * 1024 * 1024;  // 2MB (从 64KB 优化)

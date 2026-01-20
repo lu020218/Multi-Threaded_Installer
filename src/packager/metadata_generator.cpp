@@ -35,6 +35,7 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.defaultInstallDir = config.defaultInstallDir;
     metadata.autoStartup = config.autoStartup;
     metadata.desktopIcons = config.desktopIcons;
+    metadata.sparseFileThresholdBytes = config.sparseFileThresholdBytes;
     metadata.installState = config.installState;
     metadata.registry = config.registry;
     
@@ -147,6 +148,11 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     uint8_t desktopIconsFlag = metadata.desktopIcons ? 1 : 0;
     serialized.push_back(autoStartupFlag);
     serialized.push_back(desktopIconsFlag);
+
+    const uint8_t* sparseThresholdBytes =
+        reinterpret_cast<const uint8_t*>(&metadata.sparseFileThresholdBytes);
+    serialized.insert(serialized.end(), sparseThresholdBytes,
+                      sparseThresholdBytes + sizeof(uint64_t));
 
     uint8_t installMode = static_cast<uint8_t>(metadata.installState.mode);
     uint8_t installMutex = metadata.installState.useMutex ? 1 : 0;

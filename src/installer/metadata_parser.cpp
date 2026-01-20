@@ -32,7 +32,7 @@ ExtendedInstallationMetadata MetadataParser::parseExtendedEmbeddedMetadata() {
 }
 
 bool MetadataParser::validateMetadata(const InstallationMetadata& metadata) {
-    if (metadata.version != Constants::VERSION) {
+    if (metadata.version != Constants::VERSION && metadata.version != 5) {
         std::cerr << "Unsupported metadata version: " << metadata.version << std::endl;
         return false;
     }
@@ -283,6 +283,17 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     metadata.autoStartup = data[offset] != 0;
     metadata.desktopIcons = data[offset + 1] != 0;
     offset += sizeof(uint8_t) * 2;
+
+    if (header->version >= 6) {
+        if (offset + sizeof(uint64_t) > data.size()) {
+            std::cerr << "Missing sparse file threshold" << std::endl;
+            return metadata;
+        }
+        metadata.sparseFileThresholdBytes = *reinterpret_cast<const uint64_t*>(data.data() + offset);
+        offset += sizeof(uint64_t);
+    } else {
+        metadata.sparseFileThresholdBytes = 4 * 1024 * 1024;
+    }
 
     if (offset + sizeof(uint8_t) * 2 > data.size()) {
         std::cerr << "Missing install state flags" << std::endl;
@@ -671,7 +682,7 @@ bool MetadataParser::validateHeader(const BinaryMetadata& header) {
         return false;
     }
     
-    if (header.version != Constants::VERSION) {
+    if (header.version != Constants::VERSION && header.version != 5) {
         std::cerr << "Unsupported metadata version: " << header.version << std::endl;
         return false;
     }

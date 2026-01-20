@@ -26,53 +26,58 @@ bool writeManifest(const std::string& manifestPath,
     if (manifestPath.empty()) {
         return false;
     }
-    
-    json root;
-    root["version"] = "1.0";
-    root["appName"] = appName;
-    root["configVersion"] = configVersion;
-    root["installDir"] = installDir;
-    root["uninstallPath"] = uninstallPath;
-    root["files"] = filePaths;
-    root["autoStartup"] = autoStartup;
-    root["desktopIcons"] = desktopIcons;
-    
-    json reg = json::array();
-    for (const auto& entry : registry) {
-        json item;
-        item["path"] = entry.path;
-        item["key"] = entry.key;
-        item["value"] = entry.value;
-        item["type"] = static_cast<int>(entry.type);
-        reg.push_back(item);
-    }
-    root["registry"] = reg;
-    
-    json state;
-    state["mode"] = static_cast<int>(installState.mode);
-    state["registryPath"] = installState.registryPath;
-    state["registryKey"] = installState.registryKey;
-    state["filePath"] = installState.filePath;
-    state["useMutex"] = installState.useMutex;
-    state["mutexName"] = installState.mutexName;
-    root["installState"] = state;
-    
-    std::filesystem::path path(manifestPath);
-    std::filesystem::path parent = path.parent_path();
-    if (!parent.empty()) {
-        FileSystemOperator fs;
-        if (!fs.createDirectoryRecursive(parent.string())) {
+
+    try {
+        json root;
+        root["version"] = "1.0";
+        root["appName"] = appName;
+        root["configVersion"] = configVersion;
+        root["installDir"] = installDir;
+        root["uninstallPath"] = uninstallPath;
+        root["files"] = filePaths;
+        root["autoStartup"] = autoStartup;
+        root["desktopIcons"] = desktopIcons;
+
+        json reg = json::array();
+        for (const auto& entry : registry) {
+            json item;
+            item["path"] = entry.path;
+            item["key"] = entry.key;
+            item["value"] = entry.value;
+            item["type"] = static_cast<int>(entry.type);
+            reg.push_back(item);
+        }
+        root["registry"] = reg;
+
+        json state;
+        state["mode"] = static_cast<int>(installState.mode);
+        state["registryPath"] = installState.registryPath;
+        state["registryKey"] = installState.registryKey;
+        state["filePath"] = installState.filePath;
+        state["useMutex"] = installState.useMutex;
+        state["mutexName"] = installState.mutexName;
+        root["installState"] = state;
+
+        std::filesystem::path path(manifestPath);
+        std::filesystem::path parent = path.parent_path();
+        if (!parent.empty()) {
+            FileSystemOperator fs;
+            if (!fs.createDirectoryRecursive(toLongPath(parent).string())) {
+                return false;
+            }
+        }
+
+        std::ofstream out(toLongPath(path), std::ios::binary | std::ios::trunc);
+        if (!out) {
             return false;
         }
-    }
-    
-    std::ofstream out(toLongPath(path), std::ios::binary | std::ios::trunc);
-    if (!out) {
+        std::string payload = root.dump(2);
+        out.write(payload.c_str(), static_cast<std::streamsize>(payload.size()));
+        return static_cast<bool>(out);
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to write manifest: " << e.what() << std::endl;
         return false;
     }
-    std::string payload = root.dump(2);
-    out.write(payload.c_str(), static_cast<std::streamsize>(payload.size()));
-    return static_cast<bool>(out);
 }
 
 bool readManifest(const std::string& manifestPath, json& outManifest) {

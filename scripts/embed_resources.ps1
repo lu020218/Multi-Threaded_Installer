@@ -81,6 +81,30 @@ if (Test-Path "$ResourceDir\skins") {
     Write-Host "WARNING: Resources directory not found at $ResourceDir" -ForegroundColor Yellow
 }
 
+# Embed image files
+$imageList = @()
+if (Test-Path "$ResourceDir\images") {
+    Write-Host "Embedding image files..." -ForegroundColor Yellow
+    $imageFiles = Get-ChildItem "$ResourceDir\images"
+    foreach ($file in $imageFiles) {
+        if ($file.PSIsContainer) { continue }
+        if ($file.Name.StartsWith(".")) { continue }
+        $data = [System.IO.File]::ReadAllBytes($file.FullName)
+        $resourceName = "IMG_" + $file.Name.ToUpper().Replace(".", "_")
+        if (Append-BinaryData -TargetFile $InstallerPath -Data $data -ResourceName $resourceName) {
+            $imageList += $file.Name
+        }
+    }
+} else {
+    Write-Host "WARNING: Images directory not found at $ResourceDir" -ForegroundColor Yellow
+}
+
+if ($imageList.Count -gt 0) {
+    $listText = ($imageList -join "`n") + "`n"
+    $listData = [System.Text.Encoding]::UTF8.GetBytes($listText)
+    Append-BinaryData -TargetFile $InstallerPath -Data $listData -ResourceName "IMAGES_LIST"
+}
+
 # Embed license.txt
 if (Test-Path "$ResourceDir\license.txt") {
     Write-Host "Embedding license.txt..." -ForegroundColor Yellow

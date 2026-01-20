@@ -3,6 +3,7 @@
 #include <iostream>
 #include <filesystem>
 #include <cstring>
+#include <cctype>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -77,6 +78,12 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
             std::cerr << "Failed to get installer template" << std::endl;
             return false;
         }
+
+        std::filesystem::path templateDir = resolveTemplateDirectory();
+        bool resourcesEmbedded = false;
+        if (!templateDir.empty()) {
+            resourcesEmbedded = appendEmbeddedResources(installerTemplate, templateDir / "resources");
+        }
         
         // 创建输出目录（如果不存在）
         std::filesystem::path outputDir = std::filesystem::path(outputPath).parent_path();
@@ -136,7 +143,7 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
         }
         
         // 复制必需的运行时文件（DLL和resources）
-        if (!copyRuntimeDependencies(outputPath)) {
+        if (!copyRuntimeDependencies(outputPath, resourcesEmbedded)) {
             std::cerr << "Warning: Failed to copy some runtime dependencies" << std::endl;
         }
         
@@ -259,7 +266,280 @@ bool InstallerGenerator::appendDataToExecutable(const std::string& executablePat
     }
 }
 
-bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPath) {
+std::filesystem::path InstallerGenerator::resolveTemplateDirectory() const {
+    if (!installerTemplatePath.empty()) {
+        return std::filesystem::path(installerTemplatePath).parent_path();
+    }
+
+    std::vector<std::string> possibleDirs = {
+        "build/Release",
+        "build/Debug",
+        "build",
+        "."
+    };
+
+    for (const auto& dir : possibleDirs) {
+        if (std::filesystem::exists(std::filesystem::path(dir) / "installer.exe") ||
+            std::filesystem::exists(std::filesystem::path(dir) / "installer")) {
+            return std::filesystem::path(dir);
+        }
+    }
+
+    return {};
+}
+
+bool InstallerGenerator::hasEmbeddedResourceTable(const std::vector<uint8_t>& installerTemplate) const {
+#ifdef _WIN32
+    if (installerTemplate.size() < sizeof(IMAGE_DOS_HEADER) + sizeof(uint32_t)) {
+        return false;
+    }
+
+    auto readAt = [&](uint64_t offset, void* out, size_t bytes) -> bool {
+        if (offset + bytes > installerTemplate.size()) {
+            return false;
+        }
+        std::memcpy(out, installerTemplate.data() + offset, bytes);
+        return true;
+    };
+
+    IMAGE_DOS_HEADER dosHeader{};
+    if (!readAt(0, &dosHeader, sizeof(dosHeader))) {
+        return false;
+    }
+    if (dosHeader.e_magic != IMAGE_DOS_SIGNATURE) {
+        return false;
+    }
+
+    uint64_t ntOffset = static_cast<uint64_t>(dosHeader.e_lfanew);
+    uint32_t peSignature = 0;
+    if (!readAt(ntOffset, &peSignature, sizeof(peSignature))) {
+        return false;
+    }
+    if (peSignature != IMAGE_NT_SIGNATURE) {
+        return false;
+    }
+
+    IMAGE_FILE_HEADER fileHeader{};
+    if (!readAt(ntOffset + sizeof(uint32_t), &fileHeader, sizeof(fileHeader))) {
+        return false;
+    }
+
+    uint64_t sectionOffset = ntOffset + sizeof(uint32_t) + sizeof(IMAGE_FILE_HEADER) +
+                             static_cast<uint64_t>(fileHeader.SizeOfOptionalHeader);
+    uint64_t peEnd = sectionOffset;
+    for (uint16_t i = 0; i < fileHeader.NumberOfSections; ++i) {
+        IMAGE_SECTION_HEADER section{};
+        if (!readAt(sectionOffset + static_cast<uint64_t>(i) * sizeof(IMAGE_SECTION_HEADER),
+                    &section, sizeof(section))) {
+            return false;
+        }
+        uint64_t sectionEnd = static_cast<uint64_t>(section.PointerToRawData) +
+                              static_cast<uint64_t>(section.SizeOfRawData);
+        if (sectionEnd > peEnd) {
+            peEnd = sectionEnd;
+        }
+    }
+
+    if (peEnd >= installerTemplate.size()) {
+        return false;
+    }
+
+    const uint32_t magic = 0x52534D45; // "EMSR"
+
+    auto parseTable = [&](uint64_t magicOffset) -> bool {
+        if (magicOffset <= peEnd || magicOffset > installerTemplate.size()) {
+            return false;
+        }
+
+        uint64_t offset = peEnd;
+        while (offset < magicOffset) {
+            if (offset + sizeof(uint32_t) + sizeof(uint64_t) > magicOffset) {
+                return false;
+            }
+
+            uint32_t nameLen = 0;
+            if (!readAt(offset, &nameLen, sizeof(nameLen))) {
+                return false;
+            }
+            offset += sizeof(nameLen);
+            if (nameLen == 0 || offset + nameLen + sizeof(uint64_t) > magicOffset) {
+                return false;
+            }
+
+            offset += nameLen;
+
+            uint64_t dataLen = 0;
+            if (!readAt(offset, &dataLen, sizeof(dataLen))) {
+                return false;
+            }
+            offset += sizeof(dataLen);
+            if (dataLen == 0 || offset + dataLen > magicOffset) {
+                return false;
+            }
+            offset += dataLen;
+        }
+
+        return offset == magicOffset;
+    };
+
+    for (uint64_t i = installerTemplate.size() - sizeof(uint32_t);
+         i + sizeof(uint32_t) <= installerTemplate.size();
+         --i) {
+        uint32_t candidate = 0;
+        if (!readAt(i, &candidate, sizeof(candidate))) {
+            return false;
+        }
+        if (candidate == magic && parseTable(i)) {
+            return true;
+        }
+        if (i == 0) {
+            break;
+        }
+    }
+#endif
+    return false;
+}
+
+bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installerTemplate,
+                                                 const std::filesystem::path& resourceDir) {
+    try {
+        if (!std::filesystem::exists(resourceDir) || !std::filesystem::is_directory(resourceDir)) {
+            return false;
+        }
+
+        if (hasEmbeddedResourceTable(installerTemplate)) {
+            std::cout << "Installer template already contains embedded resources; appending updated resources" << std::endl;
+        }
+
+        auto appendBytes = [&](const void* data, size_t size) {
+            const uint8_t* bytes = static_cast<const uint8_t*>(data);
+            installerTemplate.insert(installerTemplate.end(), bytes, bytes + size);
+        };
+
+        auto appendEntry = [&](const std::string& name, const std::filesystem::path& filePath) -> bool {
+            std::ifstream file(filePath, std::ios::binary | std::ios::ate);
+            if (!file) {
+                return false;
+            }
+            std::streamsize size = file.tellg();
+            if (size <= 0) {
+                return false;
+            }
+            file.seekg(0, std::ios::beg);
+
+            std::vector<uint8_t> data(static_cast<size_t>(size));
+            if (!file.read(reinterpret_cast<char*>(data.data()), size)) {
+                return false;
+            }
+
+            uint32_t nameLen = static_cast<uint32_t>(name.size());
+            uint64_t dataLen = static_cast<uint64_t>(data.size());
+            appendBytes(&nameLen, sizeof(nameLen));
+            appendBytes(name.data(), name.size());
+            appendBytes(&dataLen, sizeof(dataLen));
+            appendBytes(data.data(), data.size());
+            return true;
+        };
+        auto appendRawEntry = [&](const std::string& name, const std::vector<uint8_t>& data) -> bool {
+            if (data.empty()) {
+                return false;
+            }
+            uint32_t nameLen = static_cast<uint32_t>(name.size());
+            uint64_t dataLen = static_cast<uint64_t>(data.size());
+            appendBytes(&nameLen, sizeof(nameLen));
+            appendBytes(name.data(), name.size());
+            appendBytes(&dataLen, sizeof(dataLen));
+            appendBytes(data.data(), data.size());
+            return true;
+        };
+
+        auto toResourceName = [](const std::string& prefix, const std::string& fileName) {
+            std::string name = prefix + fileName;
+            for (char& ch : name) {
+                if (ch == '.') {
+                    ch = '_';
+                    continue;
+                }
+                ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            }
+            return name;
+        };
+
+        bool anyEmbedded = false;
+        std::vector<std::string> imageNames;
+        std::filesystem::path skinsDir = resourceDir / "skins";
+        if (std::filesystem::exists(skinsDir) && std::filesystem::is_directory(skinsDir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(skinsDir)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                if (entry.path().extension() != ".xml") {
+                    continue;
+                }
+                std::string fileName = entry.path().filename().string();
+                std::string resourceName = toResourceName("XML_", fileName);
+                if (appendEntry(resourceName, entry.path())) {
+                    std::cout << "  Embedded: " << fileName << std::endl;
+                    anyEmbedded = true;
+                }
+            }
+        }
+
+        std::filesystem::path imagesDir = resourceDir / "images";
+        if (std::filesystem::exists(imagesDir) && std::filesystem::is_directory(imagesDir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(imagesDir)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                std::string fileName = entry.path().filename().string();
+                if (fileName.empty() || fileName.front() == '.') {
+                    continue;
+                }
+                std::string resourceName = toResourceName("IMG_", fileName);
+                if (appendEntry(resourceName, entry.path())) {
+                    std::cout << "  Embedded: " << fileName << std::endl;
+                    anyEmbedded = true;
+                    imageNames.push_back(fileName);
+                }
+            }
+        }
+
+        if (!imageNames.empty()) {
+            std::string listText;
+            for (const auto& name : imageNames) {
+                listText += name;
+                listText += "\n";
+            }
+            std::vector<uint8_t> listData(listText.begin(), listText.end());
+            if (appendRawEntry("IMAGES_LIST", listData)) {
+                anyEmbedded = true;
+            }
+        }
+
+        std::filesystem::path licensePath = resourceDir / "license.txt";
+        if (std::filesystem::exists(licensePath)) {
+            if (appendEntry("LICENSE_TXT", licensePath)) {
+                std::cout << "  Embedded: license.txt" << std::endl;
+                anyEmbedded = true;
+            }
+        }
+
+        if (!anyEmbedded) {
+            return false;
+        }
+
+        uint32_t magic = 0x52534D45; // "EMSR"
+        appendBytes(&magic, sizeof(magic));
+
+        std::cout << "Embedded UI resources into installer template" << std::endl;
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to embed UI resources: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPath, bool resourcesEmbedded) {
     try {
         std::filesystem::path installerFile(installerPath);
         std::filesystem::path outputDir = installerFile.parent_path();
@@ -271,28 +551,7 @@ bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPat
         
         bool allSuccess = true;
         
-        // 查找模板安装程序的目录（通常是 build/Release 或 build/Debug）
-        std::filesystem::path templateDir;
-        if (!installerTemplatePath.empty()) {
-            templateDir = std::filesystem::path(installerTemplatePath).parent_path();
-        } else {
-            // 尝试常见的构建目录
-            std::vector<std::string> possibleDirs = {
-                "build/Release",
-                "build/Debug",
-                "build",
-                "."
-            };
-            
-            for (const auto& dir : possibleDirs) {
-                // Prefer directories that contain an installer template.
-                if (std::filesystem::exists(std::filesystem::path(dir) / "installer.exe") ||
-                    std::filesystem::exists(std::filesystem::path(dir) / "installer")) {
-                    templateDir = dir;
-                    break;
-                }
-            }
-        }
+        std::filesystem::path templateDir = resolveTemplateDirectory();
         
         if (templateDir.empty()) {
             std::cerr << "Warning: Could not find template directory with runtime dependencies" << std::endl;
@@ -318,27 +577,31 @@ bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPat
             std::cout << "  DuiLib.dll not found - assuming static linking" << std::endl;
         }
         
-        // 复制 resources 目录
-        std::filesystem::path resourcesDir = templateDir / "resources";
-        if (std::filesystem::exists(resourcesDir) && std::filesystem::is_directory(resourcesDir)) {
-            std::filesystem::path destResources = outputDir / "resources";
-            try {
-                // 如果目标目录存在，先删除
-                if (std::filesystem::exists(destResources)) {
-                    std::filesystem::remove_all(destResources);
+        if (!resourcesEmbedded) {
+            // 复制 resources 目录
+            std::filesystem::path resourcesDir = templateDir / "resources";
+            if (std::filesystem::exists(resourcesDir) && std::filesystem::is_directory(resourcesDir)) {
+                std::filesystem::path destResources = outputDir / "resources";
+                try {
+                    // 如果目标目录存在，先删除
+                    if (std::filesystem::exists(destResources)) {
+                        std::filesystem::remove_all(destResources);
+                    }
+                    
+                    // 递归复制整个 resources 目录
+                    std::filesystem::copy(resourcesDir, destResources, 
+                                         std::filesystem::copy_options::recursive);
+                    std::cout << "  Copied: resources/ directory" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "  Failed to copy resources directory: " << e.what() << std::endl;
+                    allSuccess = false;
                 }
-                
-                // 递归复制整个 resources 目录
-                std::filesystem::copy(resourcesDir, destResources, 
-                                     std::filesystem::copy_options::recursive);
-                std::cout << "  Copied: resources/ directory" << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "  Failed to copy resources directory: " << e.what() << std::endl;
+            } else {
+                std::cerr << "  Warning: resources directory not found at " << resourcesDir << std::endl;
                 allSuccess = false;
             }
         } else {
-            std::cerr << "  Warning: resources directory not found at " << resourcesDir << std::endl;
-            allSuccess = false;
+            std::cout << "  Skipped resources copy (embedded)" << std::endl;
         }
         
         return allSuccess;

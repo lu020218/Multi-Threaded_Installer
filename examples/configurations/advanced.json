@@ -25,5 +25,6 @@
     "FilePath": "%ProgramData%\\MyDesktopApp\\install.state",
     "UseMutex": true,
     "MutexName": "Global\\MyDesktopApp_Install"
-  }
+  },
+  "SparseFileThresholdBytes": 4194304
 }

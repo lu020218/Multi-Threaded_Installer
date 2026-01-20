@@ -3,6 +3,11 @@
 #include <algorithm>
 #include <cctype>
 
+#ifdef _WIN32
+#include <Windows.h>
+#include <winioctl.h>
+#endif
+
 namespace MultiThreadedInstaller {
 
 std::filesystem::path toLongPath(const std::filesystem::path& path) {
@@ -23,7 +28,35 @@ std::filesystem::path toLongPath(const std::filesystem::path& path) {
 #endif
 }
 
-bool ensureFileWithSize(const std::filesystem::path& path, uint64_t size) {
+bool ensureFileWithSize(const std::filesystem::path& path, uint64_t size,
+                        uint64_t sparseThresholdBytes) {
+#ifdef _WIN32
+    std::filesystem::path openPath = toLongPath(path);
+    HANDLE handle = CreateFileW(openPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+                                nullptr, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    DWORD bytesReturned = 0;
+    if (size >= sparseThresholdBytes) {
+        (void)DeviceIoControl(handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &bytesReturned, nullptr);
+    }
+
+    if (size > 0) {
+        LARGE_INTEGER newSize;
+        newSize.QuadPart = static_cast<LONGLONG>(size);
+        if (!SetFilePointerEx(handle, newSize, nullptr, FILE_BEGIN) ||
+            !SetEndOfFile(handle)) {
+            CloseHandle(handle);
+            return false;
+        }
+    }
+
+    CloseHandle(handle);
+    return true;
+#else
     std::filesystem::path openPath = toLongPath(path);
     std::fstream file(openPath, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
     if (!file) {
@@ -46,6 +79,7 @@ bool ensureFileWithSize(const std::filesystem::path& path, uint64_t size) {
     }
     
     return static_cast<bool>(file);
+#endif
 }
 
 bool openFileForWrite(const std::filesystem::path& path, std::fstream& stream) {

@@ -76,6 +76,40 @@ std::string EmbeddedResourceManager::extractResources() {
     }
     
     // 提取 license.txt
+    auto imageList = getEmbeddedResource("IMAGES_LIST");
+    if (!imageList.empty()) {
+        std::string listText(reinterpret_cast<const char*>(imageList.data()), imageList.size());
+        size_t start = 0;
+        while (start < listText.size()) {
+            size_t end = listText.find_first_of("\r\n", start);
+            if (end == std::string::npos) {
+                end = listText.size();
+            }
+            std::string fileName = listText.substr(start, end - start);
+            if (!fileName.empty()) {
+                std::string resourceName = "IMG_";
+                resourceName += fileName;
+                for (char& c : resourceName) {
+                    if (c == '.') c = '_';
+                    c = toupper(c);
+                }
+                auto data = getEmbeddedResource(resourceName);
+                if (!data.empty()) {
+                    std::string path = "images\\";
+                    path += fileName;
+                    if (extractFile(path, data)) {
+                        std::cout << "  Extracted: " << path << std::endl;
+                        anyExtracted = true;
+                    }
+                }
+            }
+            start = listText.find_first_not_of("\r\n", end);
+            if (start == std::string::npos) {
+                break;
+            }
+        }
+    }
+
     auto license = getEmbeddedResource("LICENSE_TXT");
     if (!license.empty()) {
         if (extractFile("license.txt", license)) {

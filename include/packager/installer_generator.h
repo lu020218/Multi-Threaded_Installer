@@ -3,6 +3,7 @@
 #include "common/types.h"
 #include <string>
 #include <vector>
+#include <filesystem>
 
 namespace MultiThreadedInstaller {
 
@@ -61,7 +62,12 @@ private:
                                const std::vector<uint8_t>& data);
     
     // 复制运行时依赖文件（DLL和resources）
-    bool copyRuntimeDependencies(const std::string& installerPath);
+    bool copyRuntimeDependencies(const std::string& installerPath, bool resourcesEmbedded);
+
+    std::filesystem::path resolveTemplateDirectory() const;
+    bool appendEmbeddedResources(std::vector<uint8_t>& installerTemplate,
+                                 const std::filesystem::path& resourceDir);
+    bool hasEmbeddedResourceTable(const std::vector<uint8_t>& installerTemplate) const;
 };
 
 } // namespace MultiThreadedInstaller

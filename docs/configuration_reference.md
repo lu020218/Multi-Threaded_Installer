@@ -29,6 +29,7 @@ The packager supports configuration files to specify packaging and installation 
   }],
   "AutoStartup": false,
   "DesktopIcons": true,
+  "SparseFileThresholdBytes": 4194304,
   "InstallState": {
     "Mode": "Registry",
     "RegistryPath": "HKEY_CURRENT_USER\\Software\\MyDesktopApp",
@@ -68,6 +69,7 @@ Configuration files must be in JSON format with UTF-8 encoding.
 | `Registry` | array | No | [] | Registry entries to write after install |
 | `AutoStartup` | bool | No | false | Default auto-start behavior |
 | `DesktopIcons` | bool | No | false | Default desktop icon behavior |
+| `SparseFileThresholdBytes` | number | No | 4194304 | Only files at or above this size are created as sparse files |
 | `InstallState` | object | No | { Mode: "Registry", UseMutex: true } | Install state signaling configuration |
 
 ### Folder Target Configuration
@@ -166,6 +168,7 @@ The installer intelligently handles application name appending:
   }],
   "AutoStartup": false,
   "DesktopIcons": true,
+  "SparseFileThresholdBytes": 4194304,
   "InstallState": {
     "Mode": "Registry",
     "RegistryPath": "HKEY_CURRENT_USER\\Software\\MyApplication",

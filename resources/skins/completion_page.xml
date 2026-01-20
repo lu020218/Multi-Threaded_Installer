@@ -1,35 +1,69 @@
 <?xml version="1.0" encoding="utf-8"?>
+
 <VerticalLayout name="completion_page" padding="40,30,40,30">
-    <!-- Logo -->
+
+    
+
     <HorizontalLayout height="80">
+
         <Control/>
+
         <Control name="app_logo_completion" width="64" height="64" bkcolor="#FF4A90E2"/>
+
         <Control/>
+
     </HorizontalLayout>
+
     
-    <!-- 应用名称和版本 -->
+
+    
+
     <Label name="app_name_completion" text="应用程序名称" font="2" 
+
            textcolor="#FF333333" align="center" height="30"/>
+
     <Label name="app_version_completion" text="版本 1.0.0" font="0" 
+
            textcolor="#FF666666" align="center" height="25"/>
+
     
-    <!-- 结果消息 -->
-    <Label name="result_message" text="安装成功！" font="1" textcolor="#FF4CAF50" 
+
+    
+
+    <Label name="result_message" text="安装成功！" font="1" textcolor="#FF4CAF50"
            align="center" padding="0,30,0,0" height="40"/>
+
     
-    <!-- 选项 -->
+
+    
+
     <VerticalLayout padding="0,30,0,0">
+
         <CheckBox name="run_app_checkbox" text="立即运行应用程序" height="30" tabstop="true"/>
+
         <Control height="10"/>
+
         <CheckBox name="open_web_checkbox" text="打开介绍网页" height="30" tabstop="true"/>
+
     </VerticalLayout>
+
     
-    <!-- 弹簧 -->
+
+    
+
     <Control/>
+
     
-    <!-- 完成按钮 -->
+
+    
+
     <HorizontalLayout height="35">
+
         <Control/>
-        <Button name="finish_button" text="完成 (&amp;F)" width="100" height="35" tabstop="true"/>
+
+        <Button name="finish_button" text="完成 (&F)" width="100" height="35" tabstop="true"/>
+
     </HorizontalLayout>
+
 </VerticalLayout>
+

@@ -21,7 +21,8 @@
 namespace MultiThreadedInstaller {
 
 std::filesystem::path toLongPath(const std::filesystem::path& path);
-bool ensureFileWithSize(const std::filesystem::path& path, uint64_t size);
+bool ensureFileWithSize(const std::filesystem::path& path, uint64_t size,
+                        uint64_t sparseThresholdBytes = 4 * 1024 * 1024);
 bool openFileForWrite(const std::filesystem::path& path, std::fstream& stream);
 std::wstring toWideUtf8(const std::string& text);
 std::filesystem::path findPrimaryExecutable(const std::filesystem::path& installRoot,

@@ -1,30 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
+
 <Window size="500,400" caption="0,0,0,35" roundcorner="5,5">
-    <Font id="0" name="微软雅黑" size="12"/>
-    <Font id="1" name="微软雅黑" size="14" bold="true"/>
+
+    <Font id="0" name="å¾®è½¯éé»" size="12"/>
+
+    <Font id="1" name="å¾®è½¯éé»" size="14" bold="true"/>
+
     
+
     <VerticalLayout bkcolor="#FFFFFFFF">
-        <!-- 标题栏 -->
-        <HorizontalLayout height="35" bkcolor="#FF4A90E2">
-            <Control width="10"/>
-            <Label text="许可协议" textcolor="#FFFFFFFF" font="1"/>
-            <Control/>
-            <Button name="closebtn" width="28" height="22" normalimage="close.png" tabstop="false"/>
-            <Control width="5"/>
-        </HorizontalLayout>
+
         
-        <!-- 协议文本 -->
+
+        <HorizontalLayout height="35" bkcolor="#FF4A90E2">
+
+            <Control width="10"/>
+
+            <Label text="许可协议" textcolor="#FFFFFFFF" font="1"/>
+
+            <Control/>
+
+            <Button name="closebtn" width="28" height="22" normalimage="close.png" tabstop="false"/>
+
+            <Control width="5"/>
+
+        </HorizontalLayout>
+
+        
+
+        
+
         <VerticalLayout padding="20,20,20,20">
+
             <RichEdit name="license_text" vscrollbar="true" readonly="true" 
+
                       bkcolor="#FFF5F5F5" bordercolor="#FFCCCCCC" bordersize="1" tabstop="true"/>
+
             
-            <!-- 按钮 -->
+
+            
+
             <HorizontalLayout height="40" padding="0,15,0,0">
+
                 <Control/>
+
                 <Button name="agree_button" text="同意" width="100" height="35" tabstop="true"/>
+
                 <Control width="10"/>
+
                 <Button name="disagree_button" text="不同意" width="100" height="35" tabstop="true"/>
             </HorizontalLayout>
+
         </VerticalLayout>
+
     </VerticalLayout>
+
 </Window>
+

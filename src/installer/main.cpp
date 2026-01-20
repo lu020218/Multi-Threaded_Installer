@@ -27,6 +27,7 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <unordered_set>
 #include <memory>
 #include <io.h>
 #include <fcntl.h>
@@ -399,26 +400,35 @@ int runConsoleInstaller(int argc, char* argv[]) {
         std::vector<std::unique_ptr<FileWriter>> writers;
         writers.reserve(mapping.fileIndex.size());
         
+        // Create directories once to reduce repeated filesystem work.
+        std::unordered_set<std::string> parentDirs;
+        parentDirs.reserve(mapping.fileIndex.size());
+        for (const auto& fileEntry : mapping.fileIndex) {
+            std::filesystem::path fullPath = std::filesystem::path(folderTask.targetPath) / fileEntry.relativePath;
+            std::filesystem::path parent = fullPath.parent_path();
+            if (!parent.empty()) {
+                parentDirs.insert(parent.string());
+            }
+        }
+        FileSystemOperator fsOp;
+        for (const auto& dir : parentDirs) {
+            if (!fsOp.createDirectoryRecursive(dir)) {
+                console.showError("Failed to create directory: " + dir);
+                return false;
+            }
+        }
+
         uint64_t totalBytes = 0;
         for (const auto& fileEntry : mapping.fileIndex) {
             std::filesystem::path fullPath = std::filesystem::path(folderTask.targetPath) / fileEntry.relativePath;
-            FileSystemOperator fsOp;
-            std::filesystem::path parent = fullPath.parent_path();
-            if (!parent.empty()) {
-                if (!fsOp.createDirectoryRecursive(parent.string())) {
-                    console.showError("Failed to create directory: " + parent.string());
-                    return false;
-                }
-            }
-            
-            std::fstream stream;
-            if (!ensureFileWithSize(fullPath, fileEntry.size)) {
-                console.showError("Failed to create file: " + fullPath.string());
+            std::string fullPathStr = fullPath.string();
+            if (!ensureFileWithSize(fullPath, fileEntry.size, metadata.sparseFileThresholdBytes)) {
+                console.showError("Failed to create file: " + fullPathStr);
                 return false;
             }
             
             auto writer = std::make_unique<FileWriter>();
-            writer->path = fullPath.string();
+            writer->path = std::move(fullPathStr);
             writer->start = fileEntry.offset;
             writer->end = fileEntry.offset + fileEntry.size;
             writers.push_back(std::move(writer));
@@ -1002,6 +1012,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     
     CDuiString resourcePath;
     CDuiString resourceBasePath;
+    CDuiString skinsPath;
     if (!tempResourcePath.empty()) {
         // 使用提取的临时资源
         // MBCS build: keep resource path as narrow string
@@ -1021,8 +1032,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             if (lastChar != _T('\\') && lastChar != _T('/')) {
                 resourcePath += _T("\\");
             }
-            resourcePath += _T("skins\\");
         }
+        skinsPath = resourcePath + _T("skins\\");
         std::cout << "Using extracted resources from: " << tempResourcePath << std::endl;
     }
     
@@ -1030,16 +1041,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     if (resourcePath.IsEmpty()) {
         CDuiString instancePath = CPaintManagerUI::GetInstancePath();
         resourceBasePath = instancePath + _T("resources\\");  // 确保路径以反斜杠结尾
-        resourcePath = resourceBasePath + _T("skins\\");
+        resourcePath = resourceBasePath;
+        skinsPath = resourceBasePath + _T("skins\\");
         
         // 调试输出：显示路径信息
         std::wcout << L"Instance path: " << instancePath.GetData() << std::endl;
         std::wcout << L"Resource path: " << resourcePath.GetData() << std::endl;
-        std::wcout << L"Path exists: " << (PathFileExists(resourcePath) ? L"YES" : L"NO") << std::endl;
+        std::wcout << L"Skin path: " << skinsPath.GetData() << std::endl;
+        std::wcout << L"Skin path exists: " << (PathFileExists(skinsPath) ? L"YES" : L"NO") << std::endl;
         
-        if (!PathFileExists(resourcePath)) {
+        if (!PathFileExists(skinsPath)) {
             // 尝试检查 main.xml 文件
-            CDuiString mainXmlPath = resourcePath + _T("main.xml");
+            CDuiString mainXmlPath = skinsPath + _T("main.xml");
             std::wcout << L"Checking main.xml at: " << mainXmlPath.GetData() << std::endl;
             std::wcout << L"main.xml exists: " << (PathFileExists(mainXmlPath) ? L"YES" : L"NO") << std::endl;
             
@@ -1068,8 +1081,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         }
     }
     
-    CPaintManagerUI::SetResourcePath(resourcePath);
-    std::wcout << L"Set resource path to: " << resourcePath.GetData() << std::endl;
+    CPaintManagerUI::SetResourcePath(skinsPath);
+    std::wcout << L"Set resource path to: " << skinsPath.GetData() << std::endl;
     
     // 设置资源类型为文件系统
     CPaintManagerUI::SetResourceType(UILIB_FILE);

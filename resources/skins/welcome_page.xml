@@ -1,97 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
+<Windows>
+    <!-- 安装目录 -->
+    <VerticalLayout >
+        <Control padding="240,95,0,0" width="80" height="80" bkimage="..\images\logo1.png" />
 
-<VerticalLayout name="welcome_page" padding="40,30,40,30">
+        <Label visible="false" name="instinfo" padding="20,6,20,0" height="22" font="1" align="center" textcolor="0xFF666666" text="客户端平台" />
+        <VerticalLayout float="true" pos="0,217,560,350" name="config-bottom" >
+            <Button name="btnInstall" textcolor="0xFFFFFFFF" visible="true" msgid="msg.install" cursor="hand" width="140" height="36" font="1" padding="210,0,210,0" normalimage="file='..\images\round_dark.png'" hotimage="file='..\images\round_dark_hover.png' " pushedimage="file='..\images\round_dark_push.png'" align="center" text="快速安装"/>
 
-    
+            <VerticalLayout name="moreinfo" visible="false" padding="20,33,0,0">
+                <HorizontalLayout height="36" >
+                <RichEdit name="editDir" width="444" text="" bordersize="1" bkcolor="0x80EDF7FF" textcolor="0xFF333333" font="0" inset="10,8,34,1" autohscroll="true" wanttab="false" wantreturn="false" wantctrlreturn="false" multiline="false" />
+                <Button name="btnSelectDir" msgid="msg.browse" text="浏览" padding="10,0,0,0" cursor="hand" width="66" height="36" bordersize="1" bkcolor="0xFFEDF7FF" bordercolor="0xFFC2E1F9" hotbkcolor="0xFFE0F1FE" pushedbkcolor="0xFFD0E7F9" textcolor="0xFF060300" hottextcolor="0xFF060300" pushedtextcolor="0xFF060300" disabledtextcolor="0xFF060300" textpadding="0,-1,0,0" align="center" />
+                </HorizontalLayout>
+                    <HorizontalLayout padding="0,28,0,0" height="16">
+                    <CheckBox name="chkAutoRun" width="95" font="0" textcolor="0xFFFFFFFF" msgid="msg.autostart" text="开机自动启动" />
+                    <CheckBox name="chkShotcut" padding="20,0,0,0" textcolor="0xFFFFFFFF" width="118" font="0" msgid="msg.createshortcut" text="添加桌面快捷方式" />
+                </HorizontalLayout>
+            </VerticalLayout>
+        </VerticalLayout>
 
-    <HorizontalLayout height="80">
+        <HorizontalLayout name="license_layer" float="true" visible="true" pos="20,314,280,330" >
+            <CheckBox name="chkAgree" width="110" font="0" textcolor="0xFFFFFFFF" msgid="msg.agree" text="我已阅读并同意" />
+            <Button name="btnAgreement" cursor="hand" padding="-10,0,0,0" msgid="msg.licence" text="《用户许可协议》" showhtml="true" textcolor="#FF0091FF" font="0" width="140" align="left" height="16"/>
+        </HorizontalLayout>	
 
-        <Control/>
-
-        <Control name="app_logo" width="64" height="64" bkcolor="#FF4A90E2"/>
-
-        <Control/>
-
-    </HorizontalLayout>
-
-    
-
-    
-
-    <Label name="app_name" text="应用程序名称" font="2" textcolor="#FF333333" 
-
-           align="center" height="30"/>
-
-    <Label name="app_version" text="版本 1.0.0" font="0" textcolor="#FF666666" 
-
-           align="center" height="25"/>
-
-    
-
-    
-
-    <VerticalLayout height="100" padding="0,20,0,0">
-
-        <Label text="安装路径:" height="25" textcolor="#FF333333"/>
-
-        <HorizontalLayout height="30">
-
-            <Edit name="install_path" text="C:\Program Files\MyApp" 
-
-                  bkcolor="#FFF5F5F5" bordercolor="#FFCCCCCC" bordersize="1" tabstop="true"/>
-
-            <Control width="10"/>
-
-            <Button name="browse_button" text="浏览..." width="80" height="30" tabstop="true"/>
-
+        <HorizontalLayout name="morelayer" float="true" visible="false" pos="398,300,560,350" >
+            <Button name="btnCancelMore"  cursor="hand" font="1" width="66" height="30" bordersize="1" borderround="3,3" bkcolor="0xFFEDF7FF" bordercolor="0xFFC2E1F9" hotbkcolor="0xFFE0F1FE" pushedbkcolor="0xFFD0E7F9" textcolor="0xFF060300" hottextcolor="0xFF060300" pushedtextcolor="0xFF060300" disabledtextcolor="0xFF060300" textpadding="0,-1,0,0" align="center" msgid="msg.cancel" text="取消" />
+            <Button name="btnInstall_Short" padding="10,0,20,0" cursor="hand" font="1" width="66" height="30" borderround="3,3"  bkcolor="0xFF2979FF" hotbkcolor="0xFF1A66EF" pushedbkcolor="0xFF1057CE" textcolor="0xFFFFFFFF" hottextcolor="0xFFFFFFFF" pushedtextcolor="0xFFFFFFFF" disabledtextcolor="0xFFFFFFFF" textpadding="0,-1,0,0" align="center" msgid="msg.install_short" text="安装"/>
         </HorizontalLayout>
 
-        <Control height="5"/>
-
-        <Label name="disk_space_info" text="所需空间: 100 MB | 可用空间: 500 MB" 
-
-               height="20" textcolor="#FF666666"/>
-
+        <Button name="btnShowMore" visible="true" float="true" textcolor="0xFFFFFFFF" cursor="hand" pos="360,314,460,330" normalimage="file='..\images\browse.png' dest='0,1,16,16'" hotimage="file='..\images\browse.png' dest='0,1,16,16'" pushedimage="file='..\images\browse.png' dest='0,1,16,16'" msgid="msg.customize" text="自定义选项" textpadding="20,2,0,0" align="right"/>
+            
     </VerticalLayout>
-
-    
-
-    
-
-    <HorizontalLayout height="30" padding="0,10,0,0">
-
-        <CheckBox name="license_checkbox" text="我同意" width="80" height="25" tabstop="true"/>
-        <RichEdit name="license_link" text="<a>安装协议</a>" 
-
-                  height="25" width="100" readonly="true" tabstop="true"/>
-
-        <Control/>
-
-    </HorizontalLayout>
-
-    
-
-    
-
-    <Control/>
-
-    
-
-    
-
-    <HorizontalLayout height="35">
-
-        <Control/>
-
-        <Button name="install_button" text="安装 (&I)" width="100" height="35" 
-
-                enabled="false" tabstop="true"/>
-
-        <Control width="10"/>
-
-        <Button name="cancel_button" text="取消 (&C)" width="100" height="35" tabstop="true"/>
-
-    </HorizontalLayout>
-
-</VerticalLayout>
-
+</Windows>

@@ -170,4 +170,81 @@ void applyRegistryEntries(const std::vector<RegistryEntry>& entries,
     }
 }
 
+bool readRegistryStringValue(const std::string& path, const std::string& key, std::string& value) {
+#ifdef _WIN32
+    if (path.empty() || key.empty()) {
+        return false;
+    }
+
+    std::string pathUpper = path;
+    std::transform(pathUpper.begin(), pathUpper.end(), pathUpper.begin(), ::toupper);
+
+    HKEY root = nullptr;
+    std::string subkey;
+    const std::string hkcu = "HKEY_CURRENT_USER\\";
+    const std::string hklm = "HKEY_LOCAL_MACHINE\\";
+    const std::string hkcuShort = "HKCU\\";
+    const std::string hklmShort = "HKLM\\";
+
+    if (pathUpper.rfind(hkcu, 0) == 0) {
+        root = HKEY_CURRENT_USER;
+        subkey = path.substr(hkcu.size());
+    } else if (pathUpper.rfind(hklm, 0) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        subkey = path.substr(hklm.size());
+    } else if (pathUpper.rfind(hkcuShort, 0) == 0) {
+        root = HKEY_CURRENT_USER;
+        subkey = path.substr(hkcuShort.size());
+    } else if (pathUpper.rfind(hklmShort, 0) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        subkey = path.substr(hklmShort.size());
+    } else {
+        return false;
+    }
+
+    HKEY hKey = nullptr;
+    LONG status = RegOpenKeyExA(root, subkey.c_str(), 0, KEY_QUERY_VALUE, &hKey);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+
+    DWORD type = 0;
+    DWORD size = 0;
+    status = RegQueryValueExA(hKey, key.c_str(), nullptr, &type, nullptr, &size);
+    if (status != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ)) {
+        RegCloseKey(hKey);
+        return false;
+    }
+
+    std::string buffer(size, '\0');
+    status = RegQueryValueExA(hKey, key.c_str(), nullptr, &type,
+                              reinterpret_cast<BYTE*>(&buffer[0]), &size);
+    RegCloseKey(hKey);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+
+    if (!buffer.empty() && buffer.back() == '\0') {
+        buffer.pop_back();
+    }
+
+    if (type == REG_EXPAND_SZ) {
+        char expanded[MAX_PATH];
+        DWORD expandedSize = ExpandEnvironmentStringsA(buffer.c_str(), expanded, MAX_PATH);
+        if (expandedSize > 0 && expandedSize < MAX_PATH) {
+            value.assign(expanded);
+            return true;
+        }
+    }
+
+    value = buffer;
+    return !value.empty();
+#else
+    (void)path;
+    (void)key;
+    (void)value;
+    return false;
+#endif
+}
+
 } // namespace MultiThreadedInstaller

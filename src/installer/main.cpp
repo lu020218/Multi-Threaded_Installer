@@ -108,10 +108,19 @@ InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata
     config.applicationName = stringToWString(metadata.applicationName);
     config.version = stringToWString(metadata.configVersion);
     config.defaultInstallPath = stringToWString(metadata.defaultInstallDir);
+    for (const auto& entry : metadata.registry) {
+        if (entry.key == "InstallDir") {
+            config.registryPath = stringToWString(entry.path);
+            config.registryKey = stringToWString(entry.key);
+            break;
+        }
+    }
     config.logoResourceId = L"logo.png";  // 默认logo
     config.licenseText = L"";  // 将从resources/license.txt加载
     config.webPageUrl = L"";  // 可以从配置中扩展
     config.executableName = stringToWString(metadata.applicationName + ".exe");
+    config.autoStartup = metadata.autoStartup;
+    config.desktopIcons = metadata.desktopIcons;
     
     // 计算所需磁盘空间
     uint64_t totalSize = 0;

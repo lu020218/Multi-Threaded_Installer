@@ -19,5 +19,6 @@ void applyRegistryEntries(const std::vector<RegistryEntry>& entries,
                           const std::string& installDir,
                           const std::string& configVersion,
                           const std::string& appName);
+bool readRegistryStringValue(const std::string& path, const std::string& key, std::string& value);
 
 } // namespace MultiThreadedInstaller

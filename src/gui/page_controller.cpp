@@ -82,7 +82,7 @@ bool PageController::ShowLicenseDialog(HWND hParent) {
     return agreed;
 }
 
-void PageController::StartInstallation(const std::wstring& installPath, HWND hNotifyWindow) {
+void PageController::StartInstallation(const std::wstring& installPath, bool autoRun, bool desktopIcons, HWND hNotifyWindow) {
     // 如果已有工作线程在运行，先清理
     if (m_pWorker) {
         delete m_pWorker;
@@ -96,6 +96,8 @@ void PageController::StartInstallation(const std::wstring& installPath, HWND hNo
     // 注意：InstallationWorker的完整实现在任务7中
     // 这里只是建立接口调用关系
     
+    m_pWorker->StartInstallation(installPath, autoRun, desktopIcons);
+
     // 导航到进度页面
     NavigateToPage(PageType::Progress);
 }

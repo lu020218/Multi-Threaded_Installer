@@ -21,6 +21,10 @@ struct InstallConfig {
     std::wstring applicationName;      // 应用程序名称
     std::wstring version;               // 版本号
     std::wstring defaultInstallPath;    // 默认安装路径
+    std::wstring registryPath;          // 注册表路径（读取安装目录）
+    std::wstring registryKey;           // 注册表键名（读取安装目录）
+    bool autoStartup;                   // 默认开机启动
+    bool desktopIcons;                  // 默认创建桌面图标
     std::wstring logoResourceId;        // Logo资源ID
     std::wstring licenseText;           // 许可协议文本
     std::wstring webPageUrl;            // 介绍网页URL
@@ -31,6 +35,10 @@ struct InstallConfig {
         : applicationName(L"Application"),
           version(L"1.0.0"),
           defaultInstallPath(L"C:\\Program Files\\MyApp"),
+          registryPath(L""),
+          registryKey(L""),
+          autoStartup(false),
+          desktopIcons(false),
           logoResourceId(L"logo.png"),
           webPageUrl(L"https://example.com"),
           executableName(L"app.exe"),
@@ -94,6 +102,8 @@ private:
     CCheckBoxUI* m_pLicenseCheckbox;    // 许可协议复选框
     CButtonUI* m_pInstallButton;        // 安装按钮
     CLabelUI* m_pDiskSpaceLabel;        // 磁盘空间标签
+    CContainerUI* m_pConfigBottom;      // 更多配置容器
+    CContainerUI* m_pMoreInfo;          // 更多配置内容
     
     // 页面控制器
     PageController* m_pPageController;
@@ -103,6 +113,9 @@ private:
     
     // 配置
     InstallConfig m_config;
+    int m_baseClientHeight;
+    int m_baseClientWidth;
+    int m_expandedClientHeight;
     
     // 初始化控件
     void InitControls();
@@ -114,6 +127,7 @@ private:
     void OnLicenseLinkClick();
     void OnFinishButtonClick();
     void OnCancelProgressButtonClick();
+    void OnShowMoreClick();
     
     // 复选框状态变化处理
     void OnLicenseCheckboxChanged();

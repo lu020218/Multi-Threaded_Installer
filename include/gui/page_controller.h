@@ -34,7 +34,7 @@ public:
     bool ShowLicenseDialog(HWND hParent);
     
     // 启动安装过程
-    void StartInstallation(const std::wstring& installPath, HWND hNotifyWindow);
+    void StartInstallation(const std::wstring& installPath, bool autoRun, bool desktopIcons, HWND hNotifyWindow);
     
     // 处理安装完成
     void OnInstallationComplete(bool success, const std::wstring& errorMsg);

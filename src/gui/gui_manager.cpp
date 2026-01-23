@@ -108,7 +108,8 @@ GUIManager::GUIManager()
       m_pWorker(nullptr),
       m_baseClientHeight(0),
       m_baseClientWidth(0),
-      m_expandedClientHeight(0) {
+      m_expandedClientHeight(0),
+      m_baseWindowWidth(0) {
 }
 
 GUIManager::~GUIManager() {
@@ -174,11 +175,15 @@ void GUIManager::InitWindow() {
     }
     
 
-    if (m_baseClientHeight == 0 || m_baseClientWidth == 0) {
+    if (m_baseClientHeight == 0 || m_baseClientWidth == 0 || m_baseWindowWidth == 0) {
         RECT rcClient;
         ::GetClientRect(m_hWnd, &rcClient);
         m_baseClientHeight = rcClient.bottom - rcClient.top;
         m_baseClientWidth = rcClient.right - rcClient.left;
+
+        RECT rcWindow;
+        ::GetWindowRect(m_hWnd, &rcWindow);
+        m_baseWindowWidth = rcWindow.right - rcWindow.left;
     }
     CenterWindow();
 }
@@ -575,10 +580,26 @@ void GUIManager::OnShowMoreClick() {
         }
     }
 
-    ResizeClient(m_baseClientWidth, targetHeight);
+    RECT rcWindow = {};
+    RECT rcClient = {};
+    ::GetWindowRect(m_hWnd, &rcWindow);
+    ::GetClientRect(m_hWnd, &rcClient);
+
+    int windowWidth = m_baseWindowWidth > 0 ? m_baseWindowWidth : (rcWindow.right - rcWindow.left);
+    int nonClientHeight = (rcWindow.bottom - rcWindow.top) - (rcClient.bottom - rcClient.top);
+    int targetWindowHeight = targetHeight + nonClientHeight;
+
+    ::SetWindowPos(
+        m_hWnd,
+        NULL,
+        rcWindow.left,
+        rcWindow.top,
+        windowWidth,
+        targetWindowHeight,
+        SWP_NOZORDER | SWP_NOACTIVATE);
     std::cout << "btnShowMore toggled=" << (show ? "true" : "false")
                << " base=" << m_baseClientWidth << "x" << m_baseClientHeight
-               << " target=" << m_baseClientWidth << "x" << targetHeight
+               << " targetWindow=" << windowWidth << "x" << targetWindowHeight
                << std::endl;
     m_pm.NeedUpdate();
     m_pm.Invalidate();

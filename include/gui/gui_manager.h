@@ -116,6 +116,7 @@ private:
     int m_baseClientHeight;
     int m_baseClientWidth;
     int m_expandedClientHeight;
+    int m_baseWindowWidth;
     
     // 初始化控件
     void InitControls();

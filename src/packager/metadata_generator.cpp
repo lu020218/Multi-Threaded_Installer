@@ -35,6 +35,10 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.defaultInstallDir = config.defaultInstallDir;
     metadata.autoStartup = config.autoStartup;
     metadata.desktopIcons = config.desktopIcons;
+    metadata.requireAdmin = config.requireAdmin;
+    metadata.minWindowsMajor = config.minWindowsMajor;
+    metadata.minWindowsMinor = config.minWindowsMinor;
+    metadata.minWindowsBuild = config.minWindowsBuild;
     metadata.sparseFileThresholdBytes = config.sparseFileThresholdBytes;
     metadata.installState = config.installState;
     metadata.registry = config.registry;
@@ -146,8 +150,23 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
 
     uint8_t autoStartupFlag = metadata.autoStartup ? 1 : 0;
     uint8_t desktopIconsFlag = metadata.desktopIcons ? 1 : 0;
+    uint8_t requireAdminFlag = metadata.requireAdmin ? 1 : 0;
     serialized.push_back(autoStartupFlag);
     serialized.push_back(desktopIconsFlag);
+    serialized.push_back(requireAdminFlag);
+
+    const uint8_t* minWinMajorBytes =
+        reinterpret_cast<const uint8_t*>(&metadata.minWindowsMajor);
+    serialized.insert(serialized.end(), minWinMajorBytes,
+                      minWinMajorBytes + sizeof(uint16_t));
+    const uint8_t* minWinMinorBytes =
+        reinterpret_cast<const uint8_t*>(&metadata.minWindowsMinor);
+    serialized.insert(serialized.end(), minWinMinorBytes,
+                      minWinMinorBytes + sizeof(uint16_t));
+    const uint8_t* minWinBuildBytes =
+        reinterpret_cast<const uint8_t*>(&metadata.minWindowsBuild);
+    serialized.insert(serialized.end(), minWinBuildBytes,
+                      minWinBuildBytes + sizeof(uint32_t));
 
     const uint8_t* sparseThresholdBytes =
         reinterpret_cast<const uint8_t*>(&metadata.sparseFileThresholdBytes);

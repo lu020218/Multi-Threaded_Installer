@@ -37,4 +37,18 @@ std::string getDefaultManifestPath(const std::string& appName, InstallerPathReso
 std::string getLocalManifestPath(const std::string& exePath);
 bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath);
 
+bool isRunningAsAdmin();
+bool requiresAdminForInstall(const std::string& installPath,
+                             const ExtendedInstallationMetadata& metadata,
+                             InstallerPathResolver& resolver);
+bool relaunchSelfAsAdmin();
+uint64_t getAvailableDiskSpaceBytes(const std::string& path);
+bool checkDiskSpaceForInstall(const std::string& path, uint64_t requiredBytes,
+                              uint64_t& availableBytes);
+bool checkMinimumWindowsVersion(uint16_t minMajor, uint16_t minMinor, uint32_t minBuild,
+                                uint16_t& currentMajor, uint16_t& currentMinor, uint32_t& currentBuild);
+bool isProcessRunningByName(const std::string& exeName);
+bool terminateProcessByName(const std::string& exeName);
+void initializeInstallerLogging();
+
 } // namespace MultiThreadedInstaller

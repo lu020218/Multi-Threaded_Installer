@@ -20,5 +20,11 @@ void applyRegistryEntries(const std::vector<RegistryEntry>& entries,
                           const std::string& configVersion,
                           const std::string& appName);
 bool readRegistryStringValue(const std::string& path, const std::string& key, std::string& value);
+bool writeUninstallRegistryEntry(const std::string& appName,
+                                 const std::string& version,
+                                 const std::string& installDir,
+                                 const std::string& uninstallExePath,
+                                 bool perMachine);
+bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine);
 
 } // namespace MultiThreadedInstaller

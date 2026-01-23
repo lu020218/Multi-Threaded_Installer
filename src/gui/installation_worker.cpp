@@ -20,6 +20,9 @@
 #include <atomic>
 #include <algorithm>
 #include <iostream>
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 namespace MultiThreadedInstaller {
 
@@ -186,6 +189,76 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
 
         metadata.autoStartup = m_autoRun;
         metadata.desktopIcons = m_desktopIcons;
+
+        std::string installPathStr = WStringToString(installPath);
+        if (requiresAdminForInstall(installPathStr, metadata, pathResolver) && !isRunningAsAdmin()) {
+#ifdef _WIN32
+            SetEnvironmentVariableW(L"MTINSTALLER_INSTALL_PATH", installPath.c_str());
+#endif
+            if (relaunchSelfAsAdmin()) {
+                PostCompletionMessage(false, L"需要管理员权限，已尝试重新启动安装程序。");
+            } else {
+                PostCompletionMessage(false, L"需要管理员权限，请以管理员身份运行安装程序。");
+            }
+            return;
+        }
+
+        std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
+            installPathStr,
+            SpecialDirectoryType::INSTALL_DIRECTORY,
+            metadata.applicationName
+        );
+        std::string diskCheckPath = resolvedInstallRoot.empty() ? installPathStr : resolvedInstallRoot;
+        uint64_t requiredBytes = 0;
+        for (const auto& mapping : metadata.extendedMappings) {
+            requiredBytes += mapping.originalSize;
+        }
+        uint64_t availableBytes = 0;
+        if (!checkDiskSpaceForInstall(diskCheckPath, requiredBytes, availableBytes)) {
+            PostCompletionMessage(false, L"磁盘空间不足，无法继续安装。");
+            return;
+        }
+
+#ifdef _WIN32
+        uint16_t currentMajor = 0;
+        uint16_t currentMinor = 0;
+        uint32_t currentBuild = 0;
+        if (!checkMinimumWindowsVersion(metadata.minWindowsMajor,
+                                        metadata.minWindowsMinor,
+                                        metadata.minWindowsBuild,
+                                        currentMajor, currentMinor, currentBuild)) {
+            PostCompletionMessage(false, L"系统版本不满足最低要求。");
+            return;
+        }
+#endif
+
+#ifdef _WIN32
+        std::string processName = metadata.applicationName;
+        if (!processName.empty()) {
+            std::string lower = processName;
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".exe") {
+                processName += ".exe";
+            }
+        }
+        while (!processName.empty() && isProcessRunningByName(processName)) {
+            int result = MessageBoxW(
+                m_hNotifyWindow,
+                L"检测到应用正在运行，请先关闭。\n\n"
+                L"是：重试\n否：取消安装\n取消：结束进程后继续",
+                L"提示",
+                MB_YESNOCANCEL | MB_ICONWARNING);
+            if (result == IDNO) {
+                PostCompletionMessage(false, L"安装已取消。");
+                return;
+            }
+            if (result == IDCANCEL) {
+                terminateProcessByName(processName);
+                Sleep(500);
+            }
+        }
+#endif
         
         // 检查取消请求
         if (m_cancellationRequested) {
@@ -220,8 +293,6 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
         FileSystemOperator fsOperator;
         
         // 转换安装路径为string
-        std::string installPathStr = WStringToString(installPath);
-        
         // 处理每个文件夹
         std::vector<std::string> errors;
         std::mutex errorsMutex;
@@ -419,6 +490,17 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                                      metadata.configVersion,
                                      metadata.applicationName);
             }
+
+#ifdef _WIN32
+            if (!uninstallPath.empty()) {
+                bool perMachine = isRunningAsAdmin();
+                writeUninstallRegistryEntry(metadata.applicationName,
+                                            metadata.configVersion,
+                                            installRootPath,
+                                            uninstallPath,
+                                            perMachine);
+            }
+#endif
         }
 
         // 更新安装状态为已完成

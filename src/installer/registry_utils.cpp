@@ -30,6 +30,27 @@ std::string expandRegistryValue(const std::string& value,
     return result;
 }
 
+std::string sanitizeRegistryKeyName(const std::string& name) {
+    std::string result = name;
+    for (char& c : result) {
+        if (c == '\\' || c == '/' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+            c = '_';
+        }
+    }
+    if (result.empty()) {
+        result = "Application";
+    }
+    return result;
+}
+
+std::string quoteIfNeeded(const std::string& value) {
+    if (value.find(' ') == std::string::npos && value.find('\t') == std::string::npos) {
+        return value;
+    }
+    return "\"" + value + "\"";
+}
+
 } // namespace
 
 bool deleteRegistryValue(const RegistryEntry& entry) {
@@ -243,6 +264,118 @@ bool readRegistryStringValue(const std::string& path, const std::string& key, st
     (void)path;
     (void)key;
     (void)value;
+    return false;
+#endif
+}
+
+bool writeUninstallRegistryEntry(const std::string& appName,
+                                 const std::string& version,
+                                 const std::string& installDir,
+                                 const std::string& uninstallExePath,
+                                 bool perMachine) {
+#ifdef _WIN32
+    if (appName.empty() || uninstallExePath.empty()) {
+        return false;
+    }
+
+    std::string keyName = sanitizeRegistryKeyName(appName);
+    std::string basePath = perMachine
+        ? "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\"
+        : "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\";
+    std::string fullPath = basePath + keyName;
+
+    RegistryEntry entry;
+    entry.path = fullPath;
+
+    entry.key = "DisplayName";
+    if (!writeRegistryValue(entry, appName, RegistryValueType::STRING)) {
+        return false;
+    }
+
+    if (!version.empty()) {
+        entry.key = "DisplayVersion";
+        writeRegistryValue(entry, version, RegistryValueType::STRING);
+    }
+
+    if (!installDir.empty()) {
+        entry.key = "InstallLocation";
+        writeRegistryValue(entry, installDir, RegistryValueType::STRING);
+    }
+
+    entry.key = "UninstallString";
+    std::string uninstallCommand = quoteIfNeeded(uninstallExePath);
+    if (!writeRegistryValue(entry, uninstallCommand, RegistryValueType::STRING)) {
+        return false;
+    }
+
+    entry.key = "DisplayIcon";
+    writeRegistryValue(entry, uninstallCommand, RegistryValueType::STRING);
+
+    entry.key = "Publisher";
+    writeRegistryValue(entry, appName, RegistryValueType::STRING);
+
+    entry.key = "NoModify";
+    writeRegistryValue(entry, "1", RegistryValueType::DWORD);
+
+    entry.key = "NoRepair";
+    writeRegistryValue(entry, "1", RegistryValueType::DWORD);
+
+    return true;
+#else
+    (void)appName;
+    (void)version;
+    (void)installDir;
+    (void)uninstallExePath;
+    (void)perMachine;
+    return false;
+#endif
+}
+
+bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine) {
+#ifdef _WIN32
+    if (appName.empty()) {
+        return false;
+    }
+    std::string keyName = sanitizeRegistryKeyName(appName);
+    std::string basePath = perMachine
+        ? "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\"
+        : "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\";
+    std::string fullPath = basePath + keyName;
+
+    std::string pathUpper = fullPath;
+    std::transform(pathUpper.begin(), pathUpper.end(), pathUpper.begin(), ::toupper);
+
+    HKEY root = nullptr;
+    std::string subkey;
+    const std::string hkcu = "HKEY_CURRENT_USER\\";
+    const std::string hklm = "HKEY_LOCAL_MACHINE\\";
+    const std::string hkcuShort = "HKCU\\";
+    const std::string hklmShort = "HKLM\\";
+
+    if (pathUpper.rfind(hkcu, 0) == 0) {
+        root = HKEY_CURRENT_USER;
+        subkey = fullPath.substr(hkcu.size());
+    } else if (pathUpper.rfind(hklm, 0) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        subkey = fullPath.substr(hklm.size());
+    } else if (pathUpper.rfind(hkcuShort, 0) == 0) {
+        root = HKEY_CURRENT_USER;
+        subkey = fullPath.substr(hkcuShort.size());
+    } else if (pathUpper.rfind(hklmShort, 0) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        subkey = fullPath.substr(hklmShort.size());
+    } else {
+        return false;
+    }
+
+    LONG status = RegDeleteTreeA(root, subkey.c_str());
+    if (status == ERROR_FILE_NOT_FOUND) {
+        return true;
+    }
+    return status == ERROR_SUCCESS;
+#else
+    (void)appName;
+    (void)perMachine;
     return false;
 #endif
 }

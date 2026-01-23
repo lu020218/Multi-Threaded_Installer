@@ -29,6 +29,8 @@ The packager supports configuration files to specify packaging and installation 
   }],
   "AutoStartup": false,
   "DesktopIcons": true,
+  "RequireAdmin": false,
+  "MinWindowsVersion": "10.0.19041",
   "SparseFileThresholdBytes": 4194304,
   "InstallState": {
     "Mode": "Registry",
@@ -69,6 +71,8 @@ Configuration files must be in JSON format with UTF-8 encoding.
 | `Registry` | array | No | [] | Registry entries to write after install |
 | `AutoStartup` | bool | No | false | Default auto-start behavior |
 | `DesktopIcons` | bool | No | false | Default desktop icon behavior |
+| `RequireAdmin` | bool | No | false | Require administrator privileges at installer startup |
+| `MinWindowsVersion` | string | No | - | Minimum Windows version (format: "major.minor.build") |
 | `SparseFileThresholdBytes` | number | No | 4194304 | Only files at or above this size are created as sparse files |
 | `InstallState` | object | No | { Mode: "Registry", UseMutex: true } | Install state signaling configuration |
 
@@ -168,6 +172,8 @@ The installer intelligently handles application name appending:
   }],
   "AutoStartup": false,
   "DesktopIcons": true,
+  "RequireAdmin": false,
+  "MinWindowsVersion": "10.0.19041",
   "SparseFileThresholdBytes": 4194304,
   "InstallState": {
     "Mode": "Registry",

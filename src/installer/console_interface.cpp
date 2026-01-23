@@ -202,6 +202,7 @@ void ConsoleInterface::showInstallerHelp() {
     std::cout << "  -t, --threads <count>          Number of decompression threads (default: CPU cores)" << std::endl;
     std::cout << "  -f, --force                    Force overwrite existing files" << std::endl;
     std::cout << "  -s, --silent                   Silent installation mode" << std::endl;
+    std::cout << "  --debug                        Show console alongside GUI" << std::endl;
     std::cout << "  --uninstall                    Uninstall using saved manifest" << std::endl;
     std::cout << "  -v, --verbose                  Show detailed information" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;

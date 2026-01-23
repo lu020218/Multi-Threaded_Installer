@@ -232,6 +232,44 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         config.desktopIcons = j["DesktopIcons"].get<bool>();
     }
 
+    // 解析 RequireAdmin（可选）
+    if (j.contains("RequireAdmin") && j["RequireAdmin"].is_boolean()) {
+        config.requireAdmin = j["RequireAdmin"].get<bool>();
+    }
+
+    // 解析 MinWindowsVersion（可选，例如 "10.0.19041"）
+    if (j.contains("MinWindowsVersion") && j["MinWindowsVersion"].is_string()) {
+        std::string versionText = j["MinWindowsVersion"].get<std::string>();
+        std::vector<int> parts;
+        size_t start = 0;
+        while (start < versionText.size()) {
+            size_t end = versionText.find('.', start);
+            if (end == std::string::npos) {
+                end = versionText.size();
+            }
+            std::string token = versionText.substr(start, end - start);
+            if (token.empty()) {
+                lastError_ = "Invalid MinWindowsVersion: empty segment";
+                return std::nullopt;
+            }
+            try {
+                parts.push_back(std::stoi(token));
+            } catch (...) {
+                lastError_ = "Invalid MinWindowsVersion: must be numeric (e.g. 10.0.19041)";
+                return std::nullopt;
+            }
+            start = end + 1;
+        }
+
+        if (parts.empty() || parts.size() > 3) {
+            lastError_ = "Invalid MinWindowsVersion: expected format 'major.minor.build'";
+            return std::nullopt;
+        }
+        config.minWindowsMajor = static_cast<uint16_t>(parts[0]);
+        config.minWindowsMinor = static_cast<uint16_t>(parts.size() > 1 ? parts[1] : 0);
+        config.minWindowsBuild = static_cast<uint32_t>(parts.size() > 2 ? parts[2] : 0);
+    }
+
     // 解析 SparseFileThresholdBytes（可选）
     if (j.contains("SparseFileThresholdBytes")) {
         if (j["SparseFileThresholdBytes"].is_number_unsigned() ||
@@ -243,7 +281,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         }
     }
         
-        return config;
+    return config;
         
     } catch (const std::exception& e) {
         lastError_ = "Error parsing configuration file: " + std::string(e.what());

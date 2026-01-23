@@ -225,6 +225,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
     std::string installDir = manifest.value("installDir", "");
     bool autoStartup = manifest.value("autoStartup", false);
     bool desktopIcons = manifest.value("desktopIcons", false);
+    bool removedUninstall = false;
     
     InstallStateConfig installState;
     if (manifest.contains("installState")) {
@@ -254,6 +255,16 @@ bool uninstallFromManifest(const std::string& manifestPath,
             deleteRegistryValue(entry);
         }
     }
+
+#ifdef _WIN32
+    if (!appName.empty()) {
+        bool perMachine = isRunningAsAdmin();
+        removedUninstall = deleteUninstallRegistryEntry(appName, perMachine);
+        if (!removedUninstall) {
+            deleteUninstallRegistryEntry(appName, !perMachine);
+        }
+    }
+#endif
     
     std::vector<std::string> files;
     if (manifest.contains("files") && manifest["files"].is_array()) {

@@ -235,7 +235,11 @@ endif()
 copy_dlls_to_target(packager)
 
 # Create installer executable
-add_executable(installer ${INSTALLER_SOURCES} ${COMMON_SOURCES})
+if(WIN32 AND BUILD_GUI)
+    add_executable(installer WIN32 ${INSTALLER_SOURCES} ${COMMON_SOURCES})
+else()
+    add_executable(installer ${INSTALLER_SOURCES} ${COMMON_SOURCES})
+endif()
 target_link_libraries(installer ${LIBLZMA_LIBRARIES} Threads::Threads)
 if(WIN32)
     target_link_libraries(installer ole32 shell32)

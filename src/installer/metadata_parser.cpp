@@ -276,13 +276,42 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     metadata.configVersion = std::string(reinterpret_cast<const char*>(data.data() + offset), configVersionLen);
     offset += configVersionLen;
 
-    if (offset + sizeof(uint8_t) * 2 > data.size()) {
-        std::cerr << "Missing startup/desktop flags" << std::endl;
-        return metadata;
+    if (header->version >= 7) {
+        if (offset + sizeof(uint8_t) * 3 > data.size()) {
+            std::cerr << "Missing startup/desktop/admin flags" << std::endl;
+            return metadata;
+        }
+        metadata.autoStartup = data[offset] != 0;
+        metadata.desktopIcons = data[offset + 1] != 0;
+        metadata.requireAdmin = data[offset + 2] != 0;
+        offset += sizeof(uint8_t) * 3;
+    } else {
+        if (offset + sizeof(uint8_t) * 2 > data.size()) {
+            std::cerr << "Missing startup/desktop flags" << std::endl;
+            return metadata;
+        }
+        metadata.autoStartup = data[offset] != 0;
+        metadata.desktopIcons = data[offset + 1] != 0;
+        metadata.requireAdmin = false;
+        offset += sizeof(uint8_t) * 2;
     }
-    metadata.autoStartup = data[offset] != 0;
-    metadata.desktopIcons = data[offset + 1] != 0;
-    offset += sizeof(uint8_t) * 2;
+
+    if (header->version >= 8) {
+        if (offset + sizeof(uint16_t) * 2 + sizeof(uint32_t) > data.size()) {
+            std::cerr << "Missing minimum Windows version" << std::endl;
+            return metadata;
+        }
+        metadata.minWindowsMajor = *reinterpret_cast<const uint16_t*>(data.data() + offset);
+        offset += sizeof(uint16_t);
+        metadata.minWindowsMinor = *reinterpret_cast<const uint16_t*>(data.data() + offset);
+        offset += sizeof(uint16_t);
+        metadata.minWindowsBuild = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+    } else {
+        metadata.minWindowsMajor = 0;
+        metadata.minWindowsMinor = 0;
+        metadata.minWindowsBuild = 0;
+    }
 
     if (header->version >= 6) {
         if (offset + sizeof(uint64_t) > data.size()) {

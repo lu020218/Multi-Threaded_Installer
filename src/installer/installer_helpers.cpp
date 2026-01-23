@@ -2,13 +2,142 @@
 #include "installer/file_system_operator.h"
 #include <algorithm>
 #include <cctype>
+#include <ctime>
+#include <streambuf>
+#include <memory>
+#include <iostream>
 
 #ifdef _WIN32
 #include <Windows.h>
 #include <winioctl.h>
+#include <shellapi.h>
+#include <tlhelp32.h>
 #endif
 
 namespace MultiThreadedInstaller {
+
+namespace {
+
+bool startsWithNoCase(const std::string& value, const std::string& prefix) {
+    if (prefix.size() > value.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < prefix.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(value[i])) !=
+            std::tolower(static_cast<unsigned char>(prefix[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string normalizePathForCompare(const std::string& path) {
+    std::string normalized = path;
+    std::replace(normalized.begin(), normalized.end(), '/', '\\');
+    while (!normalized.empty() && (normalized.back() == '\\' || normalized.back() == '/')) {
+        normalized.pop_back();
+    }
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return normalized;
+}
+
+bool isPathUnder(const std::string& path, const std::string& base) {
+    if (path.empty() || base.empty()) {
+        return false;
+    }
+    std::string normalizedPath = normalizePathForCompare(path);
+    std::string normalizedBase = normalizePathForCompare(base);
+    if (normalizedBase.empty()) {
+        return false;
+    }
+    if (normalizedBase.back() != '\\') {
+        normalizedBase.push_back('\\');
+    }
+    if (normalizedPath == normalizedBase.substr(0, normalizedBase.size() - 1)) {
+        return true;
+    }
+    return startsWithNoCase(normalizedPath, normalizedBase);
+}
+
+bool registryPathRequiresAdmin(const std::string& path) {
+    return startsWithNoCase(path, "HKEY_LOCAL_MACHINE") ||
+           startsWithNoCase(path, "HKLM");
+}
+
+std::wstring quoteArgument(const std::wstring& arg) {
+    if (arg.empty()) {
+        return L"\"\"";
+    }
+    bool needsQuotes = arg.find_first_of(L" \t\"") != std::wstring::npos;
+    if (!needsQuotes) {
+        return arg;
+    }
+    std::wstring quoted = L"\"";
+    size_t backslashes = 0;
+    for (wchar_t ch : arg) {
+        if (ch == L'\\') {
+            backslashes++;
+            continue;
+        }
+        if (ch == L'"') {
+            quoted.append(backslashes * 2 + 1, L'\\');
+            quoted.push_back(L'"');
+            backslashes = 0;
+            continue;
+        }
+        if (backslashes > 0) {
+            quoted.append(backslashes, L'\\');
+            backslashes = 0;
+        }
+        quoted.push_back(ch);
+    }
+    if (backslashes > 0) {
+        quoted.append(backslashes * 2, L'\\');
+    }
+    quoted.push_back(L'"');
+    return quoted;
+}
+
+std::wstring buildRelaunchArguments() {
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argv || argc <= 1) {
+        if (argv) {
+            LocalFree(argv);
+        }
+        return std::wstring();
+    }
+    std::wstring args;
+    for (int i = 1; i < argc; ++i) {
+        if (!args.empty()) {
+            args += L" ";
+        }
+        args += quoteArgument(argv[i]);
+    }
+    LocalFree(argv);
+    return args;
+}
+
+std::string wstringToUtf8(const std::wstring& value) {
+#ifdef _WIN32
+    if (value.empty()) {
+        return {};
+    }
+    int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 0) {
+        return {};
+    }
+    std::string result(size - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), size, nullptr, nullptr);
+    return result;
+#else
+    (void)value;
+    return {};
+#endif
+}
+
+} // namespace
 
 std::filesystem::path toLongPath(const std::filesystem::path& path) {
 #ifdef _WIN32
@@ -362,6 +491,372 @@ bool createUninstallStub(const std::string& sourcePath, const std::string& targe
         remaining -= chunk;
     }
     return true;
+}
+
+bool isRunningAsAdmin() {
+#ifdef _WIN32
+    BOOL isAdmin = FALSE;
+    PSID adminGroup = nullptr;
+    SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
+    if (AllocateAndInitializeSid(&ntAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                                 DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0,
+                                 &adminGroup)) {
+        CheckTokenMembership(nullptr, adminGroup, &isAdmin);
+        FreeSid(adminGroup);
+    }
+    return isAdmin == TRUE;
+#else
+    return false;
+#endif
+}
+
+bool requiresAdminForInstall(const std::string& installPath,
+                             const ExtendedInstallationMetadata& metadata,
+                             InstallerPathResolver& resolver) {
+#ifdef _WIN32
+    std::string expandedInstallPath = resolver.expandEnvironmentVariables(installPath);
+    std::string programFiles = resolver.expandEnvironmentVariables("%ProgramFiles%");
+    std::string programFilesX86 = resolver.expandEnvironmentVariables("%ProgramFiles(x86)%");
+
+    if (isPathUnder(expandedInstallPath, programFiles) ||
+        isPathUnder(expandedInstallPath, programFilesX86)) {
+        return true;
+    }
+
+    if (metadata.installState.mode == InstallStateMode::REGISTRY ||
+        metadata.installState.mode == InstallStateMode::BOTH) {
+        if (registryPathRequiresAdmin(metadata.installState.registryPath)) {
+            return true;
+        }
+    }
+
+    for (const auto& entry : metadata.registry) {
+        if (registryPathRequiresAdmin(entry.path)) {
+            return true;
+        }
+    }
+
+    return false;
+#else
+    (void)installPath;
+    (void)metadata;
+    (void)resolver;
+    return false;
+#endif
+}
+
+bool relaunchSelfAsAdmin() {
+#ifdef _WIN32
+    wchar_t envValue[8];
+    DWORD envSize = GetEnvironmentVariableW(L"MTINSTALLER_ELEVATED", envValue, 8);
+    if (envSize > 0) {
+        return false;
+    }
+    SetEnvironmentVariableW(L"MTINSTALLER_ELEVATED", L"1");
+
+    std::wstring exePath = toWideUtf8(getCurrentExecutablePath());
+    if (exePath.empty()) {
+        return false;
+    }
+
+    std::wstring args = buildRelaunchArguments();
+    HINSTANCE result = ShellExecuteW(nullptr, L"runas", exePath.c_str(),
+                                     args.empty() ? nullptr : args.c_str(),
+                                     nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<intptr_t>(result) > 32;
+#else
+    return false;
+#endif
+}
+
+uint64_t getAvailableDiskSpaceBytes(const std::string& path) {
+#ifdef _WIN32
+    if (path.empty()) {
+        return 0;
+    }
+    std::filesystem::path candidate(path);
+    std::error_code ec;
+    std::filesystem::path probe = candidate;
+    while (!probe.empty() && !std::filesystem::exists(probe, ec)) {
+        probe = probe.parent_path();
+    }
+    if (probe.empty()) {
+        probe = candidate.root_path();
+    }
+    if (probe.empty()) {
+        probe = candidate;
+    }
+    std::wstring widePath = toWideUtf8(probe.string());
+    ULARGE_INTEGER freeBytes = {};
+    if (!GetDiskFreeSpaceExW(widePath.c_str(), &freeBytes, nullptr, nullptr)) {
+        return 0;
+    }
+    return static_cast<uint64_t>(freeBytes.QuadPart);
+#else
+    if (path.empty()) {
+        return 0;
+    }
+    std::error_code ec;
+    auto info = std::filesystem::space(std::filesystem::path(path), ec);
+    if (ec) {
+        return 0;
+    }
+    return static_cast<uint64_t>(info.available);
+#endif
+}
+
+bool checkDiskSpaceForInstall(const std::string& path, uint64_t requiredBytes,
+                              uint64_t& availableBytes) {
+    availableBytes = getAvailableDiskSpaceBytes(path);
+    return availableBytes >= requiredBytes;
+}
+
+bool checkMinimumWindowsVersion(uint16_t minMajor, uint16_t minMinor, uint32_t minBuild,
+                                uint16_t& currentMajor, uint16_t& currentMinor, uint32_t& currentBuild) {
+#ifdef _WIN32
+    currentMajor = 0;
+    currentMinor = 0;
+    currentBuild = 0;
+    if (minMajor == 0 && minMinor == 0 && minBuild == 0) {
+        return true;
+    }
+
+    using RtlGetVersionPtr = LONG (WINAPI*)(PRTL_OSVERSIONINFOW);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) {
+        return true;
+    }
+    auto rtlGetVersion = reinterpret_cast<RtlGetVersionPtr>(
+        GetProcAddress(ntdll, "RtlGetVersion"));
+    if (!rtlGetVersion) {
+        return true;
+    }
+    RTL_OSVERSIONINFOW info = {};
+    info.dwOSVersionInfoSize = sizeof(info);
+    if (rtlGetVersion(&info) != 0) {
+        return true;
+    }
+    currentMajor = static_cast<uint16_t>(info.dwMajorVersion);
+    currentMinor = static_cast<uint16_t>(info.dwMinorVersion);
+    currentBuild = static_cast<uint32_t>(info.dwBuildNumber);
+
+    if (currentMajor < minMajor) {
+        return false;
+    }
+    if (currentMajor == minMajor && currentMinor < minMinor) {
+        return false;
+    }
+    if (currentMajor == minMajor && currentMinor == minMinor &&
+        currentBuild < minBuild) {
+        return false;
+    }
+    return true;
+#else
+    (void)minMajor;
+    (void)minMinor;
+    (void)minBuild;
+    currentMajor = 0;
+    currentMinor = 0;
+    currentBuild = 0;
+    return true;
+#endif
+}
+
+namespace {
+
+class TimestampedBuffer : public std::streambuf {
+public:
+    explicit TimestampedBuffer(FILE* fileHandle)
+        : file(fileHandle), atLineStart(true) {}
+
+protected:
+    int overflow(int ch) override {
+        if (ch == EOF || !file) {
+            return ch;
+        }
+        if (atLineStart) {
+            writeTimestamp();
+            atLineStart = false;
+        }
+        if (ch == '\n') {
+            atLineStart = true;
+        }
+        fputc(ch, file);
+        return ch;
+    }
+
+    std::streamsize xsputn(const char* s, std::streamsize count) override {
+        if (!file || !s || count <= 0) {
+            return 0;
+        }
+        std::streamsize written = 0;
+        for (std::streamsize i = 0; i < count; ++i) {
+            if (atLineStart) {
+                writeTimestamp();
+                atLineStart = false;
+            }
+            char ch = s[i];
+            fputc(ch, file);
+            if (ch == '\n') {
+                atLineStart = true;
+            }
+            ++written;
+        }
+        return written;
+    }
+
+private:
+    void writeTimestamp() {
+        if (!file) {
+            return;
+        }
+#ifdef _WIN32
+        SYSTEMTIME st{};
+        GetLocalTime(&st);
+        fprintf(file, "[%04d-%02d-%02d %02d:%02d:%02d] ",
+                st.wYear, st.wMonth, st.wDay,
+                st.wHour, st.wMinute, st.wSecond);
+#else
+        std::time_t now = std::time(nullptr);
+        std::tm localTime{};
+        localtime_s(&localTime, &now);
+        fprintf(file, "[%04d-%02d-%02d %02d:%02d:%02d] ",
+                localTime.tm_year + 1900,
+                localTime.tm_mon + 1,
+                localTime.tm_mday,
+                localTime.tm_hour,
+                localTime.tm_min,
+                localTime.tm_sec);
+#endif
+    }
+
+    FILE* file;
+    bool atLineStart;
+};
+
+std::unique_ptr<TimestampedBuffer> g_logBuffer;
+FILE* g_logFile = nullptr;
+
+} // namespace
+
+void initializeInstallerLogging() {
+#ifdef _WIN32
+    if (g_logBuffer) {
+        return;
+    }
+    std::filesystem::path logPath;
+    try {
+        logPath = std::filesystem::temp_directory_path() / "MTInstaller.log";
+    } catch (...) {
+        logPath = "MTInstaller.log";
+    }
+    FILE* fp = nullptr;
+    fopen_s(&fp, logPath.string().c_str(), "w");
+    if (!fp) {
+        return;
+    }
+    g_logFile = fp;
+    g_logBuffer = std::make_unique<TimestampedBuffer>(g_logFile);
+    std::cout.rdbuf(g_logBuffer.get());
+    std::cerr.rdbuf(g_logBuffer.get());
+    std::cout << "Installer log started. Log: " << logPath.string() << std::endl;
+#else
+    std::cout << "Installer log started." << std::endl;
+#endif
+}
+
+bool isProcessRunningByName(const std::string& exeName) {
+#ifdef _WIN32
+    if (exeName.empty()) {
+        return false;
+    }
+    std::string target = exeName;
+    std::transform(target.begin(), target.end(), target.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    PROCESSENTRY32W entry = {};
+    entry.dwSize = sizeof(entry);
+    DWORD currentPid = GetCurrentProcessId();
+
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (entry.th32ProcessID == currentPid) {
+                continue;
+            }
+            std::wstring exeWide(entry.szExeFile);
+            std::string exe = wstringToUtf8(exeWide);
+            std::transform(exe.begin(), exe.end(), exe.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (exe == target) {
+                CloseHandle(snapshot);
+                return true;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+    return false;
+#else
+    (void)exeName;
+    return false;
+#endif
+}
+
+bool terminateProcessByName(const std::string& exeName) {
+#ifdef _WIN32
+    if (exeName.empty()) {
+        return false;
+    }
+    std::string target = exeName;
+    std::transform(target.begin(), target.end(), target.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    PROCESSENTRY32W entry = {};
+    entry.dwSize = sizeof(entry);
+    DWORD currentPid = GetCurrentProcessId();
+    bool terminatedAny = false;
+
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (entry.th32ProcessID == currentPid) {
+                continue;
+            }
+            std::wstring exeWide(entry.szExeFile);
+            std::string exe = wstringToUtf8(exeWide);
+            std::transform(exe.begin(), exe.end(), exe.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (exe != target) {
+                continue;
+            }
+
+            HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, entry.th32ProcessID);
+            if (!process) {
+                continue;
+            }
+            if (TerminateProcess(process, 1)) {
+                WaitForSingleObject(process, 5000);
+                terminatedAny = true;
+            }
+            CloseHandle(process);
+        } while (Process32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+    return terminatedAny;
+#else
+    (void)exeName;
+    return false;
+#endif
 }
 
 } // namespace MultiThreadedInstaller

@@ -34,6 +34,8 @@
 
 using namespace MultiThreadedInstaller;
 
+int runConsoleInstaller(int argc, char* argv[]);
+
 namespace {
 
 struct FileWriter {
@@ -91,6 +93,103 @@ std::vector<std::string> collectFilesRecursive(const std::string& rootPath) {
     }
     return files;
 }
+
+#ifdef _WIN32
+static void ensureConsoleVisible() {
+    HWND consoleWnd = GetConsoleWindow();
+    if (!consoleWnd) {
+        AllocConsole();
+        FILE* fp = nullptr;
+        freopen_s(&fp, "CONOUT$", "w", stdout);
+        freopen_s(&fp, "CONOUT$", "w", stderr);
+        freopen_s(&fp, "CONIN$", "r", stdin);
+    } else {
+        ShowWindow(consoleWnd, SW_SHOW);
+    }
+}
+
+static void hideConsoleWindow() {
+    HWND consoleWnd = GetConsoleWindow();
+    if (consoleWnd) {
+        ShowWindow(consoleWnd, SW_HIDE);
+    }
+}
+#endif
+
+static bool hasFlag(int argc, char* argv[], const std::string& flag) {
+    std::string target = flag;
+    std::transform(target.begin(), target.end(), target.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (int i = 1; i < argc; ++i) {
+        if (!argv[i]) {
+            continue;
+        }
+        std::string current = argv[i];
+        std::transform(current.begin(), current.end(), current.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (current == target) {
+            return true;
+        }
+    }
+    return false;
+}
+
+#ifdef _WIN32
+static std::string wideToUtf8(const std::wstring& value) {
+    if (value.empty()) {
+        return {};
+    }
+    int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 0) {
+        return {};
+    }
+    std::string result(size - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), size, nullptr, nullptr);
+    return result;
+}
+
+static bool hasFlagWide(int argc, wchar_t** argv, const std::wstring& flag) {
+    std::wstring target = flag;
+    std::transform(target.begin(), target.end(), target.begin(),
+                   [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+    for (int i = 1; i < argc; ++i) {
+        if (!argv[i]) {
+            continue;
+        }
+        std::wstring current = argv[i];
+        std::transform(current.begin(), current.end(), current.begin(),
+                       [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+        if (current == target) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int runConsoleInstallerWithWideArgs() {
+    int argc = 0;
+    LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argvW) {
+        return runConsoleInstaller(0, nullptr);
+    }
+
+    std::vector<std::string> utf8Args;
+    utf8Args.reserve(static_cast<size_t>(argc));
+    for (int i = 0; i < argc; ++i) {
+        utf8Args.push_back(wideToUtf8(argvW[i]));
+    }
+    LocalFree(argvW);
+
+    std::vector<char*> argv;
+    argv.reserve(utf8Args.size() + 1);
+    for (auto& arg : utf8Args) {
+        argv.push_back(arg.empty() ? const_cast<char*>("") : &arg[0]);
+    }
+    argv.push_back(nullptr);
+
+    return runConsoleInstaller(static_cast<int>(utf8Args.size()), argv.data());
+}
+#endif
 
 #ifdef GUI_ENABLED
 // 将字符串转换为宽字符串
@@ -208,6 +307,17 @@ int runConsoleInstaller(int argc, char* argv[]) {
         console.showError("Invalid or corrupted installer metadata");
         return 1;
     }
+
+#ifdef _WIN32
+    if (metadata.requireAdmin && !isRunningAsAdmin()) {
+        console.showError("Administrator privileges required by configuration.");
+        if (relaunchSelfAsAdmin()) {
+            return 0;
+        }
+        console.showError("Please run the installer as Administrator.");
+        return 1;
+    }
+#endif
     
     console.showInfo("Found " + std::to_string(metadata.folderCount) + " folders to install");
     console.showInfo("Application: " + metadata.applicationName);
@@ -215,15 +325,11 @@ int runConsoleInstaller(int argc, char* argv[]) {
     // 创建路径解析器
     InstallerPathResolver pathResolver;
     HANDLE installMutex = nullptr;
-    if (metadata.installState.useMutex) {
-        installMutex = acquireInstallMutex(metadata.installState);
-    }
-    applyInstallState(metadata.installState, "installing", pathResolver);
     
     // 如果没有提供文件夹映射，使用交互模式
     std::string userSelectedPath;
     std::string installRootPath;
-    if (args.folderMappings.empty() && args.defaultDestination.empty()) {
+    if (args.folderMappings.empty() && args.defaultDestination.empty() && !args.silent) {
         console.showInstallerMenu();
         
         // 显示默认安装目录建议
@@ -242,6 +348,110 @@ int runConsoleInstaller(int argc, char* argv[]) {
     } else if (!args.defaultDestination.empty()) {
         userSelectedPath = args.defaultDestination;
     }
+
+    if (args.silent && userSelectedPath.empty()) {
+        userSelectedPath = pathResolver.expandEnvironmentVariables(metadata.defaultInstallDir);
+        if (userSelectedPath.empty()) {
+            console.showError("Silent install requires a valid default install directory.");
+            return 1;
+        }
+    }
+
+#ifdef _WIN32
+    std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
+        userSelectedPath,
+        SpecialDirectoryType::INSTALL_DIRECTORY,
+        metadata.applicationName
+    );
+    std::string adminCheckPath = resolvedInstallRoot.empty() ? userSelectedPath : resolvedInstallRoot;
+    if (!adminCheckPath.empty() &&
+        requiresAdminForInstall(adminCheckPath, metadata, pathResolver) &&
+        !isRunningAsAdmin()) {
+        console.showError("Administrator privileges required for selected installation path.");
+        if (relaunchSelfAsAdmin()) {
+            return 0;
+        }
+        console.showError("Please run the installer as Administrator.");
+        return 1;
+    }
+#endif
+
+#ifndef _WIN32
+    std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
+        userSelectedPath,
+        SpecialDirectoryType::INSTALL_DIRECTORY,
+        metadata.applicationName
+    );
+#endif
+
+    uint64_t requiredBytes = 0;
+    for (const auto& mapping : metadata.extendedMappings) {
+        requiredBytes += mapping.originalSize;
+    }
+    std::string diskCheckPath = resolvedInstallRoot.empty() ? userSelectedPath : resolvedInstallRoot;
+    uint64_t availableBytes = 0;
+    if (!checkDiskSpaceForInstall(diskCheckPath, requiredBytes, availableBytes)) {
+        console.showError("Insufficient disk space for installation.");
+        console.showError("Required bytes: " + std::to_string(requiredBytes));
+        console.showError("Available bytes: " + std::to_string(availableBytes));
+        return 1;
+    }
+
+#ifdef _WIN32
+    uint16_t currentMajor = 0;
+    uint16_t currentMinor = 0;
+    uint32_t currentBuild = 0;
+    if (!checkMinimumWindowsVersion(metadata.minWindowsMajor,
+                                    metadata.minWindowsMinor,
+                                    metadata.minWindowsBuild,
+                                    currentMajor, currentMinor, currentBuild)) {
+        console.showError("Windows version does not meet minimum requirement.");
+        console.showError("Required: " + std::to_string(metadata.minWindowsMajor) + "." +
+                          std::to_string(metadata.minWindowsMinor) + "." +
+                          std::to_string(metadata.minWindowsBuild));
+        console.showError("Current: " + std::to_string(currentMajor) + "." +
+                          std::to_string(currentMinor) + "." +
+                          std::to_string(currentBuild));
+        return 1;
+    }
+#endif
+
+    std::string processName = metadata.applicationName;
+#ifdef _WIN32
+    if (!processName.empty()) {
+        std::string lower = processName;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".exe") {
+            processName += ".exe";
+        }
+    }
+    while (!processName.empty() && isProcessRunningByName(processName)) {
+        if (args.silent) {
+            console.showError("Application is running; silent install aborted.");
+            return 1;
+        }
+        console.showInfo("Detected running application: " + processName);
+        console.showInfo("Enter R to retry, K to terminate, C to cancel:");
+        std::string input;
+        std::getline(std::cin, input);
+        if (!input.empty()) {
+            char choice = static_cast<char>(std::tolower(static_cast<unsigned char>(input[0])));
+            if (choice == 'c') {
+                console.showError("Installation cancelled by user.");
+                return 1;
+            }
+            if (choice == 'k') {
+                terminateProcessByName(processName);
+            }
+        }
+    }
+#endif
+
+    if (metadata.installState.useMutex) {
+        installMutex = acquireInstallMutex(metadata.installState);
+    }
+    applyInstallState(metadata.installState, "installing", pathResolver);
     
     // 创建线程池
     auto threadPool = std::make_shared<ThreadPoolManager>(
@@ -962,6 +1172,19 @@ int runConsoleInstaller(int argc, char* argv[]) {
             applyRegistryEntries(metadata.registry, installRootPath,
                                  metadata.configVersion, metadata.applicationName);
         }
+
+#ifdef _WIN32
+        if (!uninstallPath.empty()) {
+            bool perMachine = isRunningAsAdmin();
+            if (!writeUninstallRegistryEntry(metadata.applicationName,
+                                             metadata.configVersion,
+                                             installRootPath,
+                                             uninstallPath,
+                                             perMachine)) {
+                console.showWarning("Failed to write uninstall registry entry");
+            }
+        }
+#endif
         
         applyInstallState(metadata.installState, "installed", pathResolver);
         if (installMutex) {
@@ -992,6 +1215,30 @@ int runConsoleInstaller(int argc, char* argv[]) {
 #ifdef GUI_ENABLED
 // GUI模式入口点
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
+    int argc = 0;
+    LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
+    initializeInstallerLogging();
+    bool silentMode = argvW ? (hasFlagWide(argc, argvW, L"-s") ||
+                               hasFlagWide(argc, argvW, L"--silent")) : false;
+    bool debugMode = argvW ? hasFlagWide(argc, argvW, L"--debug") : false;
+    if (argvW) {
+        LocalFree(argvW);
+    }
+
+    if (debugMode) {
+        ensureConsoleVisible();
+        SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", L"1");
+    } else {
+        SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr);
+    }
+
+    if (silentMode) {
+        if (!debugMode) {
+            hideConsoleWindow();
+        }
+        return runConsoleInstallerWithWideArgs();
+    }
+
     // 初始化COM库（用于文件对话框）
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr)) {
@@ -1005,6 +1252,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     
     if (!parser.validateMetadata(metadata)) {
         MessageBoxW(NULL, L"Invalid or corrupted installer metadata", L"Error", MB_OK | MB_ICONERROR);
+        CoUninitialize();
+        return 1;
+    }
+
+    if (metadata.requireAdmin && !isRunningAsAdmin()) {
+        if (relaunchSelfAsAdmin()) {
+            CoUninitialize();
+            return 0;
+        }
+        MessageBoxW(NULL, L"需要管理员权限，请以管理员身份运行安装程序。", L"提示",
+                    MB_OK | MB_ICONWARNING);
         CoUninitialize();
         return 1;
     }
@@ -1079,9 +1337,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             
             MessageBox(NULL, errorMsg, _T("资源文件缺失"), MB_OK | MB_ICONWARNING);
             
-            // 清理并回退到控制台模式
+            bool debugMode = GetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr, 0) > 0;
+            if (!debugMode) {
+                CoUninitialize();
+                return 1;
+            }
+
+            // 清理并回退到控制台模式（仅 --debug）
             CoUninitialize();
-            
+
             // 运行控制台安装程序
             char** argv_console = new char*[2];
             argv_console[0] = const_cast<char*>("installer.exe");
@@ -1154,24 +1418,32 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 // 主入口点 - 根据命令行参数选择GUI或控制台模式
 int main(int argc, char* argv[]) {
 #ifdef GUI_ENABLED
-    // 检查是否有-s（静默）标志
-    bool silentMode = false;
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "-s" || arg == "--silent") {
-            silentMode = true;
-            break;
-        }
+    bool silentMode = hasFlag(argc, argv, "-s") || hasFlag(argc, argv, "--silent");
+    bool debugMode = hasFlag(argc, argv, "--debug");
+
+#ifdef _WIN32
+    initializeInstallerLogging();
+    if (debugMode) {
+        ensureConsoleVisible();
+        SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", L"1");
+    } else {
+        SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr);
     }
-    
-    // 如果不是静默模式，使用GUI
+#endif
+
     if (!silentMode) {
-        // 转换为wWinMain参数
+#ifdef _WIN32
+        if (!debugMode) {
+            hideConsoleWindow();
+        }
+#endif
         HINSTANCE hInstance = GetModuleHandle(NULL);
         return wWinMain(hInstance, NULL, GetCommandLineW(), SW_SHOWNORMAL);
     }
+
 #endif
     
     // 静默模式或未启用GUI - 使用控制台模式
+    initializeInstallerLogging();
     return runConsoleInstaller(argc, argv);
 }

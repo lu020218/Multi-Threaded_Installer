@@ -148,6 +148,14 @@ void GUIManager::InitWindow() {
     }
     
     std::wstring installPath = ExpandEnvVars(m_config.defaultInstallPath);
+#ifdef _WIN32
+    wchar_t envPath[MAX_PATH];
+    DWORD envLen = GetEnvironmentVariableW(L"MTINSTALLER_INSTALL_PATH", envPath, MAX_PATH);
+    if (envLen > 0 && envLen < MAX_PATH) {
+        installPath = envPath;
+        SetEnvironmentVariableW(L"MTINSTALLER_INSTALL_PATH", nullptr);
+    }
+#endif
     if (!m_config.registryPath.empty() && !m_config.registryKey.empty()) {
         std::string regPath = WStringToUtf8(m_config.registryPath);
         std::string regKey = WStringToUtf8(m_config.registryKey);

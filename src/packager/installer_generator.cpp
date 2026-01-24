@@ -504,6 +504,26 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
             }
         }
 
+        std::vector<std::string> langFiles;
+        std::filesystem::path langDir = resourceDir / "lang";
+        if (std::filesystem::exists(langDir) && std::filesystem::is_directory(langDir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(langDir)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                std::string fileName = entry.path().filename().string();
+                if (fileName.empty() || fileName.front() == '.') {
+                    continue;
+                }
+                std::string resourceName = toResourceName("LANG_", fileName);
+                if (appendEntry(resourceName, entry.path())) {
+                    std::cout << "  Embedded: " << fileName << std::endl;
+                    anyEmbedded = true;
+                    langFiles.push_back(fileName);
+                }
+            }
+        }
+
         if (!imageNames.empty()) {
             std::string listText;
             for (const auto& name : imageNames) {
@@ -512,6 +532,18 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
             }
             std::vector<uint8_t> listData(listText.begin(), listText.end());
             if (appendRawEntry("IMAGES_LIST", listData)) {
+                anyEmbedded = true;
+            }
+        }
+
+        if (!langFiles.empty()) {
+            std::string listText;
+            for (const auto& name : langFiles) {
+                listText += name;
+                listText += "\n";
+            }
+            std::vector<uint8_t> listData(listText.begin(), listText.end());
+            if (appendRawEntry("LANG_LIST", listData)) {
                 anyEmbedded = true;
             }
         }

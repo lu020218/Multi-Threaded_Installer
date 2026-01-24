@@ -7,9 +7,9 @@
         <Control/>
     </HorizontalLayout>
 
-    <Label text="正在卸载..." font="2" textcolor="#FF333333"
+    <Label resourcetext="true" text="msg.uninstalling" font="2" textcolor="#FF333333"
            align="center" height="30"/>
-    <Label name="uninstall_status" text="请稍候，正在清理应用程序文件。"
+    <Label name="uninstall_status" resourcetext="true" text="msg.uninstall_status"
            font="0" textcolor="#FF666666" align="center" height="25"/>
 
     <Control height="20"/>

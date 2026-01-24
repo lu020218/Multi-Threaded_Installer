@@ -12,16 +12,16 @@
     <Label name="app_version_uninstall" text="版本 1.0.0" font="0"
            textcolor="#FF666666" align="center" height="25"/>
 
-    <Label text="将卸载此应用程序，相关文件将被删除。" font="0"
+    <Label resourcetext="true" text="msg.uninstall_desc" font="0"
            textcolor="#FF666666" align="center" padding="0,20,0,0" height="24"/>
 
     <Control/>
 
     <HorizontalLayout height="35">
         <Control/>
-        <Button name="btnUninstallCancel" text="取消" width="100" height="35"/>
+        <Button name="btnUninstallCancel" resourcetext="true" text="msg.uninstall_cancel" width="100" height="35"/>
         <Control width="12"/>
-        <Button name="btnUninstallConfirm" text="开始卸载" width="100" height="35"/>
+        <Button name="btnUninstallConfirm" resourcetext="true" text="msg.uninstall_confirm" width="100" height="35"/>
     </HorizontalLayout>
 </VerticalLayout>
 </Window>

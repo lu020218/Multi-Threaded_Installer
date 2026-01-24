@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Language>
+  <Text id="msg.title.install" value="安装向导"/>
+  <Text id="msg.title.uninstall" value="卸载向导"/>
+  <Text id="msg.lang.zh" value="中文"/>
+  <Text id="msg.lang.en" value="English"/>
+  <Text id="msg.lang.ja" value="日本語"/>
+  <Text id="msg.lang.ko" value="한국어"/>
+  <Text id="msg.lang.es" value="Español"/>
+  <Text id="msg.lang.fr" value="Français"/>
+
+  <Text id="msg.instinfo" value="客户端平台"/>
+  <Text id="msg.install" value="快速安装"/>
+  <Text id="msg.agree" value="我已阅读并同意"/>
+  <Text id="msg.licence" value="《用户许可协议》"/>
+  <Text id="msg.customize" value="自定义选项"/>
+  <Text id="msg.browse" value="浏览"/>
+  <Text id="msg.autostart" value="开机自动启动"/>
+  <Text id="msg.createshortcut" value="添加桌面快捷方式"/>
+  <Text id="msg.agree1" value="接受<c #0091FF>《用户许可协议》</c>"/>
+  <Text id="msg.back" value="返回"/>
+
+  <Text id="msg.rotate_title1" value="极速高效"/>
+  <Text id="msg.rotate_subtitle1_1" value="极速渲染最高线程可达192渲染"/>
+  <Text id="msg.rotate_subtitle1_2" value="相当约i7-8核机同时渲染"/>
+  <Text id="msg.rotate_title2" value="极致简约"/>
+  <Text id="msg.rotate_subtitle2_1" value="提升制图效率10倍"/>
+  <Text id="msg.rotate_subtitle2_2" value="超30W+素材免费下载"/>
+  <Text id="msg.installing" value="正在安装"/>
+
+  <Text id="msg.run_app" value="立即运行应用程序"/>
+  <Text id="msg.open_web" value="打开介绍网页"/>
+  <Text id="msg.finish_action" value="完成 (&amp;F)"/>
+  <Text id="msg.finish" value="完成"/>
+  <Text id="msg.open" value="打开"/>
+
+  <Text id="msg.license_title" value="许可协议"/>
+  <Text id="msg.license_agree" value="同意"/>
+  <Text id="msg.license_disagree" value="不同意"/>
+
+  <Text id="msg.msgbox.title" value="安装"/>
+  <Text id="msg.msgbox.uninstall_exit" value="卸载未完成，您确定退出卸载程序？"/>
+  <Text id="msg.msgbox.cancel" value="取消"/>
+  <Text id="msg.msgbox.ok" value="确定"/>
+
+  <Text id="msg.uninstall_desc" value="将卸载此应用程序，相关文件将被删除。"/>
+  <Text id="msg.uninstall_cancel" value="取消"/>
+  <Text id="msg.uninstall_confirm" value="开始卸载"/>
+  <Text id="msg.uninstalling" value="正在卸载..."/>
+  <Text id="msg.uninstall_status" value="请稍候，正在清理应用程序文件。"/>
+  <Text id="msg.uninstall_done" value="卸载完成"/>
+  <Text id="msg.uninstall_done_msg" value="卸载完成。"/>
+</Language>

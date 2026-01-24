@@ -62,6 +62,8 @@ static std::string WStringToUtf8(const std::wstring& wstr);
 static std::wstring Utf8ToWString(const std::string& str);
 static std::wstring ToLowerString(const std::wstring& value);
 static int GetDefaultLanguageComboIndex();
+static std::wstring GetLanguageCodeForIndex(int index);
+static std::wstring GetLanguageFilePath(const std::wstring& code);
 
 static std::wstring ExpandEnvVars(const std::wstring& value) {
 #ifdef _WIN32
@@ -241,7 +243,9 @@ void GUIManager::InitControls() {
     CComboUI* pLangCombo = static_cast<CComboUI*>(
         m_pm.FindControl(_T("comboLanguageSelect")));
     if (pLangCombo) {
-        pLangCombo->SelectItem(GetDefaultLanguageComboIndex(), false);
+        int defaultIndex = GetDefaultLanguageComboIndex();
+        pLangCombo->SelectItem(defaultIndex, false);
+        ApplyLanguageByIndex(defaultIndex);
     }
 
     CCheckBoxUI* pAutoRun = static_cast<CCheckBoxUI*>(
@@ -359,6 +363,13 @@ void GUIManager::Notify(TNotifyUI& msg) {
         
         if (senderName == _T("license_checkbox")) {
             OnLicenseCheckboxChanged();
+        }
+    }
+    else if (msg.sType == _T("itemselect")) {
+        CDuiString senderName = msg.pSender->GetName();
+        if (senderName == _T("comboLanguageSelect")) {
+            int index = static_cast<int>(msg.wParam);
+            ApplyLanguageByIndex(index);
         }
     }
     else if (msg.sType == _T("link")) {
@@ -770,6 +781,47 @@ static int GetDefaultLanguageComboIndex() {
 #endif
 }
 
+static std::wstring GetLanguageCodeForIndex(int index) {
+    switch (index) {
+        case 0:
+            return L"zh_CN";
+        case 1:
+            return L"en_US";
+        case 2:
+            return L"ja_JP";
+        case 3:
+            return L"ko_KR";
+        case 4:
+            return L"es_ES";
+        case 5:
+            return L"fr_FR";
+        default:
+            return L"en_US";
+    }
+}
+
+static std::wstring GetLanguageFilePath(const std::wstring& code) {
+    CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
+    if (resourcePath.IsEmpty()) {
+        return L"";
+    }
+    std::filesystem::path resPath(resourcePath.GetData());
+    if (resPath.filename().empty()) {
+        resPath = resPath.parent_path();
+    }
+    std::wstring tail = ToLowerString(resPath.filename().wstring());
+    bool inSkins = (tail == L"skins");
+
+    std::filesystem::path langPath;
+    if (inSkins) {
+        langPath = std::filesystem::path(L"..") / L"lang";
+    } else {
+        langPath = std::filesystem::path(L"lang");
+    }
+    langPath /= code + L".xml";
+    return langPath.wstring();
+}
+
 void GUIManager::OnLicenseCheckboxChanged() {
     UpdateInstallButtonState();
 }
@@ -888,6 +940,40 @@ void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {
             pOpenWebCheckbox->SetVisible(false);
         }
     }
+}
+
+void GUIManager::ApplyLanguageByIndex(int index) {
+    ApplyLanguageByCode(GetLanguageCodeForIndex(index));
+}
+
+void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
+    std::wstring langPath = GetLanguageFilePath(code);
+    if (langPath.empty()) {
+        return;
+    }
+
+    std::cout << "Language resource path: " << WStringToUtf8(CPaintManagerUI::GetResourcePath().GetData())
+              << " file=" << WStringToUtf8(langPath) << std::endl;
+
+    if (!CResourceManager::GetInstance()->LoadLanguage(langPath.c_str())) {
+        if (code != L"en_US") {
+            std::wstring fallbackPath = GetLanguageFilePath(L"en_US");
+            if (!fallbackPath.empty() &&
+                CResourceManager::GetInstance()->LoadLanguage(fallbackPath.c_str())) {
+                std::cout << "Language fallback loaded: " << WStringToUtf8(fallbackPath) << std::endl;
+            } else {
+                std::cout << "Failed to load language file: " << WStringToUtf8(langPath) << std::endl;
+                return;
+            }
+        } else {
+            std::cout << "Failed to load language file: " << WStringToUtf8(langPath) << std::endl;
+            return;
+        }
+    }
+
+    CResourceManager::GetInstance()->ReloadText();
+    m_pm.NeedUpdate();
+    m_pm.Invalidate();
 }
 
 void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) {

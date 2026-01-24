@@ -16,7 +16,7 @@
 
             <Control width="10"/>
 
-            <Label text="许可协议" textcolor="#FFFFFFFF" font="1"/>
+            <Label resourcetext="true" text="msg.license_title" textcolor="#FFFFFFFF" font="1"/>
 
             <Control/>
 
@@ -44,11 +44,11 @@
 
                 <Control/>
 
-                <Button name="agree_button" text="同意" width="100" height="35" tabstop="true"/>
+                <Button name="agree_button" resourcetext="true" text="msg.license_agree" width="100" height="35" tabstop="true"/>
 
                 <Control width="10"/>
 
-                <Button name="disagree_button" text="不同意" width="100" height="35" tabstop="true"/>
+                <Button name="disagree_button" resourcetext="true" text="msg.license_disagree" width="100" height="35" tabstop="true"/>
             </HorizontalLayout>
 
         </VerticalLayout>

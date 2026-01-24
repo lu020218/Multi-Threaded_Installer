@@ -5,8 +5,8 @@
 	<Control padding="240,100,0,0" width="80" height="80" bkimage="images\finish.png" />
 	
 	<HorizontalLayout float="true" pos="130,254,560,350" >
-	<Button name="btnClose" msgid="msg.finish" text="完成" cursor="hand" font="3" width="140" height="36" textcolor="0xFF333333" normalimage="file='images\round_light.png'" hotimage="file='images\round_light_hover.png' " pushedimage="file='images\round_light_push.png'" textpadding="0,-1,0,0" align="center"/>
-	<Button name="btnRun" msgid="msg.open" text="打开" padding="20,0,0,0" cursor="hand" font="3" width="140" height="36" textcolor="0xFFFFFFFF" normalimage="file='images\round_dark.png'" hotimage="file='images\round_dark_hover.png' " pushedimage="file='images\round_dark_push.png'" textpadding="0,-1,0,0" align="center"/>
+	<Button name="btnClose" resourcetext="true" text="msg.finish" cursor="hand" font="3" width="140" height="36" textcolor="0xFF333333" normalimage="file='images\round_light.png'" hotimage="file='images\round_light_hover.png' " pushedimage="file='images\round_light_push.png'" textpadding="0,-1,0,0" align="center"/>
+	<Button name="btnRun" resourcetext="true" text="msg.open" padding="20,0,0,0" cursor="hand" font="3" width="140" height="36" textcolor="0xFFFFFFFF" normalimage="file='images\round_dark.png'" hotimage="file='images\round_dark_hover.png' " pushedimage="file='images\round_dark_push.png'" textpadding="0,-1,0,0" align="center"/>
 	</HorizontalLayout>
  </VerticalLayout>
 </Windows>

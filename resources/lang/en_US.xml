@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Language>
+  <Text id="msg.title.install" value="Setup Wizard"/>
+  <Text id="msg.title.uninstall" value="Uninstall Wizard"/>
+  <Text id="msg.lang.zh" value="Chinese"/>
+  <Text id="msg.lang.en" value="English"/>
+  <Text id="msg.lang.ja" value="Japanese"/>
+  <Text id="msg.lang.ko" value="Korean"/>
+  <Text id="msg.lang.es" value="Spanish"/>
+  <Text id="msg.lang.fr" value="French"/>
+
+  <Text id="msg.instinfo" value="Desktop Platform"/>
+  <Text id="msg.install" value="Install Now"/>
+  <Text id="msg.agree" value="I have read and agree"/>
+  <Text id="msg.licence" value="User License Agreement"/>
+  <Text id="msg.customize" value="Custom Options"/>
+  <Text id="msg.browse" value="Browse"/>
+  <Text id="msg.autostart" value="Run at startup"/>
+  <Text id="msg.createshortcut" value="Create desktop shortcut"/>
+  <Text id="msg.agree1" value="Accept <c #0091FF>User License Agreement</c>"/>
+  <Text id="msg.back" value="Back"/>
+
+  <Text id="msg.rotate_title1" value="Fast and Efficient"/>
+  <Text id="msg.rotate_subtitle1_1" value="Ultra-fast rendering up to 192 threads"/>
+  <Text id="msg.rotate_subtitle1_2" value="Comparable to 8-core i7 rendering"/>
+  <Text id="msg.rotate_title2" value="Minimal and Clean"/>
+  <Text id="msg.rotate_subtitle2_1" value="Boost productivity by 10x"/>
+  <Text id="msg.rotate_subtitle2_2" value="300k+ assets free to download"/>
+  <Text id="msg.installing" value="Installing"/>
+
+  <Text id="msg.run_app" value="Run the application now"/>
+  <Text id="msg.open_web" value="Open product page"/>
+  <Text id="msg.finish_action" value="Finish (&amp;F)"/>
+  <Text id="msg.finish" value="Finish"/>
+  <Text id="msg.open" value="Open"/>
+
+  <Text id="msg.license_title" value="License Agreement"/>
+  <Text id="msg.license_agree" value="Agree"/>
+  <Text id="msg.license_disagree" value="Disagree"/>
+
+  <Text id="msg.msgbox.title" value="Setup"/>
+  <Text id="msg.msgbox.uninstall_exit" value="Uninstall is not finished. Exit now?"/>
+  <Text id="msg.msgbox.cancel" value="Cancel"/>
+  <Text id="msg.msgbox.ok" value="OK"/>
+
+  <Text id="msg.uninstall_desc" value="This will uninstall the application and remove its files."/>
+  <Text id="msg.uninstall_cancel" value="Cancel"/>
+  <Text id="msg.uninstall_confirm" value="Uninstall"/>
+  <Text id="msg.uninstalling" value="Uninstalling..."/>
+  <Text id="msg.uninstall_status" value="Please wait while files are removed."/>
+  <Text id="msg.uninstall_done" value="Uninstall complete"/>
+  <Text id="msg.uninstall_done_msg" value="Uninstall completed successfully."/>
+</Language>

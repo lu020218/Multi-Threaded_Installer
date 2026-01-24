@@ -193,6 +193,17 @@ static bool hasFlag(int argc, char* argv[], const std::string& flag) {
     return false;
 }
 
+static std::string normalizePathForCompare(const std::string& path) {
+    std::string result = path;
+    std::replace(result.begin(), result.end(), '/', '\\');
+    while (!result.empty() && (result.back() == '\\' || result.back() == '/')) {
+        result.pop_back();
+    }
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return result;
+}
+
 #ifdef _WIN32
 static std::string wideToUtf8(const std::wstring& value) {
     if (value.empty()) {
@@ -1228,10 +1239,40 @@ int runConsoleInstaller(int argc, char* argv[]) {
         }
         
         std::string manifestPath = getDefaultManifestPath(metadata.applicationName, pathResolver);
+        std::string languageCode;
+#ifdef _WIN32
+        LANGID langId = GetUserDefaultUILanguage();
+        switch (PRIMARYLANGID(langId)) {
+            case LANG_CHINESE:
+                languageCode = "zh_CN";
+                break;
+            case LANG_ENGLISH:
+                languageCode = "en_US";
+                break;
+            case LANG_JAPANESE:
+                languageCode = "ja_JP";
+                break;
+            case LANG_KOREAN:
+                languageCode = "ko_KR";
+                break;
+            case LANG_SPANISH:
+                languageCode = "es_ES";
+                break;
+            case LANG_FRENCH:
+                languageCode = "fr_FR";
+                break;
+            default:
+                languageCode = "en_US";
+                break;
+        }
+#else
+        languageCode = "en_US";
+#endif
+
         if (!writeManifest(manifestPath, metadata.applicationName, metadata.configVersion,
                            installRootPath, installedFiles, metadata.registry,
                            metadata.autoStartup, metadata.desktopIcons,
-                           metadata.installState, uninstallPath)) {
+                           metadata.installState, uninstallPath, languageCode)) {
             console.showWarning("Failed to write install manifest");
         }
         
@@ -1240,7 +1281,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
             if (!writeManifest(localPath.string(), metadata.applicationName, metadata.configVersion,
                                installRootPath, installedFiles, metadata.registry,
                                metadata.autoStartup, metadata.desktopIcons,
-                               metadata.installState, uninstallPath)) {
+                               metadata.installState, uninstallPath, languageCode)) {
                 console.showWarning("Failed to write local install manifest");
             }
         }
@@ -1373,6 +1414,37 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         config.applicationName = stringToWString(appName);
         config.version = L"";
         config.defaultInstallPath.clear();
+        config.languageCode.clear();
+
+        InstallerPathResolver pathResolver;
+        std::string manifestPath;
+        if (!exePathString.empty()) {
+            std::string localManifest = getLocalManifestPath(exePathString);
+            if (!localManifest.empty() && std::filesystem::exists(localManifest)) {
+                manifestPath = localManifest;
+            }
+        }
+        if (manifestPath.empty()) {
+            manifestPath = findManifestFromRegistry(appName, pathResolver);
+            if (!manifestPath.empty() && !std::filesystem::exists(manifestPath)) {
+                manifestPath.clear();
+            }
+        }
+        if (manifestPath.empty()) {
+            std::string defaultManifest = getDefaultManifestPath(appName, pathResolver);
+            if (!defaultManifest.empty() && std::filesystem::exists(defaultManifest)) {
+                manifestPath = defaultManifest;
+            }
+        }
+        if (!manifestPath.empty()) {
+            nlohmann::json manifest;
+            if (readManifest(manifestPath, manifest)) {
+                std::string lang = manifest.value("language", "");
+                if (!lang.empty()) {
+                    config.languageCode = stringToWString(lang);
+                }
+            }
+        }
 
         // 提取嵌入的GUI资源到临时目录
         EmbeddedResourceManager resourceMgr;
@@ -1412,8 +1484,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             skinsPath = resourceBasePath + _T("skins\\");
         }
 
-        CPaintManagerUI::SetResourcePath(skinsPath);
-        CPaintManagerUI::SetResourceType(UILIB_FILE);
+        bool useZip = false;
+        if (!tempResourcePath.empty()) {
+            std::filesystem::path zipPath = std::filesystem::path(tempResourcePath) / "resources.zip";
+            useZip = std::filesystem::exists(zipPath);
+        }
+        if (!useZip && !resourceBasePath.IsEmpty()) {
+            std::filesystem::path zipPath = std::filesystem::path(resourceBasePath.GetData()) / "resources.zip";
+            useZip = std::filesystem::exists(zipPath);
+        }
+
+        if (useZip) {
+            CPaintManagerUI::SetResourcePath(resourcePath);
+            CPaintManagerUI::SetResourceZip(_T("resources.zip"));
+            CPaintManagerUI::SetResourceType(UILIB_ZIP);
+        } else {
+            CPaintManagerUI::SetResourceZip(_T(""));
+            CPaintManagerUI::SetResourcePath(skinsPath);
+            CPaintManagerUI::SetResourceType(UILIB_FILE);
+        }
 
         GUIManager* pFrame = new GUIManager();
         if (pFrame == NULL) {
@@ -1555,11 +1644,28 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         }
     }
     
-    CPaintManagerUI::SetResourcePath(skinsPath);
-    std::wcout << L"Set resource path to: " << skinsPath.GetData() << std::endl;
-    
-    // 设置资源类型为文件系统
-    CPaintManagerUI::SetResourceType(UILIB_FILE);
+    bool useZip = false;
+    if (!tempResourcePath.empty()) {
+        std::filesystem::path zipPath = std::filesystem::path(tempResourcePath) / "resources.zip";
+        useZip = std::filesystem::exists(zipPath);
+    }
+    if (!useZip && !resourceBasePath.IsEmpty()) {
+        std::filesystem::path zipPath = std::filesystem::path(resourceBasePath.GetData()) / "resources.zip";
+        useZip = std::filesystem::exists(zipPath);
+    }
+
+    if (useZip) {
+        CPaintManagerUI::SetResourcePath(resourcePath);
+        CPaintManagerUI::SetResourceZip(_T("resources.zip"));
+        CPaintManagerUI::SetResourceType(UILIB_ZIP);
+        std::wcout << L"Set resource zip to: " << resourcePath.GetData() << L"resources.zip" << std::endl;
+    } else {
+        CPaintManagerUI::SetResourceZip(_T(""));
+        CPaintManagerUI::SetResourcePath(skinsPath);
+        std::wcout << L"Set resource path to: " << skinsPath.GetData() << std::endl;
+        // 设置资源类型为文件系统
+        CPaintManagerUI::SetResourceType(UILIB_FILE);
+    }
     std::wcout << L"Set resource type to UILIB_FILE" << std::endl;
     
     GUIManager* pFrame = new GUIManager();

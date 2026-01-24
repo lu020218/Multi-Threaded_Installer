@@ -4,6 +4,10 @@
 #include <filesystem>
 #include <cstring>
 #include <cctype>
+#include <vector>
+#include <algorithm>
+#include <cstdint>
+#include <unordered_set>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -12,6 +16,178 @@
 #endif
 
 namespace MultiThreadedInstaller {
+
+namespace {
+
+struct ZipFileEntry {
+    std::string name;
+    std::filesystem::path path;
+};
+
+static uint32_t crc32(const uint8_t* data, size_t size) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < size; ++i) {
+        crc ^= data[i];
+        for (int bit = 0; bit < 8; ++bit) {
+            uint32_t mask = -(crc & 1u);
+            crc = (crc >> 1) ^ (0xEDB88320u & mask);
+        }
+    }
+    return ~crc;
+}
+
+static void appendUint16(std::vector<uint8_t>& out, uint16_t value) {
+    out.push_back(static_cast<uint8_t>(value & 0xFF));
+    out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+}
+
+static void appendUint32(std::vector<uint8_t>& out, uint32_t value) {
+    out.push_back(static_cast<uint8_t>(value & 0xFF));
+    out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+    out.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
+    out.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
+}
+
+static bool readFileBytes(const std::filesystem::path& path, std::vector<uint8_t>& out) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return false;
+    }
+    std::streamsize size = file.tellg();
+    if (size < 0) {
+        return false;
+    }
+    file.seekg(0, std::ios::beg);
+    out.resize(static_cast<size_t>(size));
+    if (size > 0 && !file.read(reinterpret_cast<char*>(out.data()), size)) {
+        return false;
+    }
+    return true;
+}
+
+static void collectResourceFiles(const std::filesystem::path& resourceDir,
+                                 std::vector<ZipFileEntry>& outFiles) {
+    std::unordered_set<std::string> seen;
+    auto addEntry = [&](const std::string& name, const std::filesystem::path& path) {
+        if (seen.insert(name).second) {
+            outFiles.push_back({name, path});
+        }
+    };
+
+    auto addDir = [&](const std::filesystem::path& dir, const std::string& prefix,
+                      const std::vector<std::string>& extraPrefixes) {
+        if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
+            return;
+        }
+        for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            const std::string fileName = entry.path().filename().string();
+            addEntry(prefix + fileName, entry.path());
+            for (const auto& extra : extraPrefixes) {
+                addEntry(extra + fileName, entry.path());
+            }
+        }
+    };
+
+    addDir(resourceDir / "skins", "skins/", {""});
+    addDir(resourceDir / "images", "images/", {"../images/"});
+    addDir(resourceDir / "lang", "lang/", {"../lang/"});
+
+    std::filesystem::path licensePath = resourceDir / "license.txt";
+    if (std::filesystem::exists(licensePath) && std::filesystem::is_regular_file(licensePath)) {
+        addEntry("license.txt", licensePath);
+        addEntry("../license.txt", licensePath);
+    }
+
+    std::sort(outFiles.begin(), outFiles.end(),
+              [](const ZipFileEntry& a, const ZipFileEntry& b) {
+                  return a.name < b.name;
+              });
+}
+
+static bool buildResourceZip(const std::filesystem::path& resourceDir,
+                             std::vector<uint8_t>& outZip) {
+    std::vector<ZipFileEntry> files;
+    collectResourceFiles(resourceDir, files);
+    if (files.empty()) {
+        return false;
+    }
+
+    struct CentralEntry {
+        std::string name;
+        uint32_t crc;
+        uint32_t size;
+        uint32_t offset;
+    };
+
+    std::vector<CentralEntry> central;
+    outZip.clear();
+
+    for (const auto& entry : files) {
+        std::vector<uint8_t> data;
+        if (!readFileBytes(entry.path, data)) {
+            return false;
+        }
+
+        uint32_t crc = crc32(data.data(), data.size());
+        uint32_t size = static_cast<uint32_t>(data.size());
+        uint32_t offset = static_cast<uint32_t>(outZip.size());
+        std::string name = entry.name;
+
+        appendUint32(outZip, 0x04034b50);
+        appendUint16(outZip, 20);
+        appendUint16(outZip, 0);
+        appendUint16(outZip, 0);
+        appendUint16(outZip, 0);
+        appendUint16(outZip, 0);
+        appendUint32(outZip, crc);
+        appendUint32(outZip, size);
+        appendUint32(outZip, size);
+        appendUint16(outZip, static_cast<uint16_t>(name.size()));
+        appendUint16(outZip, 0);
+        outZip.insert(outZip.end(), name.begin(), name.end());
+        outZip.insert(outZip.end(), data.begin(), data.end());
+
+        central.push_back({name, crc, size, offset});
+    }
+
+    uint32_t centralOffset = static_cast<uint32_t>(outZip.size());
+    for (const auto& entry : central) {
+        appendUint32(outZip, 0x02014b50);
+        appendUint16(outZip, 20);
+        appendUint16(outZip, 20);
+        appendUint16(outZip, 0);
+        appendUint16(outZip, 0);
+        appendUint16(outZip, 0);
+        appendUint16(outZip, 0);
+        appendUint32(outZip, entry.crc);
+        appendUint32(outZip, entry.size);
+        appendUint32(outZip, entry.size);
+        appendUint16(outZip, static_cast<uint16_t>(entry.name.size()));
+        appendUint16(outZip, 0);
+        appendUint16(outZip, 0);
+        appendUint16(outZip, 0);
+        appendUint16(outZip, 0);
+        appendUint32(outZip, 0);
+        appendUint32(outZip, entry.offset);
+        outZip.insert(outZip.end(), entry.name.begin(), entry.name.end());
+    }
+
+    uint32_t centralSize = static_cast<uint32_t>(outZip.size() - centralOffset);
+    appendUint32(outZip, 0x06054b50);
+    appendUint16(outZip, 0);
+    appendUint16(outZip, 0);
+    appendUint16(outZip, static_cast<uint16_t>(central.size()));
+    appendUint16(outZip, static_cast<uint16_t>(central.size()));
+    appendUint32(outZip, centralSize);
+    appendUint32(outZip, centralOffset);
+    appendUint16(outZip, 0);
+    return true;
+}
+
+} // namespace
 
 bool InstallerGenerator::generateInstaller(const std::string& outputPath,
                                           const std::vector<uint8_t>& metadata,
@@ -466,65 +642,77 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
         };
 
         bool anyEmbedded = false;
+        bool useZip = false;
+        std::vector<uint8_t> zipData;
+        if (buildResourceZip(resourceDir, zipData)) {
+            if (appendRawEntry("RES_ZIP", zipData)) {
+                std::cout << "  Embedded: resources.zip" << std::endl;
+                anyEmbedded = true;
+                useZip = true;
+            }
+        }
+
         std::vector<std::string> imageNames;
-        std::filesystem::path skinsDir = resourceDir / "skins";
-        if (std::filesystem::exists(skinsDir) && std::filesystem::is_directory(skinsDir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(skinsDir)) {
-                if (!entry.is_regular_file()) {
-                    continue;
-                }
-                if (entry.path().extension() != ".xml") {
-                    continue;
-                }
-                std::string fileName = entry.path().filename().string();
-                std::string resourceName = toResourceName("XML_", fileName);
-                if (appendEntry(resourceName, entry.path())) {
-                    std::cout << "  Embedded: " << fileName << std::endl;
-                    anyEmbedded = true;
-                }
-            }
-        }
-
-        std::filesystem::path imagesDir = resourceDir / "images";
-        if (std::filesystem::exists(imagesDir) && std::filesystem::is_directory(imagesDir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(imagesDir)) {
-                if (!entry.is_regular_file()) {
-                    continue;
-                }
-                std::string fileName = entry.path().filename().string();
-                if (fileName.empty() || fileName.front() == '.') {
-                    continue;
-                }
-                std::string resourceName = toResourceName("IMG_", fileName);
-                if (appendEntry(resourceName, entry.path())) {
-                    std::cout << "  Embedded: " << fileName << std::endl;
-                    anyEmbedded = true;
-                    imageNames.push_back(fileName);
-                }
-            }
-        }
-
         std::vector<std::string> langFiles;
-        std::filesystem::path langDir = resourceDir / "lang";
-        if (std::filesystem::exists(langDir) && std::filesystem::is_directory(langDir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(langDir)) {
-                if (!entry.is_regular_file()) {
-                    continue;
+        if (!useZip) {
+            std::filesystem::path skinsDir = resourceDir / "skins";
+            if (std::filesystem::exists(skinsDir) && std::filesystem::is_directory(skinsDir)) {
+                for (const auto& entry : std::filesystem::directory_iterator(skinsDir)) {
+                    if (!entry.is_regular_file()) {
+                        continue;
+                    }
+                    if (entry.path().extension() != ".xml") {
+                        continue;
+                    }
+                    std::string fileName = entry.path().filename().string();
+                    std::string resourceName = toResourceName("XML_", fileName);
+                    if (appendEntry(resourceName, entry.path())) {
+                        std::cout << "  Embedded: " << fileName << std::endl;
+                        anyEmbedded = true;
+                    }
                 }
-                std::string fileName = entry.path().filename().string();
-                if (fileName.empty() || fileName.front() == '.') {
-                    continue;
+            }
+            
+            std::filesystem::path imagesDir = resourceDir / "images";
+            if (std::filesystem::exists(imagesDir) && std::filesystem::is_directory(imagesDir)) {
+                for (const auto& entry : std::filesystem::directory_iterator(imagesDir)) {
+                    if (!entry.is_regular_file()) {
+                        continue;
+                    }
+                    std::string fileName = entry.path().filename().string();
+                    if (fileName.empty() || fileName.front() == '.') {
+                        continue;
+                    }
+                    std::string resourceName = toResourceName("IMG_", fileName);
+                    if (appendEntry(resourceName, entry.path())) {
+                        std::cout << "  Embedded: " << fileName << std::endl;
+                        anyEmbedded = true;
+                        imageNames.push_back(fileName);
+                    }
                 }
-                std::string resourceName = toResourceName("LANG_", fileName);
-                if (appendEntry(resourceName, entry.path())) {
-                    std::cout << "  Embedded: " << fileName << std::endl;
-                    anyEmbedded = true;
-                    langFiles.push_back(fileName);
+            }
+
+            std::filesystem::path langDir = resourceDir / "lang";
+            if (std::filesystem::exists(langDir) && std::filesystem::is_directory(langDir)) {
+                for (const auto& entry : std::filesystem::directory_iterator(langDir)) {
+                    if (!entry.is_regular_file()) {
+                        continue;
+                    }
+                    std::string fileName = entry.path().filename().string();
+                    if (fileName.empty() || fileName.front() == '.') {
+                        continue;
+                    }
+                    std::string resourceName = toResourceName("LANG_", fileName);
+                    if (appendEntry(resourceName, entry.path())) {
+                        std::cout << "  Embedded: " << fileName << std::endl;
+                        anyEmbedded = true;
+                        langFiles.push_back(fileName);
+                    }
                 }
             }
         }
 
-        if (!imageNames.empty()) {
+        if (!useZip && !imageNames.empty()) {
             std::string listText;
             for (const auto& name : imageNames) {
                 listText += name;
@@ -536,7 +724,7 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
             }
         }
 
-        if (!langFiles.empty()) {
+        if (!useZip && !langFiles.empty()) {
             std::string listText;
             for (const auto& name : langFiles) {
                 listText += name;
@@ -548,11 +736,13 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
             }
         }
 
-        std::filesystem::path licensePath = resourceDir / "license.txt";
-        if (std::filesystem::exists(licensePath)) {
-            if (appendEntry("LICENSE_TXT", licensePath)) {
-                std::cout << "  Embedded: license.txt" << std::endl;
-                anyEmbedded = true;
+        if (!useZip) {
+            std::filesystem::path licensePath = resourceDir / "license.txt";
+            if (std::filesystem::exists(licensePath)) {
+                if (appendEntry("LICENSE_TXT", licensePath)) {
+                    std::cout << "  Embedded: license.txt" << std::endl;
+                    anyEmbedded = true;
+                }
             }
         }
 

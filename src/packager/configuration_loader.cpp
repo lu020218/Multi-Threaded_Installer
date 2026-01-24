@@ -217,9 +217,14 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         if (state.contains("UseMutex") && state["UseMutex"].is_boolean()) {
             config.installState.useMutex = state["UseMutex"].get<bool>();
         }
-        if (state.contains("MutexName") && state["MutexName"].is_string()) {
-            config.installState.mutexName = state["MutexName"].get<std::string>();
-        }
+    if (state.contains("MutexName") && state["MutexName"].is_string()) {
+        config.installState.mutexName = state["MutexName"].get<std::string>();
+    }
+
+    // 解析 AutoCleanOldInstall（可选）
+    if (j.contains("AutoCleanOldInstall") && j["AutoCleanOldInstall"].is_boolean()) {
+        config.autoCleanOldInstall = j["AutoCleanOldInstall"].get<bool>();
+    }
     }
     
     // 解析 AutoStartup（可选）

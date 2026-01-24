@@ -28,7 +28,10 @@ public:
     ~InstallationWorker();
     
     // 启动安装（在新线程中）
-    void StartInstallation(const std::wstring& installPath, bool autoRun, bool desktopIcons);
+    void StartInstallation(const std::wstring& installPath,
+                           bool autoRun,
+                           bool desktopIcons,
+                           const std::wstring& languageCode);
     
     // 请求取消安装
     void RequestCancellation();
@@ -43,6 +46,7 @@ private:
     std::atomic<bool> m_cancellationRequested;  // 取消请求标志
     bool m_autoRun;
     bool m_desktopIcons;
+    std::wstring m_languageCode;
     std::atomic<uint64_t> m_totalBytes;
     std::atomic<uint64_t> m_completedBytes;
     std::atomic<uint64_t> m_currentFolderBytes;

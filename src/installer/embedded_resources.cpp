@@ -46,6 +46,16 @@ std::string EmbeddedResourceManager::extractResources() {
             anyExtracted = true;
         }
     }
+
+    auto packedZip = getEmbeddedResource("RES_ZIP");
+    if (!packedZip.empty()) {
+        if (extractFile("resources.zip", packedZip)) {
+            std::cout << "  Extracted: resources.zip" << std::endl;
+            anyExtracted = true;
+            m_extracted = true;
+            return m_resourcePath;
+        }
+    }
     
     // 提取 XML 资源
     const char* xmlFiles[] = {

@@ -63,6 +63,7 @@ static std::wstring Utf8ToWString(const std::string& str);
 static std::wstring ToLowerString(const std::wstring& value);
 static int GetDefaultLanguageComboIndex();
 static std::wstring GetLanguageCodeForIndex(int index);
+static int GetLanguageIndexForCode(const std::wstring& code);
 static std::wstring GetLanguageFilePath(const std::wstring& code);
 
 static std::wstring ExpandEnvVars(const std::wstring& value) {
@@ -143,10 +144,12 @@ CDuiString GUIManager::GetSkinFolder() {
 }
 
 CDuiString GUIManager::GetSkinFile() {
+    bool useZip = CPaintManagerUI::GetResourceType() == UILIB_ZIP &&
+                  !CPaintManagerUI::GetResourceZip().IsEmpty();
     if (m_uninstallMode) {
-        return _T("uninstall_main.xml");
+        return useZip ? _T("skins\\uninstall_main.xml") : _T("uninstall_main.xml");
     }
-    return _T("main.xml");
+    return useZip ? _T("skins\\main.xml") : _T("main.xml");
 }
 
 LPCTSTR GUIManager::GetWindowClassName() const {
@@ -242,10 +245,16 @@ void GUIManager::InitControls() {
 
     CComboUI* pLangCombo = static_cast<CComboUI*>(
         m_pm.FindControl(_T("comboLanguageSelect")));
+    std::wstring languageCode = m_config.languageCode;
+    if (languageCode.empty()) {
+        languageCode = GetLanguageCodeForIndex(GetDefaultLanguageComboIndex());
+    }
     if (pLangCombo) {
-        int defaultIndex = GetDefaultLanguageComboIndex();
-        pLangCombo->SelectItem(defaultIndex, false);
-        ApplyLanguageByIndex(defaultIndex);
+        int selectedIndex = GetLanguageIndexForCode(languageCode);
+        pLangCombo->SelectItem(selectedIndex, false);
+        ApplyLanguageByIndex(selectedIndex);
+    } else {
+        ApplyLanguageByCode(languageCode);
     }
 
     CCheckBoxUI* pAutoRun = static_cast<CCheckBoxUI*>(
@@ -511,7 +520,17 @@ void GUIManager::OnInstallButtonClick() {
     }
 
     CollapseConfigIfExpanded();
-    m_pPageController->StartInstallation(installPath, autoRun, desktopIcons, m_hWnd);
+    std::wstring languageCode = GetLanguageCodeForIndex(GetDefaultLanguageComboIndex());
+    if (auto* pLangCombo = static_cast<CComboUI*>(m_pm.FindControl(_T("comboLanguageSelect")))) {
+        int index = pLangCombo->GetCurSel();
+        if (index >= 0) {
+            languageCode = GetLanguageCodeForIndex(index);
+        }
+    } else if (!m_config.languageCode.empty()) {
+        languageCode = m_config.languageCode;
+    }
+
+    m_pPageController->StartInstallation(installPath, autoRun, desktopIcons, languageCode, m_hWnd);
 
     if (m_pTabPages) {
         m_pTabPages->SelectItem(1);
@@ -798,6 +817,29 @@ static std::wstring GetLanguageCodeForIndex(int index) {
         default:
             return L"en_US";
     }
+}
+
+static int GetLanguageIndexForCode(const std::wstring& code) {
+    std::wstring lower = ToLowerString(code);
+    if (lower == L"zh_cn" || lower == L"zh-cn" || lower == L"zh") {
+        return 0;
+    }
+    if (lower == L"en_us" || lower == L"en-us" || lower == L"en") {
+        return 1;
+    }
+    if (lower == L"ja_jp" || lower == L"ja-jp" || lower == L"ja") {
+        return 2;
+    }
+    if (lower == L"ko_kr" || lower == L"ko-kr" || lower == L"ko") {
+        return 3;
+    }
+    if (lower == L"es_es" || lower == L"es-es" || lower == L"es") {
+        return 4;
+    }
+    if (lower == L"fr_fr" || lower == L"fr-fr" || lower == L"fr") {
+        return 5;
+    }
+    return 1;
 }
 
 static std::wstring GetLanguageFilePath(const std::wstring& code) {

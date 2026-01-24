@@ -18,6 +18,9 @@
   }],
   "AutoStartup": false,
   "DesktopIcons": true,
+  "AutoCleanOldInstall": false,
+  "RequireAdmin": true,
+  "MinWindowsVersion": "10.0.19041",
   "InstallState": {
     "Mode": "Registry",
     "RegistryPath": "HKEY_CURRENT_USER\\Software\\MyDesktopApp",

@@ -4,10 +4,28 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <vector>
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+#include "Utils/unzip.h"
 
 using namespace DuiLib;
 
 namespace MultiThreadedInstaller {
+
+static std::wstring Utf8ToWide(const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+    int size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    if (size <= 0) {
+        return {};
+    }
+    std::wstring result(static_cast<size_t>(size - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &result[0], size);
+    return result;
+}
 
 LicenseDialog::LicenseDialog()
     : m_agreed(false)
@@ -89,6 +107,28 @@ void LicenseDialog::InitWindow() {
 }
 
 std::wstring LicenseDialog::LoadLicenseText() {
+    if (CPaintManagerUI::GetResourceType() == UILIB_ZIP &&
+        !CPaintManagerUI::GetResourceZip().IsEmpty()) {
+        CDuiString basePath = CPaintManagerUI::GetResourcePath();
+        CDuiString zipName = CPaintManagerUI::GetResourceZip();
+        CDuiString zipPath = basePath + zipName;
+
+        HZIP hz = OpenZip(zipPath.GetData(), 0);
+        if (hz != NULL) {
+            ZIPENTRY ze;
+            int index = 0;
+            if (FindZipItem(hz, _T("license.txt"), true, &index, &ze) == 0) {
+                std::vector<char> buffer(static_cast<size_t>(ze.unc_size));
+                if (UnzipItem(hz, index, buffer.data(), ze.unc_size) == 0) {
+                    CloseZip(hz);
+                    std::string text(buffer.begin(), buffer.end());
+                    return Utf8ToWide(text);
+                }
+            }
+            CloseZip(hz);
+        }
+    }
+
     // 尝试从资源目录加载许可协议文本
     CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
     std::wstring licensePath = resourcePath + _T("license.txt");

@@ -277,14 +277,16 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     offset += configVersionLen;
 
     if (header->version >= 7) {
-        if (offset + sizeof(uint8_t) * 3 > data.size()) {
+        size_t flagCount = header->version >= 9 ? 4 : 3;
+        if (offset + sizeof(uint8_t) * flagCount > data.size()) {
             std::cerr << "Missing startup/desktop/admin flags" << std::endl;
             return metadata;
         }
         metadata.autoStartup = data[offset] != 0;
         metadata.desktopIcons = data[offset + 1] != 0;
         metadata.requireAdmin = data[offset + 2] != 0;
-        offset += sizeof(uint8_t) * 3;
+        metadata.autoCleanOldInstall = header->version >= 9 ? (data[offset + 3] != 0) : false;
+        offset += sizeof(uint8_t) * flagCount;
     } else {
         if (offset + sizeof(uint8_t) * 2 > data.size()) {
             std::cerr << "Missing startup/desktop flags" << std::endl;
@@ -293,6 +295,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         metadata.autoStartup = data[offset] != 0;
         metadata.desktopIcons = data[offset + 1] != 0;
         metadata.requireAdmin = false;
+        metadata.autoCleanOldInstall = false;
         offset += sizeof(uint8_t) * 2;
     }
 

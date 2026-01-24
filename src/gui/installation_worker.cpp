@@ -11,6 +11,7 @@
 #include "../../include/installer/install_state_utils.h"
 #include "../../include/installer/registry_utils.h"
 #include "../../include/installer/uninstall_manager.h"
+#include "../../include/installer/console_interface.h"
 
 #include <codecvt>
 #include <locale>
@@ -47,6 +48,17 @@ static std::vector<std::string> collectFilesRecursive(const std::string& rootPat
     return files;
 }
 
+static std::string normalizePathForCompare(const std::string& path) {
+    std::string result = path;
+    std::replace(result.begin(), result.end(), '/', '\\');
+    while (!result.empty() && (result.back() == '\\' || result.back() == '/')) {
+        result.pop_back();
+    }
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return result;
+}
+
 InstallationWorker::InstallationWorker(HWND hNotifyWindow)
     : m_hNotifyWindow(hNotifyWindow)
     , m_running(false)
@@ -73,7 +85,10 @@ InstallationWorker::~InstallationWorker() {
 // 任务 7.1: 实现线程管理
 // ============================================================================
 
-void InstallationWorker::StartInstallation(const std::wstring& installPath, bool autoRun, bool desktopIcons) {
+void InstallationWorker::StartInstallation(const std::wstring& installPath,
+                                           bool autoRun,
+                                           bool desktopIcons,
+                                           const std::wstring& languageCode) {
     // 如果已经在运行，不启动新的安装
     if (m_running) {
         return;
@@ -84,6 +99,7 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath, bool
     m_running = true;
     m_autoRun = autoRun;
     m_desktopIcons = desktopIcons;
+    m_languageCode = languageCode;
     
     // 创建工作线程
     m_workerThread = std::thread(&InstallationWorker::WorkerThreadFunc, this, installPath);
@@ -259,6 +275,41 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             }
         }
 #endif
+
+        {
+            std::string previousManifest;
+            std::string previousInstallDir;
+            if (resolveExistingInstallInfo(metadata.applicationName, pathResolver,
+                                           previousManifest, previousInstallDir)) {
+                std::string newPath = resolvedInstallRoot.empty() ? installPathStr : resolvedInstallRoot;
+                std::string normalizedOld = normalizePathForCompare(previousInstallDir);
+                std::string normalizedNew = normalizePathForCompare(newPath);
+                if (!normalizedOld.empty() && !normalizedNew.empty() &&
+                    normalizedOld != normalizedNew) {
+                    std::cout << "Detected previous install at: " << previousInstallDir << std::endl;
+                    if (previousManifest.empty()) {
+                        std::cout << "Old install manifest not found; skipping cleanup." << std::endl;
+                    } else if (metadata.autoCleanOldInstall) {
+                        ConsoleInterface console;
+                        console.showInfo("Auto-cleaning previous installation...");
+                        uninstallFromManifest(previousManifest, pathResolver, console);
+                    } else {
+                        int result = MessageBoxW(
+                            m_hNotifyWindow,
+                            L"检测到旧版本安装目录与当前不同，是否清理旧版本？",
+                            L"提示",
+                            MB_YESNO | MB_ICONQUESTION);
+                        if (result == IDYES) {
+                            ConsoleInterface console;
+                            console.showInfo("User accepted cleanup of previous installation.");
+                            uninstallFromManifest(previousManifest, pathResolver, console);
+                        } else {
+                            std::cout << "User skipped cleanup of previous installation." << std::endl;
+                        }
+                    }
+                }
+            }
+        }
         
         // 检查取消请求
         if (m_cancellationRequested) {
@@ -474,14 +525,16 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             writeManifest(manifestPath, metadata.applicationName, metadata.configVersion,
                           installRootPath, installedFiles, metadata.registry,
                           metadata.autoStartup, metadata.desktopIcons,
-                          metadata.installState, uninstallPath);
+                          metadata.installState, uninstallPath,
+                          WStringToString(m_languageCode));
 
             if (!installRootPath.empty()) {
                 std::filesystem::path localPath = std::filesystem::path(installRootPath) / "install.manifest.json";
                 writeManifest(localPath.string(), metadata.applicationName, metadata.configVersion,
                               installRootPath, installedFiles, metadata.registry,
                               metadata.autoStartup, metadata.desktopIcons,
-                              metadata.installState, uninstallPath);
+                              metadata.installState, uninstallPath,
+                              WStringToString(m_languageCode));
             }
 
             if (!metadata.registry.empty()) {

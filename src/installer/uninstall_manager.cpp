@@ -8,10 +8,81 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 namespace MultiThreadedInstaller {
 
 using json = nlohmann::json;
+
+#ifdef _WIN32
+static bool isValidUtf8(const std::string& text) {
+    size_t i = 0;
+    const size_t len = text.size();
+    while (i < len) {
+        unsigned char c = static_cast<unsigned char>(text[i]);
+        if (c <= 0x7F) {
+            ++i;
+        } else if ((c >> 5) == 0x6) {
+            if (i + 1 >= len) return false;
+            unsigned char c1 = static_cast<unsigned char>(text[i + 1]);
+            if ((c1 >> 6) != 0x2) return false;
+            i += 2;
+        } else if ((c >> 4) == 0xE) {
+            if (i + 2 >= len) return false;
+            unsigned char c1 = static_cast<unsigned char>(text[i + 1]);
+            unsigned char c2 = static_cast<unsigned char>(text[i + 2]);
+            if ((c1 >> 6) != 0x2 || (c2 >> 6) != 0x2) return false;
+            i += 3;
+        } else if ((c >> 3) == 0x1E) {
+            if (i + 3 >= len) return false;
+            unsigned char c1 = static_cast<unsigned char>(text[i + 1]);
+            unsigned char c2 = static_cast<unsigned char>(text[i + 2]);
+            unsigned char c3 = static_cast<unsigned char>(text[i + 3]);
+            if ((c1 >> 6) != 0x2 || (c2 >> 6) != 0x2 || (c3 >> 6) != 0x2) return false;
+            i += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+static std::string ansiToUtf8(const std::string& text) {
+    if (text.empty()) {
+        return text;
+    }
+    int wideLen = MultiByteToWideChar(CP_ACP, 0, text.c_str(), -1, nullptr, 0);
+    if (wideLen <= 0) {
+        return text;
+    }
+    std::wstring wide(static_cast<size_t>(wideLen - 1), L'\0');
+    MultiByteToWideChar(CP_ACP, 0, text.c_str(), -1, wide.data(), wideLen);
+
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (utf8Len <= 0) {
+        return text;
+    }
+    std::string utf8(static_cast<size_t>(utf8Len - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, utf8.data(), utf8Len, nullptr, nullptr);
+    return utf8;
+}
+
+static std::string ensureUtf8(const std::string& text) {
+    if (text.empty()) {
+        return text;
+    }
+    if (isValidUtf8(text)) {
+        return text;
+    }
+    return ansiToUtf8(text);
+}
+#else
+static std::string ensureUtf8(const std::string& text) {
+    return text;
+}
+#endif
 
 bool writeManifest(const std::string& manifestPath,
                    const std::string& appName,
@@ -22,7 +93,8 @@ bool writeManifest(const std::string& manifestPath,
                    bool autoStartup,
                    bool desktopIcons,
                    const InstallStateConfig& installState,
-                   const std::string& uninstallPath) {
+                   const std::string& uninstallPath,
+                   const std::string& languageCode) {
     if (manifestPath.empty()) {
         return false;
     }
@@ -30,20 +102,27 @@ bool writeManifest(const std::string& manifestPath,
     try {
         json root;
         root["version"] = "1.0";
-        root["appName"] = appName;
-        root["configVersion"] = configVersion;
-        root["installDir"] = installDir;
-        root["uninstallPath"] = uninstallPath;
-        root["files"] = filePaths;
+        root["appName"] = ensureUtf8(appName);
+        root["configVersion"] = ensureUtf8(configVersion);
+        root["installDir"] = ensureUtf8(installDir);
+        root["uninstallPath"] = ensureUtf8(uninstallPath);
+
+        std::vector<std::string> safeFiles;
+        safeFiles.reserve(filePaths.size());
+        for (const auto& path : filePaths) {
+            safeFiles.push_back(ensureUtf8(path));
+        }
+        root["files"] = safeFiles;
         root["autoStartup"] = autoStartup;
         root["desktopIcons"] = desktopIcons;
+        root["language"] = ensureUtf8(languageCode);
 
         json reg = json::array();
         for (const auto& entry : registry) {
             json item;
-            item["path"] = entry.path;
-            item["key"] = entry.key;
-            item["value"] = entry.value;
+            item["path"] = ensureUtf8(entry.path);
+            item["key"] = ensureUtf8(entry.key);
+            item["value"] = ensureUtf8(entry.value);
             item["type"] = static_cast<int>(entry.type);
             reg.push_back(item);
         }
@@ -51,11 +130,11 @@ bool writeManifest(const std::string& manifestPath,
 
         json state;
         state["mode"] = static_cast<int>(installState.mode);
-        state["registryPath"] = installState.registryPath;
-        state["registryKey"] = installState.registryKey;
-        state["filePath"] = installState.filePath;
+        state["registryPath"] = ensureUtf8(installState.registryPath);
+        state["registryKey"] = ensureUtf8(installState.registryKey);
+        state["filePath"] = ensureUtf8(installState.filePath);
         state["useMutex"] = installState.useMutex;
-        state["mutexName"] = installState.mutexName;
+        state["mutexName"] = ensureUtf8(installState.mutexName);
         root["installState"] = state;
 
         std::filesystem::path path(manifestPath);
@@ -71,7 +150,7 @@ bool writeManifest(const std::string& manifestPath,
         if (!out) {
             return false;
         }
-        std::string payload = root.dump(2);
+        std::string payload = root.dump(2, ' ', false, json::error_handler_t::replace);
         out.write(payload.c_str(), static_cast<std::streamsize>(payload.size()));
         return static_cast<bool>(out);
     } catch (const std::exception& e) {
@@ -94,6 +173,106 @@ bool readManifest(const std::string& manifestPath, json& outManifest) {
     }
     outManifest = json::parse(content, nullptr, false);
     return !outManifest.is_discarded();
+}
+
+bool resolveExistingInstallInfo(const std::string& appName,
+                                InstallerPathResolver& resolver,
+                                std::string& manifestPath,
+                                std::string& installDir) {
+    manifestPath.clear();
+    installDir.clear();
+    if (appName.empty()) {
+        return false;
+    }
+
+    std::string keyName = appName;
+    for (char& c : keyName) {
+        if (c == '\\' || c == '/' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+            c = '_';
+        }
+    }
+
+    const std::string hkcuPath =
+        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
+    const std::string hklmPath =
+        "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
+
+    std::string legacyPath = "HKEY_CURRENT_USER\\Software\\" + appName;
+    std::string legacyInstallDir;
+    if (readRegistryStringValue(legacyPath, "InstallDir", legacyInstallDir)) {
+        installDir = legacyInstallDir;
+        std::filesystem::path localManifest = std::filesystem::path(legacyInstallDir) / "install.manifest.json";
+        if (std::filesystem::exists(localManifest)) {
+            manifestPath = localManifest.string();
+        }
+    } else {
+        std::string legacyPathHklm = "HKEY_LOCAL_MACHINE\\Software\\" + appName;
+        if (readRegistryStringValue(legacyPathHklm, "InstallDir", legacyInstallDir)) {
+            installDir = legacyInstallDir;
+            std::filesystem::path localManifest = std::filesystem::path(legacyInstallDir) / "install.manifest.json";
+            if (std::filesystem::exists(localManifest)) {
+                manifestPath = localManifest.string();
+            }
+        }
+    }
+
+    if (!manifestPath.empty() && !installDir.empty()) {
+        return true;
+    }
+
+    std::string installLocation;
+    if (!readRegistryStringValue(hkcuPath, "InstallLocation", installLocation)) {
+        readRegistryStringValue(hklmPath, "InstallLocation", installLocation);
+    }
+    if (!installLocation.empty()) {
+        installDir = installLocation;
+        std::filesystem::path localManifest = std::filesystem::path(installLocation) / "install.manifest.json";
+        if (std::filesystem::exists(localManifest)) {
+            manifestPath = localManifest.string();
+        }
+    }
+
+    if (manifestPath.empty()) {
+        std::string uninstallString;
+        if (!readRegistryStringValue(hkcuPath, "UninstallString", uninstallString)) {
+            readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
+        }
+        if (!uninstallString.empty()) {
+            std::filesystem::path uninstallPath(uninstallString);
+            if (std::filesystem::exists(uninstallPath)) {
+                std::filesystem::path baseDir = uninstallPath.parent_path();
+                if (!baseDir.empty()) {
+                    std::filesystem::path localManifest = baseDir / "install.manifest.json";
+                    if (std::filesystem::exists(localManifest)) {
+                        manifestPath = localManifest.string();
+                        if (installDir.empty()) {
+                            installDir = baseDir.string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (manifestPath.empty()) {
+        std::string defaultManifest = getDefaultManifestPath(appName, resolver);
+        if (!defaultManifest.empty() && std::filesystem::exists(defaultManifest)) {
+            manifestPath = defaultManifest;
+        }
+    }
+
+    if (!manifestPath.empty()) {
+        json manifest;
+        if (readManifest(manifestPath, manifest)) {
+            std::string manifestInstallDir = manifest.value("installDir", "");
+            if (!manifestInstallDir.empty()) {
+                installDir = manifestInstallDir;
+            }
+        }
+    }
+
+    return !manifestPath.empty() || !installDir.empty();
 }
 
 bool scheduleSelfDelete() {
@@ -226,6 +405,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
     bool autoStartup = manifest.value("autoStartup", false);
     bool desktopIcons = manifest.value("desktopIcons", false);
     bool removedUninstall = false;
+    std::string uninstallPath = manifest.value("uninstallPath", "");
     
     InstallStateConfig installState;
     if (manifest.contains("installState")) {
@@ -310,6 +490,17 @@ bool uninstallFromManifest(const std::string& manifestPath,
         console.showInfo("Cleanup root: " + root);
     }
     
+    if (!uninstallPath.empty()) {
+        std::filesystem::path path(uninstallPath);
+        if (!std::filesystem::remove(toLongPath(path))) {
+            if (std::filesystem::exists(path)) {
+                console.showWarning("Failed to remove uninstall.exe: " + uninstallPath);
+            }
+        } else {
+            console.showInfo("Removed uninstall.exe: " + uninstallPath);
+        }
+    }
+
     for (const auto& file : files) {
         std::filesystem::path path(file);
         if (!std::filesystem::remove(toLongPath(path))) {

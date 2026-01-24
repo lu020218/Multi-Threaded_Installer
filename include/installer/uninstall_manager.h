@@ -18,8 +18,13 @@ bool writeManifest(const std::string& manifestPath,
                    bool autoStartup,
                    bool desktopIcons,
                    const InstallStateConfig& installState,
-                   const std::string& uninstallPath);
+                   const std::string& uninstallPath,
+                   const std::string& languageCode);
 bool readManifest(const std::string& manifestPath, nlohmann::json& outManifest);
+bool resolveExistingInstallInfo(const std::string& appName,
+                                InstallerPathResolver& resolver,
+                                std::string& manifestPath,
+                                std::string& installDir);
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
                            ConsoleInterface& console);

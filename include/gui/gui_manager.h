@@ -30,6 +30,7 @@ struct InstallConfig {
     std::wstring licenseText;           // 许可协议文本
     std::wstring webPageUrl;            // 介绍网页URL
     std::wstring executableName;        // 可执行文件名（用于启动）
+    std::wstring languageCode;          // 语言代码（如 zh_CN）
     uint64_t requiredDiskSpace;         // 所需磁盘空间（字节）
     
     InstallConfig()
@@ -43,6 +44,7 @@ struct InstallConfig {
           logoResourceId(L"logo.png"),
           webPageUrl(L"https://example.com"),
           executableName(L"app.exe"),
+          languageCode(L""),
           requiredDiskSpace(100 * 1024 * 1024) {} // 100 MB default
 };
 

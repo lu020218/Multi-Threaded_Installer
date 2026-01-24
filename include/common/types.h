@@ -95,6 +95,7 @@ struct PackagerConfiguration {
     std::vector<RegistryEntry> registry;           // 注册表配置（预留）
     bool autoStartup;                              // 默认开机自启动（预留）
     bool desktopIcons;                             // 默认创建桌面图标（预留）
+    bool autoCleanOldInstall;                      // 自动清理旧安装目录（仅当目录不同）
     bool requireAdmin;                             // 安装程序需要管理员权限
     uint16_t minWindowsMajor;                      // 最小Windows主版本
     uint16_t minWindowsMinor;                      // 最小Windows次版本
@@ -110,6 +111,7 @@ struct PackagerConfiguration {
           compressionAlgorithm(CompressionAlgorithm::LZMA_HIGH),
           autoStartup(false),
           desktopIcons(false),
+          autoCleanOldInstall(false),
           requireAdmin(false),
           minWindowsMajor(0),
           minWindowsMinor(0),
@@ -190,6 +192,7 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::string defaultInstallDir;                  // 建议的默认安装目录
     bool autoStartup;                               // 默认开机自启动
     bool desktopIcons;                              // 默认创建桌面图标
+    bool autoCleanOldInstall;                       // 自动清理旧安装目录（仅当目录不同）
     bool requireAdmin;                              // 安装程序需要管理员权限
     uint16_t minWindowsMajor;                       // 最小Windows主版本
     uint16_t minWindowsMinor;                       // 最小Windows次版本
@@ -206,6 +209,7 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
           defaultInstallDir("%ProgramFiles%"),
           autoStartup(false),
           desktopIcons(false),
+          autoCleanOldInstall(false),
           requireAdmin(false),
           minWindowsMajor(0),
           minWindowsMinor(0),
@@ -244,7 +248,7 @@ using ProgressCallback = std::function<void(const std::string&, float)>;
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;  // "MTDP"
-    constexpr uint32_t VERSION = 8;
+    constexpr uint32_t VERSION = 9;
     
     // 块大小配置 (优化后)
     constexpr size_t DEFAULT_BLOCK_SIZE = 16 * 1024 * 1024;  // 2MB (从 64KB 优化)

@@ -746,9 +746,20 @@ void initializeInstallerLogging() {
     }
     std::filesystem::path logPath;
     try {
-        logPath = std::filesystem::temp_directory_path() / "MTInstaller.log";
+        char appNameBuf[256] = {};
+        DWORD len = GetEnvironmentVariableA("MTINSTALLER_APPNAME", appNameBuf, sizeof(appNameBuf));
+        std::string name = (len > 0 && len < sizeof(appNameBuf)) ? appNameBuf : "Installer";
+        std::string sanitized = name;
+        for (char& c : sanitized) {
+            if (c == '\\' || c == '/' || c == ':' || c == '*' ||
+                c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+                c = '_';
+            }
+        }
+        logPath = std::filesystem::temp_directory_path() /
+                  ("MTInstaller_" + sanitized + ".log");
     } catch (...) {
-        logPath = "MTInstaller.log";
+        logPath = "MTInstaller_Installer.log";
     }
     FILE* fp = nullptr;
     fopen_s(&fp, logPath.string().c_str(), "w");

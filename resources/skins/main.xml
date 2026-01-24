@@ -32,6 +32,9 @@
             <Include source="welcome_page.xml"/>
             <Include source="progress_page.xml"/>
             <Include source="completion_page.xml"/>
+            <Include source="uninstall_confirm_page.xml"/>
+            <Include source="uninstall_progress_page.xml"/>
+            <Include source="uninstall_completion_page.xml"/>
         </TabLayout>
     </VerticalLayout>
 </Window>

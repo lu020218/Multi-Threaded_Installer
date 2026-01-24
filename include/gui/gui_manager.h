@@ -15,6 +15,7 @@ namespace MultiThreadedInstaller {
 // Forward declarations
 class PageController;
 class InstallationWorker;
+class UninstallWorker;
 
 // 安装配置结构
 struct InstallConfig {
@@ -48,6 +49,7 @@ struct InstallConfig {
 // 自定义Windows消息
 #define WM_INSTALLATION_PROGRESS (WM_USER + 1)
 #define WM_INSTALLATION_COMPLETE (WM_USER + 2)
+#define WM_UNINSTALL_COMPLETE (WM_USER + 3)
 
 // 进度消息数据结构
 struct ProgressMessageData {
@@ -110,6 +112,8 @@ private:
     
     // 安装工作线程
     InstallationWorker* m_pWorker;
+    UninstallWorker* m_pUninstallWorker;
+    bool m_uninstallMode;
     
     // 配置
     InstallConfig m_config;
@@ -129,6 +133,8 @@ private:
     void OnFinishButtonClick();
     void OnCancelProgressButtonClick();
     void OnShowMoreClick();
+    void OnUninstallConfirmClick();
+    void CollapseConfigIfExpanded();
     
     // 复选框状态变化处理
     void OnLicenseCheckboxChanged();
@@ -140,6 +146,10 @@ private:
     // 处理自定义消息
     void HandleProgressMessage(ProgressMessageData* pData);
     void HandleCompletionMessage(CompletionMessageData* pData);
+    void HandleUninstallCompletionMessage(CompletionMessageData* pData);
+
+public:
+    void SetUninstallMode(bool enabled) { m_uninstallMode = enabled; }
 };
 
 } // namespace MultiThreadedInstaller

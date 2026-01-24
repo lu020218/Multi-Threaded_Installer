@@ -203,6 +203,7 @@ if(BUILD_GUI)
         src/gui/gui_manager.cpp
         src/gui/page_controller.cpp
         src/gui/installation_worker.cpp
+        src/gui/uninstall_worker.cpp
         
         # Page controllers
         src/gui/welcome_page_controller.cpp

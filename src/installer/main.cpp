@@ -94,6 +94,65 @@ std::vector<std::string> collectFilesRecursive(const std::string& rootPath) {
     return files;
 }
 
+std::string findManifestFromRegistry(const std::string& appName, InstallerPathResolver& resolver) {
+    if (appName.empty()) {
+        return {};
+    }
+
+    std::string keyName = appName;
+    std::replace(keyName.begin(), keyName.end(), '\\', '_');
+    std::replace(keyName.begin(), keyName.end(), '/', '_');
+    std::replace(keyName.begin(), keyName.end(), ':', '_');
+    std::replace(keyName.begin(), keyName.end(), '*', '_');
+    std::replace(keyName.begin(), keyName.end(), '?', '_');
+    std::replace(keyName.begin(), keyName.end(), '"', '_');
+    std::replace(keyName.begin(), keyName.end(), '<', '_');
+    std::replace(keyName.begin(), keyName.end(), '>', '_');
+    std::replace(keyName.begin(), keyName.end(), '|', '_');
+
+    const std::string hkcuPath =
+        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
+    const std::string hklmPath =
+        "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
+
+    std::string installLocation;
+    if (!readRegistryStringValue(hkcuPath, "InstallLocation", installLocation)) {
+        readRegistryStringValue(hklmPath, "InstallLocation", installLocation);
+    }
+
+    if (!installLocation.empty()) {
+        std::filesystem::path localManifest = std::filesystem::path(installLocation) / "install.manifest.json";
+        if (std::filesystem::exists(localManifest)) {
+            return localManifest.string();
+        }
+    }
+
+    std::string uninstallString;
+    if (!readRegistryStringValue(hkcuPath, "UninstallString", uninstallString)) {
+        readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
+    }
+
+    if (!uninstallString.empty()) {
+        std::filesystem::path uninstallPath(uninstallString);
+        if (std::filesystem::exists(uninstallPath)) {
+            std::filesystem::path baseDir = uninstallPath.parent_path();
+            if (!baseDir.empty()) {
+                std::filesystem::path localManifest = baseDir / "install.manifest.json";
+                if (std::filesystem::exists(localManifest)) {
+                    return localManifest.string();
+                }
+            }
+        }
+    }
+
+    std::string defaultManifest = getDefaultManifestPath(appName, resolver);
+    if (!defaultManifest.empty() && std::filesystem::exists(defaultManifest)) {
+        return defaultManifest;
+    }
+
+    return {};
+}
+
 #ifdef _WIN32
 static void ensureConsoleVisible() {
     HWND consoleWnd = GetConsoleWindow();
@@ -275,6 +334,13 @@ int runConsoleInstaller(int argc, char* argv[]) {
             fallbackAppName = exeName.stem().string();
         }
         if (!fallbackAppName.empty()) {
+            std::string manifestPath = findManifestFromRegistry(fallbackAppName, pathResolver);
+            if (!manifestPath.empty()) {
+                bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
+                return ok ? 0 : 1;
+            }
+        }
+        if (!fallbackAppName.empty()) {
             std::string manifestPath = getDefaultManifestPath(fallbackAppName, pathResolver);
             if (!manifestPath.empty() && std::filesystem::exists(manifestPath)) {
                 bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
@@ -307,6 +373,17 @@ int runConsoleInstaller(int argc, char* argv[]) {
         console.showError("Invalid or corrupted installer metadata");
         return 1;
     }
+
+#ifdef _WIN32
+    if (!metadata.applicationName.empty()) {
+        std::wstring appName = toWideUtf8(metadata.applicationName);
+        if (!appName.empty()) {
+            SetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appName.c_str());
+        }
+    }
+#endif
+
+    initializeInstallerLogging();
 
 #ifdef _WIN32
     if (metadata.requireAdmin && !isRunningAsAdmin()) {
@@ -1217,13 +1294,33 @@ int runConsoleInstaller(int argc, char* argv[]) {
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     int argc = 0;
     LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
-    initializeInstallerLogging();
     bool silentMode = argvW ? (hasFlagWide(argc, argvW, L"-s") ||
                                hasFlagWide(argc, argvW, L"--silent")) : false;
     bool debugMode = argvW ? hasFlagWide(argc, argvW, L"--debug") : false;
+    bool uninstallMode = argvW ? hasFlagWide(argc, argvW, L"--uninstall") : false;
+    std::string exePathString = getCurrentExecutablePath();
+    std::string exeNameString;
+    if (!exePathString.empty()) {
+        exeNameString = std::filesystem::path(exePathString).filename().string();
+    }
     if (argvW) {
         LocalFree(argvW);
     }
+
+#ifdef _WIN32
+    if (!uninstallMode) {
+        std::string exeLower = exeNameString;
+        std::transform(exeLower.begin(), exeLower.end(), exeLower.begin(), ::tolower);
+        if (exeLower == "uninstall.exe" || exeLower.find("uninstall") != std::string::npos) {
+            uninstallMode = true;
+        } else {
+            std::string localManifest = getLocalManifestPath(exePathString);
+            if (!localManifest.empty() && std::filesystem::exists(localManifest)) {
+                uninstallMode = true;
+            }
+        }
+    }
+#endif
 
     if (debugMode) {
         ensureConsoleVisible();
@@ -1245,6 +1342,99 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         MessageBoxW(NULL, L"Failed to initialize COM library", L"Error", MB_OK | MB_ICONERROR);
         return 1;
     }
+
+    if (uninstallMode) {
+        std::string appName;
+        if (!exePathString.empty()) {
+            std::filesystem::path exeDir = std::filesystem::path(exePathString).parent_path();
+            if (!exeDir.empty()) {
+                appName = exeDir.filename().string();
+            }
+            if (appName.empty()) {
+                std::filesystem::path exeName = std::filesystem::path(exePathString).filename();
+                appName = exeName.stem().string();
+            }
+        }
+        if (appName.empty()) {
+            appName = "Application";
+        }
+
+#ifdef _WIN32
+        std::wstring appNameWide = toWideUtf8(appName);
+        if (!appNameWide.empty()) {
+            SetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appNameWide.c_str());
+        }
+#endif
+        initializeInstallerLogging();
+
+        std::cout << "Uninstall mode active. exe=" << exeNameString << std::endl;
+
+        InstallConfig config;
+        config.applicationName = stringToWString(appName);
+        config.version = L"";
+        config.defaultInstallPath.clear();
+
+        // 提取嵌入的GUI资源到临时目录
+        EmbeddedResourceManager resourceMgr;
+        std::string tempResourcePath = resourceMgr.extractResources();
+
+        // 创建并显示GUI
+        CPaintManagerUI::SetInstance(hInstance);
+
+        CDuiString resourcePath;
+        CDuiString resourceBasePath;
+        CDuiString skinsPath;
+        if (!tempResourcePath.empty()) {
+#if defined(UNICODE) || defined(_UNICODE)
+            int size = MultiByteToWideChar(CP_UTF8, 0, tempResourcePath.c_str(), -1, NULL, 0);
+            if (size > 0) {
+                std::vector<wchar_t> wpath(size);
+                MultiByteToWideChar(CP_UTF8, 0, tempResourcePath.c_str(), -1, wpath.data(), size);
+                resourceBasePath = wpath.data();
+            }
+#else
+            resourceBasePath = tempResourcePath.c_str();
+#endif
+            resourcePath = resourceBasePath;
+            if (!resourcePath.IsEmpty()) {
+                TCHAR lastChar = resourcePath.GetAt(resourcePath.GetLength() - 1);
+                if (lastChar != _T('\\') && lastChar != _T('/')) {
+                    resourcePath += _T("\\");
+                }
+            }
+            skinsPath = resourcePath + _T("skins\\");
+        }
+
+        if (resourcePath.IsEmpty()) {
+            CDuiString instancePath = CPaintManagerUI::GetInstancePath();
+            resourceBasePath = instancePath + _T("resources\\");
+            resourcePath = resourceBasePath;
+            skinsPath = resourceBasePath + _T("skins\\");
+        }
+
+        CPaintManagerUI::SetResourcePath(skinsPath);
+        CPaintManagerUI::SetResourceType(UILIB_FILE);
+
+        GUIManager* pFrame = new GUIManager();
+        if (pFrame == NULL) {
+            CoUninitialize();
+            return 1;
+        }
+        pFrame->SetUninstallMode(true);
+        pFrame->SetInstallConfig(config);
+
+        HWND hwnd = pFrame->Create(NULL, _T("卸载向导"), UI_WNDSTYLE_FRAME, 0L, 0, 0, 560, 350);
+        if (hwnd == NULL) {
+            delete pFrame;
+            CoUninitialize();
+            return 1;
+        }
+        pFrame->CenterWindow();
+        pFrame->ShowWindow(true);
+        CPaintManagerUI::MessageLoop();
+        CoUninitialize();
+        return 0;
+    }
     
     // 解析元数据以获取配置信息
     MetadataParser parser;
@@ -1255,6 +1445,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         CoUninitialize();
         return 1;
     }
+
+#ifdef _WIN32
+    if (!metadata.applicationName.empty()) {
+        std::wstring appName = toWideUtf8(metadata.applicationName);
+        if (!appName.empty()) {
+            SetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appName.c_str());
+        }
+    }
+#endif
+
+    initializeInstallerLogging();
 
     if (metadata.requireAdmin && !isRunningAsAdmin()) {
         if (relaunchSelfAsAdmin()) {
@@ -1368,7 +1569,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         return 1;
     }
     std::wcout << L"Created GUIManager successfully" << std::endl;
-    
+
+    pFrame->SetUninstallMode(uninstallMode);
+
     pFrame->SetInstallConfig(config);
     std::wcout << L"Set install config" << std::endl;
     
@@ -1422,7 +1625,6 @@ int main(int argc, char* argv[]) {
     bool debugMode = hasFlag(argc, argv, "--debug");
 
 #ifdef _WIN32
-    initializeInstallerLogging();
     if (debugMode) {
         ensureConsoleVisible();
         SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", L"1");
@@ -1444,6 +1646,5 @@ int main(int argc, char* argv[]) {
 #endif
     
     // 静默模式或未启用GUI - 使用控制台模式
-    initializeInstallerLogging();
     return runConsoleInstaller(argc, argv);
 }

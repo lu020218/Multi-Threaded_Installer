@@ -3,6 +3,7 @@
 #include "../../include/gui/gui_manager.h"
 #include "../../include/gui/page_controller.h"
 #include "../../include/gui/gui_helpers.h"
+#include "../../include/gui/uninstall_worker.h"
 #include "../../include/installer/registry_utils.h"
 #include <shlobj.h>
 #include <sstream>
@@ -106,10 +107,12 @@ GUIManager::GUIManager()
       m_pMoreInfo(nullptr),
       m_pPageController(nullptr),
       m_pWorker(nullptr),
+      m_pUninstallWorker(nullptr),
       m_baseClientHeight(0),
       m_baseClientWidth(0),
       m_expandedClientHeight(0),
-      m_baseWindowWidth(0) {
+      m_baseWindowWidth(0),
+      m_uninstallMode(false) {
 }
 
 GUIManager::~GUIManager() {
@@ -122,6 +125,11 @@ GUIManager::~GUIManager() {
         delete m_pWorker;
         m_pWorker = nullptr;
     }
+
+    if (m_pUninstallWorker) {
+        delete m_pUninstallWorker;
+        m_pUninstallWorker = nullptr;
+    }
 }
 
 void GUIManager::SetInstallConfig(const InstallConfig& config) {
@@ -133,6 +141,9 @@ CDuiString GUIManager::GetSkinFolder() {
 }
 
 CDuiString GUIManager::GetSkinFile() {
+    if (m_uninstallMode) {
+        return _T("uninstall_main.xml");
+    }
     return _T("main.xml");
 }
 
@@ -143,9 +154,14 @@ LPCTSTR GUIManager::GetWindowClassName() const {
 void GUIManager::InitWindow() {
     InitControls();
     
-    if (m_pTabPages) {
+    if (m_pTabPages && !m_uninstallMode) {
         m_pPageController = new PageController(m_pTabPages);
     }
+    if (m_uninstallMode && m_pTabPages) {
+        m_pTabPages->SelectItem(0);
+    }
+
+    std::cout << "GUI mode uninstall=" << (m_uninstallMode ? "true" : "false") << std::endl;
     
     std::wstring installPath = ExpandEnvVars(m_config.defaultInstallPath);
 #ifdef _WIN32
@@ -278,6 +294,19 @@ void GUIManager::InitControls() {
         std::wstring versionText = L"版本 " + m_config.version;
         pAppVersionCompletion->SetText(WStringToTStr(versionText));
     }
+
+    CLabelUI* pAppNameUninstall = static_cast<CLabelUI*>(
+        m_pm.FindControl(_T("app_name_uninstall")));
+    if (pAppNameUninstall) {
+        pAppNameUninstall->SetText(WStringToTStr(m_config.applicationName));
+    }
+
+    CLabelUI* pAppVersionUninstall = static_cast<CLabelUI*>(
+        m_pm.FindControl(_T("app_version_uninstall")));
+    if (pAppVersionUninstall) {
+        std::wstring versionText = L"版本 " + m_config.version;
+        pAppVersionUninstall->SetText(WStringToTStr(versionText));
+    }
     
     if (m_pTabPages) {
         m_pTabPages->SelectItem(0);
@@ -314,6 +343,15 @@ void GUIManager::Notify(TNotifyUI& msg) {
         }
         else if (senderName == _T("btnShowMore")) {
             OnShowMoreClick();
+        }
+        else if (senderName == _T("btnUninstallConfirm")) {
+            OnUninstallConfirmClick();
+        }
+        else if (senderName == _T("btnUninstallCancel")) {
+            Close();
+        }
+        else if (senderName == _T("btnUninstallFinish")) {
+            Close();
         }
     }
     else if (msg.sType == _T("selectchanged")) {
@@ -354,6 +392,14 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         CompletionMessageData* pData = reinterpret_cast<CompletionMessageData*>(lParam);
         if (pData) {
             HandleCompletionMessage(pData);
+            delete pData;
+        }
+        return 0;
+    }
+    else if (uMsg == WM_UNINSTALL_COMPLETE) {
+        CompletionMessageData* pData = reinterpret_cast<CompletionMessageData*>(lParam);
+        if (pData) {
+            HandleUninstallCompletionMessage(pData);
             delete pData;
         }
         return 0;
@@ -453,11 +499,35 @@ void GUIManager::OnInstallButtonClick() {
         desktopIcons = pShortcut->GetCheck();
     }
 
+    CollapseConfigIfExpanded();
     m_pPageController->StartInstallation(installPath, autoRun, desktopIcons, m_hWnd);
 
     if (m_pTabPages) {
         m_pTabPages->SelectItem(1);
     }
+}
+
+void GUIManager::OnUninstallConfirmClick() {
+    if (!m_pTabPages) {
+        return;
+    }
+
+    m_pTabPages->SelectItem(1);
+
+    if (!m_pUninstallWorker) {
+        m_pUninstallWorker = new UninstallWorker(m_hWnd);
+    }
+
+    std::string appName = WStringToUtf8(m_config.applicationName);
+    if (appName.empty()) {
+        CompletionMessageData* pData = new CompletionMessageData();
+        pData->success = false;
+        wcscpy_s(pData->errorMessage, L"应用名称缺失，无法卸载。");
+        ::PostMessage(m_hWnd, WM_UNINSTALL_COMPLETE, 0, reinterpret_cast<LPARAM>(pData));
+        return;
+    }
+
+    m_pUninstallWorker->StartUninstall(appName);
 }
 
 void GUIManager::OnCancelButtonClick() {
@@ -609,6 +679,39 @@ void GUIManager::OnShowMoreClick() {
                << " base=" << m_baseClientWidth << "x" << m_baseClientHeight
                << " targetWindow=" << windowWidth << "x" << targetWindowHeight
                << std::endl;
+    m_pm.NeedUpdate();
+    m_pm.Invalidate();
+}
+
+void GUIManager::CollapseConfigIfExpanded() {
+    if (!m_pConfigBottom || !m_pMoreInfo) {
+        return;
+    }
+
+    if (!m_pConfigBottom->IsVisible() && !m_pMoreInfo->IsVisible()) {
+        return;
+    }
+
+    m_pConfigBottom->SetVisible(false);
+    m_pMoreInfo->SetVisible(false);
+
+    RECT rcWindow = {};
+    RECT rcClient = {};
+    ::GetWindowRect(m_hWnd, &rcWindow);
+    ::GetClientRect(m_hWnd, &rcClient);
+
+    int windowWidth = m_baseWindowWidth > 0 ? m_baseWindowWidth : (rcWindow.right - rcWindow.left);
+    int nonClientHeight = (rcWindow.bottom - rcWindow.top) - (rcClient.bottom - rcClient.top);
+    int targetWindowHeight = m_baseClientHeight + nonClientHeight;
+
+    ::SetWindowPos(
+        m_hWnd,
+        NULL,
+        rcWindow.left,
+        rcWindow.top,
+        windowWidth,
+        targetWindowHeight,
+        SWP_NOZORDER | SWP_NOACTIVATE);
     m_pm.NeedUpdate();
     m_pm.Invalidate();
 }
@@ -783,6 +886,30 @@ void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {
             m_pm.FindControl(_T("open_web_checkbox")));
         if (pOpenWebCheckbox) {
             pOpenWebCheckbox->SetVisible(false);
+        }
+    }
+}
+
+void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) {
+    if (!pData) {
+        return;
+    }
+
+    if (m_pTabPages) {
+        m_pTabPages->SelectItem(2);
+    }
+
+    CLabelUI* pResultMessageLabel = static_cast<CLabelUI*>(
+        m_pm.FindControl(_T("uninstall_result_message")));
+    if (pResultMessageLabel) {
+        if (pData->success) {
+            pResultMessageLabel->SetText(L"卸载完成。");
+            pResultMessageLabel->SetTextColor(0xFF4CAF50);
+        } else {
+            std::wstring errorText = L"卸载失败: ";
+            errorText += pData->errorMessage;
+            pResultMessageLabel->SetText(WStringToTStr(errorText));
+            pResultMessageLabel->SetTextColor(0xFFFF0000);
         }
     }
 }

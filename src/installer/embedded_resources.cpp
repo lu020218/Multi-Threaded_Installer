@@ -49,9 +49,13 @@ std::string EmbeddedResourceManager::extractResources() {
     // 提取 XML 资源
     const char* xmlFiles[] = {
         "main.xml",
+        "uninstall_main.xml",
         "welcome_page.xml",
         "progress_page.xml",
         "completion_page.xml",
+        "uninstall_confirm_page.xml",
+        "uninstall_progress_page.xml",
+        "uninstall_completion_page.xml",
         "license.xml"
     };
     

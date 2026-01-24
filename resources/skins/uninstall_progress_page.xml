@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window>
+<VerticalLayout name="uninstall_progress_page" padding="40,30,40,30">
+    <HorizontalLayout height="80">
+        <Control/>
+        <Control width="64" height="64" bkimage="..\images\logo1.png"/>
+        <Control/>
+    </HorizontalLayout>
+
+    <Label text="正在卸载..." font="2" textcolor="#FF333333"
+           align="center" height="30"/>
+    <Label name="uninstall_status" text="请稍候，正在清理应用程序文件。"
+           font="0" textcolor="#FF666666" align="center" height="25"/>
+
+    <Control height="20"/>
+    <Progress name="uninstall_progress" value="50" width="480" height="12"
+              bkcolor="#FFE0E0E0" forecolor="#FF4CAF50"/>
+
+    <Control/>
+</VerticalLayout>
+</Window>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window>
+<VerticalLayout name="uninstall_completion_page" padding="40,30,40,30">
+    <HorizontalLayout height="80">
+        <Control/>
+        <Control width="64" height="64" bkimage="..\images\finish.png"/>
+        <Control/>
+    </HorizontalLayout>
+
+    <Label text="卸载完成" font="2" textcolor="#FF333333"
+           align="center" height="30"/>
+    <Label name="uninstall_result_message" text="卸载完成。" font="1"
+           textcolor="#FF4CAF50" align="center" padding="0,20,0,0" height="30"/>
+
+    <Control/>
+
+    <HorizontalLayout height="35">
+        <Control/>
+        <Button name="btnUninstallFinish" text="完成" width="100" height="35"/>
+    </HorizontalLayout>
+</VerticalLayout>
+</Window>

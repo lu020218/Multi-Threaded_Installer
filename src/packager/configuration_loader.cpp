@@ -116,6 +116,11 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         config.iconPath = j["Icon"].get<std::string>();
     }
 
+    // 解析 WebPageUrl（可选）
+    if (j.contains("WebPageUrl") && j["WebPageUrl"].is_string()) {
+        config.webPageUrl = j["WebPageUrl"].get<std::string>();
+    }
+
     // 解析版本信息（可选）
     if (j.contains("ProductName") && j["ProductName"].is_string()) {
         config.productName = j["ProductName"].get<std::string>();

@@ -33,6 +33,7 @@
   <Text id="msg.finish_action" value="Finish (&amp;F)"/>
   <Text id="msg.finish" value="Finish"/>
   <Text id="msg.open" value="Open"/>
+  <Text id="msg.launch" value="Launch now"/>
 
   <Text id="msg.license_title" value="License Agreement"/>
   <Text id="msg.license_agree" value="Agree"/>

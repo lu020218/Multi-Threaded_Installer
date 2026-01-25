@@ -24,6 +24,14 @@ public:
     
     // 嵌入安装程序模板
     bool embedInstallerTemplate(const std::string& templatePath);
+
+    // 查找默认安装程序模板路径
+    std::string findDefaultInstallerTemplatePath() const;
+
+    // 显式设置模板资源目录（用于临时模板场景）
+    void setTemplateResourceDir(const std::filesystem::path& resourceDir) {
+        templateResourceDirOverride = resourceDir;
+    }
     
 private:
     // 数据定位结构，用于安装程序查找嵌入的数据
@@ -39,6 +47,7 @@ private:
     };
     
     std::string installerTemplatePath;
+    std::filesystem::path templateResourceDirOverride;
     
     // 创建自解压可执行文件
     bool createSelfExtractingExecutable(const std::string& outputPath,

@@ -535,7 +535,7 @@ InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata
     }
     config.logoResourceId = L"logo.png";  // 默认logo
     config.licenseText = L"";  // 将从resources/license.txt加载
-    config.webPageUrl = L"";  // 可以从配置中扩展
+    config.webPageUrl = stringToWString(metadata.webPageUrl);
     config.executableName = stringToWString(metadata.applicationName + ".exe");
     config.autoStartup = metadata.autoStartup;
     config.desktopIcons = metadata.desktopIcons;

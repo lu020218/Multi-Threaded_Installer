@@ -36,5 +36,6 @@
     "UseMutex": true,
     "MutexName": "Global\\MyDesktopApp_Install"
   },
-  "SparseFileThresholdBytes": 4194304
+  "SparseFileThresholdBytes": 4194304,
+  "WebPageUrl": "https://example.com/intro"
 }

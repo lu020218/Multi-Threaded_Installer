@@ -276,6 +276,23 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     metadata.configVersion = std::string(reinterpret_cast<const char*>(data.data() + offset), configVersionLen);
     offset += configVersionLen;
 
+    if (header->version >= 10) {
+        if (offset + sizeof(uint32_t) > data.size()) {
+            std::cerr << "Missing web page URL length" << std::endl;
+            return metadata;
+        }
+        uint32_t webUrlLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+        if (offset + webUrlLen > data.size()) {
+            std::cerr << "Insufficient data for web page URL" << std::endl;
+            return metadata;
+        }
+        metadata.webPageUrl = std::string(reinterpret_cast<const char*>(data.data() + offset), webUrlLen);
+        offset += webUrlLen;
+    } else {
+        metadata.webPageUrl.clear();
+    }
+
     if (header->version >= 7) {
         size_t flagCount = header->version >= 9 ? 4 : 3;
         if (offset + sizeof(uint8_t) * flagCount > data.size()) {

@@ -306,6 +306,29 @@ bool InstallerGenerator::embedInstallerTemplate(const std::string& templatePath)
     return true;
 }
 
+std::string InstallerGenerator::findDefaultInstallerTemplatePath() const {
+    std::vector<std::string> possiblePaths = {
+        "build/Release/installer.exe",
+        "build/Debug/installer.exe",
+        "build/installer.exe",
+        "installer.exe",
+        "build/installer",
+        "installer",
+        "./build/Release/installer.exe",
+        "./build/Debug/installer.exe",
+        "./installer.exe",
+        "./installer"
+    };
+
+    for (const auto& path : possiblePaths) {
+        if (std::filesystem::exists(path)) {
+            return path;
+        }
+    }
+
+    return {};
+}
+
 bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outputPath,
                                                       const std::vector<uint8_t>& metadata,
                                                       const std::vector<std::vector<uint8_t>>& compressedData) {
@@ -404,25 +427,10 @@ std::vector<uint8_t> InstallerGenerator::getDefaultInstallerTemplate() {
         return loadInstallerTemplate(installerTemplatePath);
     }
     
-    // 尝试查找预编译的安装程序可执行文件
-    std::vector<std::string> possiblePaths = {
-        "build/Release/installer.exe",  // Windows Release build
-        "build/Debug/installer.exe",    // Windows Debug build
-        "build/installer.exe",          // Windows build directory
-        "installer.exe",                // Windows current directory
-        "build/installer",              // Unix build directory
-        "installer",                    // Unix current directory
-        "./build/Release/installer.exe", // Relative Windows Release
-        "./build/Debug/installer.exe",   // Relative Windows Debug
-        "./installer.exe",              // Relative Windows current
-        "./installer"                   // Relative Unix current
-    };
-    
-    for (const auto& path : possiblePaths) {
-        if (std::filesystem::exists(path)) {
-            std::cout << "Using installer template: " << path << std::endl;
-            return loadInstallerTemplate(path);
-        }
+    std::string defaultPath = findDefaultInstallerTemplatePath();
+    if (!defaultPath.empty()) {
+        std::cout << "Using installer template: " << defaultPath << std::endl;
+        return loadInstallerTemplate(defaultPath);
     }
     
     // 如果找不到预编译的安装程序，创建一个最小的占位符
@@ -505,6 +513,10 @@ bool InstallerGenerator::appendDataToExecutable(const std::string& executablePat
 }
 
 std::filesystem::path InstallerGenerator::resolveTemplateDirectory() const {
+    if (!templateResourceDirOverride.empty()) {
+        return templateResourceDirOverride;
+    }
+
     if (!installerTemplatePath.empty()) {
         return std::filesystem::path(installerTemplatePath).parent_path();
     }

@@ -33,6 +33,7 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.applicationName = config.applicationName;
     metadata.configVersion = config.version;
     metadata.defaultInstallDir = config.defaultInstallDir;
+    metadata.webPageUrl = config.webPageUrl;
     metadata.autoStartup = config.autoStartup;
     metadata.desktopIcons = config.desktopIcons;
     metadata.autoCleanOldInstall = config.autoCleanOldInstall;
@@ -148,6 +149,11 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     const uint8_t* configVersionLenBytes = reinterpret_cast<const uint8_t*>(&configVersionLen);
     serialized.insert(serialized.end(), configVersionLenBytes, configVersionLenBytes + sizeof(uint32_t));
     serialized.insert(serialized.end(), metadata.configVersion.begin(), metadata.configVersion.end());
+
+    uint32_t webUrlLen = static_cast<uint32_t>(metadata.webPageUrl.length());
+    const uint8_t* webUrlLenBytes = reinterpret_cast<const uint8_t*>(&webUrlLen);
+    serialized.insert(serialized.end(), webUrlLenBytes, webUrlLenBytes + sizeof(uint32_t));
+    serialized.insert(serialized.end(), metadata.webPageUrl.begin(), metadata.webPageUrl.end());
 
     uint8_t autoStartupFlag = metadata.autoStartup ? 1 : 0;
     uint8_t desktopIconsFlag = metadata.desktopIcons ? 1 : 0;

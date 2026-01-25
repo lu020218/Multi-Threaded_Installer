@@ -475,6 +475,12 @@ void GUIManager::Notify(TNotifyUI& msg) {
         else if (senderName == _T("finish_button")) {
             OnFinishButtonClick();
         }
+        else if (senderName == _T("btnRun")) {
+            OnFinishButtonClick();
+        }
+        else if (senderName == _T("btnClose")) {
+            OnCancelButtonClick();
+        }
         else if (senderName == _T("cancel_progress_button")) {
             OnCancelProgressButtonClick();
         }
@@ -855,7 +861,11 @@ void GUIManager::SyncLicenseAgreementFromPage() {
 void GUIManager::OnFinishButtonClick() {
     CCheckBoxUI* pRunAppCheckbox = static_cast<CCheckBoxUI*>(
         m_pm.FindControl(_T("run_app_checkbox")));
-    if (pRunAppCheckbox && pRunAppCheckbox->GetCheck()) {
+    bool shouldRun = true;
+    if (pRunAppCheckbox) {
+        shouldRun = pRunAppCheckbox->GetCheck();
+    }
+    if (shouldRun) {
         std::wstring installPath;
         if (m_pInstallPathEdit) {
             installPath = m_pInstallPathEdit->GetText().GetData();
@@ -1277,6 +1287,12 @@ void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {
             pRunAppCheckbox->SetVisible(false);
         }
         
+        CCheckBoxUI* pOpenWebCheckbox = static_cast<CCheckBoxUI*>(
+            m_pm.FindControl(_T("open_web_checkbox")));
+        if (pOpenWebCheckbox) {
+            pOpenWebCheckbox->SetVisible(false);
+        }
+    } else if (m_config.webPageUrl.empty()) {
         CCheckBoxUI* pOpenWebCheckbox = static_cast<CCheckBoxUI*>(
             m_pm.FindControl(_T("open_web_checkbox")));
         if (pOpenWebCheckbox) {

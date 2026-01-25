@@ -33,6 +33,7 @@
   <Text id="msg.finish_action" value="完成 (&amp;F)"/>
   <Text id="msg.finish" value="完成"/>
   <Text id="msg.open" value="打开"/>
+  <Text id="msg.launch" value="立即启动"/>
 
   <Text id="msg.license_title" value="许可协议"/>
   <Text id="msg.license_agree" value="同意"/>

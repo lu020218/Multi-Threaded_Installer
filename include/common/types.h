@@ -91,6 +91,7 @@ struct PackagerConfiguration {
     std::string applicationName;                    // 应用程序名称
     std::string defaultInstallDir;                  // 建议的默认安装目录（不含应用程序名）
     std::string iconPath;                           // 安装程序图标路径（可选）
+    std::string webPageUrl;                         // 介绍网页URL（可选）
     std::string productName;                        // 产品名称（可选）
     std::string fileVersion;                        // 文件版本（可选）
     std::string productVersion;                     // 产品版本（可选）
@@ -197,6 +198,7 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::string applicationName;                    // 应用程序名称
     std::string configVersion;                      // 配置版本
     std::string defaultInstallDir;                  // 建议的默认安装目录
+    std::string webPageUrl;                         // 介绍网页URL
     bool autoStartup;                               // 默认开机自启动
     bool desktopIcons;                              // 默认创建桌面图标
     bool autoCleanOldInstall;                       // 自动清理旧安装目录（仅当目录不同）
@@ -214,6 +216,7 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
           applicationName("MyApplication"),
           configVersion("1.0"),
           defaultInstallDir("%ProgramFiles%"),
+          webPageUrl(""),
           autoStartup(false),
           desktopIcons(false),
           autoCleanOldInstall(false),
@@ -255,7 +258,7 @@ using ProgressCallback = std::function<void(const std::string&, float)>;
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;  // "MTDP"
-    constexpr uint32_t VERSION = 9;
+    constexpr uint32_t VERSION = 10;
     
     // 块大小配置 (优化后)
     constexpr size_t DEFAULT_BLOCK_SIZE = 16 * 1024 * 1024;  // 2MB (从 64KB 优化)

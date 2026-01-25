@@ -11,6 +11,12 @@
 #include <chrono>
 #include <iomanip>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 using namespace MultiThreadedInstaller;
 namespace fs = std::filesystem;
 
@@ -25,6 +31,17 @@ void showUsage(const std::string& programName) {
     std::cout << "  Place a packager.json or .packager.json file in the input directory\n";
     std::cout << "  to configure packaging options. If no configuration file is found,\n";
     std::cout << "  default settings will be used.\n";
+}
+
+static fs::path makeTempTemplatePath(const fs::path& outputPath) {
+    fs::path baseDir = outputPath.has_parent_path() ? outputPath.parent_path() : fs::path(".");
+    std::string baseName = outputPath.filename().string();
+#ifdef _WIN32
+    auto pid = static_cast<unsigned long>(GetCurrentProcessId());
+#else
+    auto pid = static_cast<unsigned long>(getpid());
+#endif
+    return baseDir / (baseName + ".template." + std::to_string(pid) + ".exe");
 }
 
 int main(int argc, char* argv[]) {
@@ -146,41 +163,82 @@ int main(int argc, char* argv[]) {
     for (const auto& result : compressionResults) {
         compressedDataList.push_back(result.compressedData);
     }
+
+    fs::path tempTemplatePath;
+    bool usesTempTemplate = false;
+    if (!config.iconPath.empty() ||
+        !config.productName.empty() ||
+        !config.fileDescription.empty() ||
+        !config.companyName.empty() ||
+        !config.copyright.empty() ||
+        !config.fileVersion.empty() ||
+        !config.productVersion.empty()) {
+        std::string baseTemplate = installerGen.findDefaultInstallerTemplatePath();
+        if (baseTemplate.empty()) {
+            console.showError("Failed to locate installer template for resource updates");
+            return 1;
+        }
+
+        installerGen.setTemplateResourceDir(fs::path(baseTemplate).parent_path());
+
+        tempTemplatePath = makeTempTemplatePath(outputFilePath);
+        std::error_code copyError;
+        fs::copy_file(baseTemplate, tempTemplatePath, fs::copy_options::overwrite_existing, copyError);
+        if (copyError) {
+            console.showError("Failed to create temporary installer template: " + copyError.message());
+            return 1;
+        }
+
+        if (!installerGen.embedInstallerTemplate(tempTemplatePath.string())) {
+            console.showError("Failed to use temporary installer template");
+            return 1;
+        }
+
+        usesTempTemplate = true;
+
+        if (!config.iconPath.empty()) {
+            fs::path iconPath(config.iconPath);
+            if (!iconPath.is_absolute()) {
+                iconPath = fs::path(inputPath) / iconPath;
+            }
+            std::string iconError;
+            if (UpdateInstallerIcon(tempTemplatePath.string(), iconPath.string(), iconError)) {
+                console.showInfo("Applied installer icon: " + iconPath.string());
+            } else {
+                console.showWarning("Failed to apply installer icon: " + iconError);
+            }
+        }
+
+        VersionInfoData versionInfo;
+        versionInfo.productName = config.productName.empty() ? config.applicationName : config.productName;
+        versionInfo.fileDescription = config.fileDescription.empty()
+            ? (config.applicationName + " Installer")
+            : config.fileDescription;
+        versionInfo.companyName = config.companyName;
+        versionInfo.copyright = config.copyright;
+        versionInfo.fileVersion = config.fileVersion.empty() ? config.version : config.fileVersion;
+        versionInfo.productVersion = config.productVersion.empty() ? config.version : config.productVersion;
+        versionInfo.originalFilename = fs::path(outputPath).filename().string();
+
+        std::string versionError;
+        if (UpdateInstallerVersionInfo(tempTemplatePath.string(), versionInfo, versionError)) {
+            console.showInfo("Applied installer version info");
+        } else {
+            console.showWarning("Failed to apply installer version info: " + versionError);
+        }
+    }
     
     if (!installerGen.generateInstaller(outputPath, serializedMetadata, compressedDataList)) {
         console.showError("Failed to generate installer");
         return 1;
     }
 
-    if (!config.iconPath.empty()) {
-        fs::path iconPath(config.iconPath);
-        if (!iconPath.is_absolute()) {
-            iconPath = fs::path(inputPath) / iconPath;
+    if (usesTempTemplate) {
+        std::error_code removeError;
+        fs::remove(tempTemplatePath, removeError);
+        if (removeError) {
+            console.showWarning("Failed to remove temporary template: " + removeError.message());
         }
-        std::string iconError;
-        if (UpdateInstallerIcon(outputPath, iconPath.string(), iconError)) {
-            console.showInfo("Applied installer icon: " + iconPath.string());
-        } else {
-            console.showWarning("Failed to apply installer icon: " + iconError);
-        }
-    }
-
-    VersionInfoData versionInfo;
-    versionInfo.productName = config.productName.empty() ? config.applicationName : config.productName;
-    versionInfo.fileDescription = config.fileDescription.empty()
-        ? (config.applicationName + " Installer")
-        : config.fileDescription;
-    versionInfo.companyName = config.companyName;
-    versionInfo.copyright = config.copyright;
-    versionInfo.fileVersion = config.fileVersion.empty() ? config.version : config.fileVersion;
-    versionInfo.productVersion = config.productVersion.empty() ? config.version : config.productVersion;
-    versionInfo.originalFilename = fs::path(outputPath).filename().string();
-
-    std::string versionError;
-    if (UpdateInstallerVersionInfo(outputPath, versionInfo, versionError)) {
-        console.showInfo("Applied installer version info");
-    } else {
-        console.showWarning("Failed to apply installer version info: " + versionError);
     }
     
     if (!args.dataPackagePath.empty()) {

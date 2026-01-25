@@ -15,6 +15,7 @@
 #include "installer/embedded_resources.h"
 #include <Windows.h>
 #include <Shlwapi.h>
+#include "Utils/unzip.h"
 #pragma comment(lib, "Shlwapi.lib")
 #endif
 
@@ -288,6 +289,236 @@ static std::wstring tcharToWString(const TCHAR* text) {
     return result;
 #endif
 }
+
+static void EnablePerMonitorDpiAwareness() {
+#ifdef _WIN32
+#ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+#define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((DPI_AWARENESS_CONTEXT)-4)
+#endif
+#ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE
+#define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE ((DPI_AWARENESS_CONTEXT)-3)
+#endif
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        auto setContext = reinterpret_cast<BOOL(WINAPI*)(DPI_AWARENESS_CONTEXT)>(
+            GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
+        if (setContext) {
+            if (setContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+                return;
+            }
+            setContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+            return;
+        }
+    }
+
+    HMODULE shcore = LoadLibraryW(L"shcore.dll");
+    if (shcore) {
+        auto setAwareness = reinterpret_cast<HRESULT(WINAPI*)(int)>(
+            GetProcAddress(shcore, "SetProcessDpiAwareness"));
+        if (setAwareness) {
+            setAwareness(2);
+            FreeLibrary(shcore);
+            return;
+        }
+        FreeLibrary(shcore);
+    }
+
+    if (user32) {
+        auto setAware = reinterpret_cast<BOOL(WINAPI*)(void)>(
+            GetProcAddress(user32, "SetProcessDPIAware"));
+        if (setAware) {
+            setAware();
+        }
+    }
+#endif
+}
+
+static int GetSystemDpi() {
+#ifdef _WIN32
+    HDC screen = GetDC(NULL);
+    if (!screen) {
+        return 96;
+    }
+    int dpi = GetDeviceCaps(screen, LOGPIXELSX);
+    ReleaseDC(NULL, screen);
+    if (dpi <= 0) {
+        return 96;
+    }
+    return dpi;
+#else
+    return 96;
+#endif
+}
+
+#ifdef _WIN32
+static UINT GetDpiForWindowSafe(HWND hwnd) {
+    typedef UINT(WINAPI* GetDpiForWindowFn)(HWND);
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        auto fn = reinterpret_cast<GetDpiForWindowFn>(
+            GetProcAddress(user32, "GetDpiForWindow"));
+        if (fn && hwnd) {
+            return fn(hwnd);
+        }
+    }
+    return static_cast<UINT>(GetSystemDpi());
+}
+
+static void AdjustWindowForDpi(HWND hwnd, int baseWidth, int baseHeight) {
+    if (!hwnd) {
+        return;
+    }
+    UINT dpi = GetDpiForWindowSafe(hwnd);
+    float scale = static_cast<float>(dpi) / 96.0f;
+    int width = static_cast<int>(baseWidth * scale);
+    int height = static_cast<int>(baseHeight * scale);
+    ::SetWindowPos(hwnd, NULL, 0, 0, width, height,
+                   SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE);
+}
+
+struct WindowSize {
+    int width = 0;
+    int height = 0;
+};
+
+static std::string ReadFileToString(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        return {};
+    }
+    return std::string((std::istreambuf_iterator<char>(file)),
+                       std::istreambuf_iterator<char>());
+}
+
+static std::string WideToUtf8(const std::wstring& value) {
+#ifdef _WIN32
+    if (value.empty()) {
+        return {};
+    }
+    int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 0) {
+        return {};
+    }
+    std::string out(static_cast<size_t>(size - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, out.data(), size, nullptr, nullptr);
+    return out;
+#else
+    return std::string(value.begin(), value.end());
+#endif
+}
+
+static bool ZipEntryExists(const CDuiString& zipPath, const CDuiString& entry) {
+    HZIP hz = OpenZip(zipPath.GetData(), 0);
+    if (hz == NULL) {
+        return false;
+    }
+    ZIPENTRY ze;
+    int index = 0;
+    bool found = (FindZipItem(hz, entry.GetData(), true, &index, &ze) == 0);
+    CloseZip(hz);
+    return found;
+}
+
+static void LogZipEntryCheck(const CDuiString& zipPath, const std::vector<CDuiString>& entries) {
+    std::string zipPathUtf8 = WideToUtf8(tcharToWString(zipPath.GetData()));
+    if (!zipPathUtf8.empty()) {
+        std::cout << "Resource zip path: " << zipPathUtf8 << std::endl;
+    }
+    for (const auto& entry : entries) {
+        std::string entryUtf8 = WideToUtf8(tcharToWString(entry.GetData()));
+        std::cout << "Zip entry check: " << entryUtf8 << " -> "
+                  << (ZipEntryExists(zipPath, entry) ? "found" : "missing")
+                  << std::endl;
+    }
+}
+
+static std::string ReadZipEntryToString(const CDuiString& zipPath, const CDuiString& entry) {
+    HZIP hz = OpenZip(zipPath.GetData(), 0);
+    if (hz == NULL) {
+        return {};
+    }
+    ZIPENTRY ze;
+    int index = 0;
+    if (FindZipItem(hz, entry.GetData(), true, &index, &ze) != 0) {
+        CloseZip(hz);
+        return {};
+    }
+    std::string buffer(static_cast<size_t>(ze.unc_size), '\0');
+    if (UnzipItem(hz, index, buffer.data(), ze.unc_size) != 0) {
+        CloseZip(hz);
+        return {};
+    }
+    CloseZip(hz);
+    return buffer;
+}
+
+static WindowSize ParseWindowSizeFromXml(const std::string& xml, WindowSize fallback) {
+    size_t pos = xml.find("size=\"");
+    if (pos == std::string::npos) {
+        pos = xml.find("size='");
+    }
+    if (pos == std::string::npos) {
+        return fallback;
+    }
+    pos = xml.find_first_of("\"'", pos);
+    if (pos == std::string::npos) {
+        return fallback;
+    }
+    char quote = xml[pos];
+    size_t end = xml.find(quote, pos + 1);
+    if (end == std::string::npos) {
+        return fallback;
+    }
+    std::string sizeText = xml.substr(pos + 1, end - pos - 1);
+    size_t comma = sizeText.find(',');
+    if (comma == std::string::npos) {
+        return fallback;
+    }
+    try {
+        int w = std::stoi(sizeText.substr(0, comma));
+        int h = std::stoi(sizeText.substr(comma + 1));
+        if (w > 0 && h > 0) {
+            return WindowSize{ w, h };
+        }
+    } catch (...) {
+        return fallback;
+    }
+    return fallback;
+}
+
+static WindowSize GetWindowSizeFromResources(bool useZip,
+                                             const CDuiString& resourcePath,
+                                             const CDuiString& skinsPath,
+                                             bool uninstallMode,
+                                             WindowSize fallback) {
+    const wchar_t* zipFileName = L"resources.zip";
+    const wchar_t* mainFile = uninstallMode ? L"uninstall_main.xml" : L"main.xml";
+
+    if (useZip) {
+        CDuiString zipPath = resourcePath + zipFileName;
+        std::vector<CDuiString> candidates;
+        candidates.emplace_back(CDuiString(_T("skins\\")) + mainFile);
+        candidates.emplace_back(CDuiString(_T("skins/")) + mainFile);
+        candidates.emplace_back(CDuiString(mainFile));
+
+        for (const auto& entry : candidates) {
+            std::string content = ReadZipEntryToString(zipPath, entry);
+            if (!content.empty()) {
+                return ParseWindowSizeFromXml(content, fallback);
+            }
+        }
+        return fallback;
+    }
+
+    std::filesystem::path filePath(skinsPath.GetData());
+    filePath /= mainFile;
+    std::string content = ReadFileToString(filePath);
+    if (content.empty()) {
+        return fallback;
+    }
+    return ParseWindowSizeFromXml(content, fallback);
+}
+#endif
 
 // 从元数据创建InstallConfig
 InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata& metadata) {
@@ -1357,6 +1588,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                                hasFlagWide(argc, argvW, L"--silent")) : false;
     bool debugMode = argvW ? hasFlagWide(argc, argvW, L"--debug") : false;
     bool uninstallMode = argvW ? hasFlagWide(argc, argvW, L"--uninstall") : false;
+    EnablePerMonitorDpiAwareness();
     std::string exePathString = getCurrentExecutablePath();
     std::string exeNameString;
     if (!exePathString.empty()) {
@@ -1514,12 +1746,28 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
         if (useZip) {
             CPaintManagerUI::SetResourcePath(resourcePath);
-            CPaintManagerUI::SetResourceZip(_T("resources.zip"));
+            CPaintManagerUI::SetResourceZip(_T("resources.zip"), true);
             CPaintManagerUI::SetResourceType(UILIB_ZIP);
+            std::cout << "Resource zip enabled: true" << std::endl;
+            CDuiString zipPath = resourcePath + _T("resources.zip");
+            std::vector<CDuiString> checks;
+            checks.emplace_back(_T("images/bg2.png"));
+            checks.emplace_back(_T("../images/bg2.png"));
+            checks.emplace_back(_T("images/bg2@150.png"));
+            checks.emplace_back(_T("../images/bg2@150.png"));
+            checks.emplace_back(_T("images/bg2@200.png"));
+            checks.emplace_back(_T("../images/bg2@200.png"));
+            checks.emplace_back(_T("images/logo3.png"));
+            checks.emplace_back(_T("../images/logo3.png"));
+            checks.emplace_back(_T("skins/msgBox.xml"));
+            checks.emplace_back(_T("skins\\msgBox.xml"));
+            checks.emplace_back(_T("msgBox.xml"));
+            LogZipEntryCheck(zipPath, checks);
         } else {
             CPaintManagerUI::SetResourceZip(_T(""));
-            CPaintManagerUI::SetResourcePath(skinsPath);
+            CPaintManagerUI::SetResourcePath(resourcePath);
             CPaintManagerUI::SetResourceType(UILIB_FILE);
+            std::cout << "Resource zip enabled: false" << std::endl;
         }
 
         GUIManager* pFrame = new GUIManager();
@@ -1530,15 +1778,26 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         pFrame->SetUninstallMode(true);
         pFrame->SetInstallConfig(config);
 
-        HWND hwnd = pFrame->Create(NULL, _T("卸载向导"), UI_WNDSTYLE_FRAME, 0L, 0, 0, 560, 350);
+        WindowSize baseSize = GetWindowSizeFromResources(
+            useZip,
+            resourcePath,
+            skinsPath,
+            true,
+            WindowSize{ 560, 350 });
+        HWND hwnd = pFrame->Create(NULL, _T("卸载向导"), UI_WNDSTYLE_FRAME, 0L, 0, 0,
+                                   baseSize.width, baseSize.height);
         if (hwnd == NULL) {
             delete pFrame;
             CoUninitialize();
             return 1;
         }
+#ifdef _WIN32
+        AdjustWindowForDpi(hwnd, baseSize.width, baseSize.height);
+#endif
         pFrame->CenterWindow();
         pFrame->ShowWindow(true);
         CPaintManagerUI::MessageLoop();
+        CPaintManagerUI::SetResourceZip(_T(""), true);
         CoUninitialize();
         return 0;
     }
@@ -1674,15 +1933,31 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
     if (useZip) {
         CPaintManagerUI::SetResourcePath(resourcePath);
-        CPaintManagerUI::SetResourceZip(_T("resources.zip"));
+        CPaintManagerUI::SetResourceZip(_T("resources.zip"), true);
         CPaintManagerUI::SetResourceType(UILIB_ZIP);
         std::wcout << L"Set resource zip to: " << resourcePath.GetData() << L"resources.zip" << std::endl;
+        std::cout << "Resource zip enabled: true" << std::endl;
+        CDuiString zipPath = resourcePath + _T("resources.zip");
+        std::vector<CDuiString> checks;
+        checks.emplace_back(_T("images/bg2.png"));
+        checks.emplace_back(_T("../images/bg2.png"));
+        checks.emplace_back(_T("images/bg2@150.png"));
+        checks.emplace_back(_T("../images/bg2@150.png"));
+        checks.emplace_back(_T("images/bg2@200.png"));
+        checks.emplace_back(_T("../images/bg2@200.png"));
+        checks.emplace_back(_T("images/logo3.png"));
+        checks.emplace_back(_T("../images/logo3.png"));
+        checks.emplace_back(_T("skins/msgBox.xml"));
+        checks.emplace_back(_T("skins\\msgBox.xml"));
+        checks.emplace_back(_T("msgBox.xml"));
+        LogZipEntryCheck(zipPath, checks);
     } else {
         CPaintManagerUI::SetResourceZip(_T(""));
-        CPaintManagerUI::SetResourcePath(skinsPath);
-        std::wcout << L"Set resource path to: " << skinsPath.GetData() << std::endl;
+        CPaintManagerUI::SetResourcePath(resourcePath);
+        std::wcout << L"Set resource path to: " << resourcePath.GetData() << std::endl;
         // 设置资源类型为文件系统
         CPaintManagerUI::SetResourceType(UILIB_FILE);
+        std::cout << "Resource zip enabled: false" << std::endl;
     }
     std::wcout << L"Set resource type to UILIB_FILE" << std::endl;
     
@@ -1702,7 +1977,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     std::wcout << L"About to call Create()..." << std::endl;
     HWND hwnd = NULL;
     try {
-        hwnd = pFrame->Create(NULL, _T("安装向导"), UI_WNDSTYLE_FRAME, 0L, 0, 0, 800, 600);
+        WindowSize baseSize = GetWindowSizeFromResources(
+            useZip,
+            resourcePath,
+            skinsPath,
+            false,
+            WindowSize{ 800, 600 });
+        hwnd = pFrame->Create(NULL, _T("安装向导"), UI_WNDSTYLE_FRAME, 0L, 0, 0,
+                              baseSize.width, baseSize.height);
     } catch (const std::exception& e) {
         std::wcout << L"ERROR: Exception during Create(): " << e.what() << std::endl;
         delete pFrame;
@@ -1727,6 +2009,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         return 1;
     }
     std::wcout << L"Create() succeeded, hwnd = " << hwnd << std::endl;
+
+#ifdef _WIN32
+    {
+        WindowSize baseSize = GetWindowSizeFromResources(
+            useZip,
+            resourcePath,
+            skinsPath,
+            false,
+            WindowSize{ 800, 600 });
+        AdjustWindowForDpi(hwnd, baseSize.width, baseSize.height);
+    }
+#endif
     
     pFrame->CenterWindow();
     std::wcout << L"Centered window" << std::endl;
@@ -1735,8 +2029,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     std::wcout << L"Showed window, entering message loop..." << std::endl;
     
     CPaintManagerUI::MessageLoop();
-    
+
     std::wcout << L"Message loop exited" << std::endl;
+    CPaintManagerUI::SetResourceZip(_T(""), true);
     CoUninitialize();
     return 0;
 }

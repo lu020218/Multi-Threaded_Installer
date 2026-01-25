@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Windows>
 <VerticalLayout name="progress_page">
-    <Control padding="240,95,0,0" width="80" height="80" bkimage="..\images\logo1.png" />
+    <Control padding="240,95,0,0" width="80" height="80" bkimage="images/logo1.png" />
 
     <Label visible="true" name="app_name_progress" padding="20,10,20,0" height="22" font="1" align="center" textcolor="0xFF666666" text="客户端平台" />
     <Label name="app_version_progress" text="版本 1.0.0" font="0" textcolor="#FF666666" align="center" height="25"/>

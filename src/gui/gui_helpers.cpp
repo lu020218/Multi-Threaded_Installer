@@ -3,6 +3,7 @@
 #include "../../include/gui/gui_helpers.h"
 #include "../../include/gui/message_box_dialog.h"
 #include <UIlib.h>
+#include "Utils/unzip.h"
 #include <shlobj.h>
 #include <shellapi.h>
 #include <sstream>
@@ -25,10 +26,28 @@ bool CanUseCustomDialog() {
         }
         std::filesystem::path zipPath = CPaintManagerUI::GetResourcePath().GetData();
         zipPath /= zipName.GetData();
-        return std::filesystem::exists(zipPath);
+        if (!std::filesystem::exists(zipPath)) {
+            return false;
+        }
+        HZIP hz = OpenZip(zipPath.wstring().c_str(), 0);
+        if (hz == NULL) {
+            return false;
+        }
+        ZIPENTRY ze;
+        int index = 0;
+        bool found = (FindZipItem(hz, _T("skins/msgBox.xml"), true, &index, &ze) == 0);
+        if (!found) {
+            found = (FindZipItem(hz, _T("skins\\msgBox.xml"), true, &index, &ze) == 0);
+        }
+        if (!found) {
+            found = (FindZipItem(hz, _T("msgBox.xml"), true, &index, &ze) == 0);
+        }
+        CloseZip(hz);
+        return found;
     }
 
     std::filesystem::path skinPath = CPaintManagerUI::GetResourcePath().GetData();
+    skinPath /= "skins";
     skinPath /= "msgBox.xml";
     return std::filesystem::exists(skinPath);
 }

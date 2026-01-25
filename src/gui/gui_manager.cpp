@@ -15,6 +15,9 @@
 #include <fstream>
 #include <algorithm>
 #include <cwctype>
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 using namespace DuiLib;
 
@@ -72,6 +75,56 @@ static int GetDefaultLanguageComboIndex();
 static std::wstring GetLanguageCodeForIndex(int index);
 static int GetLanguageIndexForCode(const std::wstring& code);
 static std::wstring GetLanguageFilePath(const std::wstring& code);
+
+static UINT GetDpiForWindowSafe(HWND hwnd) {
+#ifdef _WIN32
+    typedef UINT(WINAPI* GetDpiForWindowFn)(HWND);
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        auto fn = reinterpret_cast<GetDpiForWindowFn>(
+            GetProcAddress(user32, "GetDpiForWindow"));
+        if (fn && hwnd) {
+            return fn(hwnd);
+        }
+        if (!hwnd) {
+            auto getSystemDpi = reinterpret_cast<UINT(WINAPI*)(void)>(
+                GetProcAddress(user32, "GetDpiForSystem"));
+            if (getSystemDpi) {
+                return getSystemDpi();
+            }
+        }
+    }
+
+    if (!hwnd) {
+        HMODULE shcore = LoadLibraryW(L"shcore.dll");
+        if (shcore) {
+            typedef HRESULT(WINAPI* GetDpiForMonitorFn)(HMONITOR, int, UINT*, UINT*);
+            auto getDpiForMonitor = reinterpret_cast<GetDpiForMonitorFn>(
+                GetProcAddress(shcore, "GetDpiForMonitor"));
+            if (getDpiForMonitor) {
+                POINT pt = {0, 0};
+                HMONITOR monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+                UINT dpiX = 96;
+                UINT dpiY = 96;
+                if (SUCCEEDED(getDpiForMonitor(monitor, 0, &dpiX, &dpiY))) {
+                    FreeLibrary(shcore);
+                    return dpiX ? dpiX : 96;
+                }
+            }
+            FreeLibrary(shcore);
+        }
+    }
+    HDC screen = GetDC(NULL);
+    if (!screen) {
+        return 96;
+    }
+    int dpi = GetDeviceCaps(screen, LOGPIXELSX);
+    ReleaseDC(NULL, screen);
+    return dpi > 0 ? static_cast<UINT>(dpi) : 96;
+#else
+    return 96;
+#endif
+}
 
 static std::wstring ExpandEnvVars(const std::wstring& value) {
 #ifdef _WIN32
@@ -148,6 +201,18 @@ static std::wstring LoadLicenseTextFromResources() {
     return Utf8ToWString(content);
 }
 
+int GUIManager::GetWelcomePageIndex() const {
+    return m_uninstallMode ? 0 : kPageWelcome;
+}
+
+int GUIManager::GetProgressPageIndex() const {
+    return m_uninstallMode ? 1 : kPageProgress;
+}
+
+int GUIManager::GetCompletionPageIndex() const {
+    return m_uninstallMode ? 2 : kPageCompletion;
+}
+
 GUIManager::GUIManager()
     : m_pTabPages(nullptr),
       m_pInstallPathEdit(nullptr),
@@ -164,6 +229,7 @@ GUIManager::GUIManager()
       m_expandedClientHeight(0),
       m_baseWindowWidth(0),
       m_uninstallMode(false) {
+    m_pm.GetDPIObj()->SetScale(static_cast<int>(GetDpiForWindowSafe(nullptr)));
 }
 
 GUIManager::~GUIManager() {
@@ -192,12 +258,10 @@ CDuiString GUIManager::GetSkinFolder() {
 }
 
 CDuiString GUIManager::GetSkinFile() {
-    bool useZip = CPaintManagerUI::GetResourceType() == UILIB_ZIP &&
-                  !CPaintManagerUI::GetResourceZip().IsEmpty();
     if (m_uninstallMode) {
-        return useZip ? _T("skins\\uninstall_main.xml") : _T("uninstall_main.xml");
+        return _T("skins\\uninstall_main.xml");
     }
-    return useZip ? _T("skins\\main.xml") : _T("main.xml");
+    return _T("skins\\main.xml");
 }
 
 LPCTSTR GUIManager::GetWindowClassName() const {
@@ -205,13 +269,19 @@ LPCTSTR GUIManager::GetWindowClassName() const {
 }
 
 void GUIManager::InitWindow() {
+    int windowDpi = static_cast<int>(GetDpiForWindowSafe(m_hWnd));
+    if (windowDpi > 0 && windowDpi != m_pm.GetDPIObj()->GetScale()) {
+        m_pm.SetDPI(windowDpi);
+        m_pm.ReloadImages();
+        m_pm.Invalidate();
+    }
     InitControls();
     
     if (m_pTabPages && !m_uninstallMode) {
         m_pPageController = new PageController(m_pTabPages);
     }
     if (m_uninstallMode && m_pTabPages) {
-        m_pTabPages->SelectItem(0);
+        m_pTabPages->SelectItem(GetWelcomePageIndex());
     }
 
     std::cout << "GUI mode uninstall=" << (m_uninstallMode ? "true" : "false") << std::endl;
@@ -382,7 +452,7 @@ void GUIManager::InitControls() {
     }
     
     if (m_pTabPages) {
-        m_pTabPages->SelectItem(kPageWelcome);
+        m_pTabPages->SelectItem(GetWelcomePageIndex());
     }
 }
 
@@ -459,6 +529,35 @@ void GUIManager::Notify(TNotifyUI& msg) {
 }
 
 LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+#ifdef _WIN32
+    if (uMsg == WM_DPICHANGED) {
+        const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+        if (suggested) {
+            ::SetWindowPos(m_hWnd, NULL,
+                           suggested->left,
+                           suggested->top,
+                           suggested->right - suggested->left,
+                           suggested->bottom - suggested->top,
+                           SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        UINT dpi = LOWORD(wParam);
+        if (dpi == 0) {
+            dpi = GetDpiForWindowSafe(m_hWnd);
+        }
+        m_pm.SetDPI(static_cast<int>(dpi));
+        m_pm.ResetDPIAssets();
+        m_pm.NeedUpdate();
+        m_pm.Invalidate();
+        RECT rcClient;
+        ::GetClientRect(m_hWnd, &rcClient);
+        m_baseClientHeight = rcClient.bottom - rcClient.top;
+        m_baseClientWidth = rcClient.right - rcClient.left;
+        RECT rcWindow;
+        ::GetWindowRect(m_hWnd, &rcWindow);
+        m_baseWindowWidth = rcWindow.right - rcWindow.left;
+        return 0;
+    }
+#endif
     if (uMsg == WM_CLOSE) {
         DestroyWindow(m_hWnd);
         PostQuitMessage(0);
@@ -501,50 +600,52 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         bool altPressed = (GetKeyState(VK_MENU) & 0x8000) != 0;
         
         if (altPressed) {
-            if (wParam == 'I' && currentPage == kPageWelcome) {
+            if (wParam == 'I' && currentPage == GetWelcomePageIndex()) {
                 if (m_pInstallButton && m_pInstallButton->IsEnabled()) {
                     OnInstallButtonClick();
                     return 0;
                 }
             }
-            else if (wParam == 'C' && (currentPage == kPageWelcome ||
-                                       currentPage == kPageLicense ||
-                                       currentPage == kPageProgress)) {
-                if (currentPage == kPageWelcome || currentPage == kPageLicense) {
+            else if (wParam == 'C' && (currentPage == GetWelcomePageIndex() ||
+                                       (!m_uninstallMode && currentPage == kPageLicense) ||
+                                       currentPage == GetProgressPageIndex())) {
+                if (currentPage == GetWelcomePageIndex() ||
+                    (!m_uninstallMode && currentPage == kPageLicense)) {
                     OnCancelButtonClick();
                 } else {
                     OnCancelProgressButtonClick();
                 }
                 return 0;
             }
-            else if (wParam == 'F' && currentPage == kPageCompletion) {
+            else if (wParam == 'F' && currentPage == GetCompletionPageIndex()) {
                 OnFinishButtonClick();
                 return 0;
             }
         }
         else {
             if (wParam == VK_RETURN) {
-                if (currentPage == kPageWelcome) {
+                if (currentPage == GetWelcomePageIndex()) {
                     if (m_pInstallButton && m_pInstallButton->IsEnabled()) {
                         OnInstallButtonClick();
                         return 0;
                     }
                 }
-                else if (currentPage == kPageCompletion) {
+                else if (currentPage == GetCompletionPageIndex()) {
                     OnFinishButtonClick();
                     return 0;
                 }
             }
             else if (wParam == VK_ESCAPE) {
-                if (currentPage == kPageWelcome || currentPage == kPageLicense) {
+                if (currentPage == GetWelcomePageIndex() ||
+                    (!m_uninstallMode && currentPage == kPageLicense)) {
                     OnCancelButtonClick();
                     return 0;
                 }
-                else if (currentPage == kPageProgress) {
+                else if (currentPage == GetProgressPageIndex()) {
                     OnCancelProgressButtonClick();
                     return 0;
                 }
-                else if (currentPage == kPageCompletion) {
+                else if (currentPage == GetCompletionPageIndex()) {
                     OnFinishButtonClick();
                     return 0;
                 }
@@ -612,7 +713,7 @@ void GUIManager::OnInstallButtonClick() {
     m_pPageController->StartInstallation(installPath, autoRun, desktopIcons, languageCode, m_hWnd);
 
     if (m_pTabPages) {
-        m_pTabPages->SelectItem(kPageProgress);
+        m_pTabPages->SelectItem(GetProgressPageIndex());
     }
 }
 
@@ -621,7 +722,7 @@ void GUIManager::OnUninstallConfirmClick() {
         return;
     }
 
-    m_pTabPages->SelectItem(1);
+    m_pTabPages->SelectItem(GetProgressPageIndex());
 
     if (!m_pUninstallWorker) {
         m_pUninstallWorker = new UninstallWorker(m_hWnd);
@@ -1048,13 +1149,61 @@ void GUIManager::UpdateDiskSpaceInfo(const std::wstring& path) {
     }
 }
 
+void GUIManager::RefreshLocalizedText() {
+    CLabelUI* pAppVersion = static_cast<CLabelUI*>(
+        m_pm.FindControl(_T("app_version")));
+    if (pAppVersion) {
+        std::wstring prefix = GUIHelpers::GetLocalizedText(
+            L"msg.version.prefix",
+            L"Version ");
+        std::wstring versionText = prefix + m_config.version;
+        pAppVersion->SetText(WStringToTStr(versionText));
+    }
+
+    CLabelUI* pAppVersionProgress = static_cast<CLabelUI*>(
+        m_pm.FindControl(_T("app_version_progress")));
+    if (pAppVersionProgress) {
+        std::wstring prefix = GUIHelpers::GetLocalizedText(
+            L"msg.version.prefix",
+            L"Version ");
+        std::wstring versionText = prefix + m_config.version;
+        pAppVersionProgress->SetText(WStringToTStr(versionText));
+    }
+
+    CLabelUI* pAppVersionCompletion = static_cast<CLabelUI*>(
+        m_pm.FindControl(_T("app_version_completion")));
+    if (pAppVersionCompletion) {
+        std::wstring prefix = GUIHelpers::GetLocalizedText(
+            L"msg.version.prefix",
+            L"Version ");
+        std::wstring versionText = prefix + m_config.version;
+        pAppVersionCompletion->SetText(WStringToTStr(versionText));
+    }
+
+    CLabelUI* pAppVersionUninstall = static_cast<CLabelUI*>(
+        m_pm.FindControl(_T("app_version_uninstall")));
+    if (pAppVersionUninstall) {
+        std::wstring prefix = GUIHelpers::GetLocalizedText(
+            L"msg.version.prefix",
+            L"Version ");
+        std::wstring versionText = prefix + m_config.version;
+        pAppVersionUninstall->SetText(WStringToTStr(versionText));
+    }
+
+    std::wstring currentPath;
+    if (m_pInstallPathEdit) {
+        currentPath = m_pInstallPathEdit->GetText().GetData();
+    }
+    UpdateDiskSpaceInfo(currentPath);
+}
+
 void GUIManager::HandleProgressMessage(ProgressMessageData* pData) {
     if (!pData) {
         return;
     }
 
-    if (m_pTabPages && m_pTabPages->GetCurSel() != kPageProgress) {
-        m_pTabPages->SelectItem(kPageProgress);
+    if (m_pTabPages && m_pTabPages->GetCurSel() != GetProgressPageIndex()) {
+        m_pTabPages->SelectItem(GetProgressPageIndex());
     }
     
     CLabelUI* pCurrentFolderLabel = static_cast<CLabelUI*>(
@@ -1099,7 +1248,7 @@ void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {
     }
     
     if (m_pTabPages) {
-        m_pTabPages->SelectItem(kPageCompletion);
+        m_pTabPages->SelectItem(GetCompletionPageIndex());
     }
     
     CLabelUI* pResultMessageLabel = static_cast<CLabelUI*>(
@@ -1171,6 +1320,7 @@ void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
     CResourceManager::GetInstance()->ReloadText();
     m_pm.NeedUpdate();
     m_pm.Invalidate();
+    RefreshLocalizedText();
 }
 
 void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) {
@@ -1179,7 +1329,7 @@ void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) 
     }
 
     if (m_pTabPages) {
-        m_pTabPages->SelectItem(2);
+        m_pTabPages->SelectItem(GetCompletionPageIndex());
     }
 
     CLabelUI* pResultMessageLabel = static_cast<CLabelUI*>(

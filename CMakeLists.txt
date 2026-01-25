@@ -257,12 +257,10 @@ if(BUILD_GUI)
     # Add GUI preprocessor definition
     target_compile_definitions(installer PRIVATE GUI_ENABLED)
     
-    # Configure character set to match DuiLib (MBCS)
+    # Configure character set (Unicode) to match DuiLib build.
     if(MSVC)
-        target_compile_definitions(installer PRIVATE _MBCS)
-        # Remove Unicode definitions if present
-        target_compile_definitions(installer PRIVATE UNICODE=0 _UNICODE=0)
-        message(STATUS "Configured installer for MBCS character set (required for DuiLib)")
+        target_compile_definitions(installer PRIVATE UNICODE _UNICODE)
+        message(STATUS "Configured installer for Unicode character set")
     endif()
     
     # Link DuiLib and required Windows libraries

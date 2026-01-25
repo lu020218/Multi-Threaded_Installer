@@ -11,6 +11,56 @@ using namespace DuiLib;
 
 namespace MultiThreadedInstaller {
 
+static UINT GetDpiForWindowSafe(HWND hwnd) {
+#ifdef _WIN32
+    typedef UINT(WINAPI* GetDpiForWindowFn)(HWND);
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        auto fn = reinterpret_cast<GetDpiForWindowFn>(
+            GetProcAddress(user32, "GetDpiForWindow"));
+        if (fn && hwnd) {
+            return fn(hwnd);
+        }
+        if (!hwnd) {
+            auto getSystemDpi = reinterpret_cast<UINT(WINAPI*)(void)>(
+                GetProcAddress(user32, "GetDpiForSystem"));
+            if (getSystemDpi) {
+                return getSystemDpi();
+            }
+        }
+    }
+
+    if (!hwnd) {
+        HMODULE shcore = LoadLibraryW(L"shcore.dll");
+        if (shcore) {
+            typedef HRESULT(WINAPI* GetDpiForMonitorFn)(HMONITOR, int, UINT*, UINT*);
+            auto getDpiForMonitor = reinterpret_cast<GetDpiForMonitorFn>(
+                GetProcAddress(shcore, "GetDpiForMonitor"));
+            if (getDpiForMonitor) {
+                POINT pt = {0, 0};
+                HMONITOR monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+                UINT dpiX = 96;
+                UINT dpiY = 96;
+                if (SUCCEEDED(getDpiForMonitor(monitor, 0, &dpiX, &dpiY))) {
+                    FreeLibrary(shcore);
+                    return dpiX ? dpiX : 96;
+                }
+            }
+            FreeLibrary(shcore);
+        }
+    }
+    HDC screen = GetDC(NULL);
+    if (!screen) {
+        return 96;
+    }
+    int dpi = GetDeviceCaps(screen, LOGPIXELSX);
+    ReleaseDC(NULL, screen);
+    return dpi > 0 ? static_cast<UINT>(dpi) : 96;
+#else
+    return 96;
+#endif
+}
+
 static LPCTSTR WStringToTStr(const std::wstring& wstr) {
 #ifdef UNICODE
     return wstr.c_str();
@@ -60,6 +110,7 @@ MessageBoxDialog::MessageBoxDialog(const std::wstring& title,
 }
 
 DialogResult MessageBoxDialog::ShowModal(HWND hParent) {
+    m_pm.GetDPIObj()->SetScale(static_cast<int>(GetDpiForWindowSafe(hParent)));
     Create(hParent, _T("MessageBox"), UI_WNDSTYLE_DIALOG, 0);
     CenterWindow();
     ShowWindow(true, true);
@@ -80,9 +131,7 @@ DialogResult MessageBoxDialog::ShowModal(HWND hParent) {
 }
 
 CDuiString MessageBoxDialog::GetSkinFile() {
-    bool useZip = CPaintManagerUI::GetResourceType() == UILIB_ZIP &&
-                  !CPaintManagerUI::GetResourceZip().IsEmpty();
-    return useZip ? _T("skins\\msgBox.xml") : _T("msgBox.xml");
+    return _T("skins\\msgBox.xml");
 }
 
 LPCTSTR MessageBoxDialog::GetWindowClassName() const {
@@ -118,6 +167,11 @@ void MessageBoxDialog::Notify(TNotifyUI& msg) {
 }
 
 void MessageBoxDialog::InitWindow() {
+    int windowDpi = static_cast<int>(GetDpiForWindowSafe(m_hWnd));
+    if (windowDpi > 0 && windowDpi != m_pm.GetDPIObj()->GetScale()) {
+        m_pm.SetDPI(windowDpi);
+    }
+
     m_pTitle = static_cast<CLabelUI*>(m_pm.FindControl(_T("lblTitle")));
     m_pMessage = static_cast<CRichEditUI*>(m_pm.FindControl(_T("lblMsg")));
     m_pOk = static_cast<CButtonUI*>(m_pm.FindControl(_T("btnOK")));

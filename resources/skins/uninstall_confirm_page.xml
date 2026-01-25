@@ -3,7 +3,7 @@
 <VerticalLayout name="uninstall_confirm_page" padding="40,30,40,30">
     <HorizontalLayout height="80">
         <Control/>
-        <Control width="64" height="64" bkimage="..\images\uninstlogo.png"/>
+        <Control width="64" height="64" bkimage="images/uninstlogo.png"/>
         <Control/>
     </HorizontalLayout>
 

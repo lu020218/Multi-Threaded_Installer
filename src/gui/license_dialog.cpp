@@ -66,7 +66,7 @@ CDuiString LicenseDialog::GetSkinFolder() {
 }
 
 CDuiString LicenseDialog::GetSkinFile() {
-    return _T("license.xml");
+    return _T("skins\\license.xml");
 }
 
 LPCTSTR LicenseDialog::GetWindowClassName() const {

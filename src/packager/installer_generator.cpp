@@ -65,6 +65,27 @@ static bool readFileBytes(const std::filesystem::path& path, std::vector<uint8_t
     return true;
 }
 
+static std::string addScaleSuffix(const std::string& fileName, const std::string& suffix) {
+    size_t dot = fileName.rfind('.');
+    if (dot == std::string::npos) {
+        return fileName + suffix;
+    }
+    return fileName.substr(0, dot) + suffix + fileName.substr(dot);
+}
+
+static bool replaceScaleSuffix(const std::string& fileName,
+                               const std::string& from,
+                               const std::string& to,
+                               std::string& out) {
+    size_t pos = fileName.find(from);
+    if (pos == std::string::npos) {
+        return false;
+    }
+    out = fileName;
+    out.replace(pos, from.size(), to);
+    return true;
+}
+
 static void collectResourceFiles(const std::filesystem::path& resourceDir,
                                  std::vector<ZipFileEntry>& outFiles) {
     std::unordered_set<std::string> seen;
@@ -92,7 +113,48 @@ static void collectResourceFiles(const std::filesystem::path& resourceDir,
     };
 
     addDir(resourceDir / "skins", "skins/", {""});
-    addDir(resourceDir / "images", "images/", {"../images/"});
+
+    const std::filesystem::path imagesDir = resourceDir / "images";
+    if (std::filesystem::exists(imagesDir) && std::filesystem::is_directory(imagesDir)) {
+        auto addImageEntry = [&](const std::string& name, const std::filesystem::path& path) {
+            addEntry("images/" + name, path);
+            addEntry("../images/" + name, path);
+        };
+
+        std::vector<std::pair<std::string, std::filesystem::path>> imageFiles;
+        for (const auto& entry : std::filesystem::directory_iterator(imagesDir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            imageFiles.emplace_back(entry.path().filename().string(), entry.path());
+        }
+
+        for (const auto& item : imageFiles) {
+            addImageEntry(item.first, item.second);
+        }
+
+        for (const auto& item : imageFiles) {
+            std::string alias;
+            if (replaceScaleSuffix(item.first, "@1.5x", "@150", alias)) {
+                addImageEntry(alias, item.second);
+            } else if (replaceScaleSuffix(item.first, "@2x", "@200", alias)) {
+                addImageEntry(alias, item.second);
+            } else if (replaceScaleSuffix(item.first, "@3x", "@300", alias)) {
+                addImageEntry(alias, item.second);
+            }
+        }
+
+        for (const auto& item : imageFiles) {
+            if (item.first.find('@') != std::string::npos) {
+                continue;
+            }
+            addImageEntry(addScaleSuffix(item.first, "@125"), item.second);
+            addImageEntry(addScaleSuffix(item.first, "@150"), item.second);
+            addImageEntry(addScaleSuffix(item.first, "@200"), item.second);
+            addImageEntry(addScaleSuffix(item.first, "@300"), item.second);
+        }
+    }
+
     addDir(resourceDir / "lang", "lang/", {"../lang/"});
 
     std::filesystem::path licensePath = resourceDir / "license.txt";

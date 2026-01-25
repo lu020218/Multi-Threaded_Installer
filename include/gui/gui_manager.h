@@ -142,6 +142,9 @@ private:
     void ApplyLanguageByCode(const std::wstring& code);
     void ShowLicensePage();
     void SyncLicenseAgreementFromPage();
+    int GetWelcomePageIndex() const;
+    int GetProgressPageIndex() const;
+    int GetCompletionPageIndex() const;
     
     // 复选框状态变化处理
     void OnLicenseCheckboxChanged();
@@ -154,6 +157,7 @@ private:
     void HandleProgressMessage(ProgressMessageData* pData);
     void HandleCompletionMessage(CompletionMessageData* pData);
     void HandleUninstallCompletionMessage(CompletionMessageData* pData);
+    void RefreshLocalizedText();
 
 public:
     void SetUninstallMode(bool enabled) { m_uninstallMode = enabled; }

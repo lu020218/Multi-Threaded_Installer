@@ -2,6 +2,13 @@
   "Version": "1.0",
   "AppName": "MyDesktopApp",
   "InstallDir": "%ProgramFiles%",
+  "Icon": "app.ico",
+  "ProductName": "MyDesktopApp",
+  "FileVersion": "1.2.3.4",
+  "ProductVersion": "1.2.3.4",
+  "CompanyName": "MyCompany",
+  "FileDescription": "MyDesktopApp Installer",
+  "Copyright": "Copyright (c) 2026 MyCompany",
   "Folder": {
     "InstallDir": "bin",
     "Roaming": "plugins"

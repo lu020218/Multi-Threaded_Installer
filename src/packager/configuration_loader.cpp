@@ -110,6 +110,31 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         return std::nullopt;
     }
     config.defaultInstallDir = j["InstallDir"].get<std::string>();
+
+    // 解析 Icon（可选）
+    if (j.contains("Icon") && j["Icon"].is_string()) {
+        config.iconPath = j["Icon"].get<std::string>();
+    }
+
+    // 解析版本信息（可选）
+    if (j.contains("ProductName") && j["ProductName"].is_string()) {
+        config.productName = j["ProductName"].get<std::string>();
+    }
+    if (j.contains("FileVersion") && j["FileVersion"].is_string()) {
+        config.fileVersion = j["FileVersion"].get<std::string>();
+    }
+    if (j.contains("ProductVersion") && j["ProductVersion"].is_string()) {
+        config.productVersion = j["ProductVersion"].get<std::string>();
+    }
+    if (j.contains("CompanyName") && j["CompanyName"].is_string()) {
+        config.companyName = j["CompanyName"].get<std::string>();
+    }
+    if (j.contains("FileDescription") && j["FileDescription"].is_string()) {
+        config.fileDescription = j["FileDescription"].get<std::string>();
+    }
+    if (j.contains("Copyright") && j["Copyright"].is_string()) {
+        config.copyright = j["Copyright"].get<std::string>();
+    }
         
         // 解析compressionAlgorithm（可选）
         if (j.contains("compressionAlgorithm")) {

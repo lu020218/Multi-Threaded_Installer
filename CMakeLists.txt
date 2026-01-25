@@ -173,6 +173,8 @@ set(PACKAGER_SOURCES
     src/packager/compression_module.cpp
     src/packager/metadata_generator.cpp
     src/packager/installer_generator.cpp
+    src/packager/icon_updater.cpp
+    src/packager/version_info_updater.cpp
     src/packager/configuration_loader.cpp
     src/packager/configuration_validator.cpp
     src/packager/configuration_manager.cpp

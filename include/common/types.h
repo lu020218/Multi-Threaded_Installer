@@ -90,6 +90,13 @@ struct PackagerConfiguration {
     std::string version;                           // 配置版本
     std::string applicationName;                    // 应用程序名称
     std::string defaultInstallDir;                  // 建议的默认安装目录（不含应用程序名）
+    std::string iconPath;                           // 安装程序图标路径（可选）
+    std::string productName;                        // 产品名称（可选）
+    std::string fileVersion;                        // 文件版本（可选）
+    std::string productVersion;                     // 产品版本（可选）
+    std::string companyName;                        // 公司名称（可选）
+    std::string fileDescription;                    // 文件描述（可选）
+    std::string copyright;                          // 版权信息（可选）
     CompressionAlgorithm compressionAlgorithm;      // 压缩算法
     std::vector<FolderTargetConfig> folderTargets;  // 文件夹目标配置
     std::vector<RegistryEntry> registry;           // 注册表配置（预留）

@@ -3,6 +3,8 @@
 #include "packager/metadata_generator.h"
 #include "packager/installer_generator.h"
 #include "packager/configuration_manager.h"
+#include "packager/icon_updater.h"
+#include "packager/version_info_updater.h"
 #include "installer/console_interface.h"
 #include <iostream>
 #include <filesystem>
@@ -148,6 +150,37 @@ int main(int argc, char* argv[]) {
     if (!installerGen.generateInstaller(outputPath, serializedMetadata, compressedDataList)) {
         console.showError("Failed to generate installer");
         return 1;
+    }
+
+    if (!config.iconPath.empty()) {
+        fs::path iconPath(config.iconPath);
+        if (!iconPath.is_absolute()) {
+            iconPath = fs::path(inputPath) / iconPath;
+        }
+        std::string iconError;
+        if (UpdateInstallerIcon(outputPath, iconPath.string(), iconError)) {
+            console.showInfo("Applied installer icon: " + iconPath.string());
+        } else {
+            console.showWarning("Failed to apply installer icon: " + iconError);
+        }
+    }
+
+    VersionInfoData versionInfo;
+    versionInfo.productName = config.productName.empty() ? config.applicationName : config.productName;
+    versionInfo.fileDescription = config.fileDescription.empty()
+        ? (config.applicationName + " Installer")
+        : config.fileDescription;
+    versionInfo.companyName = config.companyName;
+    versionInfo.copyright = config.copyright;
+    versionInfo.fileVersion = config.fileVersion.empty() ? config.version : config.fileVersion;
+    versionInfo.productVersion = config.productVersion.empty() ? config.version : config.productVersion;
+    versionInfo.originalFilename = fs::path(outputPath).filename().string();
+
+    std::string versionError;
+    if (UpdateInstallerVersionInfo(outputPath, versionInfo, versionError)) {
+        console.showInfo("Applied installer version info");
+    } else {
+        console.showWarning("Failed to apply installer version info: " + versionError);
     }
     
     if (!args.dataPackagePath.empty()) {

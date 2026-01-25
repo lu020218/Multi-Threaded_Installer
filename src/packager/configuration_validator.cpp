@@ -50,6 +50,21 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
                                 "  Suggestion: Add \"InstallDir\": \"%ProgramFiles%\" to the configuration file");
         result.isValid = false;
     }
+
+    // 验证图标文件（可选）
+    if (!config.iconPath.empty()) {
+        fs::path iconPath(config.iconPath);
+        if (!iconPath.is_absolute()) {
+            iconPath = fs::path(inputDirectory) / iconPath;
+        }
+        if (!fs::exists(iconPath)) {
+            result.errors.push_back("ERROR: Icon file not found: " + iconPath.string());
+            result.isValid = false;
+        } else if (iconPath.extension() != ".ico") {
+            result.errors.push_back("ERROR: Icon file must be .ico: " + iconPath.string());
+            result.isValid = false;
+        }
+    }
     
     // 验证注册表配置（结构完整性）
     for (const auto& reg : config.registry) {

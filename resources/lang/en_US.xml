@@ -50,4 +50,27 @@
   <Text id="msg.uninstall_status" value="Please wait while files are removed."/>
   <Text id="msg.uninstall_done" value="Uninstall complete"/>
   <Text id="msg.uninstall_done_msg" value="Uninstall completed successfully."/>
+  <Text id="msg.install.success" value="Installation successful!"/>
+  <Text id="msg.install.failed" value="Installation failed: "/>
+  <Text id="msg.progress.processing" value="Processing: "/>
+  <Text id="msg.progress.eta" value="Estimated time remaining: Calculating..."/>
+  <Text id="msg.space.required" value="Required: "/>
+  <Text id="msg.space.available" value="Available: "/>
+  <Text id="msg.uninstall.success" value="Uninstall completed."/>
+  <Text id="msg.uninstall.failed" value="Uninstall failed: "/>
+  <Text id="msg.version.prefix" value="Version "/>
+  <Text id="msg.uninstall.appname_missing" value="Application name missing; cannot uninstall."/>
+  <Text id="msg.dialog.title.prompt" value="Prompt"/>
+  <Text id="msg.dialog.title.error" value="Error"/>
+  <Text id="msg.dialog.title.warning" value="Warning"/>
+  <Text id="msg.dialog.title.info" value="Info"/>
+  <Text id="msg.dialog.agree_required" value="Please accept the license agreement first."/>
+  <Text id="msg.dialog.install_controller_missing" value="Installation controller unavailable."/>
+  <Text id="msg.dialog.select_install_dir" value="Please select an installation directory."/>
+  <Text id="msg.dialog.exit_confirm" value="Exit the installer?"/>
+  <Text id="msg.dialog.cancel_install_confirm" value="Cancel installation and exit?"/>
+  <Text id="msg.dialog.select_dir_title" value="Select installation directory"/>
+  <Text id="msg.dialog.license_not_impl" value="License dialog is not implemented yet."/>
+  <Text id="msg.dialog.launch_failed" value="Unable to launch application, please run manually."/>
+  <Text id="msg.dialog.web_failed" value="Unable to open webpage, please visit manually."/>
 </Language>

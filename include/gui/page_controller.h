@@ -12,8 +12,9 @@ namespace MultiThreadedInstaller {
 // 页面类型枚举
 enum class PageType {
     Welcome = 0,
-    Progress = 1,
-    Completion = 2
+    License = 1,
+    Progress = 2,
+    Completion = 3
 };
 
 // Forward declarations

@@ -50,4 +50,27 @@
   <Text id="msg.uninstall_status" value="请稍候，正在清理应用程序文件。"/>
   <Text id="msg.uninstall_done" value="卸载完成"/>
   <Text id="msg.uninstall_done_msg" value="卸载完成。"/>
+  <Text id="msg.install.success" value="安装成功！"/>
+  <Text id="msg.install.failed" value="安装失败: "/>
+  <Text id="msg.progress.processing" value="正在处理: "/>
+  <Text id="msg.progress.eta" value="预计剩余时间: 计算中..."/>
+  <Text id="msg.space.required" value="所需空间: "/>
+  <Text id="msg.space.available" value="可用空间: "/>
+  <Text id="msg.uninstall.success" value="卸载完成。"/>
+  <Text id="msg.uninstall.failed" value="卸载失败: "/>
+  <Text id="msg.version.prefix" value="版本 "/>
+  <Text id="msg.uninstall.appname_missing" value="应用名称缺失，无法卸载。"/>
+  <Text id="msg.dialog.title.prompt" value="提示"/>
+  <Text id="msg.dialog.title.error" value="错误"/>
+  <Text id="msg.dialog.title.warning" value="警告"/>
+  <Text id="msg.dialog.title.info" value="提示"/>
+  <Text id="msg.dialog.agree_required" value="请先勾选用户许可协议。"/>
+  <Text id="msg.dialog.install_controller_missing" value="安装控制器不可用。"/>
+  <Text id="msg.dialog.select_install_dir" value="请选择安装目录。"/>
+  <Text id="msg.dialog.exit_confirm" value="确定要退出安装程序吗？"/>
+  <Text id="msg.dialog.cancel_install_confirm" value="确定要取消安装并退出吗？"/>
+  <Text id="msg.dialog.select_dir_title" value="选择安装目录"/>
+  <Text id="msg.dialog.license_not_impl" value="许可协议对话框尚未实现。"/>
+  <Text id="msg.dialog.launch_failed" value="无法启动应用程序，请手动运行。"/>
+  <Text id="msg.dialog.web_failed" value="无法打开网页，请手动访问。"/>
 </Language>

@@ -11,6 +11,7 @@
 
 #ifdef GUI_ENABLED
 #include "gui/gui_manager.h"
+#include "gui/gui_helpers.h"
 #include "installer/embedded_resources.h"
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -269,6 +270,23 @@ std::wstring stringToWString(const std::string& str) {
     std::wstring wstrTo(size_needed, 0);
     MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &wstrTo[0], size_needed);
     return wstrTo;
+}
+
+static std::wstring tcharToWString(const TCHAR* text) {
+#ifdef UNICODE
+    return text ? std::wstring(text) : std::wstring();
+#else
+    if (!text) {
+        return {};
+    }
+    int size_needed = MultiByteToWideChar(CP_ACP, 0, text, -1, NULL, 0);
+    if (size_needed <= 0) {
+        return {};
+    }
+    std::wstring result(static_cast<size_t>(size_needed - 1), L'\0');
+    MultiByteToWideChar(CP_ACP, 0, text, -1, &result[0], size_needed);
+    return result;
+#endif
 }
 
 // 从元数据创建InstallConfig
@@ -1380,7 +1398,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     // 初始化COM库（用于文件对话框）
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr)) {
-        MessageBoxW(NULL, L"Failed to initialize COM library", L"Error", MB_OK | MB_ICONERROR);
+        GUIHelpers::ShowErrorDialog(nullptr, L"Error", L"Failed to initialize COM library");
         return 1;
     }
 
@@ -1530,7 +1548,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     auto metadata = parser.parseExtendedEmbeddedMetadata();
     
     if (!parser.validateMetadata(metadata)) {
-        MessageBoxW(NULL, L"Invalid or corrupted installer metadata", L"Error", MB_OK | MB_ICONERROR);
+        GUIHelpers::ShowErrorDialog(nullptr, L"Error", L"Invalid or corrupted installer metadata");
         CoUninitialize();
         return 1;
     }
@@ -1551,8 +1569,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             CoUninitialize();
             return 0;
         }
-        MessageBoxW(NULL, L"需要管理员权限，请以管理员身份运行安装程序。", L"提示",
-                    MB_OK | MB_ICONWARNING);
+        GUIHelpers::ShowWarningDialog(nullptr, L"提示",
+                                      L"需要管理员权限，请以管理员身份运行安装程序。");
         CoUninitialize();
         return 1;
     }
@@ -1625,7 +1643,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                        instancePath.GetData(),
                        resourceBasePath.GetData());
             
-            MessageBox(NULL, errorMsg, _T("资源文件缺失"), MB_OK | MB_ICONWARNING);
+            GUIHelpers::ShowWarningDialog(nullptr, L"资源文件缺失", tcharToWString(errorMsg));
             
             bool debugMode = GetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr, 0) > 0;
             if (!debugMode) {

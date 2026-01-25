@@ -5,18 +5,25 @@
 #include "../../include/gui/gui_helpers.h"
 #include "../../include/gui/uninstall_worker.h"
 #include "../../include/installer/registry_utils.h"
+#include "Utils/unzip.h"
 #include <shlobj.h>
 #include <sstream>
 #include <iomanip>
 #include <vector>
 #include <iostream>
 #include <filesystem>
+#include <fstream>
 #include <algorithm>
 #include <cwctype>
 
 using namespace DuiLib;
 
 namespace MultiThreadedInstaller {
+
+static constexpr int kPageWelcome = static_cast<int>(PageType::Welcome);
+static constexpr int kPageLicense = static_cast<int>(PageType::License);
+static constexpr int kPageProgress = static_cast<int>(PageType::Progress);
+static constexpr int kPageCompletion = static_cast<int>(PageType::Completion);
 
 // Convert wstring to LPCTSTR for Unicode/MBCS builds.
 // Returns a static buffer that's valid until next call.
@@ -98,6 +105,47 @@ static std::wstring NormalizeInstallPath(const std::wstring& basePath,
 
     std::filesystem::path childPath = selectedFs / appName;
     return childPath.wstring();
+}
+
+static std::wstring LoadLicenseTextFromResources() {
+    if (CPaintManagerUI::GetResourceType() == UILIB_ZIP &&
+        !CPaintManagerUI::GetResourceZip().IsEmpty()) {
+        CDuiString basePath = CPaintManagerUI::GetResourcePath();
+        CDuiString zipName = CPaintManagerUI::GetResourceZip();
+        CDuiString zipPath = basePath + zipName;
+
+        HZIP hz = OpenZip(zipPath.GetData(), 0);
+        if (hz != NULL) {
+            ZIPENTRY ze;
+            int index = 0;
+            if (FindZipItem(hz, _T("license.txt"), true, &index, &ze) == 0) {
+                std::vector<char> buffer(static_cast<size_t>(ze.unc_size));
+                if (UnzipItem(hz, index, buffer.data(), ze.unc_size) == 0) {
+                    CloseZip(hz);
+                    std::string text(buffer.begin(), buffer.end());
+                    return Utf8ToWString(text);
+                }
+            }
+            CloseZip(hz);
+        }
+    }
+
+    CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
+    std::filesystem::path licensePath = std::filesystem::path(resourcePath.GetData()) / "license.txt";
+    std::ifstream file(licensePath, std::ios::binary);
+    if (!file.is_open()) {
+        std::filesystem::path fallback = std::filesystem::path(resourcePath.GetData()) / ".." / "license.txt";
+        file.open(fallback, std::ios::binary);
+    }
+    if (!file.is_open()) {
+        return GUIHelpers::GetLocalizedText(
+            L"msg.dialog.license_not_impl",
+            L"License text not found.");
+    }
+
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    return Utf8ToWString(content);
 }
 
 GUIManager::GUIManager()
@@ -278,7 +326,10 @@ void GUIManager::InitControls() {
     CLabelUI* pAppVersion = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("app_version")));
     if (pAppVersion) {
-        std::wstring versionText = L"版本 " + m_config.version;
+        std::wstring prefix = GUIHelpers::GetLocalizedText(
+            L"msg.version.prefix",
+            L"Version ");
+        std::wstring versionText = prefix + m_config.version;
         pAppVersion->SetText(WStringToTStr(versionText));
     }
     
@@ -291,7 +342,10 @@ void GUIManager::InitControls() {
     CLabelUI* pAppVersionProgress = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("app_version_progress")));
     if (pAppVersionProgress) {
-        std::wstring versionText = L"版本 " + m_config.version;
+        std::wstring prefix = GUIHelpers::GetLocalizedText(
+            L"msg.version.prefix",
+            L"Version ");
+        std::wstring versionText = prefix + m_config.version;
         pAppVersionProgress->SetText(WStringToTStr(versionText));
     }
     
@@ -304,7 +358,10 @@ void GUIManager::InitControls() {
     CLabelUI* pAppVersionCompletion = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("app_version_completion")));
     if (pAppVersionCompletion) {
-        std::wstring versionText = L"版本 " + m_config.version;
+        std::wstring prefix = GUIHelpers::GetLocalizedText(
+            L"msg.version.prefix",
+            L"Version ");
+        std::wstring versionText = prefix + m_config.version;
         pAppVersionCompletion->SetText(WStringToTStr(versionText));
     }
 
@@ -317,12 +374,15 @@ void GUIManager::InitControls() {
     CLabelUI* pAppVersionUninstall = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("app_version_uninstall")));
     if (pAppVersionUninstall) {
-        std::wstring versionText = L"版本 " + m_config.version;
+        std::wstring prefix = GUIHelpers::GetLocalizedText(
+            L"msg.version.prefix",
+            L"Version ");
+        std::wstring versionText = prefix + m_config.version;
         pAppVersionUninstall->SetText(WStringToTStr(versionText));
     }
     
     if (m_pTabPages) {
-        m_pTabPages->SelectItem(0);
+        m_pTabPages->SelectItem(kPageWelcome);
     }
 }
 
@@ -357,6 +417,12 @@ void GUIManager::Notify(TNotifyUI& msg) {
         else if (senderName == _T("btnShowMore")) {
             OnShowMoreClick();
         }
+        else if (senderName == _T("btnAgreement")) {
+            OnLicenseLinkClick();
+        }
+        else if (senderName == _T("btnBack")) {
+            OnLicenseBackClick();
+        }
         else if (senderName == _T("btnUninstallConfirm")) {
             OnUninstallConfirmClick();
         }
@@ -372,6 +438,8 @@ void GUIManager::Notify(TNotifyUI& msg) {
         
         if (senderName == _T("license_checkbox")) {
             OnLicenseCheckboxChanged();
+        } else if (senderName == _T("chkAgree1")) {
+            SyncLicenseAgreementFromPage();
         }
     }
     else if (msg.sType == _T("itemselect")) {
@@ -433,48 +501,50 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         bool altPressed = (GetKeyState(VK_MENU) & 0x8000) != 0;
         
         if (altPressed) {
-            if (wParam == 'I' && currentPage == 0) {
+            if (wParam == 'I' && currentPage == kPageWelcome) {
                 if (m_pInstallButton && m_pInstallButton->IsEnabled()) {
                     OnInstallButtonClick();
                     return 0;
                 }
             }
-            else if (wParam == 'C' && (currentPage == 0 || currentPage == 1)) {
-                if (currentPage == 0) {
+            else if (wParam == 'C' && (currentPage == kPageWelcome ||
+                                       currentPage == kPageLicense ||
+                                       currentPage == kPageProgress)) {
+                if (currentPage == kPageWelcome || currentPage == kPageLicense) {
                     OnCancelButtonClick();
                 } else {
                     OnCancelProgressButtonClick();
                 }
                 return 0;
             }
-            else if (wParam == 'F' && currentPage == 2) {
+            else if (wParam == 'F' && currentPage == kPageCompletion) {
                 OnFinishButtonClick();
                 return 0;
             }
         }
         else {
             if (wParam == VK_RETURN) {
-                if (currentPage == 0) {
+                if (currentPage == kPageWelcome) {
                     if (m_pInstallButton && m_pInstallButton->IsEnabled()) {
                         OnInstallButtonClick();
                         return 0;
                     }
                 }
-                else if (currentPage == 2) {
+                else if (currentPage == kPageCompletion) {
                     OnFinishButtonClick();
                     return 0;
                 }
             }
             else if (wParam == VK_ESCAPE) {
-                if (currentPage == 0) {
+                if (currentPage == kPageWelcome || currentPage == kPageLicense) {
                     OnCancelButtonClick();
                     return 0;
                 }
-                else if (currentPage == 1) {
+                else if (currentPage == kPageProgress) {
                     OnCancelProgressButtonClick();
                     return 0;
                 }
-                else if (currentPage == 2) {
+                else if (currentPage == kPageCompletion) {
                     OnFinishButtonClick();
                     return 0;
                 }
@@ -489,14 +559,20 @@ void GUIManager::OnInstallButtonClick() {
     CCheckBoxUI* pAgree = static_cast<CCheckBoxUI*>(
         m_pm.FindControl(_T("chkAgree")));
     if (pAgree && !pAgree->GetCheck()) {
-        ::MessageBox(m_hWnd, _T("请先勾选用户许可协议。"), _T("提示"),
-                     MB_OK | MB_ICONWARNING);
+        GUIHelpers::ShowWarningDialog(
+            m_hWnd,
+            GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L"Prompt"),
+            GUIHelpers::GetLocalizedText(L"msg.dialog.agree_required",
+                                         L"Please accept the license agreement first."));
         return;
     }
 
     if (!m_pPageController) {
-        ::MessageBox(m_hWnd, _T("Installation controller unavailable."), _T("Error"),
-                     MB_OK | MB_ICONERROR);
+        GUIHelpers::ShowErrorDialog(
+            m_hWnd,
+            GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L"Error"),
+            GUIHelpers::GetLocalizedText(L"msg.dialog.install_controller_missing",
+                                         L"Installation controller unavailable."));
         return;
     }
 
@@ -505,8 +581,11 @@ void GUIManager::OnInstallButtonClick() {
         installPath = m_pInstallPathEdit->GetText().GetData();
     }
     if (installPath.empty()) {
-        ::MessageBox(m_hWnd, _T("Please select an installation directory."), _T("Warning"),
-                     MB_OK | MB_ICONWARNING);
+        GUIHelpers::ShowWarningDialog(
+            m_hWnd,
+            GUIHelpers::GetLocalizedText(L"msg.dialog.title.warning", L"Warning"),
+            GUIHelpers::GetLocalizedText(L"msg.dialog.select_install_dir",
+                                         L"Please select an installation directory."));
         return;
     }
 
@@ -533,7 +612,7 @@ void GUIManager::OnInstallButtonClick() {
     m_pPageController->StartInstallation(installPath, autoRun, desktopIcons, languageCode, m_hWnd);
 
     if (m_pTabPages) {
-        m_pTabPages->SelectItem(1);
+        m_pTabPages->SelectItem(kPageProgress);
     }
 }
 
@@ -552,7 +631,10 @@ void GUIManager::OnUninstallConfirmClick() {
     if (appName.empty()) {
         CompletionMessageData* pData = new CompletionMessageData();
         pData->success = false;
-        wcscpy_s(pData->errorMessage, L"应用名称缺失，无法卸载。");
+        std::wstring text = GUIHelpers::GetLocalizedText(
+            L"msg.uninstall.appname_missing",
+            L"Application name missing; cannot uninstall.");
+        wcsncpy_s(pData->errorMessage, text.c_str(), _TRUNCATE);
         ::PostMessage(m_hWnd, WM_UNINSTALL_COMPLETE, 0, reinterpret_cast<LPARAM>(pData));
         return;
     }
@@ -561,10 +643,10 @@ void GUIManager::OnUninstallConfirmClick() {
 }
 
 void GUIManager::OnCancelButtonClick() {
-    if (GUIHelpers::ShowConfirmDialog(
-        m_hWnd,
-        L"Exit",
-        L"Exit the installer?")) {
+    std::wstring title = GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L"Exit");
+    std::wstring message = GUIHelpers::GetLocalizedText(L"msg.dialog.exit_confirm",
+                                                        L"Exit the installer?");
+    if (GUIHelpers::ShowConfirmDialog(m_hWnd, title, message)) {
         Close();
     }
 }
@@ -578,7 +660,8 @@ void GUIManager::OnBrowseButtonClick() {
     std::wstring selectedPath;
     if (GUIHelpers::ShowFolderBrowserDialog(
         m_hWnd,
-        L"??????",
+        GUIHelpers::GetLocalizedText(L"msg.dialog.select_dir_title",
+                                     L"Select installation directory"),
         currentPath,
         selectedPath)) {
         
@@ -613,8 +696,59 @@ void GUIManager::OnBrowseButtonClick() {
 }
 
 void GUIManager::OnLicenseLinkClick() {
-    ::MessageBox(m_hWnd, _T("License dialog is not implemented yet."), _T("Info"),
-                 MB_OK | MB_ICONINFORMATION);
+    ShowLicensePage();
+}
+
+void GUIManager::OnLicenseBackClick() {
+    SyncLicenseAgreementFromPage();
+    if (m_pTabPages) {
+        m_pTabPages->SelectItem(kPageWelcome);
+    }
+}
+
+void GUIManager::ShowLicensePage() {
+    if (!m_pTabPages) {
+        return;
+    }
+
+    CRichEditUI* pLicenseText = static_cast<CRichEditUI*>(
+        m_pm.FindControl(_T("editLicense")));
+    if (pLicenseText) {
+        std::wstring text = LoadLicenseTextFromResources();
+        pLicenseText->SetText(WStringToTStr(text));
+        pLicenseText->SetReadOnly(true);
+    }
+
+    CCheckBoxUI* pAgreeInline = static_cast<CCheckBoxUI*>(
+        m_pm.FindControl(_T("chkAgree1")));
+    if (pAgreeInline) {
+        bool checked = false;
+        if (auto* pAgree = static_cast<CCheckBoxUI*>(m_pm.FindControl(_T("chkAgree")))) {
+            checked = pAgree->GetCheck();
+        } else if (m_pLicenseCheckbox) {
+            checked = m_pLicenseCheckbox->GetCheck();
+        }
+        pAgreeInline->SetCheck(checked);
+    }
+
+    m_pTabPages->SelectItem(kPageLicense);
+}
+
+void GUIManager::SyncLicenseAgreementFromPage() {
+    CCheckBoxUI* pAgreeInline = static_cast<CCheckBoxUI*>(
+        m_pm.FindControl(_T("chkAgree1")));
+    if (!pAgreeInline) {
+        return;
+    }
+
+    bool checked = pAgreeInline->GetCheck();
+    if (auto* pAgree = static_cast<CCheckBoxUI*>(m_pm.FindControl(_T("chkAgree")))) {
+        pAgree->SetCheck(checked);
+    }
+    if (m_pLicenseCheckbox) {
+        m_pLicenseCheckbox->SetCheck(checked);
+    }
+    UpdateInstallButtonState();
 }
 
 void GUIManager::OnFinishButtonClick() {
@@ -635,8 +769,9 @@ void GUIManager::OnFinishButtonClick() {
             if (!GUIHelpers::LaunchApplication(exePath, installPath)) {
                 GUIHelpers::ShowWarningDialog(
                     m_hWnd,
-                    L"提示",
-                    L"无法启动应用程序，请手动运行。");
+                    GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L"Prompt"),
+                    GUIHelpers::GetLocalizedText(L"msg.dialog.launch_failed",
+                                                 L"Unable to launch application, please run manually."));
             }
         }
     }
@@ -645,12 +780,12 @@ void GUIManager::OnFinishButtonClick() {
         m_pm.FindControl(_T("open_web_checkbox")));
     if (pOpenWebCheckbox && pOpenWebCheckbox->GetCheck()) {
         if (!m_config.webPageUrl.empty()) {
-            // ����ҳ
             if (!GUIHelpers::OpenWebPage(m_config.webPageUrl)) {
                 GUIHelpers::ShowWarningDialog(
                     m_hWnd,
-                    L"提示",
-                    L"无法打开网页，请手动访问。");
+                    GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L"Prompt"),
+                    GUIHelpers::GetLocalizedText(L"msg.dialog.web_failed",
+                                                 L"Unable to open webpage, please visit manually."));
             }
         }
     }
@@ -659,10 +794,10 @@ void GUIManager::OnFinishButtonClick() {
 }
 
 void GUIManager::OnCancelProgressButtonClick() {
-    if (GUIHelpers::ShowConfirmDialog(
-        m_hWnd,
-        L"Cancel",
-        L"Cancel installation and exit?")) {
+    std::wstring title = GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L"Cancel");
+    std::wstring message = GUIHelpers::GetLocalizedText(L"msg.dialog.cancel_install_confirm",
+                                                        L"Cancel installation and exit?");
+    if (GUIHelpers::ShowConfirmDialog(m_hWnd, title, message)) {
         // TODO: request cancellation from worker.
         // if (m_pWorker) {
         //     m_pWorker->RequestCancellation();
@@ -894,9 +1029,15 @@ void GUIManager::UpdateDiskSpaceInfo(const std::wstring& path) {
     std::wstring requiredStr = GUIHelpers::FormatBytes(m_config.requiredDiskSpace);
     std::wstring availableStr = GUIHelpers::FormatBytes(availableSpace);
     
+    std::wstring requiredLabel = GUIHelpers::GetLocalizedText(
+        L"msg.space.required",
+        L"Required: ");
+    std::wstring availableLabel = GUIHelpers::GetLocalizedText(
+        L"msg.space.available",
+        L"Available: ");
     std::wstringstream ss;
-    ss << L"所需空间: " << requiredStr
-       << L" | 可用空间: " << availableStr;
+    ss << requiredLabel << requiredStr
+       << L" | " << availableLabel << availableStr;
     
     m_pDiskSpaceLabel->SetText(ss.str().c_str());
     
@@ -912,14 +1053,17 @@ void GUIManager::HandleProgressMessage(ProgressMessageData* pData) {
         return;
     }
 
-    if (m_pTabPages && m_pTabPages->GetCurSel() != 1) {
-        m_pTabPages->SelectItem(1);
+    if (m_pTabPages && m_pTabPages->GetCurSel() != kPageProgress) {
+        m_pTabPages->SelectItem(kPageProgress);
     }
     
     CLabelUI* pCurrentFolderLabel = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("current_folder")));
     if (pCurrentFolderLabel) {
-        std::wstring folderText = L"正在处理: ";
+        std::wstring prefix = GUIHelpers::GetLocalizedText(
+            L"msg.progress.processing",
+            L"Processing: ");
+        std::wstring folderText = prefix;
         folderText += pData->currentFolder;
         pCurrentFolderLabel->SetText(WStringToTStr(folderText));
     }
@@ -942,7 +1086,10 @@ void GUIManager::HandleProgressMessage(ProgressMessageData* pData) {
     CLabelUI* pEstimatedTimeLabel = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("estimated_time")));
     if (pEstimatedTimeLabel) {
-        pEstimatedTimeLabel->SetText(L"预计剩余时间: 计算中...");
+        std::wstring text = GUIHelpers::GetLocalizedText(
+            L"msg.progress.eta",
+            L"Estimated time remaining: Calculating...");
+        pEstimatedTimeLabel->SetText(WStringToTStr(text));
     }
 }
 
@@ -952,18 +1099,23 @@ void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {
     }
     
     if (m_pTabPages) {
-        m_pTabPages->SelectItem(2);
+        m_pTabPages->SelectItem(kPageCompletion);
     }
     
     CLabelUI* pResultMessageLabel = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("result_message")));
     if (pResultMessageLabel) {
         if (pData->success) {
-            pResultMessageLabel->SetText(L"安装成功！");
+            std::wstring text = GUIHelpers::GetLocalizedText(
+                L"msg.install.success",
+                L"Installation successful!");
+            pResultMessageLabel->SetText(WStringToTStr(text));
             pResultMessageLabel->SetTextColor(0xFF4CAF50);
         } else {
-            std::wstring errorText = L"安装失败: ";
-            errorText += pData->errorMessage;
+            std::wstring prefix = GUIHelpers::GetLocalizedText(
+                L"msg.install.failed",
+                L"Installation failed: ");
+            std::wstring errorText = prefix + pData->errorMessage;
             pResultMessageLabel->SetText(WStringToTStr(errorText));
             pResultMessageLabel->SetTextColor(0xFFFF0000);
         }
@@ -1002,6 +1154,7 @@ void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
             std::wstring fallbackPath = GetLanguageFilePath(L"en_US");
             if (!fallbackPath.empty() &&
                 CResourceManager::GetInstance()->LoadLanguage(fallbackPath.c_str())) {
+                CResourceManager::GetInstance()->SetLanguage(L"en_US");
                 std::cout << "Language fallback loaded: " << WStringToUtf8(fallbackPath) << std::endl;
             } else {
                 std::cout << "Failed to load language file: " << WStringToUtf8(langPath) << std::endl;
@@ -1011,6 +1164,8 @@ void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
             std::cout << "Failed to load language file: " << WStringToUtf8(langPath) << std::endl;
             return;
         }
+    } else {
+        CResourceManager::GetInstance()->SetLanguage(code.c_str());
     }
 
     CResourceManager::GetInstance()->ReloadText();
@@ -1031,11 +1186,16 @@ void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) 
         m_pm.FindControl(_T("uninstall_result_message")));
     if (pResultMessageLabel) {
         if (pData->success) {
-            pResultMessageLabel->SetText(L"卸载完成。");
+            std::wstring text = GUIHelpers::GetLocalizedText(
+                L"msg.uninstall.success",
+                L"Uninstall completed.");
+            pResultMessageLabel->SetText(WStringToTStr(text));
             pResultMessageLabel->SetTextColor(0xFF4CAF50);
         } else {
-            std::wstring errorText = L"卸载失败: ";
-            errorText += pData->errorMessage;
+            std::wstring prefix = GUIHelpers::GetLocalizedText(
+                L"msg.uninstall.failed",
+                L"Uninstall failed: ");
+            std::wstring errorText = prefix + pData->errorMessage;
             pResultMessageLabel->SetText(WStringToTStr(errorText));
             pResultMessageLabel->SetTextColor(0xFFFF0000);
         }

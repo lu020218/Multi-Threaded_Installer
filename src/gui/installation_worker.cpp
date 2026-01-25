@@ -2,6 +2,7 @@
 
 #include "../../include/gui/installation_worker.h"
 #include "../../include/gui/gui_manager.h"
+#include "../../include/gui/gui_helpers.h"
 #include "../../include/installer/metadata_parser.h"
 #include "../../include/installer/decompression_engine.h"
 #include "../../include/installer/thread_pool_manager.h"
@@ -259,17 +260,27 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             }
         }
         while (!processName.empty() && isProcessRunningByName(processName)) {
-            int result = MessageBoxW(
+            std::wstring lang = GUIHelpers::GetUILanguageCode();
+            bool isChinese = lang.rfind(L"zh", 0) == 0;
+            std::wstring okText = isChinese ? L"重试" : L"Retry";
+            std::wstring cancelText = isChinese ? L"取消安装" : L"Cancel";
+            std::wstring altText = isChinese ? L"结束进程" : L"Terminate";
+            std::wstring message = isChinese
+                ? L"检测到应用正在运行，请先关闭。\n\n重试：再次检测\n取消安装：退出安装\n结束进程：关闭应用继续安装"
+                : L"Application is running.\n\nRetry: check again\nCancel: stop installation\nTerminate: close the app and continue";
+
+            DialogResult result = GUIHelpers::ShowCustomDialog(
                 m_hNotifyWindow,
-                L"检测到应用正在运行，请先关闭。\n\n"
-                L"是：重试\n否：取消安装\n取消：结束进程后继续",
-                L"提示",
-                MB_YESNOCANCEL | MB_ICONWARNING);
-            if (result == IDNO) {
+                isChinese ? L"提示" : L"Warning",
+                message,
+                okText,
+                cancelText,
+                altText);
+            if (result == DialogResult::Cancel) {
                 PostCompletionMessage(false, L"安装已取消。");
                 return;
             }
-            if (result == IDCANCEL) {
+            if (result == DialogResult::Alt) {
                 terminateProcessByName(processName);
                 Sleep(500);
             }
@@ -294,12 +305,22 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                         console.showInfo("Auto-cleaning previous installation...");
                         uninstallFromManifest(previousManifest, pathResolver, console);
                     } else {
-                        int result = MessageBoxW(
+                        std::wstring lang = GUIHelpers::GetUILanguageCode();
+                        bool isChinese = lang.rfind(L"zh", 0) == 0;
+                        std::wstring yesText = isChinese ? L"是" : L"Yes";
+                        std::wstring noText = isChinese ? L"否" : L"No";
+                        std::wstring title = isChinese ? L"提示" : L"Confirm";
+                        std::wstring message = isChinese
+                            ? L"检测到旧版本安装目录与当前不同，是否清理旧版本？"
+                            : L"Previous install was detected in a different path. Clean it now?";
+                        DialogResult result = GUIHelpers::ShowCustomDialog(
                             m_hNotifyWindow,
-                            L"检测到旧版本安装目录与当前不同，是否清理旧版本？",
-                            L"提示",
-                            MB_YESNO | MB_ICONQUESTION);
-                        if (result == IDYES) {
+                            title,
+                            message,
+                            yesText,
+                            noText,
+                            L"");
+                        if (result == DialogResult::Ok) {
                             ConsoleInterface console;
                             console.showInfo("User accepted cleanup of previous installation.");
                             uninstallFromManifest(previousManifest, pathResolver, console);

@@ -18,7 +18,8 @@
   	
   	<HorizontalLayout padding="0,20,0,0">		
 		<Control />
-		<Button name="btnCancel" resourcetext="true" text="msg.msgbox.cancel" cursor="hand" font="2" width="66" height="30" bordersize="1" borderround="3,3" bkcolor="0xFFEDF7FF" bordercolor="0xFFC2E1F9" hotbkcolor="0xFFE0F1FE" pushedbkcolor="0xFFD0E7F9" textcolor="0xFF060300" hottextcolor="0xFF060300" pushedtextcolor="0xFF060300" disabledtextcolor="0xFF060300" textpadding="0,-1,0,0" align="center"/>
+        <Button name="btnCancel" resourcetext="true" text="msg.msgbox.cancel" cursor="hand" font="2" width="66" height="30" bordersize="1" borderround="3,3" bkcolor="0xFFEDF7FF" bordercolor="0xFFC2E1F9" hotbkcolor="0xFFE0F1FE" pushedbkcolor="0xFFD0E7F9" textcolor="0xFF060300" hottextcolor="0xFF060300" pushedtextcolor="0xFF060300" disabledtextcolor="0xFF060300" textpadding="0,-1,0,0" align="center"/>
+        <Button name="btnAlt" visible="false" cursor="hand" padding="10,0,0,0" font="2" width="90" height="30" bordersize="1" borderround="3,3" bkcolor="0xFFEDF7FF" bordercolor="0xFFC2E1F9" hotbkcolor="0xFFE0F1FE" pushedbkcolor="0xFFD0E7F9" textcolor="0xFF060300" hottextcolor="0xFF060300" pushedtextcolor="0xFF060300" disabledtextcolor="0xFF060300" textpadding="0,-1,0,0" align="center"/>
   		<Button name="btnOK" resourcetext="true" text="msg.msgbox.ok" cursor="hand" padding="10,0,0,0" font="2" width="66" height="30" borderround="3,3" bkcolor="0xFF2979FF" hotbkcolor="0xFF1A66EF" pushedbkcolor="0xFF1057CE" textcolor="0xFFFFFFFF" hottextcolor="0xFFFFFFFF" pushedtextcolor="0xFFFFFFFF" disabledtextcolor="0xFFFFFFFF" textpadding="0,-1,0,0" align="center" />
 		<Control />
   	</HorizontalLayout>

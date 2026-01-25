@@ -5,6 +5,7 @@
 #include <Windows.h>
 #include <string>
 #include <cstdint>
+#include "message_box_dialog.h"
 
 namespace MultiThreadedInstaller {
 
@@ -119,6 +120,37 @@ public:
         HWND hParent,
         const std::wstring& title,
         const std::wstring& message);
+
+    /**
+     * 鏄剧ず鑷畾涔夊璇濇
+     * @param hParent 鐖剁獥鍙ｅ彞鏌?
+     * @param title 瀵硅瘽妗嗘爣棰?
+     * @param message 瀵硅瘽妗嗘枃鏈?
+     * @param okText 确认按钮文本
+     * @param cancelText 取消按钮文本（为空则隐藏）
+     * @param altText 第三个按钮文本（为空则隐藏）
+     * @return DialogResult
+     */
+    static DialogResult ShowCustomDialog(
+        HWND hParent,
+        const std::wstring& title,
+        const std::wstring& message,
+        const std::wstring& okText,
+        const std::wstring& cancelText = L"",
+        const std::wstring& altText = L"");
+
+    /**
+     * 获取当前UI语言代码
+     */
+    static std::wstring GetUILanguageCode();
+
+    /**
+     * 获取多语言文本
+     * @param textId 文本ID
+     * @param fallback 兜底文本
+     */
+    static std::wstring GetLocalizedText(const std::wstring& textId,
+                                         const std::wstring& fallback);
     
     // 辅助函数
     /**

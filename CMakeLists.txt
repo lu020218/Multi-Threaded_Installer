@@ -212,6 +212,7 @@ if(BUILD_GUI)
         
         # Dialogs and helpers
         src/gui/license_dialog.cpp
+        src/gui/message_box_dialog.cpp
         src/gui/gui_helpers.cpp
         
         # Embedded resources manager

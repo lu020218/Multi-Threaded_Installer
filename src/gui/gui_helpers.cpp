@@ -1,6 +1,8 @@
 #ifdef GUI_ENABLED
 
 #include "../../include/gui/gui_helpers.h"
+#include "../../include/gui/message_box_dialog.h"
+#include <UIlib.h>
 #include <shlobj.h>
 #include <shellapi.h>
 #include <sstream>
@@ -8,6 +10,63 @@
 #include <filesystem>
 
 namespace MultiThreadedInstaller {
+using namespace DuiLib;
+
+namespace {
+bool CanUseCustomDialog() {
+    if (CPaintManagerUI::GetResourcePath().IsEmpty()) {
+        return false;
+    }
+
+    if (CPaintManagerUI::GetResourceType() == UILIB_ZIP) {
+        CDuiString zipName = CPaintManagerUI::GetResourceZip();
+        if (zipName.IsEmpty()) {
+            return false;
+        }
+        std::filesystem::path zipPath = CPaintManagerUI::GetResourcePath().GetData();
+        zipPath /= zipName.GetData();
+        return std::filesystem::exists(zipPath);
+    }
+
+    std::filesystem::path skinPath = CPaintManagerUI::GetResourcePath().GetData();
+    skinPath /= "msgBox.xml";
+    return std::filesystem::exists(skinPath);
+}
+
+DialogResult ShowFallbackMessageBox(HWND hParent,
+                                    const std::wstring& title,
+                                    const std::wstring& message,
+                                    UINT flags) {
+    int result = MessageBoxW(hParent, message.c_str(), title.c_str(), flags);
+    if ((flags & MB_YESNOCANCEL) == MB_YESNOCANCEL) {
+        if (result == IDYES) {
+            return DialogResult::Ok;
+        }
+        if (result == IDNO) {
+            return DialogResult::Cancel;
+        }
+        return DialogResult::Alt;
+    }
+    if ((flags & MB_YESNO) == MB_YESNO) {
+        return result == IDYES ? DialogResult::Ok : DialogResult::Cancel;
+    }
+    return DialogResult::Ok;
+}
+
+DialogResult ShowCustomDialogInternal(HWND hParent,
+                                      const std::wstring& title,
+                                      const std::wstring& message,
+                                      const std::wstring& okText,
+                                      const std::wstring& cancelText,
+                                      const std::wstring& altText,
+                                      UINT fallbackFlags) {
+    if (CanUseCustomDialog()) {
+        MessageBoxDialog dialog(title, message, okText, cancelText, altText);
+        return dialog.ShowModal(hParent);
+    }
+    return ShowFallbackMessageBox(hParent, title, message, fallbackFlags);
+}
+} // namespace
 
 // 静态变量：跟踪COM初始化状态
 static bool g_comInitialized = false;
@@ -199,54 +258,89 @@ void GUIHelpers::ShowErrorDialog(
     HWND hParent,
     const std::wstring& title,
     const std::wstring& message) {
-    
-    MessageBoxW(
-        hParent,
-        message.c_str(),
-        title.c_str(),
-        MB_OK | MB_ICONERROR
-    );
+    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"OK");
+    ShowCustomDialogInternal(hParent, title, message, okText, L"", L"",
+                             MB_OK | MB_ICONERROR);
 }
 
 void GUIHelpers::ShowWarningDialog(
     HWND hParent,
     const std::wstring& title,
     const std::wstring& message) {
-    
-    MessageBoxW(
-        hParent,
-        message.c_str(),
-        title.c_str(),
-        MB_OK | MB_ICONWARNING
-    );
+    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"OK");
+    ShowCustomDialogInternal(hParent, title, message, okText, L"", L"",
+                             MB_OK | MB_ICONWARNING);
 }
 
 bool GUIHelpers::ShowConfirmDialog(
     HWND hParent,
     const std::wstring& title,
     const std::wstring& message) {
-    
-    int result = MessageBoxW(
-        hParent,
-        message.c_str(),
-        title.c_str(),
-        MB_YESNO | MB_ICONQUESTION
-    );
-    
-    return (result == IDYES);
+    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"OK");
+    std::wstring cancelText = GetLocalizedText(L"msg.msgbox.cancel", L"Cancel");
+    DialogResult result = ShowCustomDialogInternal(hParent, title, message,
+                                                   okText, cancelText, L"",
+                                                   MB_YESNO | MB_ICONQUESTION);
+    return result == DialogResult::Ok;
 }
 
 void GUIHelpers::ShowInfoDialog(
     HWND hParent,
     const std::wstring& title,
     const std::wstring& message) {
-    
-    MessageBoxW(
-        hParent,
-        message.c_str(),
-        title.c_str(),
-        MB_OK | MB_ICONINFORMATION
-    );
+    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"OK");
+    ShowCustomDialogInternal(hParent, title, message, okText, L"", L"",
+                             MB_OK | MB_ICONINFORMATION);
+}
+
+DialogResult GUIHelpers::ShowCustomDialog(
+    HWND hParent,
+    const std::wstring& title,
+    const std::wstring& message,
+    const std::wstring& okText,
+    const std::wstring& cancelText,
+    const std::wstring& altText) {
+
+    std::wstring resolvedOk = okText;
+    std::wstring resolvedCancel = cancelText;
+    std::wstring resolvedAlt = altText;
+    if (resolvedOk.empty()) {
+        resolvedOk = GetLocalizedText(L"msg.msgbox.ok", L"OK");
+    }
+    if (resolvedCancel.empty() && !cancelText.empty()) {
+        resolvedCancel = GetLocalizedText(L"msg.msgbox.cancel", L"Cancel");
+    }
+    if (resolvedAlt.empty() && !altText.empty()) {
+        resolvedAlt = GetLocalizedText(L"msg.msgbox.cancel", L"Cancel");
+    }
+
+    UINT flags = MB_OK | MB_ICONINFORMATION;
+    if (!resolvedCancel.empty() && resolvedAlt.empty()) {
+        flags = MB_YESNO | MB_ICONQUESTION;
+    } else if (!resolvedCancel.empty() && !resolvedAlt.empty()) {
+        flags = MB_YESNOCANCEL | MB_ICONWARNING;
+    }
+    return ShowCustomDialogInternal(hParent, title, message, resolvedOk, resolvedCancel, resolvedAlt, flags);
+}
+
+std::wstring GUIHelpers::GetUILanguageCode() {
+    LPCTSTR lang = CResourceManager::GetInstance()->GetLanguage();
+    if (!lang) {
+        return L"";
+    }
+    return std::wstring(lang);
+}
+
+std::wstring GUIHelpers::GetLocalizedText(const std::wstring& textId,
+                                          const std::wstring& fallback) {
+    if (textId.empty()) {
+        return fallback;
+    }
+    CDuiString text = CResourceManager::GetInstance()->GetText(textId.c_str());
+    if (text.IsEmpty()) {
+        return fallback;
+    }
+    return std::wstring(text.GetData());
 }
 
 // ============================================================================

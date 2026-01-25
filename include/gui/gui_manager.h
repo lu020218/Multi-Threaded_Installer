@@ -132,6 +132,7 @@ private:
     void OnCancelButtonClick();
     void OnBrowseButtonClick();
     void OnLicenseLinkClick();
+    void OnLicenseBackClick();
     void OnFinishButtonClick();
     void OnCancelProgressButtonClick();
     void OnShowMoreClick();
@@ -139,6 +140,8 @@ private:
     void CollapseConfigIfExpanded();
     void ApplyLanguageByIndex(int index);
     void ApplyLanguageByCode(const std::wstring& code);
+    void ShowLicensePage();
+    void SyncLicenseAgreementFromPage();
     
     // 复选框状态变化处理
     void OnLicenseCheckboxChanged();

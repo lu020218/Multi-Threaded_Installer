@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <chrono>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -17,6 +18,17 @@ namespace MultiThreadedInstaller {
 using json = nlohmann::json;
 
 #ifdef _WIN32
+static std::string normalizePathForCompare(const std::string& path) {
+    std::string normalized = path;
+    std::replace(normalized.begin(), normalized.end(), '/', '\\');
+    while (!normalized.empty() && (normalized.back() == '\\' || normalized.back() == '/')) {
+        normalized.pop_back();
+    }
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return normalized;
+}
+
 static bool isValidUtf8(const std::string& text) {
     size_t i = 0;
     const size_t len = text.size();
@@ -490,23 +502,35 @@ bool uninstallFromManifest(const std::string& manifestPath,
         console.showInfo("Cleanup root: " + root);
     }
     
+    std::string currentExe = getCurrentExecutablePath();
+    std::string currentExeNorm = normalizePathForCompare(currentExe);
+    std::string uninstallPathNorm = normalizePathForCompare(uninstallPath);
     if (!uninstallPath.empty()) {
-        std::filesystem::path path(uninstallPath);
-        if (!std::filesystem::remove(toLongPath(path))) {
-            if (std::filesystem::exists(path)) {
-                console.showWarning("Failed to remove uninstall.exe: " + uninstallPath);
-            }
+        if (!currentExe.empty() && uninstallPathNorm == currentExeNorm) {
+            console.showInfo("Skipping uninstall.exe removal (currently running).");
         } else {
-            console.showInfo("Removed uninstall.exe: " + uninstallPath);
+            std::filesystem::path path(uninstallPath);
+            std::error_code removeEc;
+            std::filesystem::remove(toLongPath(path), removeEc);
+            if (removeEc && std::filesystem::exists(path)) {
+                console.showWarning("Failed to remove uninstall.exe: " + uninstallPath);
+            } else if (!removeEc) {
+                console.showInfo("Removed uninstall.exe: " + uninstallPath);
+            }
         }
     }
 
     for (const auto& file : files) {
+        std::string fileNorm = normalizePathForCompare(file);
+        if (!currentExe.empty() && fileNorm == currentExeNorm) {
+            console.showInfo("Skipping file removal (current exe): " + file);
+            continue;
+        }
         std::filesystem::path path(file);
-        if (!std::filesystem::remove(toLongPath(path))) {
-            if (std::filesystem::exists(path)) {
-                console.showWarning("Failed to remove file: " + file);
-            }
+        std::error_code removeEc;
+        std::filesystem::remove(toLongPath(path), removeEc);
+        if (removeEc && std::filesystem::exists(path)) {
+            console.showWarning("Failed to remove file: " + file);
         }
     }
     
@@ -530,17 +554,13 @@ bool uninstallFromManifest(const std::string& manifestPath,
     };
     
     for (const auto& root : cleanupRoots) {
-        console.showInfo("Cleanup cmd start: " + root);
-        if (!cleanupEmptyDirectoriesCmd(root)) {
-            console.showWarning("Cleanup cmd failed or timed out: " + root);
-        } else {
-            console.showInfo("Cleanup cmd done: " + root);
-        }
         std::vector<std::filesystem::path> emptyDirs;
         std::filesystem::path rootPath(root);
         if (!std::filesystem::exists(rootPath)) {
             continue;
         }
+        auto cleanupStart = std::chrono::steady_clock::now();
+        console.showInfo("Cleanup dirs start: " + root);
         std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
         for (const auto& entry : std::filesystem::recursive_directory_iterator(toLongPath(rootPath), options)) {
             if (entry.is_regular_file()) {
@@ -570,6 +590,9 @@ bool uninstallFromManifest(const std::string& manifestPath,
         if (ec && std::filesystem::exists(rootPath)) {
             console.showWarning("Failed to remove root directory: " + rootPath.string());
         }
+        auto cleanupEnd = std::chrono::steady_clock::now();
+        auto cleanupMs = std::chrono::duration_cast<std::chrono::milliseconds>(cleanupEnd - cleanupStart).count();
+        console.showInfo("Cleanup dirs done: " + root + " (" + std::to_string(cleanupMs) + " ms)");
         
         if (!hasNonIgnoredFiles(rootPath)) {
             std::error_code removeEc;

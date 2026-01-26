@@ -1,4 +1,4 @@
-#ifdef GUI_ENABLED
+﻿#ifdef GUI_ENABLED
 
 #include "../../include/gui/uninstall_worker.h"
 #include "../../include/gui/gui_manager.h"

@@ -196,6 +196,7 @@ set(INSTALLER_SOURCES
     src/installer/install_state_utils.cpp
     src/installer/uninstall_manager.cpp
     src/installer/main.cpp
+    src/common/installer_parallel_install.cpp
 )
 
 # GUI source files (only if BUILD_GUI is enabled)
@@ -227,6 +228,7 @@ endif()
 # Common source files
 set(COMMON_SOURCES
     src/common/types.cpp
+    src/common/installer_logger.cpp
 )
 
 # Create packager executable
@@ -295,7 +297,7 @@ if(BUILD_GUI)
         resources/skins/welcome_page.xml
         resources/skins/progress_page.xml
         resources/skins/completion_page.xml
-        resources/skins/license.xml
+        resources/skins/license_page.xml
         resources/license.txt
     )
     

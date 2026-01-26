@@ -1,4 +1,4 @@
-#ifdef GUI_ENABLED
+﻿#ifdef GUI_ENABLED
 
 #include "../../include/gui/gui_helpers.h"
 #include "../../include/gui/message_box_dialog.h"

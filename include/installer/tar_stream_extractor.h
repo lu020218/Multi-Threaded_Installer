@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "installer/stream_sink.h"
 #include <cstdint>

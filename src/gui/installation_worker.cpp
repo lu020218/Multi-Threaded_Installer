@@ -4,15 +4,13 @@
 #include "../../include/gui/gui_manager.h"
 #include "../../include/gui/gui_helpers.h"
 #include "../../include/installer/metadata_parser.h"
-#include "../../include/installer/decompression_engine.h"
-#include "../../include/installer/thread_pool_manager.h"
-#include "../../include/installer/file_system_operator.h"
 #include "../../include/installer/path_resolver.h"
 #include "../../include/installer/installer_helpers.h"
 #include "../../include/installer/install_state_utils.h"
 #include "../../include/installer/registry_utils.h"
 #include "../../include/installer/uninstall_manager.h"
 #include "../../include/installer/console_interface.h"
+#include "../../include/common/installer_parallel_install.h"
 
 #include <codecvt>
 #include <locale>
@@ -22,8 +20,19 @@
 #include <atomic>
 #include <algorithm>
 #include <iostream>
+#include <unordered_map>
+#include <chrono>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <Windows.h>
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 #endif
 
 namespace MultiThreadedInstaller {
@@ -193,10 +202,18 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
     ExtendedInstallationMetadata metadata;
     bool metadataValid = false;
     InstallerPathResolver pathResolver;
+    auto startTime = std::chrono::steady_clock::now();
+    auto logElapsed = [startTime](const char* label) {
+        auto now = std::chrono::steady_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
+        std::cout << "[timing] " << label << " +" << ms << "ms" << std::endl;
+    };
     
     try {
         // 发送初始进度消息
         PostProgressMessage(L"正在准备安装...", 0.0f);
+        std::cout << "Installation started." << std::endl;
+        logElapsed("start");
         
         // 解析嵌入的元数据
         MetadataParser parser;
@@ -206,6 +223,9 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             throw std::runtime_error("Invalid or corrupted installer metadata");
         }
         metadataValid = true;
+        std::cout << "Metadata loaded. App=" << metadata.applicationName
+                  << " folders=" << metadata.folderCount << std::endl;
+        logElapsed("metadata_loaded");
 
         metadata.autoStartup = m_autoRun;
         metadata.desktopIcons = m_desktopIcons;
@@ -228,6 +248,8 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             SpecialDirectoryType::INSTALL_DIRECTORY,
             metadata.applicationName
         );
+        std::cout << "Install path resolved. input=" << installPathStr
+                  << " resolved=" << resolvedInstallRoot << std::endl;
         std::string diskCheckPath = resolvedInstallRoot.empty() ? installPathStr : resolvedInstallRoot;
         uint64_t requiredBytes = 0;
         for (const auto& mapping : metadata.extendedMappings) {
@@ -238,6 +260,9 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             PostCompletionMessage(false, L"磁盘空间不足，无法继续安装。");
             return;
         }
+        std::cout << "Disk check ok. required=" << requiredBytes
+                  << " available=" << availableBytes << std::endl;
+        logElapsed("disk_check");
 
 #ifdef _WIN32
         uint16_t currentMajor = 0;
@@ -250,6 +275,9 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             PostCompletionMessage(false, L"系统版本不满足最低要求。");
             return;
         }
+        std::cout << "Windows version ok. current=" << currentMajor << "."
+                  << currentMinor << "." << currentBuild << std::endl;
+        logElapsed("windows_check");
 #endif
 
 #ifdef _WIN32
@@ -263,6 +291,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             }
         }
         if (!processName.empty() && isProcessRunningByName(processName)) {
+            std::cout << "Running app detected: " << processName << std::endl;
             PostCompletionMessage(false,
                                   GUIHelpers::GetLocalizedText(
                                       L"msg.install.app_running",
@@ -288,12 +317,15 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                         ConsoleInterface console;
                         console.showInfo("Cleaning previous installation...");
                         uninstallFromManifest(previousManifest, pathResolver, console);
+                        std::cout << "Previous install cleanup done." << std::endl;
+                        logElapsed("old_install_cleanup");
                     } else {
                         std::cout << "Skipping cleanup of previous installation." << std::endl;
                     }
                 }
             }
         }
+        logElapsed("prechecks_complete");
 
         // 检查取消请求
         if (m_cancellationRequested) {
@@ -302,161 +334,96 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
         
         // 获取安装状态互斥锁
         if (metadata.installState.useMutex) {
+            std::cout << "Acquiring install mutex..." << std::endl;
             installMutex = acquireInstallMutex(metadata.installState);
         }
         
         // 应用安装状态
         applyInstallState(metadata.installState, "installing", pathResolver);
+        std::cout << "Install state set to installing." << std::endl;
         
-        // 创建线程池
-        auto threadPool = std::make_shared<ThreadPoolManager>(
-            std::thread::hardware_concurrency()
-        );
-        
-        // 创建解压引擎
-        DecompressionEngine decompressor;
-        decompressor.setThreadPool(threadPool);
-        
-        // 注册进度回调（使用静态回调函数和this指针）
-        decompressor.registerProgressCallback(
-            [this](const std::string& folder, float progress) {
-                ProgressCallback(folder, progress, this);
-            }
-        );
-        
-        // 创建文件系统操作器
-        FileSystemOperator fsOperator;
-        
-        // 转换安装路径为string
-        // 处理每个文件夹
-        std::vector<std::string> errors;
-        std::mutex errorsMutex;
-        std::atomic<bool> overallSuccess(true);
-
         uint64_t totalBytes = 0;
+        std::unordered_map<std::string, uint64_t> folderSizes;
+        std::unordered_map<std::string, float> folderProgress;
         for (const auto& mapping : metadata.extendedMappings) {
             totalBytes += mapping.originalSize;
+            folderSizes[mapping.folderName] = mapping.originalSize;
+            folderProgress[mapping.folderName] = 0.0f;
         }
+        std::cout << "Total bytes to install: " << totalBytes << std::endl;
         m_totalBytes = totalBytes;
-        m_completedBytes = 0;
-        m_currentFolderBytes = 0;
-        m_currentBaseBytes = 0;
-        
-        for (size_t i = 0; i < metadata.extendedMappings.size(); ++i) {
-            // 检查取消请求
-            if (m_cancellationRequested) {
-                throw std::runtime_error("Installation cancelled by user");
+
+        std::mutex progressMutex;
+        auto progressCallback = [this, &folderSizes, &folderProgress, &progressMutex, totalBytes]
+            (const std::string& folder, float progress) {
+            std::lock_guard<std::mutex> lock(progressMutex);
+            folderProgress[folder] = progress;
+            if (totalBytes == 0) {
+                PostProgressMessage(StringToWString(folder), progress * 100.0f);
+                return;
             }
-            
-            const auto& mapping = metadata.extendedMappings[i];
-            m_currentFolderBytes = mapping.originalSize;
-            m_currentBaseBytes = m_completedBytes.load();
-            
-            // 确定目标路径
-            std::string targetPath;
-            if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
-                // 使用用户选择的安装目录
-                targetPath = pathResolver.resolveFinalPath(
-                    installPathStr,
-                    mapping.targetDirType,
-                    metadata.applicationName
-                );
-            } else {
-                // 使用环境变量路径
-                std::string basePath = pathResolver.resolveFinalPath(
-                    mapping.customTargetPath.empty() ? mapping.targetPath : mapping.customTargetPath,
-                    mapping.targetDirType,
-                    metadata.applicationName
-                );
-                
-                // 将文件夹名称附加到基础路径
-                if (!basePath.empty()) {
-                    if (basePath.back() != '\\' && basePath.back() != '/') {
-                        basePath += '\\';
-                    }
-                    targetPath = basePath + mapping.folderName;
+            double completed = 0.0;
+            for (const auto& entry : folderProgress) {
+                auto sizeIt = folderSizes.find(entry.first);
+                if (sizeIt != folderSizes.end()) {
+                    double clamped = std::max(0.0f, std::min(1.0f, entry.second));
+                    completed += static_cast<double>(sizeIt->second) * clamped;
                 }
             }
-            
-            if (targetPath.empty()) {
-                std::string error = "No target path specified for folder: " + mapping.folderName;
-                std::lock_guard<std::mutex> lock(errorsMutex);
-                errors.push_back(error);
-                overallSuccess = false;
-                continue;
-            }
+            double overall = completed / static_cast<double>(totalBytes);
+            PostProgressMessage(StringToWString(folder), static_cast<float>(overall * 100.0));
+        };
 
-            if (installRootPath.empty() && mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
-                installRootPath = targetPath;
-            }
-            installedRoots.push_back(targetPath);
-            
-            // 创建目标目录
-            if (!fsOperator.createDirectoryRecursive(targetPath)) {
-                std::string error = "Failed to create target directory: " + targetPath;
-                std::lock_guard<std::mutex> lock(errorsMutex);
-                errors.push_back(error);
-                overallSuccess = false;
-                continue;
-            }
-            
-            // 读取压缩数据
-            std::vector<uint8_t> compressedData = parser.readCompressedData(
-                mapping.offset, 
-                mapping.compressedSize
-            );
-            
-            if (compressedData.empty()) {
-                std::string error = "Failed to read compressed data for folder: " + mapping.folderName;
-                std::lock_guard<std::mutex> lock(errorsMutex);
-                errors.push_back(error);
-                overallSuccess = false;
-                continue;
-            }
-            
-            // 创建解压任务
-            DecompressionTask task;
-            task.compressedData = std::move(compressedData);
-            task.targetPath = targetPath;
-            task.expectedChecksum = mapping.checksum;
-            task.originalSize = mapping.originalSize;
-            task.algorithm = mapping.algorithm;
-            
-            // 执行解压
-            bool folderSuccess = decompressor.decompressFolder(task);
-            
-            if (!folderSuccess) {
-                std::string error = "Failed to decompress folder: " + mapping.folderName;
-                std::lock_guard<std::mutex> lock(errorsMutex);
-                errors.push_back(error);
-                overallSuccess = false;
-            } else {
-                m_completedBytes += mapping.originalSize;
-            }
-        }
-        m_currentFolderBytes = 0;
-        
-        // 检查是否有错误
-        if (!overallSuccess) {
-            // 合并所有错误消息
+        auto infoCallback = [](const std::string& message) {
+            std::cout << "INFO: " << message << std::endl;
+        };
+        auto errorCallback = [](const std::string& message) {
+            std::cout << "ERROR: " << message << std::endl;
+        };
+
+        std::cout << "Decompression engine initialized." << std::endl;
+        logElapsed("decompression_init");
+
+        ParallelInstallResult parallelResult = RunParallelInstall(
+            metadata,
+            parser,
+            pathResolver,
+            installPathStr,
+            {},
+            0,
+            progressCallback,
+            infoCallback,
+            errorCallback
+        );
+
+        std::cout << "Decompression complete. success="
+                  << (parallelResult.success ? "true" : "false") << std::endl;
+        logElapsed("decompression_complete");
+
+        if (!parallelResult.success) {
             std::string allErrors;
-            for (const auto& err : errors) {
+            for (const auto& err : parallelResult.errors) {
                 if (!allErrors.empty()) {
                     allErrors += "\n";
                 }
                 allErrors += err;
             }
-            throw std::runtime_error(allErrors);
+            throw std::runtime_error(allErrors.empty() ? "Installation failed" : allErrors);
         }
+
+        installRootPath = parallelResult.installRootPath;
+        installedRoots = std::move(parallelResult.installedRoots);
         
         if (!metadata.registry.empty()) {
+            std::cout << "Applying registry entries: " << metadata.registry.size() << std::endl;
             applyRegistryEntries(metadata.registry,
                                  installPathStr,
                                  metadata.configVersion,
                                  metadata.applicationName);
+            logElapsed("registry_apply_pre");
         }
 
-        if (overallSuccess) {
+        if (parallelResult.success) {
             if ((metadata.autoStartup || metadata.desktopIcons) && installRootPath.empty()) {
                 std::cout << "WARNING: Install root not detected; AutoStartup/DesktopIcons skipped" << std::endl;
             }
@@ -467,9 +434,11 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                     std::cout << "WARNING: No executable found for AutoStartup/DesktopIcons" << std::endl;
                 } else {
                     if (metadata.autoStartup) {
+                        std::cout << "Setting auto-start." << std::endl;
                         setAutoStartup(metadata.applicationName, exePath);
                     }
                     if (metadata.desktopIcons) {
+                        std::cout << "Creating desktop shortcut." << std::endl;
                         createDesktopShortcut(metadata.applicationName, exePath);
                     }
                 }
@@ -511,6 +480,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                           metadata.autoStartup, metadata.desktopIcons,
                           metadata.installState, uninstallPath,
                           WStringToString(m_languageCode));
+            std::cout << "Manifest written: " << manifestPath << std::endl;
 
             if (!installRootPath.empty()) {
                 std::filesystem::path localPath = std::filesystem::path(installRootPath) / "install.manifest.json";
@@ -519,29 +489,36 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                               metadata.autoStartup, metadata.desktopIcons,
                               metadata.installState, uninstallPath,
                               WStringToString(m_languageCode));
+                std::cout << "Local manifest written: " << localPath.string() << std::endl;
             }
 
             if (!metadata.registry.empty()) {
+                std::cout << "Applying registry entries (post-install): "
+                          << metadata.registry.size() << std::endl;
                 applyRegistryEntries(metadata.registry,
                                      installRootPath,
                                      metadata.configVersion,
                                      metadata.applicationName);
+                logElapsed("registry_apply_post");
             }
 
 #ifdef _WIN32
             if (!uninstallPath.empty()) {
+                std::cout << "Writing uninstall registry entry." << std::endl;
                 bool perMachine = isRunningAsAdmin();
                 writeUninstallRegistryEntry(metadata.applicationName,
                                             metadata.configVersion,
                                             installRootPath,
                                             uninstallPath,
                                             perMachine);
+                logElapsed("uninstall_registry");
             }
 #endif
         }
 
         // 更新安装状态为已完成
         applyInstallState(metadata.installState, "installed", pathResolver);
+        std::cout << "Install state set to installed." << std::endl;
         
         // 释放互斥锁
         if (installMutex) {
@@ -551,11 +528,15 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
         // 安装成功
         success = true;
         errorMessage = L"";
+        std::cout << "Installation completed successfully." << std::endl;
+        logElapsed("success");
         
     } catch (const std::exception& e) {
         // 捕获异常并记录错误
         success = false;
         errorMessage = StringToWString(e.what());
+        std::cout << "Installation failed: " << e.what() << std::endl;
+        logElapsed("failed");
         if (metadataValid) {
             applyInstallState(metadata.installState, "failed", pathResolver);
         }
@@ -567,6 +548,8 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
         // 捕获未知异常
         success = false;
         errorMessage = L"Unknown error occurred during installation";
+        std::cout << "Installation failed: unknown error." << std::endl;
+        logElapsed("failed_unknown");
         if (metadataValid) {
             applyInstallState(metadata.installState, "failed", pathResolver);
         }

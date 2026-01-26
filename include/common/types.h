@@ -261,7 +261,7 @@ namespace Constants {
     constexpr uint32_t VERSION = 10;
     
     // 块大小配置 (优化后)
-    constexpr size_t DEFAULT_BLOCK_SIZE = 16 * 1024 * 1024;  // 2MB (从 64KB 优化)
+    constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;  // 2MB (从 64KB 优化)
     constexpr size_t MIN_BLOCK_SIZE = 4 * 1024 * 1024;      // 1MB
     constexpr size_t MAX_BLOCK_SIZE = 128 * 1024 * 1024;      // 8MB
     

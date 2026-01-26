@@ -1,4 +1,4 @@
-#ifdef GUI_ENABLED
+﻿#ifdef GUI_ENABLED
 
 #include "../../include/installer/embedded_resources.h"
 #include <Windows.h>

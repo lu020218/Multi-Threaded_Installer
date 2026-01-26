@@ -4,6 +4,8 @@
 
 namespace MultiThreadedInstaller {
 
-bool UpdateInstallerIcon(const std::string& exePath, const std::string& iconPath, std::string& error);
+void initializeInstallerLogging();
+void flushInstallerLogging();
+std::string getInstallerLogPath();
 
 } // namespace MultiThreadedInstaller

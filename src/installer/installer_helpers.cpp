@@ -3,8 +3,9 @@
 #include <algorithm>
 #include <cctype>
 #include <ctime>
-#include <streambuf>
-#include <memory>
+#include <cstdio>
+#include <exception>
+#include <cstdlib>
 #include <iostream>
 
 #ifdef _WIN32
@@ -662,119 +663,6 @@ bool checkMinimumWindowsVersion(uint16_t minMajor, uint16_t minMinor, uint32_t m
 #endif
 }
 
-namespace {
-
-class TimestampedBuffer : public std::streambuf {
-public:
-    explicit TimestampedBuffer(FILE* fileHandle)
-        : file(fileHandle), atLineStart(true) {}
-
-protected:
-    int overflow(int ch) override {
-        if (ch == EOF || !file) {
-            return ch;
-        }
-        if (atLineStart) {
-            writeTimestamp();
-            atLineStart = false;
-        }
-        if (ch == '\n') {
-            atLineStart = true;
-        }
-        fputc(ch, file);
-        return ch;
-    }
-
-    std::streamsize xsputn(const char* s, std::streamsize count) override {
-        if (!file || !s || count <= 0) {
-            return 0;
-        }
-        std::streamsize written = 0;
-        for (std::streamsize i = 0; i < count; ++i) {
-            if (atLineStart) {
-                writeTimestamp();
-                atLineStart = false;
-            }
-            char ch = s[i];
-            fputc(ch, file);
-            if (ch == '\n') {
-                atLineStart = true;
-            }
-            ++written;
-        }
-        return written;
-    }
-
-private:
-    void writeTimestamp() {
-        if (!file) {
-            return;
-        }
-#ifdef _WIN32
-        SYSTEMTIME st{};
-        GetLocalTime(&st);
-        fprintf(file, "[%04d-%02d-%02d %02d:%02d:%02d] ",
-                st.wYear, st.wMonth, st.wDay,
-                st.wHour, st.wMinute, st.wSecond);
-#else
-        std::time_t now = std::time(nullptr);
-        std::tm localTime{};
-        localtime_s(&localTime, &now);
-        fprintf(file, "[%04d-%02d-%02d %02d:%02d:%02d] ",
-                localTime.tm_year + 1900,
-                localTime.tm_mon + 1,
-                localTime.tm_mday,
-                localTime.tm_hour,
-                localTime.tm_min,
-                localTime.tm_sec);
-#endif
-    }
-
-    FILE* file;
-    bool atLineStart;
-};
-
-std::unique_ptr<TimestampedBuffer> g_logBuffer;
-FILE* g_logFile = nullptr;
-
-} // namespace
-
-void initializeInstallerLogging() {
-#ifdef _WIN32
-    if (g_logBuffer) {
-        return;
-    }
-    std::filesystem::path logPath;
-    try {
-        char appNameBuf[256] = {};
-        DWORD len = GetEnvironmentVariableA("MTINSTALLER_APPNAME", appNameBuf, sizeof(appNameBuf));
-        std::string name = (len > 0 && len < sizeof(appNameBuf)) ? appNameBuf : "Installer";
-        std::string sanitized = name;
-        for (char& c : sanitized) {
-            if (c == '\\' || c == '/' || c == ':' || c == '*' ||
-                c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
-                c = '_';
-            }
-        }
-        logPath = std::filesystem::temp_directory_path() /
-                  ("MTInstaller_" + sanitized + ".log");
-    } catch (...) {
-        logPath = "MTInstaller_Installer.log";
-    }
-    FILE* fp = nullptr;
-    fopen_s(&fp, logPath.string().c_str(), "w");
-    if (!fp) {
-        return;
-    }
-    g_logFile = fp;
-    g_logBuffer = std::make_unique<TimestampedBuffer>(g_logFile);
-    std::cout.rdbuf(g_logBuffer.get());
-    std::cerr.rdbuf(g_logBuffer.get());
-    std::cout << "Installer log started. Log: " << logPath.string() << std::endl;
-#else
-    std::cout << "Installer log started." << std::endl;
-#endif
-}
 
 bool isProcessRunningByName(const std::string& exeName) {
 #ifdef _WIN32

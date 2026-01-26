@@ -49,6 +49,5 @@ bool checkMinimumWindowsVersion(uint16_t minMajor, uint16_t minMinor, uint32_t m
                                 uint16_t& currentMajor, uint16_t& currentMinor, uint32_t& currentBuild);
 bool isProcessRunningByName(const std::string& exeName);
 bool terminateProcessByName(const std::string& exeName);
-void initializeInstallerLogging();
 
 } // namespace MultiThreadedInstaller

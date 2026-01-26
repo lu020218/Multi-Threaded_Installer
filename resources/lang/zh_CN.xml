@@ -74,4 +74,14 @@
   <Text id="msg.dialog.license_not_impl" value="许可协议对话框尚未实现。"/>
   <Text id="msg.dialog.launch_failed" value="无法启动应用程序，请手动运行。"/>
   <Text id="msg.dialog.web_failed" value="无法打开网页，请手动访问。"/>
+  <Text id="msg.dialog.running_app.title" value="提示"/>
+  <Text id="msg.dialog.running_app.retry" value="重试"/>
+  <Text id="msg.dialog.running_app.cancel" value="取消安装"/>
+  <Text id="msg.dialog.running_app.terminate" value="结束进程"/>
+  <Text id="msg.dialog.running_app.message" value="检测到应用正在运行，请先关闭。\n\n重试：再次检测\n取消安装：退出安装\n结束进程：关闭应用继续安装"/>
+  <Text id="msg.dialog.cleanup_old.title" value="提示"/>
+  <Text id="msg.dialog.cleanup_old.message" value="检测到旧版本安装目录与当前不同，是否清理旧版本？"/>
+  <Text id="msg.dialog.cleanup_old.yes" value="是"/>
+  <Text id="msg.dialog.cleanup_old.no" value="否"/>
+  <Text id="msg.install.app_running" value="检测到应用仍在运行，请先关闭后再安装。"/>
 </Language>

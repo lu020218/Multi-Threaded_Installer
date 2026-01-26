@@ -39,6 +39,7 @@ public:
                            bool autoRun,
                            bool desktopIcons,
                            const std::wstring& languageCode,
+                           bool cleanupOldInstall,
                            HWND hNotifyWindow);
     
     // 处理安装完成

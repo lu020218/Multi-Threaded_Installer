@@ -49,7 +49,7 @@ static std::vector<std::string> collectFilesRecursive(const std::string& rootPat
     return files;
 }
 
-static std::string normalizePathForCompare(const std::string& path) {
+static std::string NormalizePathForCompare(const std::string& path) {
     std::string result = path;
     std::replace(result.begin(), result.end(), '/', '\\');
     while (!result.empty() && (result.back() == '\\' || result.back() == '/')) {
@@ -66,6 +66,7 @@ InstallationWorker::InstallationWorker(HWND hNotifyWindow)
     , m_cancellationRequested(false)
     , m_autoRun(false)
     , m_desktopIcons(false)
+    , m_cleanupOldInstallRequested(false)
     , m_totalBytes(0)
     , m_completedBytes(0)
     , m_currentFolderBytes(0)
@@ -89,7 +90,8 @@ InstallationWorker::~InstallationWorker() {
 void InstallationWorker::StartInstallation(const std::wstring& installPath,
                                            bool autoRun,
                                            bool desktopIcons,
-                                           const std::wstring& languageCode) {
+                                           const std::wstring& languageCode,
+                                           bool cleanupOldInstall) {
     // 如果已经在运行，不启动新的安装
     if (m_running) {
         return;
@@ -101,6 +103,7 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
     m_autoRun = autoRun;
     m_desktopIcons = desktopIcons;
     m_languageCode = languageCode;
+    m_cleanupOldInstallRequested = cleanupOldInstall;
     
     // 创建工作线程
     m_workerThread = std::thread(&InstallationWorker::WorkerThreadFunc, this, installPath);
@@ -259,31 +262,12 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                 processName += ".exe";
             }
         }
-        while (!processName.empty() && isProcessRunningByName(processName)) {
-            std::wstring lang = GUIHelpers::GetUILanguageCode();
-            bool isChinese = lang.rfind(L"zh", 0) == 0;
-            std::wstring okText = isChinese ? L"重试" : L"Retry";
-            std::wstring cancelText = isChinese ? L"取消安装" : L"Cancel";
-            std::wstring altText = isChinese ? L"结束进程" : L"Terminate";
-            std::wstring message = isChinese
-                ? L"检测到应用正在运行，请先关闭。\n\n重试：再次检测\n取消安装：退出安装\n结束进程：关闭应用继续安装"
-                : L"Application is running.\n\nRetry: check again\nCancel: stop installation\nTerminate: close the app and continue";
-
-            DialogResult result = GUIHelpers::ShowCustomDialog(
-                m_hNotifyWindow,
-                isChinese ? L"提示" : L"Warning",
-                message,
-                okText,
-                cancelText,
-                altText);
-            if (result == DialogResult::Cancel) {
-                PostCompletionMessage(false, L"安装已取消。");
-                return;
-            }
-            if (result == DialogResult::Alt) {
-                terminateProcessByName(processName);
-                Sleep(500);
-            }
+        if (!processName.empty() && isProcessRunningByName(processName)) {
+            PostCompletionMessage(false,
+                                  GUIHelpers::GetLocalizedText(
+                                      L"msg.install.app_running",
+                                      L"Application is still running. Please close it before installing."));
+            return;
         }
 #endif
 
@@ -293,45 +277,24 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             if (resolveExistingInstallInfo(metadata.applicationName, pathResolver,
                                            previousManifest, previousInstallDir)) {
                 std::string newPath = resolvedInstallRoot.empty() ? installPathStr : resolvedInstallRoot;
-                std::string normalizedOld = normalizePathForCompare(previousInstallDir);
-                std::string normalizedNew = normalizePathForCompare(newPath);
+                std::string normalizedOld = NormalizePathForCompare(previousInstallDir);
+                std::string normalizedNew = NormalizePathForCompare(newPath);
                 if (!normalizedOld.empty() && !normalizedNew.empty() &&
                     normalizedOld != normalizedNew) {
                     std::cout << "Detected previous install at: " << previousInstallDir << std::endl;
                     if (previousManifest.empty()) {
                         std::cout << "Old install manifest not found; skipping cleanup." << std::endl;
-                    } else if (metadata.autoCleanOldInstall) {
+                    } else if (metadata.autoCleanOldInstall || m_cleanupOldInstallRequested) {
                         ConsoleInterface console;
-                        console.showInfo("Auto-cleaning previous installation...");
+                        console.showInfo("Cleaning previous installation...");
                         uninstallFromManifest(previousManifest, pathResolver, console);
                     } else {
-                        std::wstring lang = GUIHelpers::GetUILanguageCode();
-                        bool isChinese = lang.rfind(L"zh", 0) == 0;
-                        std::wstring yesText = isChinese ? L"是" : L"Yes";
-                        std::wstring noText = isChinese ? L"否" : L"No";
-                        std::wstring title = isChinese ? L"提示" : L"Confirm";
-                        std::wstring message = isChinese
-                            ? L"检测到旧版本安装目录与当前不同，是否清理旧版本？"
-                            : L"Previous install was detected in a different path. Clean it now?";
-                        DialogResult result = GUIHelpers::ShowCustomDialog(
-                            m_hNotifyWindow,
-                            title,
-                            message,
-                            yesText,
-                            noText,
-                            L"");
-                        if (result == DialogResult::Ok) {
-                            ConsoleInterface console;
-                            console.showInfo("User accepted cleanup of previous installation.");
-                            uninstallFromManifest(previousManifest, pathResolver, console);
-                        } else {
-                            std::cout << "User skipped cleanup of previous installation." << std::endl;
-                        }
+                        std::cout << "Skipping cleanup of previous installation." << std::endl;
                     }
                 }
             }
         }
-        
+
         // 检查取消请求
         if (m_cancellationRequested) {
             throw std::runtime_error("Installation cancelled by user");

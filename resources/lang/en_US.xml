@@ -74,4 +74,14 @@
   <Text id="msg.dialog.license_not_impl" value="License dialog is not implemented yet."/>
   <Text id="msg.dialog.launch_failed" value="Unable to launch application, please run manually."/>
   <Text id="msg.dialog.web_failed" value="Unable to open webpage, please visit manually."/>
+  <Text id="msg.dialog.running_app.title" value="Warning"/>
+  <Text id="msg.dialog.running_app.retry" value="Retry"/>
+  <Text id="msg.dialog.running_app.cancel" value="Cancel"/>
+  <Text id="msg.dialog.running_app.terminate" value="Terminate"/>
+  <Text id="msg.dialog.running_app.message" value="Application is running.\n\nRetry: check again\nCancel: stop installation\nTerminate: close the app and continue"/>
+  <Text id="msg.dialog.cleanup_old.title" value="Confirm"/>
+  <Text id="msg.dialog.cleanup_old.message" value="Previous install was detected in a different path. Clean it now?"/>
+  <Text id="msg.dialog.cleanup_old.yes" value="Yes"/>
+  <Text id="msg.dialog.cleanup_old.no" value="No"/>
+  <Text id="msg.install.app_running" value="Application is still running. Please close it before installing."/>
 </Language>

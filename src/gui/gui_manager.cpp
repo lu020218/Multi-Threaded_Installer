@@ -4,6 +4,10 @@
 #include "../../include/gui/page_controller.h"
 #include "../../include/gui/gui_helpers.h"
 #include "../../include/gui/uninstall_worker.h"
+#include "../../include/installer/metadata_parser.h"
+#include "../../include/installer/path_resolver.h"
+#include "../../include/installer/installer_helpers.h"
+#include "../../include/installer/uninstall_manager.h"
 #include "../../include/installer/registry_utils.h"
 #include "Utils/unzip.h"
 #include <shlobj.h>
@@ -75,6 +79,11 @@ static int GetDefaultLanguageComboIndex();
 static std::wstring GetLanguageCodeForIndex(int index);
 static int GetLanguageIndexForCode(const std::wstring& code);
 static std::wstring GetLanguageFilePath(const std::wstring& code);
+static std::string NormalizePathForCompare(const std::string& path);
+static bool HandleRunningApplicationDialog(HWND hWnd, const std::string& appName);
+static bool RequestPreviousInstallCleanup(HWND hWnd,
+                                          const ExtendedInstallationMetadata& metadata,
+                                          const std::wstring& installPath);
 
 static UINT GetDpiForWindowSafe(HWND hwnd) {
 #ifdef _WIN32
@@ -716,7 +725,36 @@ void GUIManager::OnInstallButtonClick() {
         languageCode = m_config.languageCode;
     }
 
-    m_pPageController->StartInstallation(installPath, autoRun, desktopIcons, languageCode, m_hWnd);
+    ExtendedInstallationMetadata metadata;
+    try {
+        MetadataParser parser;
+        metadata = parser.parseExtendedEmbeddedMetadata();
+        if (!parser.validateMetadata(metadata)) {
+            GUIHelpers::ShowErrorDialog(
+                m_hWnd,
+                GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L"Error"),
+                GUIHelpers::GetLocalizedText(L"msg.dialog.metadata_invalid",
+                                             L"Installer metadata is invalid or corrupted."));
+            return;
+        }
+    } catch (const std::exception& ex) {
+        std::cout << "Failed to parse installer metadata: " << ex.what() << std::endl;
+        GUIHelpers::ShowErrorDialog(
+            m_hWnd,
+            GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L"Error"),
+            GUIHelpers::GetLocalizedText(L"msg.dialog.metadata_read_failed",
+                                         L"Failed to read installer metadata."));
+        return;
+    }
+
+    if (!HandleRunningApplicationDialog(m_hWnd, metadata.applicationName)) {
+        return;
+    }
+
+    bool cleanupOldInstall = RequestPreviousInstallCleanup(m_hWnd, metadata, installPath);
+
+    m_pPageController->StartInstallation(installPath, autoRun, desktopIcons, languageCode,
+                                         cleanupOldInstall, m_hWnd);
 
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetProgressPageIndex());
@@ -1108,6 +1146,122 @@ static std::wstring GetLanguageFilePath(const std::wstring& code) {
     }
     langPath /= code + L".xml";
     return langPath.wstring();
+}
+
+static std::string NormalizePathForCompare(const std::string& path) {
+    std::string result = path;
+    std::replace(result.begin(), result.end(), '/', '\\');
+    while (!result.empty() && (result.back() == '\\' || result.back() == '/')) {
+        result.pop_back();
+    }
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return result;
+}
+
+static bool HandleRunningApplicationDialog(HWND hWnd, const std::string& appName) {
+    if (appName.empty()) {
+        return true;
+    }
+
+    std::string processName = appName;
+    std::string lower = processName;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".exe") {
+        processName += ".exe";
+    }
+
+    while (isProcessRunningByName(processName)) {
+        std::wstring title = GUIHelpers::GetLocalizedText(
+            L"msg.dialog.running_app.title",
+            L"Warning");
+        std::wstring okText = GUIHelpers::GetLocalizedText(
+            L"msg.dialog.running_app.retry",
+            L"Retry");
+        std::wstring cancelText = GUIHelpers::GetLocalizedText(
+            L"msg.dialog.running_app.cancel",
+            L"Cancel");
+        std::wstring altText = GUIHelpers::GetLocalizedText(
+            L"msg.dialog.running_app.terminate",
+            L"Terminate");
+        std::wstring message = GUIHelpers::GetLocalizedText(
+            L"msg.dialog.running_app.message",
+            L"Application is running.\n\nRetry: check again\nCancel: stop installation\nTerminate: close the app and continue");
+
+        DialogResult result = GUIHelpers::ShowCustomDialog(
+            hWnd,
+            title,
+            message,
+            okText,
+            cancelText,
+            altText);
+        if (result == DialogResult::Cancel) {
+            return false;
+        }
+        if (result == DialogResult::Alt) {
+            terminateProcessByName(processName);
+            Sleep(500);
+        }
+    }
+
+    return true;
+}
+
+static bool RequestPreviousInstallCleanup(HWND hWnd,
+                                          const ExtendedInstallationMetadata& metadata,
+                                          const std::wstring& installPath) {
+    if (metadata.autoCleanOldInstall) {
+        return true;
+    }
+
+    InstallerPathResolver pathResolver;
+    std::string installPathUtf8 = WStringToUtf8(installPath);
+    std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
+        installPathUtf8,
+        SpecialDirectoryType::INSTALL_DIRECTORY,
+        metadata.applicationName
+    );
+
+    std::string previousManifest;
+    std::string previousInstallDir;
+    if (!resolveExistingInstallInfo(metadata.applicationName, pathResolver,
+                                    previousManifest, previousInstallDir)) {
+        return false;
+    }
+
+    std::string newPath = resolvedInstallRoot.empty() ? installPathUtf8 : resolvedInstallRoot;
+    std::string normalizedOld = NormalizePathForCompare(previousInstallDir);
+    std::string normalizedNew = NormalizePathForCompare(newPath);
+    if (normalizedOld.empty() || normalizedNew.empty() || normalizedOld == normalizedNew) {
+        return false;
+    }
+
+    if (previousManifest.empty()) {
+        std::cout << "Old install manifest not found; skipping cleanup prompt." << std::endl;
+        return false;
+    }
+
+    std::wstring title = GUIHelpers::GetLocalizedText(
+        L"msg.dialog.cleanup_old.title",
+        L"Confirm");
+    std::wstring yesText = GUIHelpers::GetLocalizedText(
+        L"msg.dialog.cleanup_old.yes",
+        L"Yes");
+    std::wstring noText = GUIHelpers::GetLocalizedText(
+        L"msg.dialog.cleanup_old.no",
+        L"No");
+    std::wstring message = GUIHelpers::GetLocalizedText(
+        L"msg.dialog.cleanup_old.message",
+        L"Previous install was detected in a different path. Clean it now?");
+    DialogResult result = GUIHelpers::ShowCustomDialog(
+        hWnd,
+        title,
+        message,
+        yesText,
+        noText,
+        L"");
+    return result == DialogResult::Ok;
 }
 
 void GUIManager::OnLicenseCheckboxChanged() {

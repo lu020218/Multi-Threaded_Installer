@@ -31,7 +31,8 @@ public:
     void StartInstallation(const std::wstring& installPath,
                            bool autoRun,
                            bool desktopIcons,
-                           const std::wstring& languageCode);
+                           const std::wstring& languageCode,
+                           bool cleanupOldInstall);
     
     // 请求取消安装
     void RequestCancellation();
@@ -46,6 +47,7 @@ private:
     std::atomic<bool> m_cancellationRequested;  // 取消请求标志
     bool m_autoRun;
     bool m_desktopIcons;
+    bool m_cleanupOldInstallRequested;
     std::wstring m_languageCode;
     std::atomic<uint64_t> m_totalBytes;
     std::atomic<uint64_t> m_completedBytes;

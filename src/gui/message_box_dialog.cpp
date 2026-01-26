@@ -2,6 +2,8 @@
 
 #include "../../include/gui/message_box_dialog.h"
 #include <vector>
+#include "Utils/unzip.h"
+#include <filesystem>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -90,6 +92,42 @@ static LPCTSTR WStringToTStr(const std::wstring& wstr) {
 #endif
 }
 
+static CDuiString ResolveMessageBoxSkinFile() {
+    if (CPaintManagerUI::GetResourceType() == UILIB_ZIP) {
+        CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
+        CDuiString zipName = CPaintManagerUI::GetResourceZip();
+        if (!resourcePath.IsEmpty() && !zipName.IsEmpty()) {
+            CDuiString zipPath = resourcePath + zipName;
+            HZIP hz = OpenZip(zipPath.GetData(), 0);
+            if (hz != NULL) {
+                ZIPENTRY ze;
+                int index = 0;
+                if (FindZipItem(hz, _T("skins/msgBox.xml"), true, &index, &ze) == 0) {
+                    CloseZip(hz);
+                    return _T("skins/msgBox.xml");
+                }
+                if (FindZipItem(hz, _T("skins\\msgBox.xml"), true, &index, &ze) == 0) {
+                    CloseZip(hz);
+                    return _T("skins\\msgBox.xml");
+                }
+                if (FindZipItem(hz, _T("msgBox.xml"), true, &index, &ze) == 0) {
+                    CloseZip(hz);
+                    return _T("msgBox.xml");
+                }
+                CloseZip(hz);
+            }
+        }
+    } else {
+        std::filesystem::path skinPath = CPaintManagerUI::GetResourcePath().GetData();
+        skinPath /= "skins";
+        skinPath /= "msgBox.xml";
+        if (std::filesystem::exists(skinPath)) {
+            return _T("skins\\msgBox.xml");
+        }
+    }
+    return _T("skins\\msgBox.xml");
+}
+
 MessageBoxDialog::MessageBoxDialog(const std::wstring& title,
                                    const std::wstring& message,
                                    const std::wstring& okText,
@@ -131,7 +169,7 @@ DialogResult MessageBoxDialog::ShowModal(HWND hParent) {
 }
 
 CDuiString MessageBoxDialog::GetSkinFile() {
-    return _T("skins\\msgBox.xml");
+    return ResolveMessageBoxSkinFile();
 }
 
 LPCTSTR MessageBoxDialog::GetWindowClassName() const {

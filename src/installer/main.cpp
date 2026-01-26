@@ -1959,7 +1959,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         CPaintManagerUI::SetResourceType(UILIB_FILE);
         std::cout << "Resource zip enabled: false" << std::endl;
     }
-    std::wcout << L"Set resource type to UILIB_FILE" << std::endl;
+    std::wcout << L"Set resource type to " << (useZip ? L"UILIB_ZIP" : L"UILIB_FILE") << std::endl;
     
     GUIManager* pFrame = new GUIManager();
     if (pFrame == NULL) {

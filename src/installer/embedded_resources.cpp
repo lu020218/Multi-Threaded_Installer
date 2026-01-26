@@ -67,7 +67,8 @@ std::string EmbeddedResourceManager::extractResources() {
         "uninstall_confirm_page.xml",
         "uninstall_progress_page.xml",
         "uninstall_completion_page.xml",
-        "license.xml"
+        "license.xml",
+        "msgBox.xml"
     };
     
     for (const char* xmlFile : xmlFiles) {

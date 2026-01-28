@@ -1304,21 +1304,31 @@ void GUIManager::UpdateDiskSpaceInfo(const std::wstring& path) {
     if (!m_pDiskSpaceLabel) {
         return;
     }
-    
+
+    uint64_t totalSpace = GUIHelpers::GetTotalDiskSpace(path);
     uint64_t availableSpace = GUIHelpers::GetAvailableDiskSpace(path);
-    
+
+    std::wstring totalStr = GUIHelpers::FormatBytes(totalSpace);
+    std::wstring freeStr = GUIHelpers::FormatBytes(availableSpace);
     std::wstring requiredStr = GUIHelpers::FormatBytes(m_config.requiredDiskSpace);
-    std::wstring availableStr = GUIHelpers::FormatBytes(availableSpace);
-    
+
+    std::wstring totalLabel = GUIHelpers::GetLocalizedText(
+        L"msg.space.total",
+        L"Disk size: ");
+    std::wstring freeLabel = GUIHelpers::GetLocalizedText(
+        L"msg.space.free",
+        L"Free space: ");
     std::wstring requiredLabel = GUIHelpers::GetLocalizedText(
         L"msg.space.required",
         L"Required: ");
-    std::wstring availableLabel = GUIHelpers::GetLocalizedText(
-        L"msg.space.available",
-        L"Available: ");
     std::wstringstream ss;
-    ss << requiredLabel << requiredStr
-       << L" | " << availableLabel << availableStr;
+
+    if (totalSpace > 0) {
+        ss << totalLabel << totalStr << L" | " << freeLabel << freeStr;
+    } else {
+        ss << freeLabel << freeStr;
+    }
+    ss << L" | " << requiredLabel << requiredStr;
     
     m_pDiskSpaceLabel->SetText(ss.str().c_str());
     

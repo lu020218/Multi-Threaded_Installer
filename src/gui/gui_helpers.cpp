@@ -182,6 +182,31 @@ uint64_t GUIHelpers::GetAvailableDiskSpace(const std::wstring& path) {
     return 0;
 }
 
+uint64_t GUIHelpers::GetTotalDiskSpace(const std::wstring& path) {
+    if (path.empty()) {
+        return 0;
+    }
+
+    std::wstring rootPath = ExtractRootPath(path);
+    if (rootPath.empty()) {
+        return 0;
+    }
+
+    ULARGE_INTEGER freeBytesAvailable;
+    ULARGE_INTEGER totalNumberOfBytes;
+    ULARGE_INTEGER totalNumberOfFreeBytes;
+
+    if (GetDiskFreeSpaceExW(
+        rootPath.c_str(),
+        &freeBytesAvailable,
+        &totalNumberOfBytes,
+        &totalNumberOfFreeBytes)) {
+        return totalNumberOfBytes.QuadPart;
+    }
+
+    return 0;
+}
+
 std::wstring GUIHelpers::FormatBytes(uint64_t bytes) {
     const wchar_t* units[] = { L"B", L"KB", L"MB", L"GB", L"TB" };
     int unitIndex = 0;

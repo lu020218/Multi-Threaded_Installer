@@ -1,6 +1,7 @@
 ﻿#ifdef GUI_ENABLED
 
 #include "../../include/gui/progress_page_controller.h"
+#include "../../include/gui/gui_helpers.h"
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -39,7 +40,10 @@ void ProgressPageController::Initialize(CPaintManagerUI* pManager) {
     
     // 设置初始文本
     if (m_pCurrentFolderLabel) {
-        m_pCurrentFolderLabel->SetText(_T("正在准备安装..."));
+        std::wstring text = GUIHelpers::GetLocalizedText(
+            L"msg.progress.preparing",
+            L"Preparing installation...");
+        m_pCurrentFolderLabel->SetText(text.c_str());
     }
     
     if (m_pProgressPercentLabel) {
@@ -47,7 +51,10 @@ void ProgressPageController::Initialize(CPaintManagerUI* pManager) {
     }
     
     if (m_pEstimatedTimeLabel) {
-        m_pEstimatedTimeLabel->SetText(_T("预计剩余时间: 计算中..."));
+        std::wstring text = GUIHelpers::GetLocalizedText(
+            L"msg.progress.eta",
+            L"Estimated time remaining: Calculating...");
+        m_pEstimatedTimeLabel->SetText(text.c_str());
     }
 }
 
@@ -63,7 +70,10 @@ void ProgressPageController::UpdateProgress(const std::wstring& folder, float pe
     // 更新当前文件夹名称
     if (m_pCurrentFolderLabel && !folder.empty()) {
         std::wstring displayFolder = TruncateFolderName(folder, 50);
-        std::wstring text = L"正在安装: " + displayFolder;
+        std::wstring prefix = GUIHelpers::GetLocalizedText(
+            L"msg.progress.installing_prefix",
+            L"Installing: ");
+        std::wstring text = prefix + displayFolder;
         CDuiString displayText(text.c_str());
         m_pCurrentFolderLabel->SetText(displayText);
     }
@@ -92,7 +102,9 @@ void ProgressPageController::UpdateProgress(const std::wstring& folder, float pe
 
 std::wstring ProgressPageController::CalculateEstimatedTime(float currentProgress) {
     if (!m_installationStarted || currentProgress <= 0.0f) {
-        return L"预计剩余时间: 计算中...";
+        return GUIHelpers::GetLocalizedText(
+            L"msg.progress.eta",
+            L"Estimated time remaining: Calculating...");
     }
     
     // 计算已用时间
@@ -104,7 +116,9 @@ std::wstring ProgressPageController::CalculateEstimatedTime(float currentProgres
     float progressFraction = currentProgress / 100.0f;
     if (progressFraction < 0.01f) {
         // 进度太小，无法准确估算
-        return L"预计剩余时间: 计算中...";
+        return GUIHelpers::GetLocalizedText(
+            L"msg.progress.eta",
+            L"Estimated time remaining: Calculating...");
     }
     
     int estimatedTotalSeconds = static_cast<int>(elapsedSeconds / progressFraction);
@@ -117,7 +131,10 @@ std::wstring ProgressPageController::CalculateEstimatedTime(float currentProgres
     
     // 格式化时间字符串
     std::wstring timeStr = FormatTime(remainingSeconds);
-    return L"预计剩余时间: " + timeStr;
+    std::wstring prefix = GUIHelpers::GetLocalizedText(
+        L"msg.progress.eta_prefix",
+        L"Estimated time remaining: ");
+    return prefix + timeStr;
 }
 
 void ProgressPageController::StartInstallation() {
@@ -126,7 +143,10 @@ void ProgressPageController::StartInstallation() {
     
     // 重置进度显示
     if (m_pCurrentFolderLabel) {
-        m_pCurrentFolderLabel->SetText(_T("正在准备安装..."));
+        std::wstring text = GUIHelpers::GetLocalizedText(
+            L"msg.progress.preparing",
+            L"Preparing installation...");
+        m_pCurrentFolderLabel->SetText(text.c_str());
     }
     
     if (m_pProgressBar) {
@@ -138,7 +158,10 @@ void ProgressPageController::StartInstallation() {
     }
     
     if (m_pEstimatedTimeLabel) {
-        m_pEstimatedTimeLabel->SetText(_T("预计剩余时间: 计算中..."));
+        std::wstring text = GUIHelpers::GetLocalizedText(
+            L"msg.progress.eta",
+            L"Estimated time remaining: Calculating...");
+        m_pEstimatedTimeLabel->SetText(text.c_str());
     }
 }
 
@@ -146,7 +169,10 @@ void ProgressPageController::Reset() {
     m_installationStarted = false;
     
     if (m_pCurrentFolderLabel) {
-        m_pCurrentFolderLabel->SetText(_T("正在准备安装..."));
+        std::wstring text = GUIHelpers::GetLocalizedText(
+            L"msg.progress.preparing",
+            L"Preparing installation...");
+        m_pCurrentFolderLabel->SetText(text.c_str());
     }
     
     if (m_pProgressBar) {
@@ -158,7 +184,10 @@ void ProgressPageController::Reset() {
     }
     
     if (m_pEstimatedTimeLabel) {
-        m_pEstimatedTimeLabel->SetText(_T("预计剩余时间: 计算中..."));
+        std::wstring text = GUIHelpers::GetLocalizedText(
+            L"msg.progress.eta",
+            L"Estimated time remaining: Calculating...");
+        m_pEstimatedTimeLabel->SetText(text.c_str());
     }
 }
 
@@ -166,14 +195,23 @@ std::wstring ProgressPageController::FormatTime(int seconds) {
     if (seconds < 60) {
         // 少于1分钟，显示秒数
         std::wstringstream ss;
-        ss << seconds << L" 秒";
+        std::wstring unit = GUIHelpers::GetLocalizedText(
+            L"msg.time.seconds",
+            L" sec");
+        ss << seconds << unit;
         return ss.str();
     } else if (seconds < 3600) {
         // 少于1小时，显示分钟和秒
         int minutes = seconds / 60;
         int remainingSeconds = seconds % 60;
         std::wstringstream ss;
-        ss << minutes << L" 分 " << remainingSeconds << L" 秒";
+        std::wstring minUnit = GUIHelpers::GetLocalizedText(
+            L"msg.time.minutes",
+            L" min ");
+        std::wstring secUnit = GUIHelpers::GetLocalizedText(
+            L"msg.time.seconds",
+            L" sec");
+        ss << minutes << minUnit << remainingSeconds << secUnit;
         return ss.str();
     } else {
         // 1小时或更多，显示小时、分钟和秒
@@ -181,7 +219,16 @@ std::wstring ProgressPageController::FormatTime(int seconds) {
         int minutes = (seconds % 3600) / 60;
         int remainingSeconds = seconds % 60;
         std::wstringstream ss;
-        ss << hours << L" 时 " << minutes << L" 分 " << remainingSeconds << L" 秒";
+        std::wstring hourUnit = GUIHelpers::GetLocalizedText(
+            L"msg.time.hours",
+            L" hr ");
+        std::wstring minUnit = GUIHelpers::GetLocalizedText(
+            L"msg.time.minutes",
+            L" min ");
+        std::wstring secUnit = GUIHelpers::GetLocalizedText(
+            L"msg.time.seconds",
+            L" sec");
+        ss << hours << hourUnit << minutes << minUnit << remainingSeconds << secUnit;
         return ss.str();
     }
 }

@@ -37,6 +37,13 @@ public:
      * @return 可用空间（字节），失败返回0
      */
     static uint64_t GetAvailableDiskSpace(const std::wstring& path);
+
+    /**
+     * 获取指定路径所在磁盘总空间
+     * @param path 路径（可以是文件路径或目录路径）
+     * @return 总空间（字节），失败返回0
+     */
+    static uint64_t GetTotalDiskSpace(const std::wstring& path);
     
     /**
      * 格式化字节数为可读字符串（如 "1.5 GB"）

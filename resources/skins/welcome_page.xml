@@ -8,11 +8,13 @@
 
         <Button name="btnInstall" textcolor="0xFFFFFFFF" visible="true" resourcetext="true" cursor="hand" width="140" height="36" font="1" padding="210,30,210,0" normalimage="file='images\round_dark.png'" hotimage="file='images\round_dark_hover.png' " pushedimage="file='images\round_dark_push.png'" align="center" text="msg.install"/>
         
+        
         <HorizontalLayout padding="10,0,0,0" height="16">
             <HorizontalLayout name="license_layer" visible="true">
                 <CheckBox name="chkAgree" width="110" font="0" textcolor="0xFFFFFFFF" resourcetext="true" text="msg.agree" selectedimage="file='images\check_blue.png' dest='0,0,16,16'" normalimage="file='images\check_darkgray.png' dest='0,0,16,16'"/>
                 <Button name="btnAgreement" cursor="hand" padding="-10,0,0,0" resourcetext="true" text="msg.licence" showhtml="true" textcolor="#FF0091FF" font="0" width="160" align="left" height="16"/>
             </HorizontalLayout>
+                <Label name="disk_space_info" text="" height="22" textcolor="#FF666666" align="left" padding="0,6,0,0"/>
             <Control width="250"/> 
             <Button name="btnShowMore" visible="true" textcolor="0xFFFFFFFF" cursor="hand" normalimage="file='images\browse.png' dest='0,1,16,16'" hotimage="file='images\browse.png' dest='0,1,16,16'" pushedimage="file='images\browse.png' dest='0,1,16,16'" resourcetext="true" text="msg.customize" textpadding="20,2,0,0" align="left"/>
         </HorizontalLayout>
@@ -31,4 +33,3 @@
         </VerticalLayout>
     </VerticalLayout>
 </Windows>
-

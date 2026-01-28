@@ -57,6 +57,22 @@
   <Text id="msg.progress.eta" value="Estimated time remaining: Calculating..."/>
   <Text id="msg.space.required" value="Required: "/>
   <Text id="msg.space.available" value="Available: "/>
+  <Text id="msg.space.total" value="Disk size: "/>
+  <Text id="msg.space.free" value="Free space: "/>
+  <Text id="msg.progress.preparing" value="Preparing installation..."/>
+  <Text id="msg.progress.installing_prefix" value="Installing: "/>
+  <Text id="msg.progress.eta_prefix" value="Estimated time remaining: "/>
+  <Text id="msg.time.seconds" value=" sec"/>
+  <Text id="msg.time.minutes" value=" min "/>
+  <Text id="msg.time.hours" value=" hr "/>
+  <Text id="msg.error.metadata_invalid" value="Installer metadata is invalid or corrupted."/>
+  <Text id="msg.error.require_admin_relaunch" value="Administrator privileges required. Relaunching installer."/>
+  <Text id="msg.error.require_admin" value="Administrator privileges required. Please run as administrator."/>
+  <Text id="msg.error.disk_space" value="Insufficient disk space to continue installation."/>
+  <Text id="msg.error.windows_version" value="Windows version does not meet minimum requirements."/>
+  <Text id="msg.error.cancelled" value="Installation cancelled."/>
+  <Text id="msg.error.install_failed" value="Installation failed."/>
+  <Text id="msg.error.unknown" value="Unknown error occurred during installation."/>
   <Text id="msg.uninstall.success" value="Uninstall completed."/>
   <Text id="msg.uninstall.failed" value="Uninstall failed: "/>
   <Text id="msg.version.prefix" value="Version "/>

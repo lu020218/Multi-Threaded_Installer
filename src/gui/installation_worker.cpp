@@ -215,7 +215,11 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
     
     try {
         // 发送初始进度消息
-        PostProgressMessage(L"正在准备安装...", 0.0f);
+        PostProgressMessage(
+            GUIHelpers::GetLocalizedText(
+                L"msg.progress.preparing",
+                L"Preparing installation..."),
+            0.0f);
         std::cout << "Installation started." << std::endl;
         logElapsed("start");
         
@@ -224,7 +228,10 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
         metadata = parser.parseExtendedEmbeddedMetadata();
         
         if (!parser.validateMetadata(metadata)) {
-            throw std::runtime_error("Invalid or corrupted installer metadata");
+            throw std::runtime_error(WStringToString(
+                GUIHelpers::GetLocalizedText(
+                    L"msg.error.metadata_invalid",
+                    L"Installer metadata is invalid or corrupted.")));
         }
         metadataValid = true;
         std::cout << "Metadata loaded. App=" << metadata.applicationName
@@ -240,9 +247,15 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             SetEnvironmentVariableW(L"MTINSTALLER_INSTALL_PATH", installPath.c_str());
 #endif
             if (relaunchSelfAsAdmin()) {
-                PostCompletionMessage(false, L"需要管理员权限，已尝试重新启动安装程序。");
+                PostCompletionMessage(false,
+                    GUIHelpers::GetLocalizedText(
+                        L"msg.error.require_admin_relaunch",
+                        L"Administrator privileges required. Relaunching installer."));
             } else {
-                PostCompletionMessage(false, L"需要管理员权限，请以管理员身份运行安装程序。");
+                PostCompletionMessage(false,
+                    GUIHelpers::GetLocalizedText(
+                        L"msg.error.require_admin",
+                        L"Administrator privileges required. Please run as administrator."));
             }
             return;
         }
@@ -261,7 +274,10 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
         }
         uint64_t availableBytes = 0;
         if (!checkDiskSpaceForInstall(diskCheckPath, requiredBytes, availableBytes)) {
-            PostCompletionMessage(false, L"磁盘空间不足，无法继续安装。");
+            PostCompletionMessage(false,
+                GUIHelpers::GetLocalizedText(
+                    L"msg.error.disk_space",
+                    L"Insufficient disk space to continue installation."));
             return;
         }
         std::cout << "Disk check ok. required=" << requiredBytes
@@ -276,7 +292,10 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                                         metadata.minWindowsMinor,
                                         metadata.minWindowsBuild,
                                         currentMajor, currentMinor, currentBuild)) {
-            PostCompletionMessage(false, L"系统版本不满足最低要求。");
+            PostCompletionMessage(false,
+                GUIHelpers::GetLocalizedText(
+                    L"msg.error.windows_version",
+                    L"Windows version does not meet minimum requirements."));
             return;
         }
         std::cout << "Windows version ok. current=" << currentMajor << "."
@@ -333,7 +352,10 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
 
         // 检查取消请求
         if (m_cancellationRequested) {
-            throw std::runtime_error("Installation cancelled by user");
+            throw std::runtime_error(WStringToString(
+                GUIHelpers::GetLocalizedText(
+                    L"msg.error.cancelled",
+                    L"Installation cancelled.")));
         }
         
         // 获取安装状态互斥锁
@@ -440,7 +462,13 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                 }
                 allErrors += err;
             }
-            throw std::runtime_error(allErrors.empty() ? "Installation failed" : allErrors);
+            if (allErrors.empty()) {
+                throw std::runtime_error(WStringToString(
+                    GUIHelpers::GetLocalizedText(
+                        L"msg.error.install_failed",
+                        L"Installation failed.")));
+            }
+            throw std::runtime_error(allErrors);
         }
 
         installRootPath = parallelResult.installRootPath;
@@ -579,7 +607,9 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
     } catch (...) {
         // 捕获未知异常
         success = false;
-        errorMessage = L"Unknown error occurred during installation";
+        errorMessage = GUIHelpers::GetLocalizedText(
+            L"msg.error.unknown",
+            L"Unknown error occurred during installation.");
         std::cout << "Installation failed: unknown error." << std::endl;
         logElapsed("failed_unknown");
         if (metadataValid) {

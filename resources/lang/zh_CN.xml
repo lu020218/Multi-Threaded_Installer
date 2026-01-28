@@ -57,6 +57,22 @@
   <Text id="msg.progress.eta" value="预计剩余时间: 计算中..."/>
   <Text id="msg.space.required" value="所需空间: "/>
   <Text id="msg.space.available" value="可用空间: "/>
+  <Text id="msg.space.total" value="磁盘容量: "/>
+  <Text id="msg.space.free" value="剩余空间: "/>
+  <Text id="msg.progress.preparing" value="正在准备安装..."/>
+  <Text id="msg.progress.installing_prefix" value="????: "/>
+  <Text id="msg.progress.eta_prefix" value="??????: "/>
+  <Text id="msg.time.seconds" value=" ?"/>
+  <Text id="msg.time.minutes" value=" ? "/>
+  <Text id="msg.time.hours" value=" ? "/>
+  <Text id="msg.error.metadata_invalid" value="安装包元数据无效或已损坏。"/>
+  <Text id="msg.error.require_admin_relaunch" value="需要管理员权限，已尝试重新启动安装程序。"/>
+  <Text id="msg.error.require_admin" value="需要管理员权限，请以管理员身份运行安装程序。"/>
+  <Text id="msg.error.disk_space" value="磁盘空间不足，无法继续安装。"/>
+  <Text id="msg.error.windows_version" value="系统版本不满足最低要求。"/>
+  <Text id="msg.error.cancelled" value="安装已取消。"/>
+  <Text id="msg.error.install_failed" value="安装失败。"/>
+  <Text id="msg.error.unknown" value="安装过程中发生未知错误。"/>
   <Text id="msg.uninstall.success" value="卸载完成。"/>
   <Text id="msg.uninstall.failed" value="卸载失败: "/>
   <Text id="msg.version.prefix" value="版本 "/>

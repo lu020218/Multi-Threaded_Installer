@@ -130,15 +130,19 @@ bool InstallationWorker::IsRunning() const {
 // 任务 7.2: 实现进度回调适配
 // ============================================================================
 
-void InstallationWorker::ProgressCallback(const std::string& folder, float progress, void* userData) {
+void InstallationWorker::ProgressCallback(const std::string& folder, const std::string& currentFile, float progress, void* userData) {
     // 将void*转换回InstallationWorker指针
     InstallationWorker* worker = static_cast<InstallationWorker*>(userData);
     if (worker) {
         // 转换字符串并发送进度消息
         std::wstring wFolder = worker->StringToWString(folder);
+        std::wstring wDisplay = wFolder;
+        if (!currentFile.empty()) {
+            wDisplay = worker->StringToWString(currentFile);
+        }
         uint64_t total = worker->m_totalBytes.load();
         if (total == 0) {
-            worker->PostProgressMessage(wFolder, progress * 100.0f);
+            worker->PostProgressMessage(wDisplay, progress * 100.0f);
             return;
         }
         uint64_t base = worker->m_currentBaseBytes.load();
@@ -148,7 +152,7 @@ void InstallationWorker::ProgressCallback(const std::string& folder, float progr
         if (overall > 1.0) {
             overall = 1.0;
         }
-        worker->PostProgressMessage(wFolder, static_cast<float>(overall * 100.0));
+        worker->PostProgressMessage(wDisplay, static_cast<float>(overall * 100.0));
     }
 }
 
@@ -354,12 +358,20 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
         m_totalBytes = totalBytes;
 
         std::mutex progressMutex;
-        auto progressCallback = [this, &folderSizes, &folderProgress, &progressMutex, totalBytes]
-            (const std::string& folder, float progress) {
+        uint64_t lastCompletedBytes = 0;
+        uint64_t progressUpdateCount = 0;
+        auto lastProgressLog = std::chrono::steady_clock::now();
+        auto progressCallback = [this, &folderSizes, &folderProgress, &progressMutex, totalBytes,
+                                 &lastCompletedBytes, &progressUpdateCount, &lastProgressLog]
+            (const std::string& folder, const std::string& currentFile, float progress) {
             std::lock_guard<std::mutex> lock(progressMutex);
             folderProgress[folder] = progress;
             if (totalBytes == 0) {
-                PostProgressMessage(StringToWString(folder), progress * 100.0f);
+                if (!currentFile.empty()) {
+                    PostProgressMessage(StringToWString(currentFile), progress * 100.0f);
+                } else {
+                    PostProgressMessage(StringToWString(folder), progress * 100.0f);
+                }
                 return;
             }
             double completed = 0.0;
@@ -371,7 +383,27 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                 }
             }
             double overall = completed / static_cast<double>(totalBytes);
-            PostProgressMessage(StringToWString(folder), static_cast<float>(overall * 100.0));
+            if (!currentFile.empty()) {
+                PostProgressMessage(StringToWString(currentFile), static_cast<float>(overall * 100.0));
+            } else {
+                PostProgressMessage(StringToWString(folder), static_cast<float>(overall * 100.0));
+            }
+
+            ++progressUpdateCount;
+            auto now = std::chrono::steady_clock::now();
+            auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastProgressLog).count();
+            if (elapsedMs >= 1000) {
+                uint64_t completedBytes = static_cast<uint64_t>(completed);
+                uint64_t deltaBytes = completedBytes - lastCompletedBytes;
+                double elapsedSec = static_cast<double>(elapsedMs) / 1000.0;
+                double updatesPerSec = progressUpdateCount / elapsedSec;
+                std::cout << "[progress] rate=" << updatesPerSec
+                          << " updates/s, delta_bytes=" << deltaBytes
+                          << ", percent=" << (overall * 100.0) << std::endl;
+                lastCompletedBytes = completedBytes;
+                lastProgressLog = now;
+                progressUpdateCount = 0;
+            }
         };
 
         auto infoCallback = [](const std::string& message) {

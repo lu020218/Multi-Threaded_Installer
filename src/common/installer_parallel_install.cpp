@@ -60,6 +60,22 @@ struct FolderTask {
     DecompressionEngine::LegacyStageTiming legacyStage;
 };
 
+std::string BuildDisplayPath(const std::string& folderName, const std::string& relativePath) {
+    if (relativePath.empty()) {
+        return folderName;
+    }
+    std::string display = folderName;
+    if (!display.empty() && display.back() != '\\' && display.back() != '/') {
+        display += '\\';
+    }
+    if (relativePath.front() == '\\' || relativePath.front() == '/') {
+        display += relativePath.substr(1);
+    } else {
+        display += relativePath;
+    }
+    return display;
+}
+
 } // namespace
 
 ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& metadata,
@@ -221,6 +237,8 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
 
         std::vector<std::unique_ptr<FileWriter>> writers;
         writers.reserve(mapping.fileIndex.size());
+        std::vector<std::string> displayNames;
+        displayNames.reserve(mapping.fileIndex.size());
 
         std::unordered_set<std::string> parentDirs;
         parentDirs.reserve(mapping.fileIndex.size());
@@ -253,6 +271,7 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
             writer->start = fileEntry.offset;
             writer->end = fileEntry.offset + fileEntry.size;
             writers.push_back(std::move(writer));
+            displayNames.push_back(BuildDisplayPath(folderTask.folderName, fileEntry.relativePath));
             totalBytes += fileEntry.size;
         }
 
@@ -392,6 +411,7 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         std::atomic<long long> decompressNs(0);
         std::atomic<long long> writeNs(0);
 
+        constexpr uint64_t kProgressChunkBytes = 8 * 1024 * 1024;
         if (threadPool && threadPool->getTotalThreadCount() > 1) {
             std::atomic<bool> blockFailed(false);
             std::vector<std::future<bool>> futures;
@@ -430,9 +450,11 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                     decompressNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count());
 
                     uint64_t blockWritten = 0;
+                    uint64_t progressChunk = 0;
                     auto writeStart = std::chrono::steady_clock::now();
                     const auto& segs = segments[i];
                     size_t currentFileIndex = static_cast<size_t>(-1);
+                    std::string currentDisplayName;
                     std::fstream stream;
                     std::unique_lock<std::mutex> fileLock;
                     for (const auto& seg : segs) {
@@ -444,6 +466,11 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                                 fileLock.unlock();
                             }
                             currentFileIndex = seg.fileIndex;
+                            if (currentFileIndex < displayNames.size()) {
+                                currentDisplayName = displayNames[currentFileIndex];
+                            } else {
+                                currentDisplayName.clear();
+                            }
                             FileWriter* writer = writerPtrs[currentFileIndex];
                             fileLock = std::unique_lock<std::mutex>(writer->mutex);
                             if (!openFileForWrite(writer->path, stream)) {
@@ -463,6 +490,16 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                             return false;
                         }
                         blockWritten += seg.size;
+                        progressChunk += seg.size;
+                        if (totalBytes > 0 && progressChunk >= kProgressChunkBytes && progressCallback) {
+                            uint64_t current = writtenBytes.fetch_add(progressChunk) + progressChunk;
+                            float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
+                            {
+                                std::lock_guard<std::mutex> lock(progressMutex);
+                                progressCallback(folderTask.folderName, currentDisplayName, progress);
+                            }
+                            progressChunk = 0;
+                        }
                     }
                     if (stream.is_open()) {
                         stream.close();
@@ -473,11 +510,12 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                     auto writeEnd = std::chrono::steady_clock::now();
                     writeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count());
 
-                    if (totalBytes > 0 && blockWritten > 0 && progressCallback) {
-                        uint64_t current = writtenBytes.fetch_add(blockWritten) + blockWritten;
+                    if (totalBytes > 0 && progressChunk > 0 && progressCallback) {
+                        uint64_t toAdd = progressChunk;
+                        uint64_t current = writtenBytes.fetch_add(toAdd) + toAdd;
                         float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
                         std::lock_guard<std::mutex> lock(progressMutex);
-                        progressCallback(folderTask.folderName, progress);
+                        progressCallback(folderTask.folderName, currentDisplayName, progress);
                     }
 
                     return true;
@@ -516,9 +554,11 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                 decompressNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count());
 
                 uint64_t blockWritten = 0;
+                uint64_t progressChunk = 0;
                 auto writeStart = std::chrono::steady_clock::now();
                 const auto& segs = segments[i];
                 size_t currentFileIndex = static_cast<size_t>(-1);
+                std::string currentDisplayName;
                 std::fstream stream;
                 std::unique_lock<std::mutex> fileLock;
                 for (const auto& seg : segs) {
@@ -530,6 +570,11 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                             fileLock.unlock();
                         }
                         currentFileIndex = seg.fileIndex;
+                        if (currentFileIndex < displayNames.size()) {
+                            currentDisplayName = displayNames[currentFileIndex];
+                        } else {
+                            currentDisplayName.clear();
+                        }
                         FileWriter* writer = writerPtrs[currentFileIndex];
                         fileLock = std::unique_lock<std::mutex>(writer->mutex);
                         if (!openFileForWrite(writer->path, stream)) {
@@ -547,6 +592,14 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                         return false;
                     }
                     blockWritten += seg.size;
+                    progressChunk += seg.size;
+                    if (totalBytes > 0 && progressChunk >= kProgressChunkBytes && progressCallback) {
+                        uint64_t current = writtenBytes.fetch_add(progressChunk) + progressChunk;
+                        float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
+                        std::lock_guard<std::mutex> lock(progressMutex);
+                        progressCallback(folderTask.folderName, currentDisplayName, progress);
+                        progressChunk = 0;
+                    }
                 }
                 if (stream.is_open()) {
                     stream.close();
@@ -557,17 +610,18 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                 auto writeEnd = std::chrono::steady_clock::now();
                 writeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count());
 
-                if (totalBytes > 0 && blockWritten > 0 && progressCallback) {
-                    uint64_t current = writtenBytes.fetch_add(blockWritten) + blockWritten;
+                if (totalBytes > 0 && (progressChunk > 0 || blockWritten > 0) && progressCallback) {
+                    uint64_t toAdd = progressChunk > 0 ? progressChunk : blockWritten;
+                    uint64_t current = writtenBytes.fetch_add(toAdd) + toAdd;
                     float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
                     std::lock_guard<std::mutex> lock(progressMutex);
-                    progressCallback(folderTask.folderName, progress);
+                    progressCallback(folderTask.folderName, currentDisplayName, progress);
                 }
             }
         }
 
         if (progressCallback) {
-            progressCallback(folderTask.folderName, 1.0f);
+            progressCallback(folderTask.folderName, std::string(), 1.0f);
         }
 
         auto totalEnd = std::chrono::steady_clock::now();

@@ -252,7 +252,7 @@ struct DecompressionTask {
 };
 
 // 进度回调函数类型
-using ProgressCallback = std::function<void(const std::string&, float)>;
+using ProgressCallback = std::function<void(const std::string&, const std::string&, float)>;
 
 // 常量定义
 namespace Constants {

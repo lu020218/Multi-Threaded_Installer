@@ -145,7 +145,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
         return false;
     }
     
-    reportProgress(task.targetPath, 0.0f);
+    reportProgress(task.targetPath, std::string(), 0.0f);
     
     bool useBlockDecompression = false;
     if (task.compressedData.size() >= sizeof(uint32_t)) {
@@ -204,7 +204,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
             totalOut += produced;
             if (task.originalSize > 0) {
                 float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
-                reportProgress(task.targetPath, progress);
+                reportProgress(task.targetPath, std::string(), progress);
             }
         }
         
@@ -226,7 +226,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
         return false;
     }
     
-    reportProgress(task.targetPath, 1.0f);
+    reportProgress(task.targetPath, std::string(), 1.0f);
     return true;
 #else
     (void)task;
@@ -326,7 +326,7 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
                 totalOut += chunk.size();
                 if (task.originalSize > 0) {
                     float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
-                    reportProgress(task.targetPath, progress);
+                    reportProgress(task.targetPath, std::string(), progress);
                 }
             }
         }
@@ -364,7 +364,7 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
             totalOut += blockOut.size();
             if (task.originalSize > 0) {
                 float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
-                reportProgress(task.targetPath, progress);
+                reportProgress(task.targetPath, std::string(), progress);
             }
         }
     }
@@ -376,7 +376,7 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
         return false;
     }
     
-    reportProgress(task.targetPath, 1.0f);
+    reportProgress(task.targetPath, std::string(), 1.0f);
     return true;
 #else
     (void)task;
@@ -387,9 +387,9 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
 #endif
 }
 
-void DecompressionEngine::reportProgress(const std::string& folderName, float progress) {
+void DecompressionEngine::reportProgress(const std::string& folderName, const std::string& currentFile, float progress) {
     if (progressCallback) {
-        progressCallback(folderName, progress);
+        progressCallback(folderName, currentFile, progress);
     }
 }
 

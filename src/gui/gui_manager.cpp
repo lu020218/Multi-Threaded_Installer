@@ -31,6 +31,8 @@ static constexpr int kPageWelcome = static_cast<int>(PageType::Welcome);
 static constexpr int kPageLicense = static_cast<int>(PageType::License);
 static constexpr int kPageProgress = static_cast<int>(PageType::Progress);
 static constexpr int kPageCompletion = static_cast<int>(PageType::Completion);
+static constexpr UINT_PTR kProgressTimerId = 1001;
+static constexpr UINT kProgressTimerIntervalMs = 33;
 
 // Convert wstring to LPCTSTR for Unicode/MBCS builds.
 // Returns a static buffer that's valid until next call.
@@ -223,23 +225,27 @@ int GUIManager::GetCompletionPageIndex() const {
 }
 
 GUIManager::GUIManager()
-    : m_pTabPages(nullptr),
-      m_pInstallPathEdit(nullptr),
-      m_pLicenseCheckbox(nullptr),
-      m_pInstallButton(nullptr),
-      m_pDiskSpaceLabel(nullptr),
-      m_pConfigBottom(nullptr),
-      m_pMoreInfo(nullptr),
-      m_pPageController(nullptr),
-      m_pWorker(nullptr),
-      m_pUninstallWorker(nullptr),
-      m_baseClientHeight(0),
-      m_baseClientWidth(0),
-      m_expandedClientHeight(0),
-      m_baseWindowWidth(0),
-      m_uninstallMode(false) {
-    m_pm.GetDPIObj()->SetScale(static_cast<int>(GetDpiForWindowSafe(nullptr)));
-}
+      : m_pTabPages(nullptr),
+        m_pInstallPathEdit(nullptr),
+        m_pLicenseCheckbox(nullptr),
+        m_pInstallButton(nullptr),
+        m_pDiskSpaceLabel(nullptr),
+        m_pConfigBottom(nullptr),
+        m_pMoreInfo(nullptr),
+        m_pPageController(nullptr),
+        m_pWorker(nullptr),
+        m_pUninstallWorker(nullptr),
+        m_baseClientHeight(0),
+        m_baseClientWidth(0),
+        m_expandedClientHeight(0),
+        m_baseWindowWidth(0),
+        m_uninstallMode(false),
+        m_progressTarget(0.0f),
+        m_progressDisplayed(0.0f),
+        m_progressTimerActive(false),
+        m_progressLastTick(0) {
+      m_pm.GetDPIObj()->SetScale(static_cast<int>(GetDpiForWindowSafe(nullptr)));
+  }
 
 GUIManager::~GUIManager() {
     if (m_pPageController) {
@@ -582,6 +588,10 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         PostQuitMessage(0);
         return 0;
     }
+    if (uMsg == WM_TIMER && wParam == kProgressTimerId) {
+        TickProgressAnimation();
+        return 0;
+    }
     if (uMsg == WM_INSTALLATION_PROGRESS) {
         ProgressMessageData* pData = reinterpret_cast<ProgressMessageData*>(lParam);
         if (pData) {
@@ -704,6 +714,12 @@ void GUIManager::OnInstallButtonClick() {
                                          L"Please select an installation directory."));
         return;
     }
+
+    StopProgressTimer();
+    m_progressTarget = 0.0f;
+    m_progressDisplayed = 0.0f;
+    m_progressFolder.clear();
+    UpdateProgressDisplay(0.0f);
 
     bool autoRun = false;
     bool desktopIcons = false;
@@ -1369,33 +1385,102 @@ void GUIManager::HandleProgressMessage(ProgressMessageData* pData) {
     if (m_pTabPages && m_pTabPages->GetCurSel() != GetProgressPageIndex()) {
         m_pTabPages->SelectItem(GetProgressPageIndex());
     }
-    
+
+    float target = pData->percentage;
+    if (target < 0.0f) {
+        target = 0.0f;
+    }
+    if (target > 100.0f) {
+        target = 100.0f;
+    }
+
+    if (pData->currentFolder[0] != L'\0') {
+        m_progressFolder = pData->currentFolder;
+    }
+
+    m_progressTarget = target;
+    if (m_progressDisplayed > m_progressTarget) {
+        m_progressDisplayed = m_progressTarget;
+    }
+
+    if (m_progressDisplayed >= m_progressTarget) {
+        UpdateProgressDisplay(m_progressDisplayed);
+        StopProgressTimer();
+        return;
+    }
+
+    StartProgressTimer();
+}
+
+void GUIManager::StartProgressTimer() {
+    if (m_progressTimerActive || !m_hWnd) {
+        return;
+    }
+    m_progressLastTick = static_cast<uint64_t>(GetTickCount64());
+    ::SetTimer(m_hWnd, kProgressTimerId, kProgressTimerIntervalMs, nullptr);
+    m_progressTimerActive = true;
+}
+
+void GUIManager::StopProgressTimer() {
+    if (!m_progressTimerActive || !m_hWnd) {
+        return;
+    }
+    ::KillTimer(m_hWnd, kProgressTimerId);
+    m_progressTimerActive = false;
+}
+
+void GUIManager::TickProgressAnimation() {
+    if (!m_progressTimerActive) {
+        return;
+    }
+
+    uint64_t now = static_cast<uint64_t>(GetTickCount64());
+    uint64_t deltaMs = now > m_progressLastTick ? (now - m_progressLastTick) : 0;
+    m_progressLastTick = now;
+
+    float delta = m_progressTarget - m_progressDisplayed;
+    if (delta <= 0.01f) {
+        m_progressDisplayed = m_progressTarget;
+        UpdateProgressDisplay(m_progressDisplayed);
+        StopProgressTimer();
+        return;
+    }
+
+    float t = (std::min)(1.0f, static_cast<float>(deltaMs) / 200.0f);
+    float step = (std::max)(delta * t, 0.05f);
+    if (step > delta) {
+        step = delta;
+    }
+    m_progressDisplayed += step;
+    UpdateProgressDisplay(m_progressDisplayed);
+}
+
+void GUIManager::UpdateProgressDisplay(float percentage) {
     CLabelUI* pCurrentFolderLabel = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("current_folder")));
-    if (pCurrentFolderLabel) {
+    if (pCurrentFolderLabel && !m_progressFolder.empty()) {
         std::wstring prefix = GUIHelpers::GetLocalizedText(
             L"msg.progress.processing",
             L"Processing: ");
-        std::wstring folderText = prefix;
-        folderText += pData->currentFolder;
+        std::wstring folderText = prefix + m_progressFolder;
         pCurrentFolderLabel->SetText(WStringToTStr(folderText));
     }
-    
+
     CProgressUI* pProgressBar = static_cast<CProgressUI*>(
         m_pm.FindControl(_T("progress_bar")));
     if (pProgressBar) {
-        int progressValue = static_cast<int>(pData->percentage);
+        int progressValue = static_cast<int>(percentage);
         pProgressBar->SetValue(progressValue);
     }
-    
+
     CLabelUI* pProgressPercentLabel = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("progress_percent")));
     if (pProgressPercentLabel) {
         wchar_t percentText[32];
-        swprintf_s(percentText, L"%.1f%%", pData->percentage);
+        swprintf_s(percentText, L"%.1f%%", percentage);
         pProgressPercentLabel->SetText(percentText);
     }
-    
+
     CLabelUI* pEstimatedTimeLabel = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("estimated_time")));
     if (pEstimatedTimeLabel) {
@@ -1410,6 +1495,8 @@ void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {
     if (!pData) {
         return;
     }
+
+    StopProgressTimer();
     
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetCompletionPageIndex());
@@ -1497,6 +1584,8 @@ void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) 
     if (!pData) {
         return;
     }
+
+    StopProgressTimer();
 
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetCompletionPageIndex());

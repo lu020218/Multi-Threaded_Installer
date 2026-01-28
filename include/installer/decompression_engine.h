@@ -51,7 +51,7 @@ private:
     
     
     // 报告进度
-    void reportProgress(const std::string& folderName, float progress);
+    void reportProgress(const std::string& folderName, const std::string& currentFile, float progress);
 };
 
 } // namespace MultiThreadedInstaller

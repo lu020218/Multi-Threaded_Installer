@@ -37,7 +37,7 @@ struct ParallelInstallResult {
     ParallelInstallSummary timing;
 };
 
-using ProgressCallback = std::function<void(const std::string&, float)>;
+using ProgressCallback = std::function<void(const std::string&, const std::string&, float)>;
 using LogCallback = std::function<void(const std::string&)>;
 
 ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& metadata,

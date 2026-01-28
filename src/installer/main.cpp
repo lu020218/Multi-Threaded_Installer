@@ -792,8 +792,9 @@ int runConsoleInstaller(int argc, char* argv[]) {
     }
     applyInstallState(metadata.installState, "installing", pathResolver);
     
-    auto progressCallback = [&console](const std::string& folder, float progress) {
-        console.showInstallationProgress(folder, progress);
+    auto progressCallback = [&console](const std::string& folder, const std::string& currentFile, float progress) {
+        const std::string& display = currentFile.empty() ? folder : currentFile;
+        console.showInstallationProgress(display, progress);
     };
     auto infoCallback = [&console](const std::string& message) {
         console.showInfo(message);

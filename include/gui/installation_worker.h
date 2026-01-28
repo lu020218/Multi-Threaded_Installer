@@ -58,7 +58,7 @@ private:
     void WorkerThreadFunc(const std::wstring& installPath);
     
     // 进度回调（从DecompressionEngine调用）
-    static void ProgressCallback(const std::string& folder, float progress, void* userData);
+    static void ProgressCallback(const std::string& folder, const std::string& currentFile, float progress, void* userData);
     
     // 发送进度消息到UI线程
     void PostProgressMessage(const std::wstring& folder, float progress);

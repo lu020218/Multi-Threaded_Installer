@@ -5,6 +5,7 @@
 #include <UIlib.h>
 #include <string>
 #include <memory>
+#include <cstdint>
 #include "../common/types.h"
 
 // Use DuiLib namespace
@@ -158,9 +159,20 @@ private:
     void HandleCompletionMessage(CompletionMessageData* pData);
     void HandleUninstallCompletionMessage(CompletionMessageData* pData);
     void RefreshLocalizedText();
+    void StartProgressTimer();
+    void StopProgressTimer();
+    void TickProgressAnimation();
+    void UpdateProgressDisplay(float percentage);
 
 public:
     void SetUninstallMode(bool enabled) { m_uninstallMode = enabled; }
+
+private:
+    float m_progressTarget;
+    float m_progressDisplayed;
+    bool m_progressTimerActive;
+    uint64_t m_progressLastTick;
+    std::wstring m_progressFolder;
 };
 
 } // namespace MultiThreadedInstaller

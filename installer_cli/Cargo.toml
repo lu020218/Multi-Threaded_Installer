@@ -1,0 +1,23 @@
+[package]
+name = "installer_cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Command-line installer for extracting and installing packages"
+
+[[bin]]
+name = "installer"
+path = "src/main.rs"
+
+[dependencies]
+installer_shared = { workspace = true }
+installer_core = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }

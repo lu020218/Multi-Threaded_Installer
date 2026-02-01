@@ -1,0 +1,33 @@
+{
+  "application_name": "GlobalApp",
+  "version": "1.5.0",
+  "default_install_dir": "%ProgramFiles%\\GlobalApp",
+  "vendor": "Global Software Ltd.",
+  "license_text": "End User License Agreement\n\nThis software is provided under the following terms...",
+  "icon_path": "resources/globalapp.ico",
+  "compression_algorithm": "Zstd",
+  "compression_level": 5,
+  "require_admin": false,
+  "auto_startup": true,
+  "desktop_icons": true,
+  "min_windows_version": {
+    "major": 10,
+    "minor": 0,
+    "build": 17763
+  },
+  "registry_entries": [
+    {
+      "path": "HKEY_CURRENT_USER\\Software\\GlobalSoftware\\GlobalApp",
+      "key": "InstallDir",
+      "value": "%InstallDir%",
+      "value_type": "String"
+    },
+    {
+      "path": "HKEY_CURRENT_USER\\Software\\GlobalSoftware\\GlobalApp",
+      "key": "Language",
+      "value": "auto",
+      "value_type": "String"
+    }
+  ],
+  "ui_resources_dir": "./ui-multilingual"
+}

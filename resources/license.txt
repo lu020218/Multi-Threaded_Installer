@@ -1,9 +1,0 @@
-SOFTWARE LICENSE AGREEMENT
-
-This is a placeholder license agreement text.
-
-Please replace this with your actual license agreement before distribution.
-
-By installing this software, you agree to the terms and conditions outlined in this agreement.
-
-Copyright (c) 2024. All rights reserved.

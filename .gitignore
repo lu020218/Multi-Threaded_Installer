@@ -1,6 +1,32 @@
-/build
-/.kiro
-/.kiro
-/third_party/DuiLib_Ultimate
-/test_output
-/tests
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.mti
+/test_output/
+
+# Tauri
+/installer_gui/src-tauri/target/
+/ui/dist/
+/ui/node_modules/
+
+# Logs
+*.log

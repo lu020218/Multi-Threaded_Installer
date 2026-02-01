@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Installer</title>
+    <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+    <!-- Custom Titlebar for frameless window -->
+    <div id="titlebar" data-tauri-drag-region>
+        <div class="titlebar-title" data-tauri-drag-region>
+            <span id="titlebar-app-name">Setup</span>
+        </div>
+        <div class="titlebar-buttons">
+            <button id="titlebar-minimize" class="titlebar-button" title="Minimize">
+                <svg  xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                    <path fill="currentColor" d="M128 544h768a32 32 0 1 0 0-64H128a32 32 0 0 0 0 64"></path>
+                </svg>
+            </button>
+            <button id="titlebar-close" class="titlebar-button titlebar-close" title="Close">
+                <svg  xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                    <path fill="currentColor" d="M195.2 195.2a64 64 0 0 1 90.496 0L512 421.504 738.304 195.2a64 64 0 0 1 90.496 90.496L602.496 512 828.8 738.304a64 64 0 0 1-90.496 90.496L512 602.496 285.696 828.8a64 64 0 0 1-90.496-90.496L421.504 512 195.2 285.696a64 64 0 0 1 0-90.496"></path>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <div id="app">
+        <!-- Welcome Page -->
+        <div id="welcome-page" class="page active">
+            <div class="page-content">
+                <div class="logo-container">
+                    <div class="logo-placeholder" id="app-logo"></div>
+                </div>
+                <h1 id="app-name">Application Name</h1>
+                <p id="app-version">Version 1.0.0</p>
+                <p class="description" data-i18n="welcome.description">
+                    This will install the application on your computer.
+                </p>
+                <p class="license-link-container" id="license-link-container" style="display: none;">
+                    <span data-i18n="welcome.license_notice">By installing, you agree to the </span>
+                    <a href="#" id="license-link" data-i18n="welcome.license_link">License Agreement</a>
+                </p>
+            </div>
+            <div class="button-row">
+                <button id="btn-cancel" class="btn-secondary" data-i18n="button.cancel">Cancel</button>
+                <button id="btn-next" class="btn-primary" data-i18n="button.next">Next</button>
+            </div>
+        </div>
+
+        <!-- License Page -->
+        <div id="license-page" class="page">
+            <div class="page-content">
+                <h2 data-i18n="license.title">License Agreement</h2>
+                <div class="license-text-container">
+                    <div class="license-text" id="license-text"></div>
+                </div>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="accept-license">
+                    <span data-i18n="license.accept">I accept the license agreement</span>
+                </label>
+            </div>
+            <div class="button-row">
+                <button id="btn-license-back" class="btn-secondary" data-i18n="button.back">Back</button>
+                <button id="btn-license-accept" class="btn-primary" data-i18n="button.accept">Accept</button>
+            </div>
+        </div>
+
+        <!-- Directory Selection Page -->
+        <div id="directory-page" class="page">
+            <div class="page-content">
+                <h2 data-i18n="install.directory">Installation Directory</h2>
+                <p class="description" data-i18n="install.directory_desc">
+                    Choose where to install the application.
+                </p>
+                <div class="input-group">
+                    <input type="text" id="install-dir" readonly>
+                    <button id="btn-browse" class="btn-secondary" data-i18n="button.browse">Browse</button>
+                </div>
+                <div class="space-info">
+                    <span data-i18n="install.required_space">Required space:</span>
+                    <span id="required-space">0 MB</span>
+                    <span class="separator">|</span>
+                    <span data-i18n="install.available_space">Available:</span>
+                    <span id="available-space">0 MB</span>
+                </div>
+                <div class="options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="create-shortcuts" checked>
+                        <span data-i18n="option.shortcuts">Create desktop shortcut</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="auto-startup">
+                        <span data-i18n="option.startup">Start with Windows</span>
+                    </label>
+                </div>
+            </div>
+            <div class="button-row">
+                <button id="btn-back" class="btn-secondary" data-i18n="button.back">Back</button>
+                <button id="btn-install" class="btn-primary" data-i18n="button.install">Install</button>
+            </div>
+        </div>
+
+        <!-- Progress Page -->
+        <div id="progress-page" class="page">
+            <div class="page-content">
+                <h2 data-i18n="install.progress">Installing...</h2>
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <span id="progress-text">0%</span>
+                </div>
+                <div class="progress-details">
+                    <p id="progress-phase" class="phase-text"></p>
+                    <p id="current-file" class="current-file"></p>
+                    <p id="progress-speed" class="speed-text"></p>
+                </div>
+            </div>
+            <div class="button-row">
+                <button id="btn-cancel-install" class="btn-secondary" data-i18n="button.cancel">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Complete Page -->
+        <div id="complete-page" class="page">
+            <div class="page-content">
+                <div class="success-icon">✓</div>
+                <h2 data-i18n="install.complete">Installation Complete</h2>
+                <p class="success-message" data-i18n="install.success">
+                    The application has been installed successfully.
+                </p>
+                <div class="install-stats">
+                    <p><span data-i18n="install.files_installed">Files installed:</span> <span id="stats-files">0</span></p>
+                    <p><span data-i18n="install.total_size">Total size:</span> <span id="stats-size">0 MB</span></p>
+                    <p><span data-i18n="install.time_taken">Time taken:</span> <span id="stats-time">0s</span></p>
+                </div>
+                <div class="options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="launch-app" checked>
+                        <span data-i18n="option.launch">Launch application</span>
+                    </label>
+                </div>
+            </div>
+            <div class="button-row">
+                <button id="btn-finish" class="btn-primary" data-i18n="button.finish">Finish</button>
+            </div>
+        </div>
+
+        <!-- Error Page -->
+        <div id="error-page" class="page">
+            <div class="page-content">
+                <div class="error-icon">✕</div>
+                <h2 data-i18n="install.error">Installation Failed</h2>
+                <p class="error-message" id="error-message">
+                    An error occurred during installation.
+                </p>
+                <div class="error-details" id="error-details" style="display: none;">
+                    <pre id="error-code"></pre>
+                </div>
+            </div>
+            <div class="button-row">
+                <button id="btn-retry" class="btn-secondary" data-i18n="button.retry">Retry</button>
+                <button id="btn-close" class="btn-primary" data-i18n="button.close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Language Selector -->
+    <div class="language-selector">
+        <select id="language-select">
+            <option value="en-US">English</option>
+            <option value="zh-CN">中文</option>
+            <option value="ja-JP">日本語</option>
+            <option value="ko-KR">한국어</option>
+            <option value="de-DE">Deutsch</option>
+            <option value="fr-FR">Français</option>
+            <option value="es-ES">Español</option>
+        </select>
+    </div>
+
+    <script type="module" src="scripts/main.js"></script>
+</body>
+</html>

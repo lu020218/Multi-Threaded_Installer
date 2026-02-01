@@ -1,0 +1,9 @@
+{
+  "application_name": "MyApp",
+  "version": "1.0.0",
+  "default_install_dir": "%ProgramFiles%\\MyApp",
+  "vendor": "My Company",
+  "compression_algorithm": "Zstd",
+  "compression_level": 3,
+  "desktop_icons": true
+}

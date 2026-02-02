@@ -15,8 +15,8 @@
 
 use crc32fast::Hasher;
 use installer_shared::{
-    BlockEntry, FileEntry, InstallerError, PackageFooter, PackageHeader, PackageMetadata,
-    Result, TocHeader, FOOTER_MAGIC, FORMAT_VERSION, HEADER_MAGIC,
+    BlockEntry, FileEntry, InstallerError, PackageFooter, PackageHeader, PackageMetadata, Result,
+    TocHeader, FOOTER_MAGIC, FORMAT_VERSION, HEADER_MAGIC,
 };
 use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -73,45 +73,45 @@ pub fn write_header<W: Write>(writer: &mut W, header: &PackageHeader) -> Result<
 pub fn read_header<R: Read>(reader: &mut R) -> Result<PackageHeader> {
     let mut buf4 = [0u8; 4];
     let mut buf8 = [0u8; 8];
-    
+
     // Read fields in the order they appear in the struct (to match repr(C) layout)
     reader.read_exact(&mut buf8)?;
     let toc_offset = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let toc_size = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let metadata_offset = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let metadata_size = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let data_offset = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let data_size = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let ui_resources_offset = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let ui_resources_size = u64::from_le_bytes(buf8);
-    
+
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic)?;
-    
+
     if magic != HEADER_MAGIC {
         return Err(InstallerError::InvalidFormat(format!(
             "Invalid header magic: expected {:?}, got {:?}",
             HEADER_MAGIC, magic
         )));
     }
-    
+
     reader.read_exact(&mut buf4)?;
     let version = u32::from_le_bytes(buf4);
-    
+
     // Validate version
     if version != FORMAT_VERSION {
         return Err(InstallerError::InvalidFormat(format!(
@@ -119,16 +119,16 @@ pub fn read_header<R: Read>(reader: &mut R) -> Result<PackageHeader> {
             FORMAT_VERSION, version
         )));
     }
-    
+
     reader.read_exact(&mut buf4)?;
     let header_size = u32::from_le_bytes(buf4);
-    
+
     reader.read_exact(&mut buf4)?;
     let flags = u32::from_le_bytes(buf4);
-    
+
     let mut reserved = [0u8; 8];
     reader.read_exact(&mut reserved)?;
-    
+
     Ok(PackageHeader {
         magic,
         version,
@@ -185,18 +185,18 @@ struct TocWithChecksum {
 /// * `Err(InstallerError::Io)` on write failure
 pub fn write_toc<W: Write>(writer: &mut W, toc: &Toc) -> Result<usize> {
     // First serialize the TOC to calculate checksum
-    let toc_data = rmp_serde::to_vec(toc)
-        .map_err(|e| InstallerError::Serialization(e.to_string()))?;
-    
+    let toc_data =
+        rmp_serde::to_vec(toc).map_err(|e| InstallerError::Serialization(e.to_string()))?;
+
     // Calculate CRC32 checksum
     let checksum = calculate_crc32(&toc_data);
-    
+
     // Write checksum first (4 bytes, little-endian)
     writer.write_all(&checksum.to_le_bytes())?;
-    
+
     // Write TOC data
     writer.write_all(&toc_data)?;
-    
+
     Ok(4 + toc_data.len())
 }
 
@@ -219,17 +219,17 @@ pub fn read_toc<R: Read>(reader: &mut R, size: usize) -> Result<Toc> {
             "TOC size too small to contain checksum".to_string(),
         ));
     }
-    
+
     // Read checksum (4 bytes, little-endian)
     let mut checksum_bytes = [0u8; 4];
     reader.read_exact(&mut checksum_bytes)?;
     let expected_checksum = u32::from_le_bytes(checksum_bytes);
-    
+
     // Read TOC data
     let toc_data_size = size - 4;
     let mut toc_data = vec![0u8; toc_data_size];
     reader.read_exact(&mut toc_data)?;
-    
+
     // Verify checksum
     let actual_checksum = calculate_crc32(&toc_data);
     if actual_checksum != expected_checksum {
@@ -238,10 +238,9 @@ pub fn read_toc<R: Read>(reader: &mut R, size: usize) -> Result<Toc> {
             actual: actual_checksum,
         });
     }
-    
+
     // Deserialize TOC
-    rmp_serde::from_slice(&toc_data)
-        .map_err(|e| InstallerError::Serialization(e.to_string()))
+    rmp_serde::from_slice(&toc_data).map_err(|e| InstallerError::Serialization(e.to_string()))
 }
 
 /// Serialize TOC to bytes (without checksum wrapper).
@@ -270,8 +269,8 @@ pub fn calculate_toc_size(toc: &Toc) -> Result<usize> {
 /// * `Err(InstallerError::Serialization)` on serialization failure
 /// * `Err(InstallerError::Io)` on write failure
 pub fn write_metadata<W: Write>(writer: &mut W, metadata: &PackageMetadata) -> Result<usize> {
-    let data = rmp_serde::to_vec(metadata)
-        .map_err(|e| InstallerError::Serialization(e.to_string()))?;
+    let data =
+        rmp_serde::to_vec(metadata).map_err(|e| InstallerError::Serialization(e.to_string()))?;
     writer.write_all(&data)?;
     Ok(data.len())
 }
@@ -291,9 +290,8 @@ pub fn write_metadata<W: Write>(writer: &mut W, metadata: &PackageMetadata) -> R
 pub fn read_metadata<R: Read>(reader: &mut R, size: usize) -> Result<PackageMetadata> {
     let mut data = vec![0u8; size];
     reader.read_exact(&mut data)?;
-    
-    rmp_serde::from_slice(&data)
-        .map_err(|e| InstallerError::Serialization(e.to_string()))
+
+    rmp_serde::from_slice(&data).map_err(|e| InstallerError::Serialization(e.to_string()))
 }
 
 /// Serialize metadata to bytes.
@@ -343,41 +341,41 @@ pub fn read_footer<R: Read + Seek>(reader: &mut R) -> Result<PackageFooter> {
     // Seek to footer position (end - footer size)
     let footer_size = footer_size() as i64;
     reader.seek(SeekFrom::End(-footer_size))?;
-    
+
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic)?;
-    
+
     if magic != FOOTER_MAGIC {
         return Err(InstallerError::InvalidFormat(format!(
             "Invalid footer magic: expected {:?}, got {:?}",
             FOOTER_MAGIC, magic
         )));
     }
-    
+
     let mut buf8 = [0u8; 8];
     let mut buf4 = [0u8; 4];
-    
+
     reader.read_exact(&mut buf8)?;
     let header_offset = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let toc_offset = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let metadata_offset = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let data_offset = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf8)?;
     let ui_resources_offset = u64::from_le_bytes(buf8);
-    
+
     reader.read_exact(&mut buf4)?;
     let crc32 = u32::from_le_bytes(buf4);
-    
+
     let mut reserved = [0u8; 4];
     reader.read_exact(&mut reserved)?;
-    
+
     Ok(PackageFooter {
         footer_magic: magic,
         header_offset,
@@ -405,7 +403,9 @@ pub const fn header_size() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use installer_shared::{CompressionAlgorithm, RegistryEntry, RegistryValueType, WindowsVersion};
+    use installer_shared::{
+        CompressionAlgorithm, RegistryEntry, RegistryValueType, WindowsVersion,
+    };
     use std::io::Cursor;
 
     #[test]
@@ -425,13 +425,13 @@ mod tests {
             flags: 0,
             reserved: [0; 8],
         };
-        
+
         let mut buffer = Vec::new();
         write_header(&mut buffer, &header).unwrap();
-        
+
         let mut cursor = Cursor::new(buffer);
         let read_header = read_header(&mut cursor).unwrap();
-        
+
         assert_eq!(header, read_header);
     }
 
@@ -439,7 +439,7 @@ mod tests {
     fn test_header_invalid_magic() {
         // With reordered fields, magic is at offset 64 (after 8 u64 fields)
         let mut buffer = vec![0u8; 88]; // Full header size
-        // Write 8 u64 fields (64 bytes)
+                                        // Write 8 u64 fields (64 bytes)
         for i in 0..8 {
             buffer[i * 8..(i + 1) * 8].copy_from_slice(&0u64.to_le_bytes());
         }
@@ -452,10 +452,10 @@ mod tests {
         // Write flags at offset 76
         buffer[76..80].copy_from_slice(&0u32.to_le_bytes());
         // Reserved at offset 80-88 (already zeros)
-        
+
         let mut cursor = Cursor::new(buffer);
         let result = read_header(&mut cursor);
-        
+
         assert!(matches!(result, Err(InstallerError::InvalidFormat(_))));
     }
 
@@ -463,7 +463,7 @@ mod tests {
     fn test_header_invalid_version() {
         // With reordered fields, version is at offset 68 (after 8 u64 fields + 4 byte magic)
         let mut buffer = vec![0u8; 88]; // Full header size
-        // Write 8 u64 fields (64 bytes)
+                                        // Write 8 u64 fields (64 bytes)
         for i in 0..8 {
             buffer[i * 8..(i + 1) * 8].copy_from_slice(&0u64.to_le_bytes());
         }
@@ -476,10 +476,10 @@ mod tests {
         // Write flags at offset 76
         buffer[76..80].copy_from_slice(&0u32.to_le_bytes());
         // Reserved at offset 80-88 (already zeros)
-        
+
         let mut cursor = Cursor::new(buffer);
         let result = read_header(&mut cursor);
-        
+
         assert!(matches!(result, Err(InstallerError::InvalidFormat(_))));
     }
 
@@ -534,15 +534,15 @@ mod tests {
                 },
             ],
         };
-        
+
         let mut buffer = Vec::new();
         let written_size = write_toc(&mut buffer, &toc).unwrap();
-        
+
         assert_eq!(buffer.len(), written_size);
-        
+
         let mut cursor = Cursor::new(&buffer);
         let read_toc = read_toc(&mut cursor, buffer.len()).unwrap();
-        
+
         assert_eq!(toc, read_toc);
     }
 
@@ -571,19 +571,22 @@ mod tests {
                 algorithm: CompressionAlgorithm::Zstd,
             }],
         };
-        
+
         let mut buffer = Vec::new();
         write_toc(&mut buffer, &toc).unwrap();
-        
+
         // Corrupt the data (not the checksum)
         if buffer.len() > 10 {
             buffer[10] ^= 0xFF;
         }
-        
+
         let mut cursor = Cursor::new(&buffer);
         let result = read_toc(&mut cursor, buffer.len());
-        
-        assert!(matches!(result, Err(InstallerError::ChecksumMismatch { .. })));
+
+        assert!(matches!(
+            result,
+            Err(InstallerError::ChecksumMismatch { .. })
+        ));
     }
 
     #[test]
@@ -612,16 +615,18 @@ mod tests {
             desktop_icons: true,
             process_name: Some("testapp.exe".to_string()),
             ui_resources_checksum: Some(0x12345678),
+            embedded_flow_yaml: None,
+            embedded_scripts: Vec::new(),
         };
-        
+
         let mut buffer = Vec::new();
         let written_size = write_metadata(&mut buffer, &metadata).unwrap();
-        
+
         assert_eq!(buffer.len(), written_size);
-        
+
         let mut cursor = Cursor::new(&buffer);
         let read_metadata = read_metadata(&mut cursor, buffer.len()).unwrap();
-        
+
         assert_eq!(metadata, read_metadata);
     }
 
@@ -637,20 +642,24 @@ mod tests {
             crc32: 0xDEADBEEF,
             reserved: [0; 4],
         };
-        
+
         // Create a buffer with some padding before the footer
         let mut buffer = vec![0u8; 100];
-        write_footer(&mut Cursor::new(&mut buffer[100 - footer_size()..]), &footer).unwrap();
-        
+        write_footer(
+            &mut Cursor::new(&mut buffer[100 - footer_size()..]),
+            &footer,
+        )
+        .unwrap();
+
         // Actually write footer at the end
         let mut full_buffer = vec![0u8; 100];
         let footer_start = 100 - footer_size();
         let mut footer_cursor = Cursor::new(&mut full_buffer[footer_start..]);
         write_footer(&mut footer_cursor, &footer).unwrap();
-        
+
         let mut cursor = Cursor::new(&full_buffer);
         let read_footer = read_footer(&mut cursor).unwrap();
-        
+
         assert_eq!(footer, read_footer);
     }
 
@@ -658,10 +667,10 @@ mod tests {
     fn test_footer_invalid_magic() {
         let mut buffer = vec![0u8; footer_size()];
         buffer[0..4].copy_from_slice(b"XXXX"); // Invalid magic
-        
+
         let mut cursor = Cursor::new(&buffer);
         let result = read_footer(&mut cursor);
-        
+
         assert!(matches!(result, Err(InstallerError::InvalidFormat(_))));
     }
 
@@ -669,10 +678,10 @@ mod tests {
     fn test_crc32_calculation() {
         let data = b"Hello, World!";
         let checksum = calculate_crc32(data);
-        
+
         // Verify same data produces same checksum
         assert_eq!(checksum, calculate_crc32(data));
-        
+
         // Verify different data produces different checksum
         let different_data = b"Hello, World?";
         assert_ne!(checksum, calculate_crc32(different_data));
@@ -689,10 +698,10 @@ mod tests {
             toc_offset: 0x090A0B0C0D0E0F10,
             ..Default::default()
         };
-        
+
         let mut buffer = Vec::new();
         write_header(&mut buffer, &header).unwrap();
-        
+
         // toc_offset is first (8 bytes, little-endian: 10 0F 0E 0D 0C 0B 0A 09)
         assert_eq!(buffer[0], 0x10);
         assert_eq!(buffer[1], 0x0F);
@@ -702,16 +711,16 @@ mod tests {
         assert_eq!(buffer[5], 0x0B);
         assert_eq!(buffer[6], 0x0A);
         assert_eq!(buffer[7], 0x09);
-        
+
         // magic is at offset 64 (after 8 u64 fields)
         assert_eq!(&buffer[64..68], &HEADER_MAGIC);
-        
+
         // version is at offset 68 (little-endian: 04 03 02 01)
         assert_eq!(buffer[68], 0x04);
         assert_eq!(buffer[69], 0x03);
         assert_eq!(buffer[70], 0x02);
         assert_eq!(buffer[71], 0x01);
-        
+
         // header_size is at offset 72 (little-endian: 08 07 06 05)
         assert_eq!(buffer[72], 0x08);
         assert_eq!(buffer[73], 0x07);
@@ -730,18 +739,28 @@ mod property_tests {
     // Strategy for generating arbitrary PackageHeader
     fn arb_header() -> impl Strategy<Value = PackageHeader> {
         (
-            any::<u64>(),  // toc_offset
-            any::<u64>(),  // toc_size
-            any::<u64>(),  // metadata_offset
-            any::<u64>(),  // metadata_size
-            any::<u64>(),  // data_offset
-            any::<u64>(),  // data_size
-            any::<u64>(),  // ui_resources_offset
-            any::<u64>(),  // ui_resources_size
-            any::<u32>(),  // flags
+            any::<u64>(), // toc_offset
+            any::<u64>(), // toc_size
+            any::<u64>(), // metadata_offset
+            any::<u64>(), // metadata_size
+            any::<u64>(), // data_offset
+            any::<u64>(), // data_size
+            any::<u64>(), // ui_resources_offset
+            any::<u64>(), // ui_resources_size
+            any::<u32>(), // flags
         )
             .prop_map(
-                |(toc_offset, toc_size, metadata_offset, metadata_size, data_offset, data_size, ui_resources_offset, ui_resources_size, flags)| {
+                |(
+                    toc_offset,
+                    toc_size,
+                    metadata_offset,
+                    metadata_size,
+                    data_offset,
+                    data_size,
+                    ui_resources_offset,
+                    ui_resources_size,
+                    flags,
+                )| {
                     PackageHeader {
                         magic: HEADER_MAGIC,
                         version: FORMAT_VERSION,
@@ -764,43 +783,46 @@ mod property_tests {
     // Strategy for generating arbitrary FileEntry
     fn arb_file_entry() -> impl Strategy<Value = FileEntry> {
         (
-            "[a-zA-Z0-9_/]{1,50}",  // path
-            any::<u64>(),           // original_size
-            any::<u32>(),           // mode
-            any::<u32>(),           // first_block_index
-            1..100u32,              // block_count (at least 1)
-            any::<u32>(),           // checksum
+            "[a-zA-Z0-9_/]{1,50}", // path
+            any::<u64>(),          // original_size
+            any::<u32>(),          // mode
+            any::<u32>(),          // first_block_index
+            1..100u32,             // block_count (at least 1)
+            any::<u32>(),          // checksum
         )
-            .prop_map(|(path, original_size, mode, first_block_index, block_count, checksum)| {
-                FileEntry {
+            .prop_map(
+                |(path, original_size, mode, first_block_index, block_count, checksum)| FileEntry {
                     path,
                     original_size,
                     mode,
                     first_block_index,
                     block_count,
                     checksum,
-                }
-            })
+                },
+            )
     }
 
     // Strategy for generating arbitrary BlockEntry
     fn arb_block_entry() -> impl Strategy<Value = BlockEntry> {
         (
-            any::<u64>(),  // offset
-            any::<u64>(),  // compressed_size
-            any::<u64>(),  // original_size
-            any::<u32>(),  // checksum
-            prop_oneof![Just(CompressionAlgorithm::Zstd), Just(CompressionAlgorithm::Lzma)],
+            any::<u64>(), // offset
+            any::<u64>(), // compressed_size
+            any::<u64>(), // original_size
+            any::<u32>(), // checksum
+            prop_oneof![
+                Just(CompressionAlgorithm::Zstd),
+                Just(CompressionAlgorithm::Lzma)
+            ],
         )
-            .prop_map(|(offset, compressed_size, original_size, checksum, algorithm)| {
-                BlockEntry {
+            .prop_map(
+                |(offset, compressed_size, original_size, checksum, algorithm)| BlockEntry {
                     offset,
                     compressed_size,
                     original_size,
                     checksum,
                     algorithm,
-                }
-            })
+                },
+            )
     }
 
     // Strategy for generating arbitrary Toc
@@ -824,55 +846,75 @@ mod property_tests {
     // Strategy for generating arbitrary PackageMetadata
     fn arb_metadata() -> impl Strategy<Value = PackageMetadata> {
         (
-            "[a-zA-Z0-9_]{1,30}",  // app_name
-            "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}",  // version
-            "[a-zA-Z0-9_/\\\\]{1,50}",  // default_install_dir
-            any::<bool>(),  // require_admin
-            any::<bool>(),  // auto_startup
-            any::<bool>(),  // desktop_icons
+            "[a-zA-Z0-9_]{1,30}",                   // app_name
+            "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}", // version
+            "[a-zA-Z0-9_/\\\\]{1,50}",              // default_install_dir
+            any::<bool>(),                          // require_admin
+            any::<bool>(),                          // auto_startup
+            any::<bool>(),                          // desktop_icons
         )
-            .prop_map(|(app_name, version, default_install_dir, require_admin, auto_startup, desktop_icons)| {
-                PackageMetadata {
+            .prop_map(
+                |(
                     app_name,
                     version,
                     default_install_dir,
-                    vendor: None,
-                    license_text: None,
                     require_admin,
-                    icon_path: None,
-                    ui_theme: None,
-                    min_windows_version: None,
-                    registry_entries: Vec::new(),
                     auto_startup,
                     desktop_icons,
-                    process_name: None,
-                    ui_resources_checksum: None,
-                }
-            })
+                )| {
+                    PackageMetadata {
+                        app_name,
+                        version,
+                        default_install_dir,
+                        vendor: None,
+                        license_text: None,
+                        require_admin,
+                        icon_path: None,
+                        ui_theme: None,
+                        min_windows_version: None,
+                        registry_entries: Vec::new(),
+                        auto_startup,
+                        desktop_icons,
+                        process_name: None,
+                        ui_resources_checksum: None,
+                        embedded_flow_yaml: None,
+                        embedded_scripts: Vec::new(),
+                    }
+                },
+            )
     }
 
     // Strategy for generating arbitrary PackageFooter
     fn arb_footer() -> impl Strategy<Value = PackageFooter> {
         (
-            any::<u64>(),  // header_offset
-            any::<u64>(),  // toc_offset
-            any::<u64>(),  // metadata_offset
-            any::<u64>(),  // data_offset
-            any::<u64>(),  // ui_resources_offset
-            any::<u32>(),  // crc32
+            any::<u64>(), // header_offset
+            any::<u64>(), // toc_offset
+            any::<u64>(), // metadata_offset
+            any::<u64>(), // data_offset
+            any::<u64>(), // ui_resources_offset
+            any::<u32>(), // crc32
         )
-            .prop_map(|(header_offset, toc_offset, metadata_offset, data_offset, ui_resources_offset, crc32)| {
-                PackageFooter {
-                    footer_magic: FOOTER_MAGIC,
+            .prop_map(
+                |(
                     header_offset,
                     toc_offset,
                     metadata_offset,
                     data_offset,
                     ui_resources_offset,
                     crc32,
-                    reserved: [0; 4],
-                }
-            })
+                )| {
+                    PackageFooter {
+                        footer_magic: FOOTER_MAGIC,
+                        header_offset,
+                        toc_offset,
+                        metadata_offset,
+                        data_offset,
+                        ui_resources_offset,
+                        crc32,
+                        reserved: [0; 4],
+                    }
+                },
+            )
     }
 
     proptest! {
@@ -885,10 +927,10 @@ mod property_tests {
         fn prop_header_roundtrip(header in arb_header()) {
             let mut buffer = Vec::new();
             write_header(&mut buffer, &header).unwrap();
-            
+
             let mut cursor = Cursor::new(buffer);
             let read_back = read_header(&mut cursor).unwrap();
-            
+
             prop_assert_eq!(header, read_back);
         }
 
@@ -899,12 +941,12 @@ mod property_tests {
         fn prop_toc_roundtrip(toc in arb_toc()) {
             let mut buffer = Vec::new();
             let written_size = write_toc(&mut buffer, &toc).unwrap();
-            
+
             prop_assert_eq!(buffer.len(), written_size);
-            
+
             let mut cursor = Cursor::new(&buffer);
             let read_back = read_toc(&mut cursor, buffer.len()).unwrap();
-            
+
             prop_assert_eq!(toc, read_back);
         }
 
@@ -915,12 +957,12 @@ mod property_tests {
         fn prop_metadata_roundtrip(metadata in arb_metadata()) {
             let mut buffer = Vec::new();
             let written_size = write_metadata(&mut buffer, &metadata).unwrap();
-            
+
             prop_assert_eq!(buffer.len(), written_size);
-            
+
             let mut cursor = Cursor::new(&buffer);
             let read_back = read_metadata(&mut cursor, buffer.len()).unwrap();
-            
+
             prop_assert_eq!(metadata, read_back);
         }
 
@@ -935,10 +977,10 @@ mod property_tests {
                 let mut cursor = Cursor::new(&mut buffer[..]);
                 write_footer(&mut cursor, &footer).unwrap();
             }
-            
+
             let mut cursor = Cursor::new(&buffer);
             let read_back = read_footer(&mut cursor).unwrap();
-            
+
             prop_assert_eq!(footer, read_back);
         }
 
@@ -948,7 +990,7 @@ mod property_tests {
         fn prop_crc32_deterministic(data in prop::collection::vec(any::<u8>(), 0..1000)) {
             let checksum1 = calculate_crc32(&data);
             let checksum2 = calculate_crc32(&data);
-            
+
             prop_assert_eq!(checksum1, checksum2);
         }
 
@@ -958,15 +1000,15 @@ mod property_tests {
         fn prop_toc_checksum_integrity(toc in arb_toc(), corrupt_pos in 0usize..100) {
             let mut buffer = Vec::new();
             write_toc(&mut buffer, &toc).unwrap();
-            
+
             // Only corrupt if buffer is large enough and position is in data area (after checksum)
             if buffer.len() > 4 && corrupt_pos < buffer.len() - 4 {
                 let pos = 4 + (corrupt_pos % (buffer.len() - 4));
                 buffer[pos] ^= 0xFF;
-                
+
                 let mut cursor = Cursor::new(&buffer);
                 let result = read_toc(&mut cursor, buffer.len());
-                
+
                 // Should either fail with checksum mismatch or serialization error
                 prop_assert!(result.is_err());
             }

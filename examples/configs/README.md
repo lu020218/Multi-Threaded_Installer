@@ -1,6 +1,9 @@
 # Example Configurations
 
-This directory contains example `packager.json` configuration files for different use cases.
+This directory currently contains legacy JSON examples for historical reference.
+New packager versions are YAML-only.
+
+Use `examples/yaml-flow-demo/packager.yaml` as the primary template.
 
 ## Files
 
@@ -40,12 +43,12 @@ A configuration optimized for multi-language applications:
 
 Use this when building installers with multi-language support.
 
-## Usage
+## Usage (YAML)
 
-Copy one of these files to your project directory and rename it to `packager.json`:
+Copy a YAML config to your project directory and name it `packager.yaml`:
 
 ```bash
-cp basic.json /path/to/your/project/packager.json
+cp ../yaml-flow-demo/packager.yaml /path/to/your/project/packager.yaml
 ```
 
 Then run the packager:

@@ -425,16 +425,8 @@ mod tests {
         // Create locales directory
         let locales_dir = dir.join("locales");
         fs::create_dir_all(&locales_dir).unwrap();
-        fs::write(
-            locales_dir.join("en-US.json"),
-            r#"{"welcome": "Welcome"}"#,
-        )
-        .unwrap();
-        fs::write(
-            locales_dir.join("zh-CN.json"),
-            r#"{"welcome": "欢迎"}"#,
-        )
-        .unwrap();
+        fs::write(locales_dir.join("en-US.json"), r#"{"welcome": "Welcome"}"#).unwrap();
+        fs::write(locales_dir.join("zh-CN.json"), r#"{"welcome": "欢迎"}"#).unwrap();
     }
 
     #[test]
@@ -459,10 +451,7 @@ mod tests {
 
         let result = UIResources::from_directory(dir.path());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("index.html"));
+        assert!(result.unwrap_err().to_string().contains("index.html"));
     }
 
     #[test]
@@ -656,22 +645,22 @@ mod property_tests {
     /// Strategy for generating valid HTML content
     fn arb_html_content() -> impl Strategy<Value = String> {
         "[a-zA-Z0-9 ]{0,100}".prop_map(|content| {
-            format!("<!DOCTYPE html><html><head><title>Test</title></head><body>{}</body></html>", content)
+            format!(
+                "<!DOCTYPE html><html><head><title>Test</title></head><body>{}</body></html>",
+                content
+            )
         })
     }
 
     /// Strategy for generating valid CSS content
     fn arb_css_content() -> impl Strategy<Value = String> {
-        "[a-zA-Z0-9_-]{1,20}".prop_map(|selector| {
-            format!("{} {{ margin: 0; padding: 0; }}", selector)
-        })
+        "[a-zA-Z0-9_-]{1,20}"
+            .prop_map(|selector| format!("{} {{ margin: 0; padding: 0; }}", selector))
     }
 
     /// Strategy for generating valid JS content
     fn arb_js_content() -> impl Strategy<Value = String> {
-        "[a-zA-Z0-9 ]{0,50}".prop_map(|msg| {
-            format!("console.log('{}');", msg)
-        })
+        "[a-zA-Z0-9 ]{0,50}".prop_map(|msg| format!("console.log('{}');", msg))
     }
 
     /// Create a test UI directory with the given content

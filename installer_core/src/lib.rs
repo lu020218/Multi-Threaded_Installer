@@ -93,47 +93,52 @@
 //!
 //! The platform abstraction trait allows future expansion to other platforms.
 
+pub mod components;
 pub mod compression;
+pub mod exe_builder;
 pub mod filesystem;
-pub mod package;
-pub mod platform;
-pub mod packager;
+pub mod flow_executor;
 pub mod installer;
-pub mod uninstall;
-pub mod ui_resources;
 pub mod localization;
 pub mod logging;
-pub mod exe_builder;
+pub mod package;
+pub mod packager;
+pub mod platform;
+pub mod ui_resources;
+pub mod uninstall;
 
 // Re-export compression functions
-pub use compression::{compress, decompress, calculate_crc32, verify_crc32};
+pub use components::{
+    download_component_to_cache, find_component, load_component_manifest, sha256_file_hex,
+    verify_component_sha256, verify_component_signature, ComponentDownloadPolicy, ComponentEntry,
+    ComponentManifest, ComponentPackage, ComponentSignaturePolicy,
+};
+pub use compression::{calculate_crc32, compress, decompress, verify_crc32};
 
 // Re-export filesystem types and functions
 pub use filesystem::{
-    FileInfo, ScanOptions, BlockDivisionResult, BlockInfo, BlockData,
-    DiskSpaceInfo, DEFAULT_DISK_SPACE_BUFFER,
-    scan_directory, scan_directory_with_options, divide_into_blocks,
-    calculate_block_count, create_dir_all, write_file, write_file_with_mode,
-    delete_file, delete_dir_all, delete_empty_dir,
-    get_available_space, check_disk_space, check_disk_space_with_default_buffer,
-    calculate_required_space, get_disk_space_info,
+    calculate_block_count, calculate_required_space, check_disk_space,
+    check_disk_space_with_default_buffer, create_dir_all, delete_dir_all, delete_empty_dir,
+    delete_file, divide_into_blocks, get_available_space, get_disk_space_info, scan_directory,
+    scan_directory_with_options, write_file, write_file_with_mode, BlockData, BlockDivisionResult,
+    BlockInfo, DiskSpaceInfo, FileInfo, ScanOptions, DEFAULT_DISK_SPACE_BUFFER,
 };
 
 // Re-export package types and functions
 pub use package::{
-    Toc, write_header, read_header, write_toc, read_toc,
-    write_metadata, read_metadata, write_footer, read_footer,
+    read_footer, read_header, read_metadata, read_toc, write_footer, write_header, write_metadata,
+    write_toc, Toc,
 };
 
 // Re-export platform trait
-pub use platform::{Platform, UninstallInfo, WindowsPlatform, create_platform};
+pub use platform::{create_platform, Platform, UninstallInfo, WindowsPlatform};
 
 // Re-export packager and installer
-pub use packager::{Packager, PackageStats, CompressedBlock};
-pub use installer::Installer;
+pub use installer::{Installer, ScriptPolicy};
+pub use packager::{CompressedBlock, PackageStats, Packager};
 
 // Re-export uninstaller
-pub use uninstall::{Uninstaller, InstallManifest, UninstallStats};
+pub use uninstall::{InstallManifest, UninstallStats, Uninstaller};
 
 // Re-export UI resources
 pub use ui_resources::UIResources;
@@ -142,14 +147,17 @@ pub use ui_resources::UIResources;
 pub use localization::LocalizationManager;
 
 // Re-export logging
-pub use logging::{init_logging, init_cli_logging, init_gui_logging};
+pub use logging::{init_cli_logging, init_gui_logging, init_logging};
 
 // Re-export exe builder
 pub use exe_builder::{
     build_self_contained_installer, build_self_contained_installer_from_memory,
-    check_embedded_package, read_embedded_package, extract_embedded_package,
-    OverlayMarker, OVERLAY_MAGIC, OVERLAY_MARKER_SIZE,
+    check_embedded_package, extract_embedded_package, read_embedded_package, OverlayMarker,
+    OVERLAY_MAGIC, OVERLAY_MARKER_SIZE,
 };
+
+// Re-export flow executor
+pub use flow_executor::{ExecutionReport, FlowContext, FlowExecutor, FlowRuntime};
 
 // Re-export shared types for convenience
 pub use installer_shared::*;

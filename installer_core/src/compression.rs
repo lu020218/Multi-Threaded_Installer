@@ -59,15 +59,15 @@ pub fn compress_with_checksum(
     level: i32,
 ) -> Result<CompressionResult> {
     let original_size = data.len() as u64;
-    
+
     let compressed = match algorithm {
         CompressionAlgorithm::Zstd => compress_zstd(data, level)?,
         CompressionAlgorithm::Lzma => compress_lzma(data)?,
     };
-    
+
     let checksum = calculate_crc32(&compressed);
     let compressed_size = compressed.len() as u64;
-    
+
     debug!(
         algorithm = ?algorithm,
         original_size,
@@ -75,7 +75,7 @@ pub fn compress_with_checksum(
         ratio = format!("{:.2}%", (compressed_size as f64 / original_size as f64) * 100.0),
         "Compression complete"
     );
-    
+
     Ok(CompressionResult {
         data: compressed,
         checksum,
@@ -116,21 +116,21 @@ pub fn decompress_with_checksum(
 ) -> Result<DecompressionResult> {
     // Verify checksum of compressed data first
     verify_crc32(data, expected_checksum)?;
-    
+
     let decompressed = match algorithm {
         CompressionAlgorithm::Zstd => decompress_zstd(data)?,
         CompressionAlgorithm::Lzma => decompress_lzma(data)?,
     };
-    
+
     let checksum = calculate_crc32(&decompressed);
-    
+
     debug!(
         algorithm = ?algorithm,
         compressed_size = data.len(),
         decompressed_size = decompressed.len(),
         "Decompression complete"
     );
-    
+
     Ok(DecompressionResult {
         data: decompressed,
         checksum,
@@ -164,11 +164,10 @@ pub fn decompress(data: &[u8], algorithm: CompressionAlgorithm) -> Result<Vec<u8
 fn compress_zstd(data: &[u8], level: i32) -> Result<Vec<u8>> {
     // Clamp level to valid range
     let level = level.clamp(MIN_ZSTD_LEVEL, MAX_ZSTD_LEVEL);
-    
+
     trace!(level, data_size = data.len(), "Starting Zstd compression");
-    
-    zstd::encode_all(Cursor::new(data), level)
-        .map_err(|e| InstallerError::Io(e))
+
+    zstd::encode_all(Cursor::new(data), level).map_err(|e| InstallerError::Io(e))
 }
 
 /// Decompress Zstd compressed data.
@@ -180,7 +179,7 @@ fn compress_zstd(data: &[u8], level: i32) -> Result<Vec<u8>> {
 /// - 3.5: Decompression using Zstd algorithm
 fn decompress_zstd(data: &[u8]) -> Result<Vec<u8>> {
     trace!(compressed_size = data.len(), "Starting Zstd decompression");
-    
+
     zstd::decode_all(Cursor::new(data))
         .map_err(|e| InstallerError::Decompression(format!("Zstd decompression failed: {}", e)))
 }
@@ -198,14 +197,15 @@ fn decompress_zstd(data: &[u8]) -> Result<Vec<u8>> {
 /// - 2.5: LZMA as optional compression algorithm
 fn compress_lzma(data: &[u8]) -> Result<Vec<u8>> {
     trace!(data_size = data.len(), "Starting LZMA compression");
-    
+
     let mut output = Vec::new();
-    lzma_rs::lzma_compress(&mut Cursor::new(data), &mut output)
-        .map_err(|e| InstallerError::Io(std::io::Error::new(
+    lzma_rs::lzma_compress(&mut Cursor::new(data), &mut output).map_err(|e| {
+        InstallerError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
-            format!("LZMA compression failed: {}", e)
-        )))?;
-    
+            format!("LZMA compression failed: {}", e),
+        ))
+    })?;
+
     Ok(output)
 }
 
@@ -218,11 +218,11 @@ fn compress_lzma(data: &[u8]) -> Result<Vec<u8>> {
 /// - 3.5: Decompression using LZMA algorithm
 fn decompress_lzma(data: &[u8]) -> Result<Vec<u8>> {
     trace!(compressed_size = data.len(), "Starting LZMA decompression");
-    
+
     let mut output = Vec::new();
     lzma_rs::lzma_decompress(&mut Cursor::new(data), &mut output)
         .map_err(|e| InstallerError::Decompression(format!("LZMA decompression failed: {}", e)))?;
-    
+
     Ok(output)
 }
 
@@ -328,17 +328,17 @@ mod tests {
     #[test]
     fn test_zstd_compression_levels() {
         let data = b"Test data for compression level testing. ".repeat(100);
-        
+
         // Test minimum level
         let compressed_min = compress(&data, CompressionAlgorithm::Zstd, MIN_ZSTD_LEVEL).unwrap();
         let decompressed_min = decompress(&compressed_min, CompressionAlgorithm::Zstd).unwrap();
         assert_eq!(data.as_slice(), decompressed_min.as_slice());
-        
+
         // Test maximum level
         let compressed_max = compress(&data, CompressionAlgorithm::Zstd, MAX_ZSTD_LEVEL).unwrap();
         let decompressed_max = decompress(&compressed_max, CompressionAlgorithm::Zstd).unwrap();
         assert_eq!(data.as_slice(), decompressed_max.as_slice());
-        
+
         // Higher level should generally produce smaller output (for compressible data)
         assert!(compressed_max.len() <= compressed_min.len());
     }
@@ -346,17 +346,20 @@ mod tests {
     #[test]
     fn test_zstd_with_checksum() {
         let data = b"Test data for Zstd compression with checksum verification.";
-        
-        let result = compress_with_checksum(data, CompressionAlgorithm::Zstd, DEFAULT_ZSTD_LEVEL).unwrap();
+
+        let result =
+            compress_with_checksum(data, CompressionAlgorithm::Zstd, DEFAULT_ZSTD_LEVEL).unwrap();
         assert!(result.compressed_size > 0);
         assert_eq!(result.original_size, data.len() as u64);
-        
+
         // Verify checksum is correct
         let actual_checksum = calculate_crc32(&result.data);
         assert_eq!(result.checksum, actual_checksum);
-        
+
         // Decompress with checksum verification
-        let decompressed = decompress_with_checksum(&result.data, CompressionAlgorithm::Zstd, result.checksum).unwrap();
+        let decompressed =
+            decompress_with_checksum(&result.data, CompressionAlgorithm::Zstd, result.checksum)
+                .unwrap();
         assert_eq!(data.as_slice(), decompressed.data.as_slice());
     }
 
@@ -371,13 +374,15 @@ mod tests {
     #[test]
     fn test_lzma_with_checksum() {
         let data = b"Test data for LZMA compression with checksum verification.";
-        
+
         let result = compress_with_checksum(data, CompressionAlgorithm::Lzma, 0).unwrap();
         assert!(result.compressed_size > 0);
         assert_eq!(result.original_size, data.len() as u64);
-        
+
         // Decompress with checksum verification
-        let decompressed = decompress_with_checksum(&result.data, CompressionAlgorithm::Lzma, result.checksum).unwrap();
+        let decompressed =
+            decompress_with_checksum(&result.data, CompressionAlgorithm::Lzma, result.checksum)
+                .unwrap();
         assert_eq!(data.as_slice(), decompressed.data.as_slice());
     }
 
@@ -393,10 +398,10 @@ mod tests {
     fn test_checksum_mismatch_error() {
         let data = b"Test data";
         let wrong_checksum = 0x12345678;
-        
+
         let result = verify_crc32(data, wrong_checksum);
         assert!(result.is_err());
-        
+
         match result {
             Err(InstallerError::ChecksumMismatch { expected, actual }) => {
                 assert_eq!(expected, wrong_checksum);
@@ -410,11 +415,12 @@ mod tests {
     fn test_decompress_with_wrong_checksum() {
         let data = b"Test data for decompression";
         let compressed = compress(data, CompressionAlgorithm::Zstd, DEFAULT_ZSTD_LEVEL).unwrap();
-        
+
         // Try to decompress with wrong checksum
         let wrong_checksum = 0xDEADBEEF;
-        let result = decompress_with_checksum(&compressed, CompressionAlgorithm::Zstd, wrong_checksum);
-        
+        let result =
+            decompress_with_checksum(&compressed, CompressionAlgorithm::Zstd, wrong_checksum);
+
         assert!(result.is_err());
         match result {
             Err(InstallerError::ChecksumMismatch { .. }) => {}
@@ -425,17 +431,18 @@ mod tests {
     #[test]
     fn test_block_compression() {
         let data = b"Block data for compression testing. ".repeat(50);
-        
+
         let result = compress_block(&data, CompressionAlgorithm::Zstd, DEFAULT_ZSTD_LEVEL).unwrap();
-        
-        let decompressed = decompress_block(&result.data, CompressionAlgorithm::Zstd, result.checksum).unwrap();
+
+        let decompressed =
+            decompress_block(&result.data, CompressionAlgorithm::Zstd, result.checksum).unwrap();
         assert_eq!(data.as_slice(), decompressed.as_slice());
     }
 
     #[test]
     fn test_empty_data_compression() {
         let data: &[u8] = b"";
-        
+
         // Zstd handles empty data
         let compressed = compress(data, CompressionAlgorithm::Zstd, DEFAULT_ZSTD_LEVEL).unwrap();
         let decompressed = decompress(&compressed, CompressionAlgorithm::Zstd).unwrap();
@@ -446,10 +453,13 @@ mod tests {
     fn test_large_data_compression() {
         // Test with 1MB of data
         let data: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
-        
-        let result = compress_with_checksum(&data, CompressionAlgorithm::Zstd, DEFAULT_ZSTD_LEVEL).unwrap();
-        let decompressed = decompress_with_checksum(&result.data, CompressionAlgorithm::Zstd, result.checksum).unwrap();
-        
+
+        let result =
+            compress_with_checksum(&data, CompressionAlgorithm::Zstd, DEFAULT_ZSTD_LEVEL).unwrap();
+        let decompressed =
+            decompress_with_checksum(&result.data, CompressionAlgorithm::Zstd, result.checksum)
+                .unwrap();
+
         assert_eq!(data, decompressed.data);
     }
 }
@@ -478,7 +488,7 @@ mod property_tests {
         fn prop_crc32_deterministic(data in prop::collection::vec(any::<u8>(), 0..1000)) {
             let checksum1 = calculate_crc32(&data);
             let checksum2 = calculate_crc32(&data);
-            
+
             prop_assert_eq!(checksum1, checksum2, "CRC32 should be deterministic");
         }
 
@@ -493,10 +503,10 @@ mod property_tests {
         ) {
             let original_checksum = calculate_crc32(&data);
             prop_assert!(verify_crc32(&data, original_checksum).is_ok());
-            
+
             let mut corrupted_data = data.clone();
             let pos = corrupt_pos % corrupted_data.len();
-            
+
             if corrupted_data[pos] != corrupt_value {
                 corrupted_data[pos] = corrupt_value;
                 let result = verify_crc32(&corrupted_data, original_checksum);
@@ -514,7 +524,7 @@ mod property_tests {
             let result = compress_with_checksum(&data, CompressionAlgorithm::Zstd, DEFAULT_ZSTD_LEVEL);
             prop_assert!(result.is_ok());
             let compression_result = result.unwrap();
-            
+
             if wrong_checksum != compression_result.checksum {
                 let decompress_result = decompress_with_checksum(
                     &compression_result.data,
@@ -535,7 +545,7 @@ mod property_tests {
             let result = compress_block(&data, CompressionAlgorithm::Zstd, DEFAULT_ZSTD_LEVEL);
             prop_assert!(result.is_ok());
             let compression_result = result.unwrap();
-            
+
             if wrong_checksum != compression_result.checksum {
                 let decompress_result = decompress_block(
                     &compression_result.data,

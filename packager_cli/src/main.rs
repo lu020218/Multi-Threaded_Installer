@@ -28,7 +28,7 @@ struct Args {
     #[arg(long)]
     template: Option<PathBuf>,
 
-    /// Path to configuration file (default: packager.json in input directory)
+    /// Path to YAML configuration file (default: packager.yaml in input directory)
     #[arg(short, long)]
     config: Option<PathBuf>,
 
@@ -57,13 +57,15 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // Initialize logging
-    init_cli_logging(args.verbose)
-        .context("Failed to initialize logging")?;
+    init_cli_logging(args.verbose).context("Failed to initialize logging")?;
 
     info!("Packager CLI v{}", env!("CARGO_PKG_VERSION"));
 
     // Load configuration
-    let config_path = args.config.clone().unwrap_or_else(|| args.input.join("packager.json"));
+    let config_path = args
+        .config
+        .clone()
+        .unwrap_or_else(|| args.input.join("packager.yaml"));
     let config = load_config(&config_path, &args)?;
 
     info!("Packaging: {}", config.application_name);
@@ -75,18 +77,17 @@ fn main() -> Result<()> {
     let packager = Packager::new(config)?;
 
     // Determine UI resources directory
-    let ui_resources_dir = args.ui_resources.as_deref()
+    let ui_resources_dir = args
+        .ui_resources
+        .as_deref()
         .or_else(|| packager.config().ui_resources_dir.as_deref());
 
     let stats = if args.package_only {
         // Legacy mode: generate package data file only
         warn!("Using legacy package-only mode. The output file cannot be run directly.");
-        packager.build_package(
-            &args.input,
-            &args.output,
-            ui_resources_dir,
-            |event| print_progress(&event),
-        )?
+        packager.build_package(&args.input, &args.output, ui_resources_dir, |event| {
+            print_progress(&event)
+        })?
     } else {
         // Normal mode: generate self-contained installer executable
         let template_exe = find_template_exe(&args)?;
@@ -111,7 +112,10 @@ fn main() -> Result<()> {
     }
     println!("  Files: {}", stats.total_files);
     println!("  Original size: {} bytes", format_size(stats.total_size));
-    println!("  Compressed size: {} bytes", format_size(stats.compressed_size));
+    println!(
+        "  Compressed size: {} bytes",
+        format_size(stats.compressed_size)
+    );
     println!(
         "  Compression ratio: {:.1}%",
         stats.compression_ratio * 100.0
@@ -175,9 +179,19 @@ fn find_template_exe(args: &Args) -> Result<PathBuf> {
 /// Load configuration from file or use defaults.
 fn load_config(config_path: &PathBuf, args: &Args) -> Result<PackagerConfig> {
     let mut config = if config_path.exists() {
+        let ext = config_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if ext == "json" {
+            anyhow::bail!(
+                "JSON config is no longer supported. Please use YAML (e.g. packager.yaml)"
+            );
+        }
         let content = std::fs::read_to_string(config_path)
             .with_context(|| format!("Failed to read config file: {:?}", config_path))?;
-        serde_json::from_str(&content)
+        serde_yaml::from_str(&content)
             .with_context(|| format!("Failed to parse config file: {:?}", config_path))?
     } else {
         info!("No config file found, using defaults");

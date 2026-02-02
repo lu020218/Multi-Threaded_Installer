@@ -6,9 +6,9 @@
 //! - Variable interpolation in translation strings
 //! - Fallback to default language when translations are missing
 
+use installer_shared::{InstallerError, LocalizationConfig, Result};
 use std::collections::HashMap;
 use std::path::Path;
-use installer_shared::{InstallerError, Result, LocalizationConfig};
 use tracing::{debug, warn};
 
 /// Manager for handling multi-language translations.
@@ -44,7 +44,7 @@ impl LocalizationManager {
     /// named after the locale (e.g., `en-US.json`, `zh-CN.json`).
     pub fn load_from_resources(&mut self, resources_dir: &Path) -> Result<()> {
         let locales_dir = resources_dir.join("locales");
-        
+
         if !locales_dir.exists() {
             return Err(InstallerError::Config(format!(
                 "Locales directory not found: {}",
@@ -56,11 +56,15 @@ impl LocalizationManager {
 
         for locale in &self.config.supported_locales {
             let locale_file = locales_dir.join(format!("{}.json", locale));
-            
+
             if locale_file.exists() {
                 match self.load_locale_file(&locale_file, locale) {
                     Ok(translations) => {
-                        debug!("Loaded {} translations for locale '{}'", translations.len(), locale);
+                        debug!(
+                            "Loaded {} translations for locale '{}'",
+                            translations.len(),
+                            locale
+                        );
                         self.translations.insert(locale.clone(), translations);
                     }
                     Err(e) => {
@@ -86,15 +90,13 @@ impl LocalizationManager {
 
     /// Load a single locale file and return the translations.
     fn load_locale_file(&self, path: &Path, locale: &str) -> Result<HashMap<String, String>> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| InstallerError::Io(e))?;
-        
-        let translations: HashMap<String, String> = serde_json::from_str(&content)
-            .map_err(|e| InstallerError::Config(format!(
-                "Failed to parse locale file '{}': {}",
-                locale, e
-            )))?;
-        
+        let content = std::fs::read_to_string(path).map_err(|e| InstallerError::Io(e))?;
+
+        let translations: HashMap<String, String> =
+            serde_json::from_str(&content).map_err(|e| {
+                InstallerError::Config(format!("Failed to parse locale file '{}': {}", locale, e))
+            })?;
+
         Ok(translations)
     }
 
@@ -165,12 +167,12 @@ impl LocalizationManager {
     /// Variables are specified as `{variableName}` in the text.
     fn interpolate_vars(&self, text: &str, vars: &HashMap<String, String>) -> String {
         let mut result = text.to_string();
-        
+
         for (name, value) in vars {
             let placeholder = format!("{{{}}}", name);
             result = result.replace(&placeholder, value);
         }
-        
+
         result
     }
 
@@ -183,7 +185,7 @@ impl LocalizationManager {
         {
             Self::detect_windows_locale()
         }
-        
+
         #[cfg(not(windows))]
         {
             // On non-Windows platforms, try environment variables
@@ -204,18 +206,18 @@ impl LocalizationManager {
     fn detect_windows_locale() -> String {
         use std::ffi::OsString;
         use std::os::windows::ffi::OsStringExt;
-        
+
         // LOCALE_NAME_MAX_LENGTH is 85
         const LOCALE_NAME_MAX_LENGTH: usize = 85;
         let mut buffer: Vec<u16> = vec![0; LOCALE_NAME_MAX_LENGTH];
-        
+
         let len = unsafe {
             windows_sys::Win32::Globalization::GetUserDefaultLocaleName(
                 buffer.as_mut_ptr(),
                 buffer.len() as i32,
             )
         };
-        
+
         if len > 0 {
             // Remove null terminator
             buffer.truncate((len - 1) as usize);
@@ -333,23 +335,29 @@ mod tests {
 
     fn create_test_manager() -> LocalizationManager {
         let mut manager = LocalizationManager::with_defaults();
-        
+
         // Load English translations
         let mut en_translations = HashMap::new();
         en_translations.insert("welcome.title".to_string(), "Welcome".to_string());
-        en_translations.insert("welcome.description".to_string(), "This will install {appName} on your computer.".to_string());
+        en_translations.insert(
+            "welcome.description".to_string(),
+            "This will install {appName} on your computer.".to_string(),
+        );
         en_translations.insert("button.next".to_string(), "Next".to_string());
         en_translations.insert("button.cancel".to_string(), "Cancel".to_string());
         manager.load_translations("en-US", en_translations);
-        
+
         // Load Chinese translations
         let mut zh_translations = HashMap::new();
         zh_translations.insert("welcome.title".to_string(), "欢迎".to_string());
-        zh_translations.insert("welcome.description".to_string(), "这将在您的计算机上安装 {appName}。".to_string());
+        zh_translations.insert(
+            "welcome.description".to_string(),
+            "这将在您的计算机上安装 {appName}。".to_string(),
+        );
         zh_translations.insert("button.next".to_string(), "下一步".to_string());
         // Note: button.cancel is intentionally missing to test fallback
         manager.load_translations("zh-CN", zh_translations);
-        
+
         manager
     }
 
@@ -365,7 +373,7 @@ mod tests {
         let manager = create_test_manager();
         let mut vars = HashMap::new();
         vars.insert("appName".to_string(), "TestApp".to_string());
-        
+
         let text = manager.get_text_with_vars("welcome.description", &vars);
         assert_eq!(text, "This will install TestApp on your computer.");
     }
@@ -373,10 +381,10 @@ mod tests {
     #[test]
     fn test_locale_switching() {
         let mut manager = create_test_manager();
-        
+
         // Default is en-US
         assert_eq!(manager.get_text("welcome.title"), "Welcome");
-        
+
         // Switch to zh-CN
         manager.set_locale("zh-CN").unwrap();
         assert_eq!(manager.get_text("welcome.title"), "欢迎");
@@ -386,7 +394,7 @@ mod tests {
     fn test_fallback_on_missing_key() {
         let mut manager = create_test_manager();
         manager.set_locale("zh-CN").unwrap();
-        
+
         // button.cancel is missing in zh-CN, should fall back to en-US
         assert_eq!(manager.get_text("button.cancel"), "Cancel");
     }
@@ -394,7 +402,7 @@ mod tests {
     #[test]
     fn test_missing_key_returns_key() {
         let manager = create_test_manager();
-        
+
         // Non-existent key should return the key itself
         assert_eq!(manager.get_text("nonexistent.key"), "nonexistent.key");
     }
@@ -403,13 +411,16 @@ mod tests {
     fn test_variable_interpolation_multiple_vars() {
         let mut manager = LocalizationManager::with_defaults();
         let mut translations = HashMap::new();
-        translations.insert("message".to_string(), "Hello {name}, you have {count} messages.".to_string());
+        translations.insert(
+            "message".to_string(),
+            "Hello {name}, you have {count} messages.".to_string(),
+        );
         manager.load_translations("en-US", translations);
-        
+
         let mut vars = HashMap::new();
         vars.insert("name".to_string(), "Alice".to_string());
         vars.insert("count".to_string(), "5".to_string());
-        
+
         let text = manager.get_text_with_vars("message", &vars);
         assert_eq!(text, "Hello Alice, you have 5 messages.");
     }
@@ -417,7 +428,7 @@ mod tests {
     #[test]
     fn test_missing_keys_detection() {
         let manager = create_test_manager();
-        
+
         let missing = manager.missing_keys("zh-CN");
         assert!(missing.contains(&"button.cancel".to_string()));
     }
@@ -425,7 +436,7 @@ mod tests {
     #[test]
     fn test_has_key() {
         let manager = create_test_manager();
-        
+
         assert!(manager.has_key("welcome.title"));
         assert!(!manager.has_key("nonexistent.key"));
     }
@@ -433,7 +444,7 @@ mod tests {
     #[test]
     fn test_unsupported_locale() {
         let mut manager = create_test_manager();
-        
+
         let result = manager.set_locale("fr-FR");
         assert!(result.is_err());
     }
@@ -446,12 +457,11 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod property_tests {
     use super::*;
-    use proptest::prelude::*;
     use proptest::collection::hash_map;
+    use proptest::prelude::*;
 
     /// Generate a valid translation key (alphanumeric with dots)
     fn arb_translation_key() -> impl Strategy<Value = String> {
@@ -491,25 +501,25 @@ mod property_tests {
             };
 
             let mut manager = LocalizationManager::new(config);
-            
+
             // Load fallback locale translations
             manager.load_translations("en-US", fallback_translations.clone());
-            
+
             // Load secondary locale with potentially missing keys
             manager.load_translations("zh-CN", locale_translations.clone());
-            
+
             // Switch to secondary locale
             manager.set_locale("zh-CN").unwrap();
-            
+
             // Property: For every key in the fallback locale, get_text should return
             // either the translation from zh-CN or fall back to en-US
             for (key, fallback_value) in &fallback_translations {
                 let result = manager.get_text(key);
-                
+
                 // Result should either be from zh-CN or fallback to en-US
                 if let Some(zh_value) = locale_translations.get(key) {
                     // If zh-CN has the key, it should return that value
-                    prop_assert_eq!(&result, zh_value, 
+                    prop_assert_eq!(&result, zh_value,
                         "Key '{}' exists in zh-CN but got wrong value", key);
                 } else {
                     // If zh-CN doesn't have the key, it should fall back to en-US
@@ -527,23 +537,23 @@ mod property_tests {
             var_value in arb_translation_value(),
         ) {
             let mut manager = LocalizationManager::with_defaults();
-            
+
             // Create a translation with a variable placeholder
             let template = format!("{} {{{}}} end", base_text, var_name);
             let mut translations = HashMap::new();
             translations.insert("test.key".to_string(), template.clone());
             manager.load_translations("en-US", translations);
-            
+
             // Interpolate the variable
             let mut vars = HashMap::new();
             vars.insert(var_name.clone(), var_value.clone());
-            
+
             let result = manager.get_text_with_vars("test.key", &vars);
-            
+
             // The result should have the variable replaced
             let expected = format!("{} {} end", base_text, var_value);
             prop_assert_eq!(&result, &expected);
-            
+
             // The result should not contain the placeholder
             prop_assert!(!result.contains(&format!("{{{}}}", var_name)),
                 "Result should not contain placeholder: {}", result);
@@ -564,9 +574,9 @@ mod property_tests {
             let mut manager = LocalizationManager::new(config);
             manager.load_translations("en-US", fallback_translations.clone());
             manager.load_translations("zh-CN", locale_translations.clone());
-            
+
             let missing = manager.missing_keys("zh-CN");
-            
+
             // Every key in fallback that's not in locale should be in missing
             for key in fallback_translations.keys() {
                 if !locale_translations.contains_key(key) {
@@ -594,23 +604,23 @@ mod property_tests {
             let mut manager = LocalizationManager::new(config);
             manager.load_translations("en-US", en_translations.clone());
             manager.load_translations("zh-CN", zh_translations.clone());
-            
+
             // Get a key that exists in both locales
             let common_keys: Vec<_> = en_translations.keys()
                 .filter(|k| zh_translations.contains_key(*k))
                 .collect();
-            
+
             if let Some(key) = common_keys.first() {
                 // In en-US locale
                 manager.set_locale("en-US").unwrap();
                 let en_result = manager.get_text(key);
                 prop_assert_eq!(&en_result, en_translations.get(*key).unwrap());
-                
+
                 // Switch to zh-CN
                 manager.set_locale("zh-CN").unwrap();
                 let zh_result = manager.get_text(key);
                 prop_assert_eq!(&zh_result, zh_translations.get(*key).unwrap());
-                
+
                 // Switch back to en-US
                 manager.set_locale("en-US").unwrap();
                 let en_result_again = manager.get_text(key);

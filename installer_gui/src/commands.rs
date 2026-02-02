@@ -7,8 +7,10 @@
 //! - 4.10: Implement Tauri commands for metadata queries
 
 use crate::webview2;
-use installer_core::{Installer, LocalizationManager};
-use installer_shared::{InstallOptions, LocalizationConfig, PackageMetadata, Phase};
+use installer_core::{Installer, LocalizationManager, ScriptPolicy};
+use installer_shared::{
+    FlowDefinition, InstallOptions, LocalizationConfig, PackageMetadata, Phase,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -60,7 +62,7 @@ impl From<PackageMetadata> for MetadataResponse {
     fn from(m: PackageMetadata) -> Self {
         // Expand environment variables in the install directory path
         let expanded_install_dir = expand_env_vars(&m.default_install_dir);
-        
+
         Self {
             app_name: m.app_name.clone(),
             version: m.version,
@@ -83,7 +85,7 @@ impl From<PackageMetadata> for MetadataResponse {
 /// Supports %VAR% syntax on Windows.
 fn expand_env_vars(path: &str) -> String {
     let mut result = path.to_string();
-    
+
     // Common Windows environment variables to expand
     let env_vars = [
         ("ProgramFiles", "PROGRAMFILES"),
@@ -96,7 +98,7 @@ fn expand_env_vars(path: &str) -> String {
         ("Temp", "TEMP"),
         ("Tmp", "TMP"),
     ];
-    
+
     for (name, env_name) in env_vars {
         // Try both %Name% and %NAME% patterns
         let patterns = [
@@ -104,7 +106,7 @@ fn expand_env_vars(path: &str) -> String {
             format!("%{}%", name.to_uppercase()),
             format!("%{}%", env_name),
         ];
-        
+
         for pattern in patterns {
             if result.contains(&pattern) {
                 if let Ok(value) = std::env::var(env_name) {
@@ -115,7 +117,7 @@ fn expand_env_vars(path: &str) -> String {
             }
         }
     }
-    
+
     result
 }
 
@@ -132,18 +134,16 @@ fn expand_env_vars(path: &str) -> String {
 #[tauri::command]
 pub async fn get_metadata(package_path: String) -> Result<MetadataResponse, String> {
     info!("Getting metadata from: {}", package_path);
-    
-    let installer = Installer::new(PathBuf::from(&package_path))
-        .map_err(|e| e.to_string())?;
-    
-    let parsed = installer.parse_package()
-        .map_err(|e| e.to_string())?;
-    
+
+    let installer = Installer::new(PathBuf::from(&package_path)).map_err(|e| e.to_string())?;
+
+    let parsed = installer.parse_package().map_err(|e| e.to_string())?;
+
     // Store package path in state
     if let Ok(mut state) = INSTALL_STATE.lock() {
         state.package_path = Some(PathBuf::from(&package_path));
     }
-    
+
     Ok(parsed.metadata.into())
 }
 
@@ -154,6 +154,9 @@ pub struct InstallRequest {
     pub install_dir: String,
     pub create_shortcuts: bool,
     pub auto_startup: bool,
+    pub flow_path: Option<String>,
+    pub enable_scripts: Option<bool>,
+    pub script_allow_roots: Option<Vec<String>>,
 }
 
 /// Start installation.
@@ -165,20 +168,32 @@ pub struct InstallRequest {
 /// # Requirements
 /// - 4.9: start_install command
 #[tauri::command]
-pub async fn start_install(
-    app: AppHandle,
-    request: InstallRequest,
-) -> Result<(), String> {
+pub async fn start_install(app: AppHandle, request: InstallRequest) -> Result<(), String> {
     info!("Starting installation: {:?}", request.install_dir);
-    
+
     // Reset cancellation flag
     if let Ok(state) = INSTALL_STATE.lock() {
         state.cancelled.store(false, Ordering::SeqCst);
     }
-    
-    let installer = Installer::new(PathBuf::from(&request.package_path))
-        .map_err(|e| e.to_string())?;
-    
+
+    let mut installer =
+        Installer::new(PathBuf::from(&request.package_path)).map_err(|e| e.to_string())?;
+    if request.enable_scripts.unwrap_or(false) {
+        let roots: Vec<PathBuf> = request
+            .script_allow_roots
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        if roots.is_empty() {
+            return Err(
+                "enable_scripts=true requires at least one script_allow_roots entry".to_string(),
+            );
+        }
+        installer = installer.with_script_policy(ScriptPolicy::enabled_with_roots(roots));
+    }
+
     let options = InstallOptions {
         install_dir: PathBuf::from(&request.install_dir),
         create_shortcuts: request.create_shortcuts,
@@ -187,27 +202,30 @@ pub async fn start_install(
         silent: false,
         thread_count: None,
     };
-    
+
     // Get cancellation flag
-    let cancelled = INSTALL_STATE.lock()
+    let cancelled = INSTALL_STATE
+        .lock()
         .map(|s| s.cancelled.clone())
         .unwrap_or_else(|_| Arc::new(AtomicBool::new(false)));
-    
+
     // Run installation in a blocking task
     let app_clone = app.clone();
     let cancelled_clone = cancelled.clone();
-    
+
     // Track last emit time to throttle events and highest percentage to prevent regression
     let last_emit = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
     let highest_percentage = Arc::new(std::sync::Mutex::new(0.0f64));
-    
+
+    let flow_path = request.flow_path.clone();
+
     let result = tokio::task::spawn_blocking(move || {
-        installer.install(options, |event| {
+        let progress_cb = |event: installer_shared::ProgressEvent| {
             // Check for cancellation
             if cancelled_clone.load(Ordering::SeqCst) {
                 return;
             }
-            
+
             // Calculate overall percentage based on phase
             // Phase weights: Decompressing 40%, Writing 55%, Completing 5%
             let phase_percentage = event.percentage();
@@ -217,18 +235,18 @@ pub async fn start_install(
                 Phase::Completing => 95.0 + phase_percentage * 0.05,
                 _ => phase_percentage,
             };
-            
+
             // Check if we should emit (throttle + monotonic increase)
             let should_emit = {
                 let mut last = last_emit.lock().unwrap();
                 let mut highest = highest_percentage.lock().unwrap();
                 let now = std::time::Instant::now();
-                
+
                 // Only emit if percentage increased and enough time has passed
                 let time_ok = now.duration_since(*last).as_millis() >= 50;
                 let is_final = event.current == event.total;
                 let percentage_increased = overall_percentage > *highest;
-                
+
                 if (time_ok || is_final) && percentage_increased {
                     *last = now;
                     *highest = overall_percentage;
@@ -237,7 +255,7 @@ pub async fn start_install(
                     false
                 }
             };
-            
+
             if should_emit {
                 // Create a modified event with the overall percentage
                 let modified_event = serde_json::json!({
@@ -247,28 +265,45 @@ pub async fn start_install(
                     "current_file": event.current_file,
                     "overall_percentage": overall_percentage,
                 });
-                
-                debug!("Emitting progress event: phase={:?}, overall={:.1}%", 
-                    event.phase, overall_percentage);
-                
+
+                debug!(
+                    "Emitting progress event: phase={:?}, overall={:.1}%",
+                    event.phase, overall_percentage
+                );
+
                 // Emit progress event to frontend
                 if let Err(e) = app_clone.emit("install_progress", &modified_event) {
                     warn!("Failed to emit progress event: {}", e);
                 }
             }
-        })
+        };
+
+        if let Some(path) = flow_path.as_ref() {
+            let flow = FlowDefinition::from_yaml_file(path).map_err(|e| {
+                installer_shared::InstallerError::Config(format!(
+                    "Failed to load flow file '{}': {}",
+                    path, e
+                ))
+            })?;
+            installer.install_with_flow_definition(options, flow, progress_cb)
+        } else {
+            installer.install(options, progress_cb)
+        }
     })
     .await
     .map_err(|e| e.to_string())?;
-    
+
     match result {
         Ok(stats) => {
             info!("Installation completed successfully");
-            let _ = app.emit("install_complete", serde_json::json!({
-                "files": stats.installed_files,
-                "size": stats.total_size,
-                "time_ms": stats.elapsed_time.as_millis(),
-            }));
+            let _ = app.emit(
+                "install_complete",
+                serde_json::json!({
+                    "files": stats.installed_files,
+                    "size": stats.total_size,
+                    "time_ms": stats.elapsed_time.as_millis(),
+                }),
+            );
             Ok(())
         }
         Err(e) => {
@@ -286,11 +321,11 @@ pub async fn start_install(
 #[tauri::command]
 pub async fn cancel_install() -> Result<(), String> {
     info!("Installation cancelled by user");
-    
+
     if let Ok(state) = INSTALL_STATE.lock() {
         state.cancelled.store(true, Ordering::SeqCst);
     }
-    
+
     Ok(())
 }
 
@@ -334,37 +369,38 @@ pub async fn check_prerequisites(
     package_path: String,
     install_dir: String,
 ) -> Result<PrerequisitesResult, String> {
-    debug!("Checking prerequisites for installation to: {}", install_dir);
-    
-    let installer = Installer::new(PathBuf::from(&package_path))
-        .map_err(|e| e.to_string())?;
-    
-    let parsed = installer.parse_package()
-        .map_err(|e| e.to_string())?;
-    
+    debug!(
+        "Checking prerequisites for installation to: {}",
+        install_dir
+    );
+
+    let installer = Installer::new(PathBuf::from(&package_path)).map_err(|e| e.to_string())?;
+
+    let parsed = installer.parse_package().map_err(|e| e.to_string())?;
+
     // Check disk space
     let disk_space_result = installer.check_disk_space(&PathBuf::from(&install_dir));
     let disk_space_ok = disk_space_result.is_ok();
     let disk_error = disk_space_result.err().map(|e| e.to_string());
-    
+
     // Check Windows version
     let version_ok = installer.check_windows_version().is_ok();
-    
+
     // Check if process is running
     let process_running = installer.check_running_process().unwrap_or(false);
-    
+
     // Calculate space requirements
     let required_bytes: u64 = parsed.toc.files.iter().map(|f| f.original_size).sum();
     let required_space_mb = required_bytes / (1024 * 1024);
-    
+
     // Get available space
     let available_space_mb = installer_core::get_available_space(&PathBuf::from(&install_dir))
         .map(|bytes| bytes / (1024 * 1024))
         .unwrap_or(0);
-    
+
     // Check admin status
     let is_admin = installer_core::platform::create_platform().is_elevated();
-    
+
     Ok(PrerequisitesResult {
         disk_space_ok,
         version_ok,
@@ -392,7 +428,7 @@ pub struct WebView2StatusResponse {
 #[tauri::command]
 pub async fn check_webview2_status() -> WebView2StatusResponse {
     let status = webview2::check_webview2();
-    
+
     WebView2StatusResponse {
         is_installed: status.is_installed,
         version: status.version,
@@ -413,11 +449,11 @@ pub async fn browse_directory(
     default_path: Option<String>,
 ) -> Result<Option<String>, String> {
     info!("Browse directory requested, default: {:?}", default_path);
-    
+
     // Use rfd (Rust File Dialog) for cross-platform folder picker
     let result = tokio::task::spawn_blocking(move || {
         let mut dialog = rfd::FileDialog::new();
-        
+
         // Set starting directory if provided
         if let Some(ref path) = default_path {
             let path_buf = std::path::PathBuf::from(path);
@@ -425,12 +461,14 @@ pub async fn browse_directory(
                 dialog = dialog.set_directory(&path_buf);
             }
         }
-        
-        dialog.pick_folder().map(|p| p.to_string_lossy().to_string())
+
+        dialog
+            .pick_folder()
+            .map(|p| p.to_string_lossy().to_string())
     })
     .await
     .map_err(|e| e.to_string())?;
-    
+
     info!("Browse result: {:?}", result);
     Ok(result)
 }
@@ -457,9 +495,9 @@ pub async fn get_translations(
     ui_resources_path: Option<String>,
 ) -> Result<TranslationsResponse, String> {
     let target_locale = locale.unwrap_or_else(|| LocalizationManager::detect_system_locale());
-    
+
     debug!("Getting translations for locale: {}", target_locale);
-    
+
     // Try to load from UI resources if path provided
     if let Some(path) = ui_resources_path {
         let resources_path = PathBuf::from(&path);
@@ -467,25 +505,22 @@ pub async fn get_translations(
             let config = LocalizationConfig {
                 default_locale: "en-US".to_string(),
                 fallback_locale: "en-US".to_string(),
-                supported_locales: vec![
-                    "en-US".to_string(),
-                    "zh-CN".to_string(),
-                ],
+                supported_locales: vec!["en-US".to_string(), "zh-CN".to_string()],
             };
-            
+
             let mut manager = LocalizationManager::new(config.clone());
             if let Err(e) = manager.load_from_resources(&resources_path) {
                 warn!("Failed to load translations from resources: {}", e);
             } else {
                 // Set the locale
                 let _ = manager.set_locale(&target_locale);
-                
+
                 // Get all translations
                 let mut translations = HashMap::new();
                 for key in manager.all_keys() {
                     translations.insert(key.clone(), manager.get_text(key));
                 }
-                
+
                 return Ok(TranslationsResponse {
                     locale: target_locale,
                     translations,
@@ -494,10 +529,10 @@ pub async fn get_translations(
             }
         }
     }
-    
+
     // Return default translations
     let default_translations = get_default_translations(&target_locale);
-    
+
     Ok(TranslationsResponse {
         locale: target_locale,
         translations: default_translations,
@@ -508,19 +543,34 @@ pub async fn get_translations(
 /// Get default built-in translations.
 fn get_default_translations(locale: &str) -> HashMap<String, String> {
     let mut translations = HashMap::new();
-    
+
     if locale.starts_with("zh") {
         // Chinese translations
         translations.insert("welcome.title".to_string(), "欢迎".to_string());
-        translations.insert("welcome.description".to_string(), "这将在您的计算机上安装 {appName}。".to_string());
+        translations.insert(
+            "welcome.description".to_string(),
+            "这将在您的计算机上安装 {appName}。".to_string(),
+        );
         translations.insert("install.directory".to_string(), "安装目录".to_string());
         translations.insert("install.progress".to_string(), "正在安装...".to_string());
         translations.insert("install.complete".to_string(), "安装完成".to_string());
-        translations.insert("install.success".to_string(), "应用程序已成功安装。".to_string());
+        translations.insert(
+            "install.success".to_string(),
+            "应用程序已成功安装。".to_string(),
+        );
         translations.insert("error.disk_space".to_string(), "磁盘空间不足".to_string());
-        translations.insert("error.version".to_string(), "不支持的 Windows 版本".to_string());
-        translations.insert("error.process_running".to_string(), "请在安装前关闭应用程序".to_string());
-        translations.insert("option.shortcuts".to_string(), "创建桌面快捷方式".to_string());
+        translations.insert(
+            "error.version".to_string(),
+            "不支持的 Windows 版本".to_string(),
+        );
+        translations.insert(
+            "error.process_running".to_string(),
+            "请在安装前关闭应用程序".to_string(),
+        );
+        translations.insert(
+            "option.shortcuts".to_string(),
+            "创建桌面快捷方式".to_string(),
+        );
         translations.insert("option.startup".to_string(), "开机自动启动".to_string());
         translations.insert("option.launch".to_string(), "启动应用程序".to_string());
         translations.insert("button.next".to_string(), "下一步".to_string());
@@ -532,17 +582,47 @@ fn get_default_translations(locale: &str) -> HashMap<String, String> {
     } else {
         // English translations (default)
         translations.insert("welcome.title".to_string(), "Welcome".to_string());
-        translations.insert("welcome.description".to_string(), "This will install {appName} on your computer.".to_string());
-        translations.insert("install.directory".to_string(), "Installation Directory".to_string());
+        translations.insert(
+            "welcome.description".to_string(),
+            "This will install {appName} on your computer.".to_string(),
+        );
+        translations.insert(
+            "install.directory".to_string(),
+            "Installation Directory".to_string(),
+        );
         translations.insert("install.progress".to_string(), "Installing...".to_string());
-        translations.insert("install.complete".to_string(), "Installation Complete".to_string());
-        translations.insert("install.success".to_string(), "The application has been installed successfully.".to_string());
-        translations.insert("error.disk_space".to_string(), "Insufficient disk space".to_string());
-        translations.insert("error.version".to_string(), "Windows version not supported".to_string());
-        translations.insert("error.process_running".to_string(), "Please close the application before installing".to_string());
-        translations.insert("option.shortcuts".to_string(), "Create desktop shortcut".to_string());
-        translations.insert("option.startup".to_string(), "Start with Windows".to_string());
-        translations.insert("option.launch".to_string(), "Launch application".to_string());
+        translations.insert(
+            "install.complete".to_string(),
+            "Installation Complete".to_string(),
+        );
+        translations.insert(
+            "install.success".to_string(),
+            "The application has been installed successfully.".to_string(),
+        );
+        translations.insert(
+            "error.disk_space".to_string(),
+            "Insufficient disk space".to_string(),
+        );
+        translations.insert(
+            "error.version".to_string(),
+            "Windows version not supported".to_string(),
+        );
+        translations.insert(
+            "error.process_running".to_string(),
+            "Please close the application before installing".to_string(),
+        );
+        translations.insert(
+            "option.shortcuts".to_string(),
+            "Create desktop shortcut".to_string(),
+        );
+        translations.insert(
+            "option.startup".to_string(),
+            "Start with Windows".to_string(),
+        );
+        translations.insert(
+            "option.launch".to_string(),
+            "Launch application".to_string(),
+        );
         translations.insert("button.next".to_string(), "Next".to_string());
         translations.insert("button.back".to_string(), "Back".to_string());
         translations.insert("button.install".to_string(), "Install".to_string());
@@ -550,7 +630,7 @@ fn get_default_translations(locale: &str) -> HashMap<String, String> {
         translations.insert("button.finish".to_string(), "Finish".to_string());
         translations.insert("button.browse".to_string(), "Browse".to_string());
     }
-    
+
     translations
 }
 
@@ -564,11 +644,11 @@ fn get_default_translations(locale: &str) -> HashMap<String, String> {
 #[tauri::command]
 pub async fn set_locale(locale: String) -> Result<(), String> {
     info!("Setting locale to: {}", locale);
-    
+
     if let Ok(mut state) = INSTALL_STATE.lock() {
         state.current_locale = locale;
     }
-    
+
     Ok(())
 }
 
@@ -579,13 +659,13 @@ pub async fn set_locale(locale: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn minimize_window(app: AppHandle) -> Result<(), String> {
     debug!("Minimizing window");
-    
+
     if let Some(window) = app.get_webview_window("main") {
         window.minimize().map_err(|e| e.to_string())?;
     } else {
         return Err("Main window not found".to_string());
     }
-    
+
     Ok(())
 }
 
@@ -596,13 +676,13 @@ pub async fn minimize_window(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn close_window(app: AppHandle) -> Result<(), String> {
     debug!("Closing window");
-    
+
     if let Some(window) = app.get_webview_window("main") {
         window.close().map_err(|e| e.to_string())?;
     } else {
         return Err("Main window not found".to_string());
     }
-    
+
     Ok(())
 }
 
@@ -613,12 +693,12 @@ pub async fn close_window(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn start_dragging(app: AppHandle) -> Result<(), String> {
     debug!("Starting window drag");
-    
+
     if let Some(window) = app.get_webview_window("main") {
         window.start_dragging().map_err(|e| e.to_string())?;
     } else {
         return Err("Main window not found".to_string());
     }
-    
+
     Ok(())
 }

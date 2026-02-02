@@ -73,10 +73,10 @@ impl OverlayMarker {
         if &bytes[0..4] != OVERLAY_MAGIC {
             return None;
         }
-        
+
         let package_offset = u64::from_le_bytes(bytes[4..12].try_into().ok()?);
         let reserved = u32::from_le_bytes(bytes[12..16].try_into().ok()?);
-        
+
         Some(Self {
             magic: *OVERLAY_MAGIC,
             package_offset,
@@ -112,7 +112,10 @@ pub fn build_self_contained_installer(
     let template_data = fs::read(template_exe).map_err(|e| {
         InstallerError::Io(std::io::Error::new(
             e.kind(),
-            format!("Failed to read template executable {:?}: {}", template_exe, e),
+            format!(
+                "Failed to read template executable {:?}: {}",
+                template_exe, e
+            ),
         ))
     })?;
 
@@ -186,7 +189,10 @@ pub fn build_self_contained_installer_from_memory(
     let template_data = fs::read(template_exe).map_err(|e| {
         InstallerError::Io(std::io::Error::new(
             e.kind(),
-            format!("Failed to read template executable {:?}: {}", template_exe, e),
+            format!(
+                "Failed to read template executable {:?}: {}",
+                template_exe, e
+            ),
         ))
     })?;
 
@@ -299,7 +305,10 @@ pub fn extract_embedded_package(exe_path: &Path, output_path: &Path) -> Result<u
 
     fs::write(output_path, &package_data)?;
 
-    info!("Extracted embedded package to {:?}: {} bytes", output_path, size);
+    info!(
+        "Extracted embedded package to {:?}: {} bytes",
+        output_path, size
+    );
 
     Ok(size)
 }
@@ -341,12 +350,9 @@ mod tests {
 
         // Build self-contained installer
         let output_path = dir.path().join("installer.exe");
-        let size = build_self_contained_installer_from_memory(
-            &template_path,
-            package_data,
-            &output_path,
-        )
-        .unwrap();
+        let size =
+            build_self_contained_installer_from_memory(&template_path, package_data, &output_path)
+                .unwrap();
 
         assert_eq!(
             size,

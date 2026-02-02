@@ -1,14 +1,14 @@
-﻿//! Integration tests for the installer system.
+//! Integration tests for the installer system.
 
 use installer_core::{
-    Installer, Packager, Uninstaller,
-    InstallOptions, PackagerConfig, Phase,
-    calculate_crc32, verify_crc32,
+    calculate_crc32, verify_crc32, FlowDefinition, FlowStep, InstallFlow, InstallOptions,
+    Installer, OnFailPolicy, Packager, PackagerConfig, Phase, ScriptPolicy, Uninstaller,
 };
+use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 
 fn create_test_files(dir: &Path, files: &[(&str, &[u8])]) {
@@ -24,9 +24,13 @@ fn create_test_files(dir: &Path, files: &[(&str, &[u8])]) {
 fn verify_installed_files(install_dir: &Path, expected_files: &[(&str, &[u8])]) -> bool {
     for (name, expected_content) in expected_files {
         let file_path = install_dir.join(name);
-        if !file_path.exists() { return false; }
+        if !file_path.exists() {
+            return false;
+        }
         let actual = fs::read(&file_path).expect("read file");
-        if actual != *expected_content { return false; }
+        if actual != *expected_content {
+            return false;
+        }
     }
     true
 }
@@ -36,6 +40,14 @@ fn create_ui_resources(dir: &Path) {
     let locales = dir.join("locales");
     fs::create_dir_all(&locales).expect("create locales");
     fs::write(locales.join("en-US.json"), r#"{"k":"v"}"#).expect("write locale");
+}
+
+fn has_node_runtime() -> bool {
+    std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 // 16.1 Complete Installation Flow Tests
@@ -60,13 +72,14 @@ fn test_complete_install_flow_basic() {
         ..Default::default()
     };
     let packager = Packager::new(config).unwrap();
-    
+
     let events = Arc::new(Mutex::new(Vec::new()));
     let events_clone = events.clone();
-    let stats = packager.build_package(
-        input_dir.path(), &output_path, None,
-        move |e| { events_clone.lock().unwrap().push(e.phase.clone()); }
-    ).unwrap();
+    let stats = packager
+        .build_package(input_dir.path(), &output_path, None, move |e| {
+            events_clone.lock().unwrap().push(e.phase.clone());
+        })
+        .unwrap();
 
     assert!(output_path.exists());
     assert_eq!(stats.total_files, 3);
@@ -86,6 +99,735 @@ fn test_complete_install_flow_basic() {
     assert_eq!(install_stats.installed_files, 3);
     assert!(verify_installed_files(install_dir.path(), &test_files));
 }
+
+#[test]
+fn test_install_with_custom_flow_definition() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+
+    let test_files: Vec<(&str, &[u8])> = vec![
+        ("app.exe", b"exe content"),
+        ("data/config.json", br#"{"ok":true}"#),
+    ];
+    create_test_files(input_dir.path(), &test_files);
+
+    let output_path = output_dir.path().join("custom-flow.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let custom_flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "check_disk".to_string(),
+                    step_type: "check_disk".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        silent: true,
+        thread_count: None,
+    };
+    let stats = installer
+        .install_with_flow_definition(options, custom_flow, |_| {})
+        .unwrap();
+
+    assert_eq!(stats.installed_files, 2);
+    assert!(verify_installed_files(install_dir.path(), &test_files));
+}
+
+#[test]
+fn test_flow_script_step_requires_policy() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+    let script_dir = tempdir().unwrap();
+    let script_path = script_dir.path().join("ok.js");
+    fs::write(&script_path, "true;").unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+    let output_path = output_dir.path().join("script-policy.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "pre_script".to_string(),
+                    step_type: "script".to_string(),
+                    params: json!({ "path": script_path.to_string_lossy().to_string() }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: Some(installer_shared::ScriptEngine::Js),
+                },
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        silent: true,
+        thread_count: None,
+    };
+
+    let err = installer
+        .install_with_flow_definition(options, flow, |_| {})
+        .expect_err("script should be blocked by default");
+    assert!(matches!(
+        err,
+        installer_shared::InstallerError::PermissionDenied(_)
+    ));
+}
+
+#[test]
+fn test_flow_script_step_executes_with_allowlist_policy() {
+    if !has_node_runtime() {
+        return;
+    }
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+    let script_dir = tempdir().unwrap();
+    let script_path = script_dir.path().join("ok.js");
+    fs::write(&script_path, "true;").unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+    let output_path = output_dir.path().join("script-enabled.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "pre_script".to_string(),
+                    step_type: "script".to_string(),
+                    params: json!({ "path": script_path.to_string_lossy().to_string() }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: Some(installer_shared::ScriptEngine::Js),
+                },
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer =
+        Installer::new(output_path)
+            .unwrap()
+            .with_script_policy(ScriptPolicy::enabled_with_roots(vec![script_dir
+                .path()
+                .to_path_buf()]));
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        silent: true,
+        thread_count: None,
+    };
+
+    let stats = installer
+        .install_with_flow_definition(options, flow, |_| {})
+        .expect("script step should pass");
+    assert_eq!(stats.installed_files, 1);
+    assert!(install_dir.path().join("app.exe").exists());
+}
+
+#[test]
+fn test_install_flow_failure_triggers_rollback_cleanup() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+
+    let test_files: Vec<(&str, &[u8])> = vec![
+        ("app.exe", b"exe content"),
+        ("data/config.json", br#"{"ok":true}"#),
+    ];
+    create_test_files(input_dir.path(), &test_files);
+
+    let output_path = output_dir.path().join("rollback-failure.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    // 故障注入：extract 成功后执行一个未知 step，触发 on_fail=rollback。
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "force_fail".to_string(),
+                    step_type: "unknown_step_type".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        silent: true,
+        thread_count: None,
+    };
+
+    let result = installer.install_with_flow_definition(options, flow, |_| {});
+    assert!(result.is_err(), "flow should fail after fault injection");
+
+    // 验证已安装文件被回滚清理。
+    assert!(
+        !install_dir.path().join("app.exe").exists(),
+        "app.exe should be removed by rollback"
+    );
+    assert!(
+        !install_dir.path().join("data").join("config.json").exists(),
+        "config.json should be removed by rollback"
+    );
+}
+
+#[test]
+fn test_install_flow_returns_rollback_error_when_rollback_step_fails() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let output_path = output_dir.path().join("rollback-error.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    // 主流程中故障注入失败，并触发 rollback；
+    // rollback 本身使用未知步骤类型，期望返回 InstallerError::Rollback。
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![FlowStep {
+                id: "force_fail".to_string(),
+                step_type: "unknown_step_type".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Rollback),
+                engine: None,
+            }],
+            rollback: vec![FlowStep {
+                id: "bad_rollback".to_string(),
+                step_type: "unknown_rollback_type".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        silent: true,
+        thread_count: None,
+    };
+
+    let err = installer
+        .install_with_flow_definition(options, flow, |_| {})
+        .expect_err("rollback should fail");
+
+    assert!(
+        matches!(err, installer_shared::InstallerError::Rollback(_)),
+        "expected Rollback error, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_install_uses_embedded_flow_from_package_metadata() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let flow_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let flow_path = flow_dir.path().join("embedded-flow.yaml");
+    fs::write(
+        &flow_path,
+        r#"
+version: 1
+install_flow:
+  steps:
+    - id: force_fail
+      type: unknown_step_type
+      on_fail: abort
+  rollback: []
+"#,
+    )
+    .unwrap();
+
+    let output_path = output_dir.path().join("embedded-flow.pkg");
+    let config = PackagerConfig {
+        flow_file: Some(flow_path.clone()),
+        ..Default::default()
+    };
+    let packager = Packager::new(config).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        silent: true,
+        thread_count: None,
+    };
+
+    let err = installer
+        .install(options, |_| {})
+        .expect_err("embedded flow should override default and fail");
+    assert!(matches!(err, installer_shared::InstallerError::Config(_)));
+    assert!(
+        !install_dir.path().join("app.exe").exists(),
+        "no files should be extracted when embedded flow fails first"
+    );
+}
+
+#[test]
+fn test_install_embedded_script_runs_without_explicit_script_policy() {
+    if !has_node_runtime() {
+        return;
+    }
+
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let scripts_dir = input_dir.path().join("scripts");
+    fs::create_dir_all(&scripts_dir).unwrap();
+    let script_path = scripts_dir.join("embedded_ok.js");
+    fs::write(&script_path, "process.exit(0);\n").unwrap();
+
+    let flow_path = input_dir.path().join("embedded-flow-script.yaml");
+    fs::write(
+        &flow_path,
+        r#"
+version: 1
+install_flow:
+  steps:
+    - id: precheck
+      type: script
+      engine: js
+      params:
+        path: "scripts/embedded_ok.js"
+      on_fail: abort
+    - id: extract
+      type: extract_package
+      on_fail: rollback
+  rollback:
+    - id: rollback_files
+      type: rollback_files
+      on_fail: continue
+"#,
+    )
+    .unwrap();
+
+    let output_path = output_dir.path().join("embedded-script.pkg");
+    let config = PackagerConfig {
+        flow_file: Some(flow_path.clone()),
+        script_files: vec![PathBuf::from("scripts/embedded_ok.js")],
+        ..Default::default()
+    };
+    let packager = Packager::new(config).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        silent: true,
+        thread_count: None,
+    };
+    let stats = installer
+        .install(options, |_| {})
+        .expect("embedded script should run without explicit script policy flags");
+
+    assert_eq!(stats.installed_files, 1);
+    assert!(install_dir.path().join("app.exe").exists());
+}
+
+#[test]
+fn test_component_nodes_skeleton_load_download_verify() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+    let source_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let component_bin = source_dir.path().join("extra-tools.zip");
+    fs::write(&component_bin, b"component-binary-content").unwrap();
+    let component_sha = installer_core::sha256_file_hex(&component_bin).unwrap();
+
+    let manifest_path = input_dir.path().join("component_manifest.yaml");
+    let manifest = format!(
+        r#"
+version: 1
+components:
+  - id: "extra-tools"
+    display_name: "Extra Tools"
+    version: "1.0.0"
+    package:
+      url: 'file://{url}'
+      size: 24
+      sha256: '{sha}'
+    install:
+      kind: "archive"
+      target_subdir: "components/extra-tools"
+"#,
+        url = component_bin.to_string_lossy(),
+        sha = component_sha
+    );
+    fs::write(&manifest_path, manifest).unwrap();
+
+    let output_path = output_dir.path().join("component-skeleton.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "load_manifest".to_string(),
+                    step_type: "load_component_manifest".to_string(),
+                    params: json!({ "path": "${InstallDir}/component_manifest.yaml" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "download".to_string(),
+                    step_type: "download_component".to_string(),
+                    params: json!({ "component_id": "extra-tools" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "verify".to_string(),
+                    step_type: "verify_component".to_string(),
+                    params: json!({ "component_id": "extra-tools" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "install_component".to_string(),
+                    step_type: "install_component".to_string(),
+                    params: json!({ "component_id": "extra-tools" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        silent: true,
+        thread_count: None,
+    };
+    let stats = installer
+        .install_with_flow_definition(options, flow, |_| {})
+        .expect("component skeleton nodes should pass");
+
+    assert_eq!(stats.installed_files, 2);
+    assert!(install_dir.path().join("app.exe").exists());
+    assert!(install_dir.path().join("component_manifest.yaml").exists());
+    assert!(install_dir
+        .path()
+        .join("components")
+        .join("extra-tools")
+        .exists());
+}
+
+#[test]
+fn test_component_install_rollback_cleans_component_files() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+    let source_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let component_bin = source_dir.path().join("extra-tools.zip");
+    fs::write(&component_bin, b"component-binary-content").unwrap();
+    let component_sha = installer_core::sha256_file_hex(&component_bin).unwrap();
+
+    let manifest_path = input_dir.path().join("component_manifest.yaml");
+    let manifest = format!(
+        r#"
+version: 1
+components:
+  - id: "extra-tools"
+    display_name: "Extra Tools"
+    version: "1.0.0"
+    package:
+      url: 'file://{url}'
+      size: 24
+      sha256: '{sha}'
+    install:
+      kind: "archive"
+      target_subdir: "components/extra-tools"
+"#,
+        url = component_bin.to_string_lossy(),
+        sha = component_sha
+    );
+    fs::write(&manifest_path, manifest).unwrap();
+
+    let output_path = output_dir.path().join("component-rollback.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "load_manifest".to_string(),
+                    step_type: "load_component_manifest".to_string(),
+                    params: json!({ "path": "${InstallDir}/component_manifest.yaml" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "download".to_string(),
+                    step_type: "download_component".to_string(),
+                    params: json!({ "component_id": "extra-tools" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "verify".to_string(),
+                    step_type: "verify_component".to_string(),
+                    params: json!({ "component_id": "extra-tools" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "install_component".to_string(),
+                    step_type: "install_component".to_string(),
+                    params: json!({ "component_id": "extra-tools" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "force_fail".to_string(),
+                    step_type: "unknown_step_type".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![
+                FlowStep {
+                    id: "rollback_components".to_string(),
+                    step_type: "rollback_component".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Continue),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "rollback_files".to_string(),
+                    step_type: "rollback_files".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Continue),
+                    engine: None,
+                },
+            ],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        silent: true,
+        thread_count: None,
+    };
+
+    let result = installer.install_with_flow_definition(options, flow, |_| {});
+    assert!(result.is_err());
+    assert!(!install_dir
+        .path()
+        .join("components")
+        .join("extra-tools")
+        .exists());
+}
 #[test]
 fn test_complete_install_flow_with_ui_resources() {
     let input_dir = tempdir().unwrap();
@@ -93,17 +835,16 @@ fn test_complete_install_flow_with_ui_resources() {
     let ui_dir = tempdir().unwrap();
     let install_dir = tempdir().unwrap();
 
-    let test_files: Vec<(&str, &[u8])> = vec![
-        ("app.exe", b"exe"),
-        ("lib/helper.dll", b"dll"),
-    ];
+    let test_files: Vec<(&str, &[u8])> = vec![("app.exe", b"exe"), ("lib/helper.dll", b"dll")];
     create_test_files(input_dir.path(), &test_files);
     create_ui_resources(ui_dir.path());
 
     let output_path = output_dir.path().join("ui.pkg");
     let config = PackagerConfig::default();
     let packager = Packager::new(config).unwrap();
-    packager.build_package(input_dir.path(), &output_path, Some(ui_dir.path()), |_| {}).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, Some(ui_dir.path()), |_| {})
+        .unwrap();
 
     let installer = Installer::new(output_path.clone()).unwrap();
     assert!(installer.has_ui_resources().unwrap());
@@ -132,15 +873,20 @@ fn test_complete_install_flow_large_files() {
     let output_dir = tempdir().unwrap();
     let install_dir = tempdir().unwrap();
 
-    let large: Vec<u8> = (0..1024*1024).map(|i| (i % 256) as u8).collect();
+    let large: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
     fs::write(input_dir.path().join("large.bin"), &large).unwrap();
     fs::write(input_dir.path().join("small.txt"), b"small").unwrap();
 
     let output_path = output_dir.path().join("large.pkg");
-    let config = PackagerConfig { block_size: 256*1024, ..Default::default() };
+    let config = PackagerConfig {
+        block_size: 256 * 1024,
+        ..Default::default()
+    };
     let packager = Packager::new(config).unwrap();
-    let stats = packager.build_package(input_dir.path(), &output_path, None, |_| {}).unwrap();
-    assert!(stats.total_size >= 1024*1024);
+    let stats = packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+    assert!(stats.total_size >= 1024 * 1024);
 
     let installer = Installer::new(output_path).unwrap();
     let options = InstallOptions {
@@ -173,7 +919,9 @@ fn test_complete_install_flow_subdirectories() {
 
     let output_path = output_dir.path().join("nested.pkg");
     let packager = Packager::new(PackagerConfig::default()).unwrap();
-    packager.build_package(input_dir.path(), &output_path, None, |_| {}).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
 
     let installer = Installer::new(output_path).unwrap();
     let options = InstallOptions {
@@ -197,17 +945,23 @@ fn test_complete_install_flow_progress_events() {
     let install_dir = tempdir().unwrap();
 
     for i in 0..10 {
-        fs::write(input_dir.path().join(format!("f{}.txt", i)), format!("c{}", i)).unwrap();
+        fs::write(
+            input_dir.path().join(format!("f{}.txt", i)),
+            format!("c{}", i),
+        )
+        .unwrap();
     }
 
     let output_path = output_dir.path().join("progress.pkg");
     let packager = Packager::new(PackagerConfig::default()).unwrap();
-    
+
     let pack_phases = Arc::new(Mutex::new(Vec::new()));
     let pc = pack_phases.clone();
-    packager.build_package(input_dir.path(), &output_path, None, move |e| {
-        pc.lock().unwrap().push(e.phase.clone());
-    }).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, move |e| {
+            pc.lock().unwrap().push(e.phase.clone());
+        })
+        .unwrap();
 
     let phases = pack_phases.lock().unwrap();
     assert!(phases.contains(&Phase::Scanning));
@@ -226,7 +980,11 @@ fn test_complete_install_flow_progress_events() {
 
     let inst_phases = Arc::new(Mutex::new(Vec::new()));
     let ic = inst_phases.clone();
-    installer.install(options, move |e| { ic.lock().unwrap().push(e.phase.clone()); }).unwrap();
+    installer
+        .install(options, move |e| {
+            ic.lock().unwrap().push(e.phase.clone());
+        })
+        .unwrap();
 
     let phases = inst_phases.lock().unwrap();
     assert!(phases.contains(&Phase::Decompressing));
@@ -253,8 +1011,10 @@ fn test_uninstall_flow_basic() {
         application_name: "UninstallApp".to_string(),
         ..Default::default()
     };
-    Packager::new(config).unwrap()
-        .build_package(input_dir.path(), &output_path, None, |_| {}).unwrap();
+    Packager::new(config)
+        .unwrap()
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
 
     let installer = Installer::new(output_path).unwrap();
     let options = InstallOptions {
@@ -299,8 +1059,10 @@ fn test_uninstall_removes_empty_directories() {
     create_test_files(input_dir.path(), &test_files);
 
     let output_path = output_dir.path().join("nested_un.pkg");
-    Packager::new(PackagerConfig::default()).unwrap()
-        .build_package(input_dir.path(), &output_path, None, |_| {}).unwrap();
+    Packager::new(PackagerConfig::default())
+        .unwrap()
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
 
     let installer = Installer::new(output_path).unwrap();
     let options = InstallOptions {
@@ -329,16 +1091,14 @@ fn test_uninstall_handles_missing_files() {
     let output_dir = tempdir().unwrap();
     let install_dir = tempdir().unwrap();
 
-    let test_files: Vec<(&str, &[u8])> = vec![
-        ("f1.txt", b"1"),
-        ("f2.txt", b"2"),
-        ("f3.txt", b"3"),
-    ];
+    let test_files: Vec<(&str, &[u8])> = vec![("f1.txt", b"1"), ("f2.txt", b"2"), ("f3.txt", b"3")];
     create_test_files(input_dir.path(), &test_files);
 
     let output_path = output_dir.path().join("missing.pkg");
-    Packager::new(PackagerConfig::default()).unwrap()
-        .build_package(input_dir.path(), &output_path, None, |_| {}).unwrap();
+    Packager::new(PackagerConfig::default())
+        .unwrap()
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
 
     let installer = Installer::new(output_path).unwrap();
     let options = InstallOptions {
@@ -368,12 +1128,18 @@ fn test_uninstall_progress_events() {
     let install_dir = tempdir().unwrap();
 
     for i in 0..5 {
-        fs::write(input_dir.path().join(format!("f{}.txt", i)), format!("c{}", i)).unwrap();
+        fs::write(
+            input_dir.path().join(format!("f{}.txt", i)),
+            format!("c{}", i),
+        )
+        .unwrap();
     }
 
     let output_path = output_dir.path().join("prog_un.pkg");
-    Packager::new(PackagerConfig::default()).unwrap()
-        .build_package(input_dir.path(), &output_path, None, |_| {}).unwrap();
+    Packager::new(PackagerConfig::default())
+        .unwrap()
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
 
     let installer = Installer::new(output_path).unwrap();
     let options = InstallOptions {
@@ -390,7 +1156,11 @@ fn test_uninstall_progress_events() {
     let uninstaller = Uninstaller::from_install_dir(install_dir.path()).unwrap();
     let count = Arc::new(AtomicUsize::new(0));
     let cc = count.clone();
-    uninstaller.uninstall(move |_| { cc.fetch_add(1, Ordering::SeqCst); }).unwrap();
+    uninstaller
+        .uninstall(move |_| {
+            cc.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
     assert!(count.load(Ordering::SeqCst) > 0);
 }
 
@@ -409,9 +1179,9 @@ fn test_error_handling_checksum_verification() {
 fn test_error_handling_invalid_package() {
     let temp_dir = tempdir().unwrap();
     let invalid_pkg = temp_dir.path().join("invalid.pkg");
-    
+
     fs::write(&invalid_pkg, b"not a valid package").unwrap();
-    
+
     // Installer::new only checks file existence, parse_package validates content
     let installer = Installer::new(invalid_pkg).unwrap();
     let result = installer.parse_package();
@@ -422,7 +1192,7 @@ fn test_error_handling_invalid_package() {
 fn test_error_handling_package_not_found() {
     let temp_dir = tempdir().unwrap();
     let nonexistent = temp_dir.path().join("nonexistent.pkg");
-    
+
     let result = Installer::new(nonexistent);
     assert!(result.is_err());
 }
@@ -431,11 +1201,11 @@ fn test_error_handling_package_not_found() {
 fn test_error_handling_empty_input_directory() {
     let input_dir = tempdir().unwrap();
     let output_dir = tempdir().unwrap();
-    
+
     let output_path = output_dir.path().join("empty.pkg");
     let packager = Packager::new(PackagerConfig::default()).unwrap();
     let result = packager.build_package(input_dir.path(), &output_path, None, |_| {});
-    
+
     match result {
         Ok(stats) => assert_eq!(stats.total_files, 0),
         Err(_) => {}
@@ -444,18 +1214,18 @@ fn test_error_handling_empty_input_directory() {
 
 #[test]
 fn test_error_handling_disk_space_check() {
-    use installer_core::{get_available_space, check_disk_space};
-    
+    use installer_core::{check_disk_space, get_available_space};
+
     let temp_dir = tempdir().unwrap();
-    
+
     let available = get_available_space(temp_dir.path());
     assert!(available.is_ok());
     let space = available.unwrap();
     assert!(space > 0);
-    
+
     let result = check_disk_space(temp_dir.path(), 1024, 0);
     assert!(result.is_ok());
-    
+
     let huge_space = u64::MAX / 2;
     let result = check_disk_space(temp_dir.path(), huge_space, 0);
     assert!(result.is_err());
@@ -467,15 +1237,15 @@ fn test_error_handling_rollback() {
     let output_dir = tempdir().unwrap();
     let install_dir = tempdir().unwrap();
 
-    let test_files: Vec<(&str, &[u8])> = vec![
-        ("app.exe", b"exe content"),
-        ("data/config.json", b"{}"),
-    ];
+    let test_files: Vec<(&str, &[u8])> =
+        vec![("app.exe", b"exe content"), ("data/config.json", b"{}")];
     create_test_files(input_dir.path(), &test_files);
 
     let output_path = output_dir.path().join("rollback.pkg");
-    Packager::new(PackagerConfig::default()).unwrap()
-        .build_package(input_dir.path(), &output_path, None, |_| {}).unwrap();
+    Packager::new(PackagerConfig::default())
+        .unwrap()
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
 
     let installer = Installer::new(output_path).unwrap();
     let options = InstallOptions {
@@ -497,7 +1267,7 @@ fn test_error_handling_rollback() {
     ];
     let result = installer.rollback(&installed_files);
     assert!(result.is_ok());
-    
+
     assert!(!install_dir.path().join("app.exe").exists());
     assert!(!install_dir.path().join("data/config.json").exists());
 }
@@ -521,16 +1291,18 @@ fn test_concurrency_parallel_compression() {
         ..Default::default()
     };
     let packager = Packager::new(config).unwrap();
-    
+
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    let stats = packager.build_package(input_dir.path(), &output_path, None, move |e| {
-        ec.lock().unwrap().push(e.phase.clone());
-    }).unwrap();
+    let stats = packager
+        .build_package(input_dir.path(), &output_path, None, move |e| {
+            ec.lock().unwrap().push(e.phase.clone());
+        })
+        .unwrap();
 
     assert_eq!(stats.total_files, 20);
     assert!(output_path.exists());
-    
+
     let phases = events.lock().unwrap();
     assert!(phases.contains(&Phase::Compressing));
 }
@@ -555,8 +1327,10 @@ fn test_concurrency_parallel_decompression() {
         thread_count: Some(4),
         ..Default::default()
     };
-    Packager::new(config).unwrap()
-        .build_package(input_dir.path(), &output_path, None, |_| {}).unwrap();
+    Packager::new(config)
+        .unwrap()
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
 
     let installer = Installer::new(output_path).unwrap();
     let options = InstallOptions {
@@ -567,20 +1341,22 @@ fn test_concurrency_parallel_decompression() {
         silent: true,
         thread_count: Some(4),
     };
-    
+
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    let stats = installer.install(options, move |e| {
-        ec.lock().unwrap().push(e.phase.clone());
-    }).unwrap();
+    let stats = installer
+        .install(options, move |e| {
+            ec.lock().unwrap().push(e.phase.clone());
+        })
+        .unwrap();
 
     assert_eq!(stats.installed_files, 15);
-    
+
     for (name, expected_content) in &expected_files {
         let actual = fs::read(install_dir.path().join(name)).unwrap();
         assert_eq!(&actual, expected_content, "File {} content mismatch", name);
     }
-    
+
     let phases = events.lock().unwrap();
     assert!(phases.contains(&Phase::Decompressing));
 }
@@ -591,11 +1367,17 @@ fn test_concurrency_thread_count_configuration() {
     let output_dir = tempdir().unwrap();
 
     for i in 0..10 {
-        fs::write(input_dir.path().join(format!("f{}.txt", i)), format!("content {}", i)).unwrap();
+        fs::write(
+            input_dir.path().join(format!("f{}.txt", i)),
+            format!("content {}", i),
+        )
+        .unwrap();
     }
 
     for thread_count in [1, 2, 4, 8] {
-        let output_path = output_dir.path().join(format!("threads_{}.pkg", thread_count));
+        let output_path = output_dir
+            .path()
+            .join(format!("threads_{}.pkg", thread_count));
         let config = PackagerConfig {
             thread_count: Some(thread_count),
             ..Default::default()
@@ -610,7 +1392,7 @@ fn test_concurrency_thread_count_configuration() {
 #[test]
 fn test_concurrency_no_data_races() {
     use std::thread;
-    
+
     let input_dir = tempdir().unwrap();
     let output_dir = tempdir().unwrap();
 
@@ -623,17 +1405,19 @@ fn test_concurrency_no_data_races() {
         thread_count: Some(4),
         ..Default::default()
     };
-    
-    let handles: Vec<_> = (0..3).map(|run| {
-        let input = input_dir.path().to_path_buf();
-        let output = output_dir.path().join(format!("race_run_{}.pkg", run));
-        let cfg = config.clone();
-        
-        thread::spawn(move || {
-            let packager = Packager::new(cfg).unwrap();
-            packager.build_package(&input, &output, None, |_| {})
+
+    let handles: Vec<_> = (0..3)
+        .map(|run| {
+            let input = input_dir.path().to_path_buf();
+            let output = output_dir.path().join(format!("race_run_{}.pkg", run));
+            let cfg = config.clone();
+
+            thread::spawn(move || {
+                let packager = Packager::new(cfg).unwrap();
+                packager.build_package(&input, &output, None, |_| {})
+            })
         })
-    }).collect();
+        .collect();
 
     for (i, handle) in handles.into_iter().enumerate() {
         let result = handle.join().expect("Thread panicked");
@@ -647,7 +1431,11 @@ fn test_concurrency_progress_events_thread_safe() {
     let output_dir = tempdir().unwrap();
 
     for i in 0..10 {
-        fs::write(input_dir.path().join(format!("ts_{}.txt", i)), format!("data {}", i)).unwrap();
+        fs::write(
+            input_dir.path().join(format!("ts_{}.txt", i)),
+            format!("data {}", i),
+        )
+        .unwrap();
     }
 
     let output_path = output_dir.path().join("thread_safe.pkg");
@@ -656,13 +1444,15 @@ fn test_concurrency_progress_events_thread_safe() {
         ..Default::default()
     };
     let packager = Packager::new(config).unwrap();
-    
+
     let event_count = Arc::new(AtomicUsize::new(0));
     let ec = event_count.clone();
-    
-    packager.build_package(input_dir.path(), &output_path, None, move |_| {
-        ec.fetch_add(1, Ordering::SeqCst);
-    }).unwrap();
+
+    packager
+        .build_package(input_dir.path(), &output_path, None, move |_| {
+            ec.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
 
     assert!(event_count.load(Ordering::SeqCst) > 0);
 }

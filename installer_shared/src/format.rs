@@ -189,6 +189,21 @@ pub struct PackageMetadata {
     pub process_name: Option<String>,
     /// CRC32 checksum of embedded UI resources
     pub ui_resources_checksum: Option<u32>,
+    /// Optional embedded install flow YAML.
+    #[serde(default)]
+    pub embedded_flow_yaml: Option<String>,
+    /// Optional embedded script sources referenced by flow script nodes.
+    #[serde(default)]
+    pub embedded_scripts: Vec<EmbeddedScript>,
+}
+
+/// Embedded script source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbeddedScript {
+    /// Logical script path used by flow step `params.path`.
+    pub path: String,
+    /// UTF-8 script source content.
+    pub content: String,
 }
 
 impl Default for PackageMetadata {
@@ -208,6 +223,8 @@ impl Default for PackageMetadata {
             desktop_icons: false,
             process_name: None,
             ui_resources_checksum: None,
+            embedded_flow_yaml: None,
+            embedded_scripts: Vec::new(),
         }
     }
 }

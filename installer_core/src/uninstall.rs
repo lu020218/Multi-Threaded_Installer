@@ -129,7 +129,7 @@ impl Uninstaller {
     /// - 11.3: Read install.manifest.json
     pub fn new(manifest_path: PathBuf) -> Result<Self> {
         let manifest = Self::read_manifest(&manifest_path)?;
-        
+
         Ok(Self {
             manifest_path,
             manifest,
@@ -174,8 +174,9 @@ impl Uninstaller {
         }
 
         let content = fs::read_to_string(path)?;
-        let manifest: InstallManifest = serde_json::from_str(&content)
-            .map_err(|e| InstallerError::Serialization(format!("Failed to parse manifest: {}", e)))?;
+        let manifest: InstallManifest = serde_json::from_str(&content).map_err(|e| {
+            InstallerError::Serialization(format!("Failed to parse manifest: {}", e))
+        })?;
 
         debug!(
             "Loaded manifest: app={}, version={}, {} files, {} directories",
@@ -207,7 +208,6 @@ impl Uninstaller {
     pub fn directories(&self) -> &[String] {
         &self.manifest.directories
     }
-
 
     /// Delete all files listed in the manifest.
     ///
@@ -259,7 +259,11 @@ impl Uninstaller {
             }
         }
 
-        progress(ProgressEvent::new(Phase::Completing, total_files, total_files));
+        progress(ProgressEvent::new(
+            Phase::Completing,
+            total_files,
+            total_files,
+        ));
 
         info!("Deleted {} of {} files", deleted, total_files);
         (deleted, errors)
@@ -306,7 +310,8 @@ impl Uninstaller {
                                     removed += 1;
                                 }
                                 Err(e) => {
-                                    let error_msg = format!("Failed to remove {:?}: {}", full_path, e);
+                                    let error_msg =
+                                        format!("Failed to remove {:?}: {}", full_path, e);
                                     warn!("{}", error_msg);
                                     errors.push(error_msg);
                                 }
@@ -399,7 +404,6 @@ impl Uninstaller {
         info!("Cleaned {} registry entries", cleaned);
         (cleaned, errors)
     }
-
 
     /// Delete desktop shortcuts created during installation.
     ///
@@ -553,7 +557,7 @@ impl Uninstaller {
     }
 
     /// Create a batch file that will delete the uninstaller after it exits.
-    /// 
+    ///
     /// Note: This is skipped in test mode to avoid hanging tests.
     #[cfg(windows)]
     fn create_self_delete_batch(&self, uninstall_exe: &Path) -> bool {
@@ -565,12 +569,12 @@ impl Uninstaller {
             let _ = delete_file(uninstall_exe);
             return true;
         }
-        
+
         #[cfg(not(test))]
         {
             let install_dir = self.install_dir();
             let batch_path = std::env::temp_dir().join("uninstall_cleanup.bat");
-            
+
             // Create a batch script that:
             // 1. Waits for the uninstaller to exit
             // 2. Deletes the uninstaller executable
@@ -661,17 +665,13 @@ del /f /q "%~f0"
         stats.errors.extend(dir_errors);
 
         // Step 3: Clean up registry
-        progress(
-            ProgressEvent::new(Phase::Completing, 2, 5).with_message("Cleaning registry..."),
-        );
+        progress(ProgressEvent::new(Phase::Completing, 2, 5).with_message("Cleaning registry..."));
         let (registry_cleaned, registry_errors) = self.cleanup_registry();
         stats.registry_entries_cleaned = registry_cleaned;
         stats.errors.extend(registry_errors);
 
         // Step 4: Delete shortcuts
-        progress(
-            ProgressEvent::new(Phase::Completing, 3, 5).with_message("Removing shortcuts..."),
-        );
+        progress(ProgressEvent::new(Phase::Completing, 3, 5).with_message("Removing shortcuts..."));
         stats.shortcuts_removed = self.delete_shortcuts();
 
         // Step 5: Disable auto-startup
@@ -681,12 +681,12 @@ del /f /q "%~f0"
         stats.auto_startup_disabled = self.disable_auto_startup();
 
         // Step 6: Self-cleanup
-        progress(
-            ProgressEvent::new(Phase::Completing, 5, 5).with_message("Cleaning up..."),
-        );
+        progress(ProgressEvent::new(Phase::Completing, 5, 5).with_message("Cleaning up..."));
         let cleanup_success = self.self_cleanup();
         if !cleanup_success {
-            stats.errors.push("Self-cleanup partially failed".to_string());
+            stats
+                .errors
+                .push("Self-cleanup partially failed".to_string());
         }
 
         info!(
@@ -695,13 +695,15 @@ del /f /q "%~f0"
         );
 
         if !stats.errors.is_empty() {
-            warn!("Uninstallation completed with {} errors", stats.errors.len());
+            warn!(
+                "Uninstallation completed with {} errors",
+                stats.errors.len()
+            );
         }
 
         Ok(stats)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -714,10 +716,7 @@ mod tests {
             app_name: "TestApp".to_string(),
             version: "1.0.0".to_string(),
             install_dir: dir.to_string_lossy().to_string(),
-            files: vec![
-                "file1.txt".to_string(),
-                "subdir/file2.txt".to_string(),
-            ],
+            files: vec!["file1.txt".to_string(), "subdir/file2.txt".to_string()],
             directories: vec!["subdir".to_string()],
             registry_entries: vec![],
             auto_startup: false,
@@ -740,7 +739,7 @@ mod tests {
         let manifest_path = write_manifest(dir.path(), &manifest);
 
         let uninstaller = Uninstaller::new(manifest_path).unwrap();
-        
+
         assert_eq!(uninstaller.manifest().app_name, "TestApp");
         assert_eq!(uninstaller.manifest().version, "1.0.0");
         assert_eq!(uninstaller.manifest().files.len(), 2);
@@ -779,12 +778,12 @@ mod tests {
     #[test]
     fn test_delete_files() {
         let dir = tempdir().unwrap();
-        
+
         // Create test files
         let file1 = dir.path().join("file1.txt");
         let subdir = dir.path().join("subdir");
         let file2 = subdir.join("file2.txt");
-        
+
         fs::write(&file1, b"content1").unwrap();
         fs::create_dir(&subdir).unwrap();
         fs::write(&file2, b"content2").unwrap();
@@ -805,7 +804,7 @@ mod tests {
     #[test]
     fn test_delete_files_already_deleted() {
         let dir = tempdir().unwrap();
-        
+
         // Create manifest but don't create the files
         let manifest = create_test_manifest(dir.path());
         let manifest_path = write_manifest(dir.path(), &manifest);
@@ -821,7 +820,7 @@ mod tests {
     #[test]
     fn test_delete_directories() {
         let dir = tempdir().unwrap();
-        
+
         // Create directory structure
         let subdir = dir.path().join("subdir");
         let nested = subdir.join("nested");
@@ -829,10 +828,7 @@ mod tests {
 
         // Create manifest with directories
         let mut manifest = create_test_manifest(dir.path());
-        manifest.directories = vec![
-            "subdir".to_string(),
-            "subdir/nested".to_string(),
-        ];
+        manifest.directories = vec!["subdir".to_string(), "subdir/nested".to_string()];
         manifest.files = vec![]; // No files
         let manifest_path = write_manifest(dir.path(), &manifest);
 
@@ -849,7 +845,7 @@ mod tests {
     #[test]
     fn test_delete_directories_not_empty() {
         let dir = tempdir().unwrap();
-        
+
         // Create directory with a file
         let subdir = dir.path().join("subdir");
         fs::create_dir(&subdir).unwrap();
@@ -873,7 +869,7 @@ mod tests {
     #[test]
     fn test_manifest_registry_entry_from() {
         use installer_shared::RegistryValueType;
-        
+
         let entry = RegistryEntry {
             path: "HKEY_CURRENT_USER\\Software\\Test".to_string(),
             key: "TestKey".to_string(),
@@ -900,12 +896,12 @@ mod tests {
     #[test]
     fn test_full_uninstall() {
         let dir = tempdir().unwrap();
-        
+
         // Create test files and directories
         let file1 = dir.path().join("file1.txt");
         let subdir = dir.path().join("subdir");
         let file2 = subdir.join("file2.txt");
-        
+
         fs::write(&file1, b"content1").unwrap();
         fs::create_dir(&subdir).unwrap();
         fs::write(&file2, b"content2").unwrap();
@@ -933,7 +929,10 @@ mod tests {
         let manifest_path = write_manifest(dir.path(), &manifest);
 
         let uninstaller = Uninstaller::new(manifest_path).unwrap();
-        assert_eq!(uninstaller.install_dir(), PathBuf::from(&manifest.install_dir));
+        assert_eq!(
+            uninstaller.install_dir(),
+            PathBuf::from(&manifest.install_dir)
+        );
     }
 
     #[test]
@@ -944,13 +943,12 @@ mod tests {
 
         let uninstaller = Uninstaller::new(manifest_path).unwrap();
         let files = uninstaller.installed_files();
-        
+
         assert_eq!(files.len(), 2);
         assert!(files.contains(&"file1.txt".to_string()));
         assert!(files.contains(&"subdir/file2.txt".to_string()));
     }
 }
-
 
 // ============================================================================
 // Property-Based Tests
@@ -977,10 +975,7 @@ mod property_tests {
 
     /// Generate a list of files with content
     fn files_strategy() -> impl Strategy<Value = Vec<(String, Vec<u8>)>> {
-        prop::collection::vec(
-            (filename_strategy(), file_content_strategy()),
-            1..4
-        )
+        prop::collection::vec((filename_strategy(), file_content_strategy()), 1..4)
     }
 
     proptest! {

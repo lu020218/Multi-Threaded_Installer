@@ -114,6 +114,21 @@ for step in steps:
 return ok
 ```
 
+### 6.1 失败策略与回滚语义（补充）
+- `on_fail: abort`：步骤失败后立即返回错误，不进入回滚。
+- `on_fail: continue`：记录失败并继续后续步骤。
+- `on_fail: rollback`：触发 `install_flow.rollback`，按**逆序**执行回滚步骤。
+
+### 6.2 回滚错误传播（补充）
+- 如果主流程失败且进入回滚，但回滚步骤本身再次失败：
+  - 执行器返回 `InstallerError::Rollback(...)`
+  - 错误消息包含失败的回滚 step id，便于定位。
+- 若回滚成功，则返回原始主流程错误。
+
+### 6.3 故障注入验证结论（补充）
+- 场景 A：`extract_package` 成功后故障注入失败节点，`on_fail: rollback` 能清理已写入文件。
+- 场景 B：故障注入使回滚节点也失败，最终返回 `Rollback` 类型错误。
+
 ## 7. 安全策略
 - 脚本节点白名单 + 沙箱隔离。
 - 默认禁用脚本节点（需显式开启）。
@@ -124,3 +139,23 @@ return ok
 - `installer_shared` 新增 DSL 结构体与 schema。
 - `installer_gui` 前端加载 `ui_flow` 驱动页面。
 
+## 9. 表达式能力（更新）
+`when` 目前支持：
+- 逻辑运算：`&&`、`||`
+- 比较运算：`==`、`!=`、`>`、`>=`、`<`、`<=`
+- 分组：`(...)`
+- 作用域变量：`vars.*`、`options.*`、`metadata.*`
+
+示例：
+
+```yaml
+install_flow:
+  steps:
+    - id: precheck
+      type: emit_progress
+      when: '${options.disk_gb >= 20 && (options.channel == "stable" || vars.ForceInstall == true)}'
+```
+
+注意：
+- 比较两侧类型必须兼容（数字对数字、字符串对字符串、布尔对布尔）。
+- 混合类型比较会直接报错并终止当前步骤执行。

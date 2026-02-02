@@ -20,8 +20,8 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use installer_core::{init_cli_logging, Installer, Uninstaller};
-use installer_shared::{InstallOptions, Phase, ProgressEvent};
+use installer_core::{init_cli_logging, Installer, ScriptPolicy, Uninstaller};
+use installer_shared::{FlowDefinition, InstallOptions, Phase, ProgressEvent};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -34,9 +34,11 @@ use tracing::{debug, error, info, warn};
 #[derive(Parser, Debug)]
 #[command(name = "installer")]
 #[command(author, version, about = "Install and uninstall packages")]
-#[command(long_about = "A command-line installer for extracting and installing packages.\n\n\
+#[command(
+    long_about = "A command-line installer for extracting and installing packages.\n\n\
     Use --silent for unattended installations.\n\
-    Use --uninstall to remove an installed application.")]
+    Use --uninstall to remove an installed application."
+)]
 struct Args {
     /// Subcommand to execute (install or uninstall)
     #[command(subcommand)]
@@ -88,6 +90,20 @@ struct Args {
     #[arg(long)]
     threads: Option<usize>,
 
+    /// Optional YAML flow definition path
+    ///
+    /// If provided, installer will execute this custom flow instead of the default built-in flow.
+    #[arg(long)]
+    flow: Option<PathBuf>,
+
+    /// Enable script step execution in flow.
+    #[arg(long)]
+    enable_scripts: bool,
+
+    /// Allowlisted script root (repeatable).
+    #[arg(long = "script-allow-root")]
+    script_allow_roots: Vec<PathBuf>,
+
     /// Verbose output
     ///
     /// Enables detailed logging output.
@@ -136,6 +152,18 @@ enum Commands {
         #[arg(long)]
         threads: Option<usize>,
 
+        /// Optional YAML flow definition path
+        #[arg(long)]
+        flow: Option<PathBuf>,
+
+        /// Enable script step execution in flow.
+        #[arg(long)]
+        enable_scripts: bool,
+
+        /// Allowlisted script root (repeatable).
+        #[arg(long = "script-allow-root")]
+        script_allow_roots: Vec<PathBuf>,
+
         /// Force installation even if application is running
         #[arg(long)]
         force: bool,
@@ -183,6 +211,9 @@ fn run() -> Result<()> {
                 no_shortcuts,
                 no_registry,
                 threads,
+                flow,
+                enable_scripts,
+                script_allow_roots,
                 force,
                 skip_version_check,
             } => run_install(InstallArgs {
@@ -192,22 +223,26 @@ fn run() -> Result<()> {
                 no_shortcuts,
                 no_registry,
                 threads,
+                flow,
+                enable_scripts,
+                script_allow_roots,
                 force,
                 skip_version_check,
                 verbose: args.verbose,
             }),
-            Commands::Uninstall { install_dir, silent } => {
-                run_uninstall(&install_dir, silent, args.verbose)
-            }
+            Commands::Uninstall {
+                install_dir,
+                silent,
+            } => run_uninstall(&install_dir, silent, args.verbose),
         };
     }
 
     // Handle legacy mode (without subcommand)
     if args.uninstall {
         // Uninstall mode
-        let install_dir = args.install_dir.ok_or_else(|| {
-            anyhow::anyhow!("--install-dir is required for uninstall mode")
-        })?;
+        let install_dir = args
+            .install_dir
+            .ok_or_else(|| anyhow::anyhow!("--install-dir is required for uninstall mode"))?;
         return run_uninstall(&install_dir, args.silent, args.verbose);
     }
 
@@ -223,6 +258,9 @@ fn run() -> Result<()> {
         no_shortcuts: args.no_shortcuts,
         no_registry: args.no_registry,
         threads: args.threads,
+        flow: args.flow,
+        enable_scripts: args.enable_scripts,
+        script_allow_roots: args.script_allow_roots,
         force: args.force,
         skip_version_check: args.skip_version_check,
         verbose: args.verbose,
@@ -238,11 +276,13 @@ struct InstallArgs {
     no_shortcuts: bool,
     no_registry: bool,
     threads: Option<usize>,
+    flow: Option<PathBuf>,
+    enable_scripts: bool,
+    script_allow_roots: Vec<PathBuf>,
     force: bool,
     skip_version_check: bool,
     verbose: bool,
 }
-
 
 /// Run the installation process.
 ///
@@ -258,8 +298,17 @@ fn run_install(args: InstallArgs) -> Result<()> {
     }
 
     // Create installer
-    let installer =
-        Installer::new(args.package.clone()).context("Failed to open package")?;
+    let mut installer = Installer::new(args.package.clone()).context("Failed to open package")?;
+    if args.enable_scripts {
+        if args.script_allow_roots.is_empty() {
+            return Err(anyhow::anyhow!(
+                "--enable-scripts requires at least one --script-allow-root"
+            ));
+        }
+        installer = installer.with_script_policy(ScriptPolicy::enabled_with_roots(
+            args.script_allow_roots.clone(),
+        ));
+    }
 
     // Parse package to get metadata
     let parsed = installer
@@ -334,10 +383,7 @@ fn run_install(args: InstallArgs) -> Result<()> {
                         process_name
                     ));
                 } else {
-                    eprintln!(
-                        "Warning: '{}' appears to be running.",
-                        process_name
-                    );
+                    eprintln!("Warning: '{}' appears to be running.", process_name);
                     if !prompt_continue("Do you want to continue anyway?")? {
                         return Err(anyhow::anyhow!("Installation cancelled by user"));
                     }
@@ -367,9 +413,18 @@ fn run_install(args: InstallArgs) -> Result<()> {
 
     // Run installation with progress reporting
     let progress_printer = ProgressPrinter::new(args.silent);
-    let stats = installer.install(options, |event| {
-        progress_printer.print(&event);
-    })?;
+    let stats = if let Some(flow_path) = args.flow.as_ref() {
+        info!("Using custom flow definition: {}", flow_path.display());
+        let flow = FlowDefinition::from_yaml_file(flow_path)
+            .with_context(|| format!("Failed to load flow file: {}", flow_path.display()))?;
+        installer.install_with_flow_definition(options, flow, |event| {
+            progress_printer.print(&event);
+        })?
+    } else {
+        installer.install(options, |event| {
+            progress_printer.print(&event);
+        })?
+    };
 
     // Ensure we print a newline after progress bar
     if !args.silent {
@@ -390,10 +445,7 @@ fn run_install(args: InstallArgs) -> Result<()> {
         println!();
         println!("Installation complete!");
         println!("  Files installed: {}", stats.installed_files);
-        println!(
-            "  Total size: {}",
-            format_size(stats.total_size)
-        );
+        println!("  Total size: {}", format_size(stats.total_size));
         println!("  Time: {:.2}s", stats.elapsed_time.as_secs_f64());
     }
 
@@ -411,7 +463,10 @@ fn run_install(args: InstallArgs) -> Result<()> {
 /// - 12.5: Accept --uninstall flag to trigger uninstallation
 fn run_uninstall(install_dir: &PathBuf, silent: bool, _verbose: bool) -> Result<()> {
     if !silent {
-        println!("Installer CLI v{} - Uninstall Mode", env!("CARGO_PKG_VERSION"));
+        println!(
+            "Installer CLI v{} - Uninstall Mode",
+            env!("CARGO_PKG_VERSION")
+        );
         println!();
     }
 
@@ -520,7 +575,6 @@ fn format_size(bytes: u64) -> String {
         format!("{} bytes", bytes)
     }
 }
-
 
 /// Progress printer for console output.
 ///
@@ -665,7 +719,10 @@ mod tests {
     #[test]
     fn test_truncate_path() {
         assert_eq!(truncate_path("short", 10), "short");
-        assert_eq!(truncate_path("this/is/a/very/long/path", 15), "...ry/long/path");
+        assert_eq!(
+            truncate_path("this/is/a/very/long/path", 15),
+            "...ry/long/path"
+        );
     }
 
     #[test]
@@ -675,7 +732,6 @@ mod tests {
         printer.print(&ProgressEvent::new(Phase::Scanning, 0, 100));
     }
 }
-
 
 // ============================================================================
 // Property-Based Tests
@@ -746,20 +802,20 @@ mod property_tests {
 
             // Create a silent progress printer and verify it doesn't output
             let printer = ProgressPrinter::new(true); // silent = true
-            
+
             // In silent mode, the printer should not produce any output
             // We verify this by checking that the print method returns immediately
             // without modifying any state when silent is true
             prop_assert!(printer.silent, "Printer should be in silent mode");
-            
+
             // Verify that printing in silent mode doesn't panic and doesn't
             // modify the last_phase state (since it returns early)
             let event = ProgressEvent::new(Phase::Scanning, 0, 100);
             printer.print(&event);
-            
+
             // The last_phase should still be None because silent mode returns early
             let last_phase = printer.last_phase.lock().unwrap();
-            prop_assert!(last_phase.is_none(), 
+            prop_assert!(last_phase.is_none(),
                 "Silent mode should not update internal state");
         }
 
@@ -831,7 +887,7 @@ mod property_tests {
             // Verify progress events were received (even in silent mode,
             // the core still emits events - it's the CLI that doesn't print them)
             let events = events_received.lock().unwrap();
-            prop_assert!(!events.is_empty(), 
+            prop_assert!(!events.is_empty(),
                 "Progress events should still be emitted in silent mode");
         }
     }

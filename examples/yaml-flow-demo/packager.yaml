@@ -1,0 +1,11 @@
+application_name: "YamlFlowDemo"
+version: "1.0.0"
+default_install_dir: "%ProgramFiles%\\YamlFlowDemo"
+vendor: "Demo Team"
+compression_algorithm: "Zstd"
+compression_level: 3
+desktop_icons: false
+auto_startup: false
+flow_file: "./flow.yaml"
+script_files:
+  - "./scripts/precheck.js"

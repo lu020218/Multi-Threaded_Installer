@@ -23,13 +23,13 @@ use crate::package::{write_footer, write_header, write_toc, Toc};
 use crate::platform::{create_platform, Platform};
 use crate::ui_resources::UIResources;
 use installer_shared::{
-    BlockEntry, CompressionAlgorithm, FileEntry, InstallerError, PackageFooter, PackageHeader,
-    PackageMetadata, PackagerConfig, Phase, ProgressEvent, Result, TocHeader,
+    BlockEntry, CompressionAlgorithm, EmbeddedScript, FileEntry, InstallerError, PackageFooter,
+    PackageHeader, PackageMetadata, PackagerConfig, Phase, ProgressEvent, Result, TocHeader,
 };
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::info;
@@ -79,6 +79,41 @@ pub struct Packager {
 }
 
 impl Packager {
+    fn normalize_rel_path(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
+    }
+
+    fn payload_exclude_patterns(&self, input_dir: &Path) -> Vec<String> {
+        let mut patterns = vec![
+            "packager.json".to_string(),
+            "packager.yaml".to_string(),
+            "packager.yml".to_string(),
+        ];
+
+        let input_canonical = input_dir.canonicalize().ok();
+        if let Some(input_root) = input_canonical {
+            if let Some(flow_file) = &self.config.flow_file {
+                let flow_abs = Self::resolve_config_path(input_dir, flow_file);
+                if let Ok(flow_can) = flow_abs.canonicalize() {
+                    if let Ok(rel) = flow_can.strip_prefix(&input_root) {
+                        patterns.push(Self::normalize_rel_path(rel));
+                    }
+                }
+            }
+
+            for script_file in &self.config.script_files {
+                let script_abs = Self::resolve_config_path(input_dir, script_file);
+                if let Ok(script_can) = script_abs.canonicalize() {
+                    if let Ok(rel) = script_can.strip_prefix(&input_root) {
+                        patterns.push(Self::normalize_rel_path(rel));
+                    }
+                }
+            }
+        }
+
+        patterns
+    }
+
     /// Create a new packager with the given configuration.
     ///
     /// # Arguments
@@ -121,27 +156,25 @@ impl Packager {
     /// - 2.2: Collect file path, size, and permission information
     pub fn scan_directory(&self, input_dir: &Path) -> Result<Vec<FileInfo>> {
         info!("Scanning directory: {:?}", input_dir);
-        
-        // Create scan options from config - exclude packager config files at root level only
+
+        // Exclude packager config and embedded flow/script source files from payload.
         let options = ScanOptions {
             skip_hidden: false,
             skip_system: false,
-            exclude_patterns: vec![
-                "packager.json".to_string(),  // Only matches root level packager.json
-            ],
+            exclude_patterns: self.payload_exclude_patterns(input_dir),
             follow_symlinks: false,
         };
-        
+
         let mut files = scan_directory_with_options(input_dir, &options)?;
-        
+
         // Filter out root-level icon file (app.ico) that's used for installer icon
         files.retain(|f| f.relative_path != "app.ico");
-        
+
         // Apply folder_targets configuration to remap paths
         if !self.config.folder_targets.is_empty() {
             files = self.apply_folder_targets(files);
         }
-        
+
         info!("Found {} files", files.len());
         Ok(files)
     }
@@ -157,13 +190,18 @@ impl Packager {
             .filter_map(|mut file| {
                 for target in &self.config.folder_targets {
                     // Check if this file is in a folder that should be redirected
-                    if file.relative_path.starts_with(&target.folder_name) 
-                        || file.relative_path.starts_with(&format!("{}/", target.folder_name)) {
+                    if file.relative_path.starts_with(&target.folder_name)
+                        || file
+                            .relative_path
+                            .starts_with(&format!("{}/", target.folder_name))
+                    {
                         // Replace the folder name with the target directory
                         // The target_directory may contain environment variables like %AppData%
-                        file.relative_path = file
-                            .relative_path
-                            .replacen(&target.folder_name, &target.target_directory, 1);
+                        file.relative_path = file.relative_path.replacen(
+                            &target.folder_name,
+                            &target.target_directory,
+                            1,
+                        );
                         return Some(file);
                     }
                 }
@@ -226,8 +264,7 @@ impl Packager {
         let processed = Arc::new(AtomicU64::new(0));
 
         // Map block index -> file list for metadata/debug
-        let mut block_files: Vec<Vec<(String, u64)>> =
-            vec![Vec::new(); division.block_data.len()];
+        let mut block_files: Vec<Vec<(String, u64)>> = vec![Vec::new(); division.block_data.len()];
         for block_info in &division.block_infos {
             let files = block_info
                 .file_indices
@@ -286,9 +323,8 @@ impl Packager {
             compress_fn(&division.block_data)
         };
 
-        let mut blocks: Vec<CompressedBlock> = compressed_blocks
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
+        let mut blocks: Vec<CompressedBlock> =
+            compressed_blocks.into_iter().collect::<Result<Vec<_>>>()?;
 
         blocks.sort_by_key(|b| b.id);
         info!("Compression complete: {} blocks", blocks.len());
@@ -360,9 +396,14 @@ impl Packager {
     ///
     /// # Requirements
     /// - 2.7: Generate metadata and serialize to MessagePack format
-    pub fn generate_metadata(&self, ui_resources_checksum: Option<u32>) -> Result<PackageMetadata> {
+    pub fn generate_metadata(
+        &self,
+        ui_resources_checksum: Option<u32>,
+        embedded_flow_yaml: Option<String>,
+        embedded_scripts: Vec<EmbeddedScript>,
+    ) -> Result<PackageMetadata> {
         info!("Generating metadata for '{}'", self.config.application_name);
-        
+
         Ok(PackageMetadata {
             app_name: self.config.application_name.clone(),
             version: self.config.version.clone(),
@@ -378,7 +419,53 @@ impl Packager {
             desktop_icons: self.config.desktop_icons,
             process_name: self.config.process_name.clone(),
             ui_resources_checksum,
+            embedded_flow_yaml,
+            embedded_scripts,
         })
+    }
+
+    fn resolve_config_path(base: &Path, path: &Path) -> PathBuf {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            base.join(path)
+        }
+    }
+
+    fn load_embedded_flow_assets(
+        &self,
+        input_dir: &Path,
+    ) -> Result<(Option<String>, Vec<EmbeddedScript>)> {
+        let embedded_flow_yaml = if let Some(flow_file) = &self.config.flow_file {
+            let flow_path = Self::resolve_config_path(input_dir, flow_file);
+            Some(std::fs::read_to_string(&flow_path).map_err(|e| {
+                InstallerError::Config(format!(
+                    "Failed to read flow file '{}': {}",
+                    flow_path.display(),
+                    e
+                ))
+            })?)
+        } else {
+            None
+        };
+
+        let mut embedded_scripts = Vec::with_capacity(self.config.script_files.len());
+        for script_file in &self.config.script_files {
+            let script_path = Self::resolve_config_path(input_dir, script_file);
+            let content = std::fs::read_to_string(&script_path).map_err(|e| {
+                InstallerError::Config(format!(
+                    "Failed to read script file '{}': {}",
+                    script_path.display(),
+                    e
+                ))
+            })?;
+            embedded_scripts.push(EmbeddedScript {
+                path: script_file.to_string_lossy().replace('\\', "/"),
+                content,
+            });
+        }
+
+        Ok((embedded_flow_yaml, embedded_scripts))
     }
 
     /// Embed UI resources from a directory.
@@ -466,12 +553,13 @@ impl Packager {
         // Phase 4: Generate TOC and metadata
         let toc = self.generate_toc(file_entries, &blocks)?;
         let ui_checksum = ui_resources.as_ref().map(|r| r.checksum);
-        let metadata = self.generate_metadata(ui_checksum)?;
+        let (embedded_flow_yaml, embedded_scripts) = self.load_embedded_flow_assets(input_dir)?;
+        let metadata = self.generate_metadata(ui_checksum, embedded_flow_yaml, embedded_scripts)?;
 
         // Serialize TOC with checksum wrapper to get the actual size
         let mut toc_data = Vec::new();
         let toc_size = write_toc(&mut toc_data, &toc)? as u64;
-        
+
         // Serialize metadata
         let metadata_data = rmp_serde::to_vec(&metadata)
             .map_err(|e| InstallerError::Serialization(e.to_string()))?;
@@ -559,7 +647,8 @@ impl Packager {
         progress(ProgressEvent::new(Phase::Writing, 1, 1));
 
         // Calculate statistics
-        let compressed_size = data_size + toc_size + metadata_size + header_size + ui_resources_size;
+        let compressed_size =
+            data_size + toc_size + metadata_size + header_size + ui_resources_size;
         let compression_ratio = if total_size > 0 {
             compressed_size as f64 / total_size as f64
         } else {
@@ -652,7 +741,8 @@ impl Packager {
         // Phase 4: Generate TOC and metadata
         let toc = self.generate_toc(file_entries, &blocks)?;
         let ui_checksum = ui_resources.as_ref().map(|r| r.checksum);
-        let metadata = self.generate_metadata(ui_checksum)?;
+        let (embedded_flow_yaml, embedded_scripts) = self.load_embedded_flow_assets(input_dir)?;
+        let metadata = self.generate_metadata(ui_checksum, embedded_flow_yaml, embedded_scripts)?;
 
         // Serialize TOC with checksum wrapper
         let mut toc_data = Vec::new();
@@ -701,10 +791,10 @@ impl Packager {
         // Write package format to memory buffer
         // Write header
         write_header(&mut package_data, &header)?;
-        
+
         // Write TOC
         package_data.extend_from_slice(&toc_data);
-        
+
         // Write metadata
         package_data.extend_from_slice(&metadata_data);
 
@@ -732,11 +822,8 @@ impl Packager {
         write_footer(&mut package_data, &footer)?;
 
         // Phase 6: Embed package data into installer executable
-        let installer_size = build_self_contained_installer_from_memory(
-            template_exe,
-            &package_data,
-            output_exe,
-        )?;
+        let installer_size =
+            build_self_contained_installer_from_memory(template_exe, &package_data, output_exe)?;
 
         progress(ProgressEvent::new(Phase::Writing, 1, 1));
 
@@ -784,7 +871,6 @@ pub struct CompressedBlock {
     pub files: Vec<(String, u64)>,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,6 +898,26 @@ mod tests {
         let files = packager.scan_directory(dir.path()).unwrap();
 
         assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn test_scan_directory_excludes_embedded_flow_and_scripts_from_payload() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("app.exe"), b"exe").unwrap();
+        fs::write(dir.path().join("flow.yaml"), b"version: 1").unwrap();
+        fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        fs::write(dir.path().join("scripts").join("precheck.js"), b"true;").unwrap();
+
+        let config = PackagerConfig {
+            flow_file: Some(PathBuf::from("flow.yaml")),
+            script_files: vec![PathBuf::from("scripts/precheck.js")],
+            ..Default::default()
+        };
+        let packager = Packager::new(config).unwrap();
+        let files = packager.scan_directory(dir.path()).unwrap();
+
+        let paths: Vec<_> = files.iter().map(|f| f.relative_path.as_str()).collect();
+        assert_eq!(paths, vec!["app.exe"]);
     }
 
     #[test]
@@ -843,7 +949,9 @@ mod tests {
         let files = packager.scan_directory(dir.path()).unwrap();
         let division = divide_into_blocks(&files, packager.config().block_size).unwrap();
         let blocks = packager.compress_blocks(&files, |_| {}).unwrap();
-        let toc = packager.generate_toc(division.file_entries, &blocks).unwrap();
+        let toc = packager
+            .generate_toc(division.file_entries, &blocks)
+            .unwrap();
 
         assert_eq!(toc.header.file_count, 1);
         assert_eq!(toc.header.block_count, 1);
@@ -857,7 +965,7 @@ mod tests {
             ..Default::default()
         };
         let packager = Packager::new(config).unwrap();
-        let metadata = packager.generate_metadata(None).unwrap();
+        let metadata = packager.generate_metadata(None, None, Vec::new()).unwrap();
 
         assert_eq!(metadata.app_name, "TestApp");
         assert_eq!(metadata.version, "1.0.0");
@@ -872,7 +980,9 @@ mod tests {
             ..Default::default()
         };
         let packager = Packager::new(config).unwrap();
-        let metadata = packager.generate_metadata(Some(0xDEADBEEF)).unwrap();
+        let metadata = packager
+            .generate_metadata(Some(0xDEADBEEF), None, Vec::new())
+            .unwrap();
 
         assert_eq!(metadata.app_name, "TestApp");
         assert_eq!(metadata.ui_resources_checksum, Some(0xDEADBEEF));
@@ -1157,7 +1267,7 @@ mod property_tests {
 
             for (b1, b2) in blocks1.iter().zip(blocks2.iter()) {
                 prop_assert_eq!(b1.id, b2.id, "Block IDs should match");
-                
+
                 // File order within blocks should match
                 let files1: Vec<&str> = b1.files.iter().map(|(p, _)| p.as_str()).collect();
                 let files2: Vec<&str> = b2.files.iter().map(|(p, _)| p.as_str()).collect();

@@ -56,6 +56,12 @@ pub struct PackagerConfig {
     /// Path to UI resources directory
     #[serde(default)]
     pub ui_resources_dir: Option<PathBuf>,
+    /// Optional install flow YAML file to embed into package metadata.
+    #[serde(default)]
+    pub flow_file: Option<PathBuf>,
+    /// Optional script files to embed for flow `script` steps.
+    #[serde(default)]
+    pub script_files: Vec<PathBuf>,
     /// Number of threads for parallel operations (default: CPU count)
     #[serde(default)]
     pub thread_count: Option<usize>,
@@ -89,6 +95,8 @@ impl Default for PackagerConfig {
             min_windows_version: None,
             process_name: None,
             ui_resources_dir: None,
+            flow_file: None,
+            script_files: Vec::new(),
             thread_count: None,
         }
     }
@@ -154,7 +162,6 @@ impl Default for LocalizationConfig {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,15 +208,17 @@ mod tests {
             }),
             process_name: Some("testapp.exe".to_string()),
             ui_resources_dir: Some(PathBuf::from("ui")),
+            flow_file: Some(PathBuf::from("flow.yaml")),
+            script_files: vec![PathBuf::from("scripts/precheck.js")],
             thread_count: Some(4),
         };
 
         // Serialize to JSON
         let json = serde_json::to_string(&config).unwrap();
-        
+
         // Deserialize from JSON
         let deserialized: PackagerConfig = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(config, deserialized);
     }
 
@@ -223,10 +232,10 @@ mod tests {
 
         // Serialize to MessagePack
         let msgpack = rmp_serde::to_vec(&config).unwrap();
-        
+
         // Deserialize from MessagePack
         let deserialized: PackagerConfig = rmp_serde::from_slice(&msgpack).unwrap();
-        
+
         assert_eq!(config, deserialized);
     }
 
@@ -239,7 +248,7 @@ mod tests {
 
         let json = serde_json::to_string(&target).unwrap();
         let deserialized: FolderTarget = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(target, deserialized);
     }
 
@@ -270,15 +279,13 @@ mod property_tests {
 
     /// Strategy for generating valid version strings
     fn version_strategy() -> impl Strategy<Value = String> {
-        (1u32..100, 0u32..100, 0u32..1000).prop_map(|(major, minor, patch)| {
-            format!("{}.{}.{}", major, minor, patch)
-        })
+        (1u32..100, 0u32..100, 0u32..1000)
+            .prop_map(|(major, minor, patch)| format!("{}.{}.{}", major, minor, patch))
     }
 
     /// Strategy for generating valid directory paths
     fn dir_path_strategy() -> impl Strategy<Value = String> {
-        prop::collection::vec("[a-zA-Z0-9_-]{1,10}", 1..4)
-            .prop_map(|parts| parts.join("\\"))
+        prop::collection::vec("[a-zA-Z0-9_-]{1,10}", 1..4).prop_map(|parts| parts.join("\\"))
     }
 
     /// Strategy for generating optional strings
@@ -331,23 +338,27 @@ mod property_tests {
             "[a-zA-Z0-9_ ]{1,30}",
             registry_value_type_strategy(),
         )
-            .prop_map(|(path, key, value, value_type)| crate::format::RegistryEntry {
-                path,
-                key,
-                value,
-                value_type,
-            })
+            .prop_map(
+                |(path, key, value, value_type)| crate::format::RegistryEntry {
+                    path,
+                    key,
+                    value,
+                    value_type,
+                },
+            )
     }
 
     /// Strategy for generating Windows versions
     fn windows_version_strategy() -> impl Strategy<Value = Option<WindowsVersion>> {
-        prop::option::of((6u16..11, 0u16..10, 10000u32..30000).prop_map(
-            |(major, minor, build)| WindowsVersion {
-                major,
-                minor,
-                build,
-            },
-        ))
+        prop::option::of(
+            (6u16..11, 0u16..10, 10000u32..30000).prop_map(|(major, minor, build)| {
+                WindowsVersion {
+                    major,
+                    minor,
+                    build,
+                }
+            }),
+        )
     }
 
     /// Strategy for generating complete PackagerConfig
@@ -362,61 +373,77 @@ mod property_tests {
             optional_string_strategy(),
             optional_string_strategy(),
         );
-        
+
         // Second group: compression settings (3 elements)
         let compression_settings = (
             compression_algorithm_strategy(),
             compression_level_strategy(),
             block_size_strategy(),
         );
-        
+
         // Third group: collections (2 elements)
         let collections = (
             prop::collection::vec(folder_target_strategy(), 0..3),
             prop::collection::vec(registry_entry_strategy(), 0..3),
         );
-        
+
         // Fourth group: boolean flags (3 elements)
         let bool_flags = (any::<bool>(), any::<bool>(), any::<bool>());
-        
+
         // Fifth group: optional fields (3 elements)
         let optional_fields = (
             windows_version_strategy(),
             optional_string_strategy(),
             prop::option::of(1usize..16),
         );
-        
+
         // Combine all groups
-        (basic_info, compression_settings, collections, bool_flags, optional_fields).prop_map(
-            |(
-                (application_name, version, default_install_dir, vendor, license_text, icon_path),
-                (compression_algorithm, compression_level, block_size),
-                (folder_targets, registry_entries),
-                (require_admin, auto_startup, desktop_icons),
-                (min_windows_version, process_name, thread_count),
-            )| {
-                PackagerConfig {
-                    application_name,
-                    version,
-                    default_install_dir,
-                    vendor,
-                    license_text,
-                    icon_path,
-                    compression_algorithm,
-                    compression_level,
-                    block_size,
-                    folder_targets,
-                    registry_entries,
-                    require_admin,
-                    auto_startup,
-                    desktop_icons,
-                    min_windows_version,
-                    process_name,
-                    ui_resources_dir: None, // PathBuf doesn't implement Arbitrary
-                    thread_count,
-                }
-            },
+        (
+            basic_info,
+            compression_settings,
+            collections,
+            bool_flags,
+            optional_fields,
         )
+            .prop_map(
+                |(
+                    (
+                        application_name,
+                        version,
+                        default_install_dir,
+                        vendor,
+                        license_text,
+                        icon_path,
+                    ),
+                    (compression_algorithm, compression_level, block_size),
+                    (folder_targets, registry_entries),
+                    (require_admin, auto_startup, desktop_icons),
+                    (min_windows_version, process_name, thread_count),
+                )| {
+                    PackagerConfig {
+                        application_name,
+                        version,
+                        default_install_dir,
+                        vendor,
+                        license_text,
+                        icon_path,
+                        compression_algorithm,
+                        compression_level,
+                        block_size,
+                        folder_targets,
+                        registry_entries,
+                        require_admin,
+                        auto_startup,
+                        desktop_icons,
+                        min_windows_version,
+                        process_name,
+                        ui_resources_dir: None, // PathBuf doesn't implement Arbitrary
+                        flow_file: None,
+                        script_files: Vec::new(),
+                        thread_count,
+                    }
+                },
+            )
     }
 
     proptest! {
@@ -432,11 +459,11 @@ mod property_tests {
             // Serialize to JSON
             let json = serde_json::to_string(&config)
                 .expect("Failed to serialize config to JSON");
-            
+
             // Deserialize from JSON
             let deserialized: PackagerConfig = serde_json::from_str(&json)
                 .expect("Failed to deserialize config from JSON");
-            
+
             // Property: Deserialized config should equal original
             prop_assert_eq!(
                 config,
@@ -455,11 +482,11 @@ mod property_tests {
             // Serialize to MessagePack
             let msgpack = rmp_serde::to_vec(&config)
                 .expect("Failed to serialize config to MessagePack");
-            
+
             // Deserialize from MessagePack
             let deserialized: PackagerConfig = rmp_serde::from_slice(&msgpack)
                 .expect("Failed to deserialize config from MessagePack");
-            
+
             // Property: Deserialized config should equal original
             prop_assert_eq!(
                 config,
@@ -478,11 +505,11 @@ mod property_tests {
             // JSON round-trip
             let json = serde_json::to_string(&config).unwrap();
             let from_json: PackagerConfig = serde_json::from_str(&json).unwrap();
-            
+
             // MessagePack round-trip
             let msgpack = rmp_serde::to_vec(&config).unwrap();
             let from_msgpack: PackagerConfig = rmp_serde::from_slice(&msgpack).unwrap();
-            
+
             // Property: Both should produce the same result
             prop_assert_eq!(
                 from_json,
@@ -500,7 +527,7 @@ mod property_tests {
             // JSON round-trip
             let json = serde_json::to_string(&target).unwrap();
             let from_json: FolderTarget = serde_json::from_str(&json).unwrap();
-            
+
             prop_assert_eq!(target, from_json, "FolderTarget JSON round-trip should preserve all fields");
         }
 
@@ -513,7 +540,7 @@ mod property_tests {
             // JSON round-trip
             let json = serde_json::to_string(&entry).unwrap();
             let from_json: crate::format::RegistryEntry = serde_json::from_str(&json).unwrap();
-            
+
             prop_assert_eq!(entry, from_json, "RegistryEntry JSON round-trip should preserve all fields");
         }
 
@@ -530,11 +557,11 @@ mod property_tests {
                 fallback_locale,
                 supported_locales,
             };
-            
+
             // JSON round-trip
             let json = serde_json::to_string(&config).unwrap();
             let from_json: LocalizationConfig = serde_json::from_str(&json).unwrap();
-            
+
             prop_assert_eq!(config, from_json, "LocalizationConfig JSON round-trip should preserve all fields");
         }
     }

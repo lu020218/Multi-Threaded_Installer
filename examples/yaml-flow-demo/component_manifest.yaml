@@ -1,0 +1,21 @@
+version: 1
+channel: stable
+public_key_id: "main-release-key-2026"
+
+components:
+  - id: "extra-tools"
+    display_name: "Extra Tools"
+    version: "2.1.0"
+    required: false
+    package:
+      url: "https://downloads.example.com/components/extra-tools-2.1.0.zip"
+      size: 24567890
+      sha256: "8a2f00000000000000000000000000000000000000000000000000000000f1c9"
+      signature: "base64-signature"
+    install:
+      kind: "archive"
+      target_subdir: "components/extra-tools"
+      entrypoint: "install.ps1"
+    rollback:
+      remove_paths:
+        - "components/extra-tools"

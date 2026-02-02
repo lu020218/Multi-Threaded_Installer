@@ -74,11 +74,13 @@
 pub mod error;
 pub mod format;
 pub mod config;
-pub mod progress;
 pub mod logging;
+pub mod progress;
+pub mod flow;
 
 pub use error::{InstallerError, Result};
+pub use flow::*;
 pub use format::*;
 pub use config::*;
-pub use progress::*;
 pub use logging::*;
+pub use progress::*;

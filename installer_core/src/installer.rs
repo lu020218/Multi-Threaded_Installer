@@ -15,17 +15,29 @@
 //! - 8.5, 8.6, 8.7: Rollback on failure
 //! - 11.1, 11.2: Create uninstaller
 
+use crate::components::{
+    download_component_to_cache, find_component, load_component_manifest, verify_component_sha256,
+    verify_component_signature, ComponentDownloadPolicy, ComponentManifest,
+    ComponentSignaturePolicy,
+};
 use crate::compression::{decompress, verify_crc32};
 use crate::filesystem::{
     check_disk_space, create_dir_all, delete_file, set_file_permissions_public, write_file,
 };
+use crate::flow_executor::{FlowContext, FlowExecutor, FlowRuntime};
 use crate::package::{footer_size, read_footer, read_header, read_metadata, read_toc, Toc};
 use crate::platform::{create_platform, Platform, UninstallInfo};
 use crate::ui_resources::UIResources;
-use installer_shared::{InstallOptions, InstallerError, PackageMetadata, Phase, ProgressEvent, Result};
+use installer_shared::{
+    FlowDefinition, FlowStep, InstallFlow, InstallOptions, InstallerError, OnFailPolicy,
+    PackageMetadata, Phase, ProgressEvent, Result,
+};
+use serde_json::{json, Value};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
@@ -33,7 +45,7 @@ use tracing::{debug, error, info, warn};
 /// Supports %VAR% syntax on Windows.
 fn expand_env_vars_in_path(path: &str) -> String {
     let mut result = path.to_string();
-    
+
     // Common Windows environment variables to expand
     let env_vars = [
         ("ProgramFiles", "PROGRAMFILES"),
@@ -46,7 +58,7 @@ fn expand_env_vars_in_path(path: &str) -> String {
         ("Temp", "TEMP"),
         ("Tmp", "TMP"),
     ];
-    
+
     for (name, env_name) in env_vars {
         // Try both %Name% and %NAME% patterns
         let patterns = [
@@ -54,7 +66,7 @@ fn expand_env_vars_in_path(path: &str) -> String {
             format!("%{}%", name.to_uppercase()),
             format!("%{}%", env_name),
         ];
-        
+
         for pattern in patterns {
             if result.contains(&pattern) {
                 if let Ok(value) = std::env::var(env_name) {
@@ -65,7 +77,7 @@ fn expand_env_vars_in_path(path: &str) -> String {
             }
         }
     }
-    
+
     result
 }
 
@@ -158,9 +170,313 @@ pub struct ParsedPackage {
 pub struct Installer {
     package_path: PathBuf,
     platform: Box<dyn Platform>,
+    script_policy: ScriptPolicy,
+    component_download_policy: ComponentDownloadPolicy,
+    component_signature_policy: ComponentSignaturePolicy,
+}
+
+/// Script execution safety policy.
+#[derive(Debug, Clone, Default)]
+pub struct ScriptPolicy {
+    /// Whether script nodes are enabled.
+    pub enabled: bool,
+    /// Canonicalized roots allowed for script loading.
+    pub allow_roots: Vec<PathBuf>,
+}
+
+impl ScriptPolicy {
+    /// Build policy from environment variables.
+    ///
+    /// - `MTI_ENABLE_SCRIPTS=1|true|yes` enables script execution.
+    /// - `MTI_SCRIPT_ALLOWLIST` is a semicolon-separated root list.
+    pub fn from_env() -> Self {
+        let enabled = std::env::var("MTI_ENABLE_SCRIPTS")
+            .ok()
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+
+        let allow_roots = std::env::var("MTI_SCRIPT_ALLOWLIST")
+            .ok()
+            .map(|v| {
+                v.split(';')
+                    .filter_map(|entry| {
+                        let trimmed = entry.trim();
+                        if trimmed.is_empty() {
+                            return None;
+                        }
+                        let path = PathBuf::from(trimmed);
+                        canonicalize_fallible(&path)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Self {
+            enabled,
+            allow_roots,
+        }
+    }
+
+    /// Create an enabled policy with explicit allow roots.
+    pub fn enabled_with_roots(roots: Vec<PathBuf>) -> Self {
+        let allow_roots = roots
+            .into_iter()
+            .filter_map(|p| canonicalize_fallible(&p))
+            .collect();
+        Self {
+            enabled: true,
+            allow_roots,
+        }
+    }
+
+    fn ensure_allowed(&self, script_path: &Path) -> Result<()> {
+        if !self.enabled {
+            return Err(InstallerError::PermissionDenied(
+                "Script execution is disabled. Set MTI_ENABLE_SCRIPTS=1 and allowlist roots."
+                    .to_string(),
+            ));
+        }
+        if self.allow_roots.is_empty() {
+            return Err(InstallerError::PermissionDenied(
+                "Script allowlist is empty. Set MTI_SCRIPT_ALLOWLIST.".to_string(),
+            ));
+        }
+
+        let canonical = canonicalize_fallible(script_path).ok_or_else(|| {
+            InstallerError::Config(format!(
+                "Script path '{}' does not exist or cannot be canonicalized",
+                script_path.display()
+            ))
+        })?;
+
+        if self
+            .allow_roots
+            .iter()
+            .any(|root| canonical.starts_with(root))
+        {
+            Ok(())
+        } else {
+            Err(InstallerError::PermissionDenied(format!(
+                "Script path '{}' is not under allowlisted roots",
+                canonical.display()
+            )))
+        }
+    }
+}
+
+fn canonicalize_fallible(path: &Path) -> Option<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    absolute.canonicalize().ok()
+}
+
+struct InstallFlowRuntime<'a, F>
+where
+    F: Fn(ProgressEvent) + Send + Sync,
+{
+    installer: &'a Installer,
+    parsed: &'a ParsedPackage,
+    options: &'a InstallOptions,
+    progress: &'a F,
+    installed_files: Vec<PathBuf>,
+    component_state: ComponentRuntimeState,
+}
+
+#[derive(Debug, Default)]
+struct ComponentRuntimeState {
+    manifest: Option<ComponentManifest>,
+    downloaded_files: std::collections::HashMap<String, PathBuf>,
+    cache_root: Option<PathBuf>,
+    install_root: PathBuf,
+    installed_components: Vec<InstalledComponentRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct InstalledComponentRecord {
+    component_id: String,
+    created_paths: Vec<PathBuf>,
+}
+
+impl<'a, F> InstallFlowRuntime<'a, F>
+where
+    F: Fn(ProgressEvent) + Send + Sync,
+{
+    fn new(
+        installer: &'a Installer,
+        parsed: &'a ParsedPackage,
+        options: &'a InstallOptions,
+        progress: &'a F,
+    ) -> Self {
+        Self {
+            installer,
+            parsed,
+            options,
+            progress,
+            installed_files: Vec::new(),
+            component_state: ComponentRuntimeState {
+                install_root: options.install_dir.clone(),
+                ..Default::default()
+            },
+        }
+    }
+}
+
+impl<F> FlowRuntime for InstallFlowRuntime<'_, F>
+where
+    F: Fn(ProgressEvent) + Send + Sync,
+{
+    fn execute_builtin(&mut self, step: &FlowStep, _context: &mut FlowContext) -> Result<()> {
+        match step.step_type.as_str() {
+            "check_disk" => self
+                .installer
+                .check_disk_space_for_parsed(self.parsed, &self.options.install_dir),
+            "extract_package" => self.installer.extract_payload(
+                self.parsed,
+                self.options,
+                self.progress,
+                &mut self.installed_files,
+            ),
+            "create_shortcut" => self
+                .installer
+                .create_shortcut_if_needed(self.parsed, self.options),
+            "write_registry" => self
+                .installer
+                .configure_registry_if_needed(self.parsed, self.options),
+            "configure_autostart" => self
+                .installer
+                .configure_autostart_if_needed(self.parsed, self.options),
+            "load_component_manifest" => self
+                .installer
+                .load_component_manifest_step(step, &mut self.component_state),
+            "download_component" => self
+                .installer
+                .download_component_step(step, &mut self.component_state),
+            "verify_component" => self
+                .installer
+                .verify_component_step(step, &mut self.component_state),
+            "install_component" => self
+                .installer
+                .install_component_step(step, &mut self.component_state),
+            "rollback_component" => self
+                .installer
+                .rollback_component_step(&mut self.component_state),
+            "rollback_files" => self.installer.rollback(&self.installed_files),
+            other => Err(InstallerError::Config(format!(
+                "Unsupported built-in flow step type '{}'",
+                other
+            ))),
+        }
+    }
+
+    fn execute_script(&mut self, step: &FlowStep, context: &mut FlowContext) -> Result<()> {
+        self.installer.execute_script_step(step, context)
+    }
 }
 
 impl Installer {
+    fn build_default_install_flow_definition() -> FlowDefinition {
+        FlowDefinition {
+            version: 1,
+            vars: std::collections::HashMap::new(),
+            ui_flow: None,
+            install_flow: InstallFlow {
+                steps: vec![
+                    FlowStep {
+                        id: "check_disk".to_string(),
+                        step_type: "check_disk".to_string(),
+                        params: json!({}),
+                        when: None,
+                        on_fail: Some(OnFailPolicy::Abort),
+                        engine: None,
+                    },
+                    FlowStep {
+                        id: "extract".to_string(),
+                        step_type: "extract_package".to_string(),
+                        params: json!({}),
+                        when: None,
+                        on_fail: Some(OnFailPolicy::Rollback),
+                        engine: None,
+                    },
+                    FlowStep {
+                        id: "shortcut".to_string(),
+                        step_type: "create_shortcut".to_string(),
+                        params: json!({}),
+                        when: Some(
+                            "${options.create_shortcuts == true && metadata.desktop_icons == true}"
+                                .to_string(),
+                        ),
+                        on_fail: Some(OnFailPolicy::Continue),
+                        engine: None,
+                    },
+                    FlowStep {
+                        id: "registry".to_string(),
+                        step_type: "write_registry".to_string(),
+                        params: json!({}),
+                        when: Some("${options.configure_registry == true}".to_string()),
+                        on_fail: Some(OnFailPolicy::Continue),
+                        engine: None,
+                    },
+                    FlowStep {
+                        id: "autostart".to_string(),
+                        step_type: "configure_autostart".to_string(),
+                        params: json!({}),
+                        when: Some(
+                            "${options.auto_startup == true && metadata.auto_startup == true}"
+                                .to_string(),
+                        ),
+                        on_fail: Some(OnFailPolicy::Continue),
+                        engine: None,
+                    },
+                ],
+                rollback: vec![FlowStep {
+                    id: "rollback_files".to_string(),
+                    step_type: "rollback_files".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Continue),
+                    engine: None,
+                }],
+            },
+        }
+    }
+
+    fn build_flow_context(
+        &self,
+        flow: &FlowDefinition,
+        parsed: &ParsedPackage,
+        options: &InstallOptions,
+        embedded_scripts_root: Option<&Path>,
+    ) -> FlowContext {
+        let mut context = FlowContext::from_definition(flow);
+        context.metadata = json!({
+            "app_name": parsed.metadata.app_name,
+            "version": parsed.metadata.version,
+            "desktop_icons": parsed.metadata.desktop_icons,
+            "auto_startup": parsed.metadata.auto_startup,
+        });
+        context.options = json!({
+            "install_dir": options.install_dir.to_string_lossy().to_string(),
+            "create_shortcuts": options.create_shortcuts,
+            "configure_registry": options.configure_registry,
+            "auto_startup": options.auto_startup,
+            "silent": options.silent,
+        });
+        context.set_var(
+            "InstallDir",
+            Value::String(options.install_dir.to_string_lossy().to_string()),
+        );
+        if let Some(root) = embedded_scripts_root {
+            context.set_var(
+                "__embedded_scripts_root",
+                Value::String(root.to_string_lossy().to_string()),
+            );
+        }
+        context
+    }
+
     /// Create a new installer for the given package.
     pub fn new(package_path: PathBuf) -> Result<Self> {
         if !package_path.exists() {
@@ -173,7 +489,28 @@ impl Installer {
         Ok(Self {
             package_path,
             platform: create_platform(),
+            script_policy: ScriptPolicy::from_env(),
+            component_download_policy: ComponentDownloadPolicy::from_env(),
+            component_signature_policy: ComponentSignaturePolicy::from_env(),
         })
+    }
+
+    /// Override script execution policy for this installer instance.
+    pub fn with_script_policy(mut self, policy: ScriptPolicy) -> Self {
+        self.script_policy = policy;
+        self
+    }
+
+    /// Override component download policy for this installer instance.
+    pub fn with_component_download_policy(mut self, policy: ComponentDownloadPolicy) -> Self {
+        self.component_download_policy = policy;
+        self
+    }
+
+    /// Override component signature verification policy for this installer instance.
+    pub fn with_component_signature_policy(mut self, policy: ComponentSignaturePolicy) -> Self {
+        self.component_signature_policy = policy;
+        self
     }
 
     /// Parse the package and return its contents.
@@ -198,7 +535,10 @@ impl Installer {
         // Read metadata
         reader.seek(SeekFrom::Start(header.metadata_offset))?;
         let metadata = read_metadata(&mut reader, header.metadata_size as usize)?;
-        debug!("Metadata: app={}, version={}", metadata.app_name, metadata.version);
+        debug!(
+            "Metadata: app={}, version={}",
+            metadata.app_name, metadata.version
+        );
 
         // Verify package CRC32 if present
         let footer = read_footer(&mut reader)?;
@@ -219,9 +559,16 @@ impl Installer {
     /// Check if there is sufficient disk space.
     pub fn check_disk_space(&self, install_dir: &Path) -> Result<()> {
         let parsed = self.parse_package()?;
+        self.check_disk_space_for_parsed(&parsed, install_dir)
+    }
+
+    fn check_disk_space_for_parsed(
+        &self,
+        parsed: &ParsedPackage,
+        install_dir: &Path,
+    ) -> Result<()> {
         let required: u64 = parsed.toc.files.iter().map(|f| f.original_size).sum();
         let buffer = 100 * 1024 * 1024; // 100MB buffer
-
         check_disk_space(install_dir, required, buffer)
     }
 
@@ -309,11 +656,8 @@ impl Installer {
         })?;
 
         // Create UIResources and verify checksum
-        let ui_resources = UIResources::from_archive(
-            archive_data,
-            expected_checksum,
-            parsed.ui_resources_size,
-        )?;
+        let ui_resources =
+            UIResources::from_archive(archive_data, expected_checksum, parsed.ui_resources_size)?;
 
         // Extract to temp directory
         ui_resources.extract_to(temp_dir)?;
@@ -332,50 +676,29 @@ impl Installer {
         Ok(parsed.has_ui_resources)
     }
 
-    /// Install the package.
-    ///
-    /// Uses rayon for parallel decompression of blocks while maintaining
-    /// correct file order during writing.
-    ///
-    /// # Arguments
-    /// * `options` - Installation options
-    /// * `progress` - Progress callback function
-    ///
-    /// # Returns
-    /// * `Ok(InstallStats)` on success
-    /// * `Err(InstallerError)` on failure (triggers rollback)
-    ///
-    /// # Requirements
-    /// - 3.9: Parallel decompression using thread pool
-    /// - 3.10: Report success or failure
-    /// - 7.1: Emit progress events
-    pub fn install<F>(&self, options: InstallOptions, progress: F) -> Result<InstallStats>
+    fn extract_payload<F>(
+        &self,
+        parsed: &ParsedPackage,
+        options: &InstallOptions,
+        progress: &F,
+        installed_files: &mut Vec<PathBuf>,
+    ) -> Result<()>
     where
         F: Fn(ProgressEvent) + Send + Sync,
     {
-        let start_time = Instant::now();
-        info!("Starting installation to {:?}", options.install_dir);
-
-        // Parse package
-        let parsed = self.parse_package()?;
-
-        // Check disk space
-        self.check_disk_space(&options.install_dir)?;
-
-        // Create install directory
         create_dir_all(&options.install_dir)?;
 
-        // Read all compressed block data first
         let file = File::open(&self.package_path)?;
         let mut reader = BufReader::new(file);
-
         let total_blocks = parsed.toc.blocks.len() as u64;
         let mut blocks_processed = 0u64;
-        let mut installed_files: Vec<PathBuf> = Vec::new();
 
-        // Sequential file writing to maintain correct order (streaming decompression)
-        progress(ProgressEvent::new(Phase::Writing, 0, parsed.toc.files.len() as u64));
-        
+        progress(ProgressEvent::new(
+            Phase::Writing,
+            0,
+            parsed.toc.files.len() as u64,
+        ));
+
         let mut files_written = 0u64;
         let mut current_file_index = 0usize;
         let mut current_file: Option<(std::fs::File, PathBuf, u32, crc32fast::Hasher, u64)> = None;
@@ -431,7 +754,6 @@ impl Installer {
                 let remaining_usize = *remaining as usize;
 
                 if remaining_usize == 0 {
-                    // Empty file: finalize immediately
                     let (mut output_file, path, mode, hasher, _remaining) =
                         current_file.take().unwrap();
                     output_file.flush()?;
@@ -496,7 +818,6 @@ impl Installer {
             }
         }
 
-        // Finalize any remaining empty file (if the last file had size 0)
         while current_file.is_none() && current_file_index < parsed.toc.files.len() {
             let file_entry = &parsed.toc.files[current_file_index];
             if file_entry.original_size != 0 {
@@ -529,12 +850,8 @@ impl Installer {
             installed_files.push(file_path);
             files_written += 1;
             progress(
-                ProgressEvent::new(
-                    Phase::Writing,
-                    files_written,
-                    parsed.toc.files.len() as u64,
-                )
-                .with_file(&file_entry.path),
+                ProgressEvent::new(Phase::Writing, files_written, parsed.toc.files.len() as u64)
+                    .with_file(&file_entry.path),
             );
             current_file_index += 1;
         }
@@ -545,65 +862,532 @@ impl Installer {
             ));
         }
 
-        // Post-installation tasks
-        progress(ProgressEvent::new(Phase::Completing, 0, 1));
+        Ok(())
+    }
 
-        if options.create_shortcuts && parsed.metadata.desktop_icons {
-            // Find the main executable (first .exe file or use app_name.exe)
-            let exe_name = parsed.toc.files.iter()
-                .find(|f| f.path.ends_with(".exe"))
-                .map(|f| f.path.clone())
-                .unwrap_or_else(|| format!("{}.exe", parsed.metadata.app_name));
-            
-            let icon_path = parsed.metadata.icon_path.as_ref()
-                .map(|p| options.install_dir.join(p));
-            
-            if let Err(e) = self.platform.create_shortcut(
+    fn create_shortcut_if_needed(
+        &self,
+        parsed: &ParsedPackage,
+        options: &InstallOptions,
+    ) -> Result<()> {
+        if !(options.create_shortcuts && parsed.metadata.desktop_icons) {
+            return Ok(());
+        }
+
+        let exe_name = parsed
+            .toc
+            .files
+            .iter()
+            .find(|f| f.path.ends_with(".exe"))
+            .map(|f| f.path.clone())
+            .unwrap_or_else(|| format!("{}.exe", parsed.metadata.app_name));
+
+        let icon_path = parsed
+            .metadata
+            .icon_path
+            .as_ref()
+            .map(|p| options.install_dir.join(p));
+
+        self.platform
+            .create_shortcut(
                 &parsed.metadata.app_name,
                 &options.install_dir.join(&exe_name),
                 icon_path.as_deref(),
-            ) {
-                warn!("Failed to create shortcut: {}", e);
-            }
+            )
+            .map_err(|e| InstallerError::Platform(e.to_string()))
+    }
+
+    fn configure_registry_if_needed(
+        &self,
+        parsed: &ParsedPackage,
+        options: &InstallOptions,
+    ) -> Result<()> {
+        if !options.configure_registry {
+            return Ok(());
         }
 
-        if options.configure_registry {
-            // Register uninstaller
-            if let Err(e) = self.platform.register_uninstaller(&UninstallInfo {
+        self.platform
+            .register_uninstaller(&UninstallInfo {
                 app_name: parsed.metadata.app_name.clone(),
                 version: parsed.metadata.version.clone(),
                 install_location: options.install_dir.clone(),
                 uninstall_exe: options.install_dir.join("uninstall.exe"),
                 publisher: parsed.metadata.vendor.clone(),
-                estimated_size_kb: parsed.toc.files.iter().map(|f| f.original_size).sum::<u64>()
+                estimated_size_kb: parsed
+                    .toc
+                    .files
+                    .iter()
+                    .map(|f| f.original_size)
+                    .sum::<u64>()
                     / 1024,
-            }) {
-                warn!("Failed to register uninstaller: {}", e);
-            }
+            })
+            .map_err(|e| InstallerError::Platform(e.to_string()))?;
 
-            // Write custom registry entries
-            for entry in &parsed.metadata.registry_entries {
-                if let Err(e) = self.platform.write_registry(entry) {
-                    warn!("Failed to write registry entry {}: {}", entry.key, e);
+        for entry in &parsed.metadata.registry_entries {
+            self.platform
+                .write_registry(entry)
+                .map_err(|e| InstallerError::Platform(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    fn configure_autostart_if_needed(
+        &self,
+        parsed: &ParsedPackage,
+        options: &InstallOptions,
+    ) -> Result<()> {
+        if !(options.auto_startup && parsed.metadata.auto_startup) {
+            return Ok(());
+        }
+
+        let exe_name = parsed
+            .toc
+            .files
+            .iter()
+            .find(|f| f.path.ends_with(".exe"))
+            .map(|f| f.path.clone())
+            .unwrap_or_else(|| format!("{}.exe", parsed.metadata.app_name));
+
+        self.platform
+            .configure_auto_startup(
+                &parsed.metadata.app_name,
+                &options.install_dir.join(&exe_name),
+                true,
+            )
+            .map_err(|e| InstallerError::Platform(e.to_string()))
+    }
+
+    fn component_cache_root(state: &mut ComponentRuntimeState) -> Result<PathBuf> {
+        if let Some(root) = &state.cache_root {
+            return Ok(root.clone());
+        }
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "mti_component_cache_{}_{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        create_dir_all(&root)?;
+        state.cache_root = Some(root.clone());
+        Ok(root)
+    }
+
+    fn load_component_manifest_step(
+        &self,
+        step: &FlowStep,
+        state: &mut ComponentRuntimeState,
+    ) -> Result<()> {
+        let params = step.params_object();
+        let path = params.get("path").and_then(Value::as_str).ok_or_else(|| {
+            InstallerError::Config(format!(
+                "Step '{}' requires params.path for load_component_manifest",
+                step.id
+            ))
+        })?;
+        let manifest = load_component_manifest(Path::new(path))?;
+        state.manifest = Some(manifest);
+        Ok(())
+    }
+
+    fn download_component_step(
+        &self,
+        step: &FlowStep,
+        state: &mut ComponentRuntimeState,
+    ) -> Result<()> {
+        let params = step.params_object();
+        let component_id = params
+            .get("component_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                InstallerError::Config(format!(
+                    "Step '{}' requires params.component_id for download_component",
+                    step.id
+                ))
+            })?;
+        let component = {
+            let manifest = state.manifest.as_ref().ok_or_else(|| {
+                InstallerError::Config(
+                    "download_component requires load_component_manifest first".to_string(),
+                )
+            })?;
+            find_component(manifest, component_id)?.clone()
+        };
+        let cache_root = Self::component_cache_root(state)?;
+        let downloaded =
+            download_component_to_cache(&component, &cache_root, &self.component_download_policy)?;
+        state
+            .downloaded_files
+            .insert(component_id.to_string(), downloaded);
+        Ok(())
+    }
+
+    fn verify_component_step(
+        &self,
+        step: &FlowStep,
+        state: &mut ComponentRuntimeState,
+    ) -> Result<()> {
+        let params = step.params_object();
+        let component_id = params
+            .get("component_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                InstallerError::Config(format!(
+                    "Step '{}' requires params.component_id for verify_component",
+                    step.id
+                ))
+            })?;
+        let manifest = state.manifest.as_ref().ok_or_else(|| {
+            InstallerError::Config(
+                "verify_component requires load_component_manifest first".to_string(),
+            )
+        })?;
+        let component = find_component(manifest, component_id)?;
+        let downloaded = state.downloaded_files.get(component_id).ok_or_else(|| {
+            InstallerError::Config(format!(
+                "verify_component requires download_component first for '{}'",
+                component_id
+            ))
+        })?;
+
+        verify_component_sha256(downloaded, &component.package.sha256)?;
+        verify_component_signature(manifest, component, &self.component_signature_policy)?;
+
+        Ok(())
+    }
+
+    fn install_component_step(
+        &self,
+        step: &FlowStep,
+        state: &mut ComponentRuntimeState,
+    ) -> Result<()> {
+        let params = step.params_object();
+        let component_id = params
+            .get("component_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                InstallerError::Config(format!(
+                    "Step '{}' requires params.component_id for install_component",
+                    step.id
+                ))
+            })?;
+        let manifest = state.manifest.as_ref().ok_or_else(|| {
+            InstallerError::Config(
+                "install_component requires load_component_manifest first".to_string(),
+            )
+        })?;
+        let component = find_component(manifest, component_id)?;
+        let downloaded = state.downloaded_files.get(component_id).ok_or_else(|| {
+            InstallerError::Config(format!(
+                "install_component requires download_component first for '{}'",
+                component_id
+            ))
+        })?;
+
+        let install_spec = component.install.as_ref().ok_or_else(|| {
+            InstallerError::Config(format!(
+                "Component '{}' missing install specification",
+                component_id
+            ))
+        })?;
+        if install_spec.kind != "archive" {
+            return Err(InstallerError::Config(format!(
+                "install_component skeleton currently supports kind='archive' only (got '{}')",
+                install_spec.kind
+            )));
+        }
+
+        let target_subdir = install_spec
+            .target_subdir
+            .as_deref()
+            .map(Self::validate_embedded_script_path)
+            .transpose()?
+            .unwrap_or_else(|| PathBuf::from(format!("components/{}", component_id)));
+        let target_dir = state.install_root.join(target_subdir);
+        create_dir_all(&target_dir)?;
+
+        let file_name = downloaded
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("component.bin");
+        let target_file = target_dir.join(file_name);
+        std::fs::copy(downloaded, &target_file)?;
+
+        state.installed_components.push(InstalledComponentRecord {
+            component_id: component_id.to_string(),
+            created_paths: vec![target_file, target_dir],
+        });
+        Ok(())
+    }
+
+    fn rollback_component_step(&self, state: &mut ComponentRuntimeState) -> Result<()> {
+        for record in state.installed_components.iter().rev() {
+            debug!("Rolling back component '{}'", record.component_id);
+            for path in record.created_paths.iter().rev() {
+                if !path.exists() {
+                    continue;
+                }
+                if path.is_file() {
+                    if let Err(e) = std::fs::remove_file(path) {
+                        return Err(InstallerError::Rollback(format!(
+                            "Failed to remove component file '{}': {}",
+                            path.display(),
+                            e
+                        )));
+                    }
+                } else if path.is_dir() {
+                    if let Err(e) = std::fs::remove_dir_all(path) {
+                        return Err(InstallerError::Rollback(format!(
+                            "Failed to remove component dir '{}': {}",
+                            path.display(),
+                            e
+                        )));
+                    }
+                }
+            }
+        }
+        state.installed_components.clear();
+        Ok(())
+    }
+
+    fn execute_script_step(&self, step: &FlowStep, context: &mut FlowContext) -> Result<()> {
+        let params = step.params_object();
+        let path = params.get("path").and_then(Value::as_str).ok_or_else(|| {
+            InstallerError::Config(format!("Script step '{}' missing params.path", step.id))
+        })?;
+
+        let mut script_path = PathBuf::from(path);
+        let mut is_embedded_script = false;
+        if !script_path.is_absolute() && !script_path.exists() {
+            if let Some(root) = context
+                .vars
+                .get("__embedded_scripts_root")
+                .and_then(Value::as_str)
+            {
+                let candidate = PathBuf::from(root).join(path);
+                if candidate.exists() {
+                    script_path = candidate;
+                    is_embedded_script = true;
                 }
             }
         }
 
-        if options.auto_startup && parsed.metadata.auto_startup {
-            let exe_name = parsed.toc.files.iter()
-                .find(|f| f.path.ends_with(".exe"))
-                .map(|f| f.path.clone())
-                .unwrap_or_else(|| format!("{}.exe", parsed.metadata.app_name));
-            
-            if let Err(e) = self.platform.configure_auto_startup(
-                &parsed.metadata.app_name,
-                &options.install_dir.join(&exe_name),
-                true,
-            ) {
-                warn!("Failed to configure auto-startup: {}", e);
+        // Embedded scripts materialized from package metadata are treated as trusted package assets.
+        // External scripts still require explicit opt-in + allowlist.
+        if !is_embedded_script && !self.script_policy.enabled {
+            return Err(InstallerError::PermissionDenied(
+                "Script execution is disabled. Set MTI_ENABLE_SCRIPTS=1 and allowlist roots."
+                    .to_string(),
+            ));
+        }
+        if !is_embedded_script {
+            self.script_policy.ensure_allowed(&script_path)?;
+        }
+
+        let engine = step.engine.ok_or_else(|| {
+            InstallerError::Config(format!("Script step '{}' missing engine", step.id))
+        })?;
+        match engine {
+            installer_shared::ScriptEngine::Js => {}
+            _ => {
+                return Err(InstallerError::Config(format!(
+                    "Script engine '{:?}' is not implemented yet",
+                    engine
+                )))
             }
         }
 
+        let absolute_script = canonicalize_fallible(&script_path).ok_or_else(|| {
+            InstallerError::Config(format!(
+                "Script path '{}' does not exist",
+                script_path.display()
+            ))
+        })?;
+
+        let args_json = params
+            .get("args")
+            .cloned()
+            .unwrap_or(Value::Null)
+            .to_string();
+        let vars_json = Value::Object(context.vars.clone().into_iter().collect()).to_string();
+        let metadata_json = context.metadata.to_string();
+        let options_json = context.options.to_string();
+
+        let mut command = std::process::Command::new("node");
+        command
+            .arg(&absolute_script)
+            .env("MTI_ARGS_JSON", args_json)
+            .env("MTI_VARS_JSON", vars_json)
+            .env("MTI_METADATA_JSON", metadata_json)
+            .env("MTI_OPTIONS_JSON", options_json);
+
+        #[cfg(windows)]
+        {
+            // Prevent transient console window flashes when launching node.exe from GUI installer.
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let output = command.output().map_err(|e| {
+            InstallerError::Config(format!(
+                "Script step '{}' failed to start Node.js: {}",
+                step.id, e
+            ))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(InstallerError::Config(format!(
+                "Script step '{}' failed (exit {}): {}",
+                step.id,
+                output
+                    .status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                stderr.trim()
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn embedded_flow_from_package(&self, parsed: &ParsedPackage) -> Result<Option<FlowDefinition>> {
+        let Some(yaml) = parsed.metadata.embedded_flow_yaml.as_deref() else {
+            return Ok(None);
+        };
+        let flow = FlowDefinition::from_yaml_str(yaml).map_err(|e| {
+            InstallerError::Config(format!("Failed to parse embedded flow from package: {e}"))
+        })?;
+        Ok(Some(flow))
+    }
+
+    fn validate_embedded_script_path(path: &str) -> Result<PathBuf> {
+        let raw = Path::new(path);
+        if raw.as_os_str().is_empty() || raw.is_absolute() {
+            return Err(InstallerError::Config(format!(
+                "Invalid embedded script path '{}'",
+                path
+            )));
+        }
+
+        let mut sanitized = PathBuf::new();
+        for comp in raw.components() {
+            match comp {
+                Component::Normal(seg) => sanitized.push(seg),
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(InstallerError::Config(format!(
+                        "Embedded script path '{}' contains forbidden segments",
+                        path
+                    )))
+                }
+            }
+        }
+        if sanitized.as_os_str().is_empty() {
+            return Err(InstallerError::Config(format!(
+                "Invalid embedded script path '{}'",
+                path
+            )));
+        }
+        Ok(sanitized)
+    }
+
+    fn materialize_embedded_scripts(&self, parsed: &ParsedPackage) -> Result<Option<PathBuf>> {
+        if parsed.metadata.embedded_scripts.is_empty() {
+            return Ok(None);
+        }
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "mti_embedded_scripts_{}_{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        create_dir_all(&root)?;
+
+        for script in &parsed.metadata.embedded_scripts {
+            let relative = Self::validate_embedded_script_path(&script.path)?;
+            let target = root.join(relative);
+            if let Some(parent) = target.parent() {
+                create_dir_all(parent)?;
+            }
+            std::fs::write(&target, script.content.as_bytes())?;
+        }
+
+        Ok(Some(root))
+    }
+
+    /// Install the package.
+    ///
+    /// Uses rayon for parallel decompression of blocks while maintaining
+    /// correct file order during writing.
+    ///
+    /// # Arguments
+    /// * `options` - Installation options
+    /// * `progress` - Progress callback function
+    ///
+    /// # Returns
+    /// * `Ok(InstallStats)` on success
+    /// * `Err(InstallerError)` on failure (triggers rollback)
+    ///
+    /// # Requirements
+    /// - 3.9: Parallel decompression using thread pool
+    /// - 3.10: Report success or failure
+    /// - 7.1: Emit progress events
+    pub fn install<F>(&self, options: InstallOptions, progress: F) -> Result<InstallStats>
+    where
+        F: Fn(ProgressEvent) + Send + Sync,
+    {
+        let parsed = self.parse_package()?;
+        let flow = self
+            .embedded_flow_from_package(&parsed)?
+            .unwrap_or_else(Self::build_default_install_flow_definition);
+        self.install_with_flow_definition(options, flow, progress)
+    }
+
+    /// Install using a custom flow definition.
+    pub fn install_with_flow_definition<F>(
+        &self,
+        options: InstallOptions,
+        flow: FlowDefinition,
+        progress: F,
+    ) -> Result<InstallStats>
+    where
+        F: Fn(ProgressEvent) + Send + Sync,
+    {
+        let start_time = Instant::now();
+        info!("Starting installation to {:?}", options.install_dir);
+
+        let parsed = self.parse_package()?;
+        let embedded_scripts_root = self.materialize_embedded_scripts(&parsed)?;
+        let mut context =
+            self.build_flow_context(&flow, &parsed, &options, embedded_scripts_root.as_deref());
+        let executor = FlowExecutor::new(flow)?;
+        let mut runtime = InstallFlowRuntime::new(self, &parsed, &options, &progress);
+
+        progress(ProgressEvent::new(Phase::Completing, 0, 1));
+        let execution_result = executor.execute(&mut runtime, &mut context);
+        if let Some(root) = embedded_scripts_root {
+            if let Err(e) = std::fs::remove_dir_all(&root) {
+                warn!(
+                    "Failed to clean embedded scripts temp dir {:?}: {}",
+                    root, e
+                );
+            }
+        }
+        if let Some(cache_root) = runtime.component_state.cache_root.as_ref() {
+            if let Err(e) = std::fs::remove_dir_all(cache_root) {
+                warn!(
+                    "Failed to clean component cache temp dir {:?}: {}",
+                    cache_root, e
+                );
+            }
+        }
+        if let Err(error) = execution_result {
+            error!("Installation flow failed: {}", error);
+            return Err(error);
+        }
         progress(ProgressEvent::new(Phase::Completing, 1, 1));
 
         let total_size: u64 = parsed.toc.files.iter().map(|f| f.original_size).sum();
@@ -611,13 +1395,13 @@ impl Installer {
 
         info!(
             "Installation complete: {} files, {} bytes in {:?}",
-            installed_files.len(),
+            runtime.installed_files.len(),
             total_size,
             elapsed_time
         );
 
         Ok(InstallStats {
-            installed_files: installed_files.len(),
+            installed_files: runtime.installed_files.len(),
             total_size,
             elapsed_time,
         })
@@ -658,7 +1442,12 @@ impl Installer {
         dirs.reverse(); // Process deepest first
 
         for dir in dirs {
-            if dir.exists() && dir.read_dir().map(|mut d| d.next().is_none()).unwrap_or(false) {
+            if dir.exists()
+                && dir
+                    .read_dir()
+                    .map(|mut d| d.next().is_none())
+                    .unwrap_or(false)
+            {
                 if let Err(e) = std::fs::remove_dir(&dir) {
                     warn!("Failed to remove empty directory {:?}: {}", dir, e);
                 } else {
@@ -709,7 +1498,11 @@ impl Installer {
     /// # Arguments
     /// * `installed_files` - List of files that were installed
     /// * `install_dir` - The installation directory
-    pub fn rollback_with_registry(&self, installed_files: &[PathBuf], install_dir: &Path) -> Result<()> {
+    pub fn rollback_with_registry(
+        &self,
+        installed_files: &[PathBuf],
+        install_dir: &Path,
+    ) -> Result<()> {
         // First do the standard rollback
         self.rollback(installed_files)?;
 
@@ -719,7 +1512,7 @@ impl Installer {
                 "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{}",
                 parsed.metadata.app_name
             );
-            
+
             // Try to delete the entire uninstall key
             // Note: This requires admin privileges
             if let Err(e) = self.platform.delete_registry(&uninstall_key_path, "") {
@@ -757,7 +1550,7 @@ impl Installer {
     /// - 10.1-10.7: Write uninstall info to registry
     pub fn create_uninstaller(&self, install_dir: &Path) -> Result<()> {
         info!("Creating uninstaller in {:?}", install_dir);
-        
+
         let parsed = self.parse_package()?;
 
         // 1. Copy the installer executable as uninstall.exe
@@ -778,15 +1571,15 @@ impl Installer {
 
         // 2. Create install.manifest.json with file list
         let manifest_path = install_dir.join("install.manifest.json");
-        
+
         // Collect all installed files with their full paths
-        let installed_files: Vec<String> = parsed.toc.files
-            .iter()
-            .map(|f| f.path.clone())
-            .collect();
+        let installed_files: Vec<String> =
+            parsed.toc.files.iter().map(|f| f.path.clone()).collect();
 
         // Collect directories that were created
-        let mut directories: Vec<String> = parsed.toc.files
+        let mut directories: Vec<String> = parsed
+            .toc
+            .files
             .iter()
             .filter_map(|f| {
                 Path::new(&f.path)
@@ -827,7 +1620,13 @@ impl Installer {
             install_location: install_dir.to_path_buf(),
             uninstall_exe: uninstall_exe_path,
             publisher: parsed.metadata.vendor.clone(),
-            estimated_size_kb: parsed.toc.files.iter().map(|f| f.original_size).sum::<u64>() / 1024,
+            estimated_size_kb: parsed
+                .toc
+                .files
+                .iter()
+                .map(|f| f.original_size)
+                .sum::<u64>()
+                / 1024,
         };
 
         if let Err(e) = self.platform.register_uninstaller(&uninstall_info) {
@@ -848,7 +1647,6 @@ impl Installer {
         self.platform.as_ref()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -898,7 +1696,7 @@ mod tests {
         // First verify we can parse the package
         let installer = Installer::new(output_path.clone()).unwrap();
         let parsed = installer.parse_package().unwrap();
-        
+
         // Verify UI resources info
         assert!(parsed.has_ui_resources);
         assert!(parsed.ui_resources_size > 0);
@@ -967,7 +1765,6 @@ mod tests {
     }
 }
 
-
 // ============================================================================
 // Property-Based Tests
 // ============================================================================
@@ -993,10 +1790,7 @@ mod property_tests {
 
     /// Generate a list of files with content
     fn files_strategy() -> impl Strategy<Value = Vec<(String, Vec<u8>)>> {
-        prop::collection::vec(
-            (filename_strategy(), file_content_strategy()),
-            1..10
-        )
+        prop::collection::vec((filename_strategy(), file_content_strategy()), 1..10)
     }
 
     proptest! {
@@ -1116,7 +1910,7 @@ mod property_tests {
             };
 
             installer.install(options1, |_| {}).expect("Installation 1 failed");
-            
+
             // Need to recreate installer since it consumes the package
             let installer2 = Installer::new(output_dir.path().join("test.pkg"))
                 .expect("Failed to create installer 2");
@@ -1162,10 +1956,7 @@ mod rollback_property_tests {
 
     /// Generate a list of files with content
     fn files_strategy() -> impl Strategy<Value = Vec<(String, Vec<u8>)>> {
-        prop::collection::vec(
-            (filename_strategy(), file_content_strategy()),
-            1..8
-        )
+        prop::collection::vec((filename_strategy(), file_content_strategy()), 1..8)
     }
 
     proptest! {

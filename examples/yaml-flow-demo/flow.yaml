@@ -1,0 +1,24 @@
+version: 1
+
+vars:
+  AppName: "YamlFlowDemo"
+
+install_flow:
+  steps:
+    - id: precheck_script
+      type: script
+      engine: js
+      params:
+        path: "scripts/precheck.js"
+        args:
+          minimum_mb: 64
+      on_fail: abort
+
+    - id: extract
+      type: extract_package
+      on_fail: rollback
+
+  rollback:
+    - id: rollback_files
+      type: rollback_files
+      on_fail: continue

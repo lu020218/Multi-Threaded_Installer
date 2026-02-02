@@ -1,0 +1,42 @@
+version: 1
+
+install_flow:
+  steps:
+    - id: extract
+      type: extract_package
+      on_fail: rollback
+
+    - id: load_manifest
+      type: load_component_manifest
+      params:
+        path: "${InstallDir}/resources/component_manifest.yaml"
+      on_fail: abort
+
+    - id: download_extra_tools
+      type: download_component
+      when: "${options.components.extra-tools == true}"
+      params:
+        component_id: "extra-tools"
+      on_fail: rollback
+
+    - id: verify_extra_tools
+      type: verify_component
+      when: "${options.components.extra-tools == true}"
+      params:
+        component_id: "extra-tools"
+      on_fail: rollback
+
+    - id: install_extra_tools
+      type: install_component
+      when: "${options.components.extra-tools == true}"
+      params:
+        component_id: "extra-tools"
+      on_fail: rollback
+
+  rollback:
+    - id: rollback_components
+      type: rollback_component
+      on_fail: continue
+    - id: rollback_files
+      type: rollback_files
+      on_fail: continue

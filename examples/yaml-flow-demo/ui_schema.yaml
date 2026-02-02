@@ -1,0 +1,13 @@
+version: 1
+forms:
+  - id: "components"
+    page: "options"
+    controls:
+      - type: "checkbox_group"
+        id: "optional_components"
+        label: "Optional Components"
+        bind: "options.components"
+        items:
+          - id: "extra-tools"
+            label: "Extra Tools"
+            default: false

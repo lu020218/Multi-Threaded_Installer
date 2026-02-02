@@ -15,6 +15,7 @@ A modern, high-performance installer system written in Rust with Tauri-based GUI
   - [Silent Installation](#silent-installation)
   - [Uninstallation](#uninstallation)
 - [Configuration](#configuration)
+- [Flow DSL Reference](#flow-dsl-reference)
 - [UI Customization](#ui-customization)
 - [Multi-Language Support](#multi-language-support)
 - [Package Format](#package-format)
@@ -159,7 +160,7 @@ The `packager_cli` tool creates installer packages from a directory of files.
 packager --input ./my-app --output ./my-app-installer.mti
 
 # Specify configuration file explicitly
-packager --input ./my-app --output ./installer.mti --config ./packager.json
+packager --input ./my-app --output ./installer.mti --config ./packager.yaml
 
 # Override compression settings
 packager --input ./my-app --output ./installer.mti \
@@ -230,59 +231,51 @@ installer --package ./installer.mti --uninstall
 
 ## Configuration
 
-Create a `packager.json` file in your input directory or specify it with `--config`.
+Create a `packager.yaml` file in your input directory or specify it with `--config`.
 
 ### Basic Configuration
 
-```json
-{
-  "application_name": "MyApp",
-  "version": "1.0.0",
-  "default_install_dir": "%ProgramFiles%\\MyApp",
-  "vendor": "My Company",
-  "compression_algorithm": "Zstd",
-  "compression_level": 3
-}
+```yaml
+application_name: "MyApp"
+version: "1.0.0"
+default_install_dir: "%ProgramFiles%\\MyApp"
+vendor: "My Company"
+compression_algorithm: "Zstd"
+compression_level: 3
 ```
 
 ### Full Configuration Reference
 
-```json
-{
-  "application_name": "MyApp",
-  "version": "1.0.0",
-  "default_install_dir": "%ProgramFiles%\\MyApp",
-  "vendor": "My Company",
-  "license_text": "MIT License...",
-  "icon_path": "app.ico",
-  "compression_algorithm": "Zstd",
-  "compression_level": 3,
-  "block_size": 4194304,
-  "require_admin": true,
-  "auto_startup": false,
-  "desktop_icons": true,
-  "min_windows_version": {
-    "major": 10,
-    "minor": 0,
-    "build": 19041
-  },
-  "process_name": "myapp.exe",
-  "folder_targets": [
-    {
-      "folder_name": "plugins",
-      "target_directory": "%AppData%\\MyApp\\plugins"
-    }
-  ],
-  "registry_entries": [
-    {
-      "path": "HKEY_CURRENT_USER\\Software\\MyApp",
-      "key": "InstallDir",
-      "value": "%InstallDir%",
-      "value_type": "String"
-    }
-  ],
-  "ui_resources_dir": "./ui"
-}
+```yaml
+application_name: "MyApp"
+version: "1.0.0"
+default_install_dir: "%ProgramFiles%\\MyApp"
+vendor: "My Company"
+license_text: "MIT License..."
+icon_path: "app.ico"
+compression_algorithm: "Zstd"
+compression_level: 3
+block_size: 4194304
+require_admin: true
+auto_startup: false
+desktop_icons: true
+min_windows_version:
+  major: 10
+  minor: 0
+  build: 19041
+process_name: "myapp.exe"
+folder_targets:
+  - folder_name: "plugins"
+    target_directory: "%AppData%\\MyApp\\plugins"
+registry_entries:
+  - path: "HKEY_CURRENT_USER\\Software\\MyApp"
+    key: "InstallDir"
+    value: "%InstallDir%"
+    value_type: "String"
+ui_resources_dir: "./ui"
+flow_file: "./flow.yaml"
+script_files:
+  - "./scripts/precheck.js"
 ```
 
 ### Configuration Options
@@ -306,6 +299,17 @@ Create a `packager.json` file in your input directory or specify it with `--conf
 | `folder_targets` | array | `[]` | Custom folder mappings |
 | `registry_entries` | array | `[]` | Custom registry entries |
 | `ui_resources_dir` | string | optional | Custom UI resources directory |
+| `flow_file` | string | optional | Install flow YAML to embed into package metadata |
+| `script_files` | array | `[]` | Script files to embed for flow `script` steps |
+
+## Flow DSL Reference
+
+If you are building custom install flows with YAML DSL, see:
+
+- `docs/flow_dsl_requirements.md` (requirements)
+- `docs/flow_dsl_design.md` (design)
+- `docs/flow_dsl_quick_reference.md` (quick reference + common errors)
+- `docs/component_extension_design.md` (optional component download/install design)
 
 ## UI Customization
 
@@ -331,10 +335,8 @@ ui/
 2. Modify the HTML, CSS, and JavaScript as needed
 3. Specify your custom UI directory in the configuration:
 
-```json
-{
-  "ui_resources_dir": "./my-custom-ui"
-}
+```yaml
+ui_resources_dir: "./my-custom-ui"
 ```
 
 ### Tauri Commands Available

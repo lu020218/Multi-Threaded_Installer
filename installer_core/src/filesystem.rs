@@ -208,19 +208,19 @@ fn matches_glob_pattern(path: &str, pattern: &str) -> bool {
             return path.starts_with(parts[0]) && path.ends_with(parts[1]);
         }
     }
-    
+
     // Exact match - check both full path and filename only
     if path == pattern {
         return true;
     }
-    
+
     // Also check if the filename matches (for patterns like "packager.json")
     if let Some(filename) = path.rsplit('/').next() {
         if filename == pattern {
             return true;
         }
     }
-    
+
     false
 }
 
@@ -292,7 +292,9 @@ pub struct BlockData {
 /// it will span multiple blocks. Small files are grouped together to fill blocks efficiently.
 pub fn divide_into_blocks(files: &[FileInfo], block_size: usize) -> Result<BlockDivisionResult> {
     if block_size == 0 {
-        return Err(InstallerError::Config("Block size cannot be zero".to_string()));
+        return Err(InstallerError::Config(
+            "Block size cannot be zero".to_string(),
+        ));
     }
 
     let mut file_entries = Vec::with_capacity(files.len());
@@ -467,7 +469,12 @@ pub fn write_file_with_mode(path: &Path, data: &[u8], mode: u32) -> Result<()> {
     // Set permissions
     set_file_permissions(path, mode)?;
 
-    debug!("Wrote {} bytes to {:?} with mode {:o}", data.len(), path, mode);
+    debug!(
+        "Wrote {} bytes to {:?} with mode {:o}",
+        data.len(),
+        path,
+        mode
+    );
     Ok(())
 }
 
@@ -845,7 +852,6 @@ mod tests {
         assert!(matches_glob_pattern("a/b/c/file.txt", "**/file.txt"));
     }
 }
-
 
 // ============================================================================
 // Property-Based Tests

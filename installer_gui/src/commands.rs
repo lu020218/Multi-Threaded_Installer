@@ -154,6 +154,7 @@ pub struct InstallRequest {
     pub install_dir: String,
     pub create_shortcuts: bool,
     pub auto_startup: bool,
+    pub components: Option<HashMap<String, bool>>,
     pub flow_path: Option<String>,
     pub enable_scripts: Option<bool>,
     pub script_allow_roots: Option<Vec<String>>,
@@ -199,6 +200,12 @@ pub async fn start_install(app: AppHandle, request: InstallRequest) -> Result<()
         create_shortcuts: request.create_shortcuts,
         configure_registry: true,
         auto_startup: request.auto_startup,
+        components: request
+            .components
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
         silent: false,
         thread_count: None,
     };
@@ -263,7 +270,21 @@ pub async fn start_install(app: AppHandle, request: InstallRequest) -> Result<()
                     "current": event.current,
                     "total": event.total,
                     "current_file": event.current_file,
+                    // Backward-compatible field for existing frontends.
+                    "percentage": overall_percentage,
                     "overall_percentage": overall_percentage,
+                    "speed_bps": event.speed_bps,
+                    "speed_display": event.speed_bps.map(|bps| {
+                        if bps >= 1_000_000_000 {
+                            format!("{:.1} GB/s", bps as f64 / 1_000_000_000.0)
+                        } else if bps >= 1_000_000 {
+                            format!("{:.1} MB/s", bps as f64 / 1_000_000.0)
+                        } else if bps >= 1_000 {
+                            format!("{:.1} KB/s", bps as f64 / 1_000.0)
+                        } else {
+                            format!("{} B/s", bps)
+                        }
+                    }),
                 });
 
                 debug!(

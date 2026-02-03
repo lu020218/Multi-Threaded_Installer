@@ -91,6 +91,7 @@ fn test_complete_install_flow_basic() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -158,6 +159,7 @@ fn test_install_with_custom_flow_definition() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -225,6 +227,7 @@ fn test_flow_script_step_requires_policy() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -302,6 +305,7 @@ fn test_flow_script_step_executes_with_allowlist_policy() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -372,6 +376,7 @@ fn test_install_flow_failure_triggers_rollback_cleanup() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -436,6 +441,7 @@ fn test_install_flow_returns_rollback_error_when_rollback_step_fails() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -490,6 +496,7 @@ install_flow:
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -562,6 +569,7 @@ install_flow:
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -677,6 +685,7 @@ components:
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -816,6 +825,7 @@ components:
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -827,6 +837,920 @@ components:
         .join("components")
         .join("extra-tools")
         .exists());
+}
+
+#[test]
+fn test_resolve_selected_components_supports_required_component() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+    let source_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let component_bin = source_dir.path().join("required-tools.zip");
+    fs::write(&component_bin, b"component-required-content").unwrap();
+    let component_sha = installer_core::sha256_file_hex(&component_bin).unwrap();
+
+    let manifest_path = input_dir.path().join("component_manifest.yaml");
+    let manifest = format!(
+        r#"
+version: 1
+components:
+  - id: "required-tools"
+    display_name: "Required Tools"
+    version: "1.0.0"
+    required: true
+    package:
+      url: 'file://{url}'
+      size: 26
+      sha256: '{sha}'
+    install:
+      kind: "archive"
+      target_subdir: "components/required-tools"
+"#,
+        url = component_bin.to_string_lossy(),
+        sha = component_sha
+    );
+    fs::write(&manifest_path, manifest).unwrap();
+
+    let output_path = output_dir.path().join("component-required.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "load_manifest".to_string(),
+                    step_type: "load_component_manifest".to_string(),
+                    params: json!({ "path": "${InstallDir}/component_manifest.yaml" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "resolve".to_string(),
+                    step_type: "resolve_selected_components".to_string(),
+                    params: json!({ "include_required": true }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "download".to_string(),
+                    step_type: "download_component".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "verify".to_string(),
+                    step_type: "verify_component".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "install_component".to_string(),
+                    step_type: "install_component".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        components: std::collections::BTreeMap::new(),
+        silent: true,
+        thread_count: None,
+    };
+    let stats = installer
+        .install_with_flow_definition(options, flow, |_| {})
+        .expect("required component should be resolved and installed");
+
+    assert_eq!(stats.installed_files, 2);
+    assert!(install_dir.path().join("app.exe").exists());
+    assert!(install_dir
+        .path()
+        .join("components")
+        .join("required-tools")
+        .join("required-tools-1.0.0.zip")
+        .exists());
+}
+
+#[test]
+fn test_resolve_selected_components_supports_ui_selected_component() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+    let source_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let component_bin = source_dir.path().join("extra-tools.zip");
+    fs::write(&component_bin, b"component-selected-content").unwrap();
+    let component_sha = installer_core::sha256_file_hex(&component_bin).unwrap();
+
+    let manifest_path = input_dir.path().join("component_manifest.yaml");
+    let manifest = format!(
+        r#"
+version: 1
+components:
+  - id: "extra-tools"
+    display_name: "Extra Tools"
+    version: "1.0.0"
+    required: false
+    package:
+      url: 'file://{url}'
+      size: 26
+      sha256: '{sha}'
+    install:
+      kind: "archive"
+      target_subdir: "components/extra-tools"
+"#,
+        url = component_bin.to_string_lossy(),
+        sha = component_sha
+    );
+    fs::write(&manifest_path, manifest).unwrap();
+
+    let output_path = output_dir.path().join("component-selected.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "load_manifest".to_string(),
+                    step_type: "load_component_manifest".to_string(),
+                    params: json!({ "path": "${InstallDir}/component_manifest.yaml" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "resolve".to_string(),
+                    step_type: "resolve_selected_components".to_string(),
+                    params: json!({ "include_required": true }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "download".to_string(),
+                    step_type: "download_component".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "verify".to_string(),
+                    step_type: "verify_component".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "install_component".to_string(),
+                    step_type: "install_component".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let mut components = std::collections::BTreeMap::new();
+    components.insert("extra-tools".to_string(), true);
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        components,
+        silent: true,
+        thread_count: None,
+    };
+    let stats = installer
+        .install_with_flow_definition(options, flow, |_| {})
+        .expect("selected component should be resolved and installed");
+
+    assert_eq!(stats.installed_files, 2);
+    assert!(install_dir.path().join("app.exe").exists());
+    assert!(install_dir
+        .path()
+        .join("components")
+        .join("extra-tools")
+        .join("extra-tools-1.0.0.zip")
+        .exists());
+}
+
+#[test]
+fn test_component_nodes_batch_selected_components() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+    let source_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let c1 = source_dir.path().join("extra-tools.zip");
+    let c2 = source_dir.path().join("lang-pack.zip");
+    fs::write(&c1, b"component-extra-content").unwrap();
+    fs::write(&c2, b"component-lang-content").unwrap();
+    let c1_sha = installer_core::sha256_file_hex(&c1).unwrap();
+    let c2_sha = installer_core::sha256_file_hex(&c2).unwrap();
+
+    let manifest_path = input_dir.path().join("component_manifest.yaml");
+    let manifest = format!(
+        r#"
+version: 1
+components:
+  - id: "extra-tools"
+    display_name: "Extra Tools"
+    version: "1.0.0"
+    required: false
+    package:
+      url: 'file://{c1_url}'
+      size: 23
+      sha256: '{c1_sha}'
+    install:
+      kind: "archive"
+      target_subdir: "components/extra-tools"
+  - id: "lang-pack"
+    display_name: "Language Pack"
+    version: "1.0.0"
+    required: false
+    package:
+      url: 'file://{c2_url}'
+      size: 22
+      sha256: '{c2_sha}'
+    install:
+      kind: "archive"
+      target_subdir: "components/lang-pack"
+"#,
+        c1_url = c1.to_string_lossy(),
+        c1_sha = c1_sha,
+        c2_url = c2.to_string_lossy(),
+        c2_sha = c2_sha
+    );
+    fs::write(&manifest_path, manifest).unwrap();
+
+    let output_path = output_dir.path().join("component-batch.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "load_manifest".to_string(),
+                    step_type: "load_component_manifest".to_string(),
+                    params: json!({ "path": "${InstallDir}/component_manifest.yaml" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "resolve".to_string(),
+                    step_type: "resolve_selected_components".to_string(),
+                    params: json!({ "include_required": true }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "download_all".to_string(),
+                    step_type: "download_component".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "verify_all".to_string(),
+                    step_type: "verify_component".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "install_all".to_string(),
+                    step_type: "install_component".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let mut components = std::collections::BTreeMap::new();
+    components.insert("extra-tools".to_string(), true);
+    components.insert("lang-pack".to_string(), true);
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        components,
+        silent: true,
+        thread_count: None,
+    };
+    let stats = installer
+        .install_with_flow_definition(options, flow, |_| {})
+        .expect("batch selected components should install");
+
+    assert_eq!(stats.installed_files, 2);
+    assert!(install_dir.path().join("app.exe").exists());
+    assert!(install_dir
+        .path()
+        .join("components")
+        .join("extra-tools")
+        .join("extra-tools-1.0.0.zip")
+        .exists());
+    assert!(install_dir
+        .path()
+        .join("components")
+        .join("lang-pack")
+        .join("lang-pack-1.0.0.zip")
+        .exists());
+}
+
+#[test]
+fn test_process_selected_components_node() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+    let source_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let c1 = source_dir.path().join("extra-tools.zip");
+    let c2 = source_dir.path().join("lang-pack.zip");
+    fs::write(&c1, b"component-extra-content").unwrap();
+    fs::write(&c2, b"component-lang-content").unwrap();
+    let c1_sha = installer_core::sha256_file_hex(&c1).unwrap();
+    let c2_sha = installer_core::sha256_file_hex(&c2).unwrap();
+
+    let manifest_path = input_dir.path().join("component_manifest.yaml");
+    let manifest = format!(
+        r#"
+version: 1
+components:
+  - id: "extra-tools"
+    display_name: "Extra Tools"
+    version: "1.0.0"
+    package:
+      url: 'file://{c1_url}'
+      size: 23
+      sha256: '{c1_sha}'
+    install:
+      kind: "archive"
+      target_subdir: "components/extra-tools"
+  - id: "lang-pack"
+    display_name: "Language Pack"
+    version: "1.0.0"
+    package:
+      url: 'file://{c2_url}'
+      size: 22
+      sha256: '{c2_sha}'
+    install:
+      kind: "archive"
+      target_subdir: "components/lang-pack"
+"#,
+        c1_url = c1.to_string_lossy(),
+        c1_sha = c1_sha,
+        c2_url = c2.to_string_lossy(),
+        c2_sha = c2_sha
+    );
+    fs::write(&manifest_path, manifest).unwrap();
+
+    let output_path = output_dir.path().join("component-process-selected.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "load_manifest".to_string(),
+                    step_type: "load_component_manifest".to_string(),
+                    params: json!({ "path": "${InstallDir}/component_manifest.yaml" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "resolve".to_string(),
+                    step_type: "resolve_selected_components".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "process_download".to_string(),
+                    step_type: "process_selected_components".to_string(),
+                    params: json!({ "action": "download" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "process_verify".to_string(),
+                    step_type: "process_selected_components".to_string(),
+                    params: json!({ "action": "verify" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "process_install".to_string(),
+                    step_type: "process_selected_components".to_string(),
+                    params: json!({ "action": "install" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let mut components = std::collections::BTreeMap::new();
+    components.insert("extra-tools".to_string(), true);
+    components.insert("lang-pack".to_string(), true);
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        components,
+        silent: true,
+        thread_count: None,
+    };
+    let stats = installer
+        .install_with_flow_definition(options, flow, |_| {})
+        .expect("process_selected_components should handle selected components");
+
+    assert_eq!(stats.installed_files, 2);
+    assert!(install_dir
+        .path()
+        .join("components")
+        .join("extra-tools")
+        .join("extra-tools-1.0.0.zip")
+        .exists());
+    assert!(install_dir
+        .path()
+        .join("components")
+        .join("lang-pack")
+        .join("lang-pack-1.0.0.zip")
+        .exists());
+}
+
+#[test]
+fn test_component_download_failure_triggers_rollback_cleanup() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let manifest_path = input_dir.path().join("component_manifest.yaml");
+    let manifest = r#"
+version: 1
+components:
+  - id: "missing-tools"
+    display_name: "Missing Tools"
+    version: "1.0.0"
+    package:
+      url: "file:///definitely/not/exist/missing-tools.zip"
+      size: 1
+      sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    install:
+      kind: "archive"
+      target_subdir: "components/missing-tools"
+"#;
+    fs::write(&manifest_path, manifest).unwrap();
+
+    let output_path = output_dir.path().join("component-download-fail.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "load_manifest".to_string(),
+                    step_type: "load_component_manifest".to_string(),
+                    params: json!({ "path": "${InstallDir}/component_manifest.yaml" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "download".to_string(),
+                    step_type: "download_component".to_string(),
+                    params: json!({ "component_id": "missing-tools" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        components: std::collections::BTreeMap::new(),
+        silent: true,
+        thread_count: None,
+    };
+    let result = installer.install_with_flow_definition(options, flow, |_| {});
+    assert!(result.is_err());
+    assert!(!install_dir.path().join("app.exe").exists());
+}
+
+#[test]
+fn test_component_verify_failure_triggers_rollback_cleanup() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+    let source_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let component_bin = source_dir.path().join("verify-fail.zip");
+    fs::write(&component_bin, b"verify-fail-content").unwrap();
+
+    let manifest_path = input_dir.path().join("component_manifest.yaml");
+    let manifest = format!(
+        r#"
+version: 1
+components:
+  - id: "verify-fail"
+    display_name: "Verify Fail"
+    version: "1.0.0"
+    package:
+      url: 'file://{url}'
+      size: 19
+      sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    install:
+      kind: "archive"
+      target_subdir: "components/verify-fail"
+"#,
+        url = component_bin.to_string_lossy()
+    );
+    fs::write(&manifest_path, manifest).unwrap();
+
+    let output_path = output_dir.path().join("component-verify-fail.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "load_manifest".to_string(),
+                    step_type: "load_component_manifest".to_string(),
+                    params: json!({ "path": "${InstallDir}/component_manifest.yaml" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "download".to_string(),
+                    step_type: "download_component".to_string(),
+                    params: json!({ "component_id": "verify-fail" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "verify".to_string(),
+                    step_type: "verify_component".to_string(),
+                    params: json!({ "component_id": "verify-fail" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        components: std::collections::BTreeMap::new(),
+        silent: true,
+        thread_count: None,
+    };
+    let result = installer.install_with_flow_definition(options, flow, |_| {});
+    assert!(result.is_err());
+    assert!(!install_dir.path().join("app.exe").exists());
+}
+
+#[test]
+fn test_component_install_failure_triggers_rollback_cleanup() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+    let install_dir = tempdir().unwrap();
+    let source_dir = tempdir().unwrap();
+
+    create_test_files(input_dir.path(), &[("app.exe", b"exe content")]);
+
+    let component_bin = source_dir.path().join("install-fail.zip");
+    fs::write(&component_bin, b"install-fail-content").unwrap();
+    let component_sha = installer_core::sha256_file_hex(&component_bin).unwrap();
+
+    let manifest_path = input_dir.path().join("component_manifest.yaml");
+    let manifest = format!(
+        r#"
+version: 1
+components:
+  - id: "install-fail"
+    display_name: "Install Fail"
+    version: "1.0.0"
+    package:
+      url: 'file://{url}'
+      size: 20
+      sha256: '{sha}'
+    install:
+      kind: "unsupported_kind"
+"#,
+        url = component_bin.to_string_lossy(),
+        sha = component_sha
+    );
+    fs::write(&manifest_path, manifest).unwrap();
+
+    let output_path = output_dir.path().join("component-install-fail.pkg");
+    let packager = Packager::new(PackagerConfig::default()).unwrap();
+    packager
+        .build_package(input_dir.path(), &output_path, None, |_| {})
+        .unwrap();
+
+    let flow = FlowDefinition {
+        version: 1,
+        vars: std::collections::HashMap::new(),
+        ui_flow: None,
+        install_flow: InstallFlow {
+            steps: vec![
+                FlowStep {
+                    id: "extract".to_string(),
+                    step_type: "extract_package".to_string(),
+                    params: json!({}),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "load_manifest".to_string(),
+                    step_type: "load_component_manifest".to_string(),
+                    params: json!({ "path": "${InstallDir}/component_manifest.yaml" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "download".to_string(),
+                    step_type: "download_component".to_string(),
+                    params: json!({ "component_id": "install-fail" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "verify".to_string(),
+                    step_type: "verify_component".to_string(),
+                    params: json!({ "component_id": "install-fail" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Abort),
+                    engine: None,
+                },
+                FlowStep {
+                    id: "install".to_string(),
+                    step_type: "install_component".to_string(),
+                    params: json!({ "component_id": "install-fail" }),
+                    when: None,
+                    on_fail: Some(OnFailPolicy::Rollback),
+                    engine: None,
+                },
+            ],
+            rollback: vec![FlowStep {
+                id: "rollback_files".to_string(),
+                step_type: "rollback_files".to_string(),
+                params: json!({}),
+                when: None,
+                on_fail: Some(OnFailPolicy::Continue),
+                engine: None,
+            }],
+        },
+    };
+
+    let installer = Installer::new(output_path).unwrap();
+    let options = InstallOptions {
+        install_dir: install_dir.path().to_path_buf(),
+        create_shortcuts: false,
+        configure_registry: false,
+        auto_startup: false,
+        components: std::collections::BTreeMap::new(),
+        silent: true,
+        thread_count: None,
+    };
+    let result = installer.install_with_flow_definition(options, flow, |_| {});
+    assert!(result.is_err());
+    assert!(!install_dir.path().join("app.exe").exists());
+}
+
+#[test]
+fn test_packager_output_is_deterministic_for_same_input() {
+    let input_dir = tempdir().unwrap();
+    let output_dir = tempdir().unwrap();
+
+    create_test_files(
+        input_dir.path(),
+        &[
+            ("app.exe", b"exe content"),
+            ("config/settings.json", br#"{"name":"demo"}"#),
+            ("assets/readme.txt", b"hello"),
+        ],
+    );
+
+    let config = PackagerConfig {
+        application_name: "DeterministicDemo".to_string(),
+        version: "1.0.0".to_string(),
+        ..Default::default()
+    };
+    let packager = Packager::new(config).unwrap();
+
+    let p1 = output_dir.path().join("a.pkg");
+    let p2 = output_dir.path().join("b.pkg");
+    packager
+        .build_package(input_dir.path(), &p1, None, |_| {})
+        .unwrap();
+    packager
+        .build_package(input_dir.path(), &p2, None, |_| {})
+        .unwrap();
+
+    let h1 = installer_core::sha256_file_hex(&p1).unwrap();
+    let h2 = installer_core::sha256_file_hex(&p2).unwrap();
+    assert_eq!(
+        h1, h2,
+        "same input should produce deterministic package bytes"
+    );
 }
 #[test]
 fn test_complete_install_flow_with_ui_resources() {
@@ -854,6 +1778,7 @@ fn test_complete_install_flow_with_ui_resources() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -894,6 +1819,7 @@ fn test_complete_install_flow_large_files() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: Some(4),
     };
@@ -929,6 +1855,7 @@ fn test_complete_install_flow_subdirectories() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -974,6 +1901,7 @@ fn test_complete_install_flow_progress_events() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -1022,6 +1950,7 @@ fn test_uninstall_flow_basic() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -1070,6 +1999,7 @@ fn test_uninstall_removes_empty_directories() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -1106,6 +2036,7 @@ fn test_uninstall_handles_missing_files() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -1147,6 +2078,7 @@ fn test_uninstall_progress_events() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -1253,6 +2185,7 @@ fn test_error_handling_rollback() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: None,
     };
@@ -1338,6 +2271,7 @@ fn test_concurrency_parallel_decompression() {
         create_shortcuts: false,
         configure_registry: false,
         auto_startup: false,
+        components: std::collections::BTreeMap::new(),
         silent: true,
         thread_count: Some(4),
     };

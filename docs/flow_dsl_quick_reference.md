@@ -223,3 +223,63 @@ when: "${options.disk_gb > options.label}"
 - 回滚步骤保持“少而稳”，优先保证可执行成功
 - 表达式尽量加括号，避免歧义
 - 先本地跑最小流程，再逐步增加复杂分支
+
+
+---
+
+## 8. Component Batch Template (process_selected_components)
+
+Use this pattern when UI returns `options.components.*` selections.
+
+```yaml
+version: 1
+
+install_flow:
+  steps:
+    - id: extract
+      type: extract_package
+      on_fail: rollback
+
+    - id: load_manifest
+      type: load_component_manifest
+      params:
+        path: "${InstallDir}/component_manifest.yaml"
+      on_fail: abort
+
+    - id: resolve_selected
+      type: resolve_selected_components
+      params:
+        include_required: true
+      on_fail: abort
+
+    - id: batch_download
+      type: process_selected_components
+      params:
+        action: "download"
+      on_fail: rollback
+
+    - id: batch_verify
+      type: process_selected_components
+      params:
+        action: "verify"
+      on_fail: rollback
+
+    - id: batch_install
+      type: process_selected_components
+      params:
+        action: "install"
+      on_fail: rollback
+
+  rollback:
+    - id: rollback_components
+      type: rollback_component
+      on_fail: continue
+    - id: rollback_files
+      type: rollback_files
+      on_fail: continue
+```
+
+Notes:
+- `process_selected_components.params.action` supports: `download` / `verify` / `install`.
+- If `resolve_selected_components` is omitted, but there is exactly one component, single-component fallback still works.
+- For explicit lists, you can still use `component_id` or `component_ids` on `download_component` / `verify_component` / `install_component`.

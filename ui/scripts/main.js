@@ -436,7 +436,10 @@ async function cancelInstall() {
 }
 
 function updateProgress(progress) {
-    const percentage = progress.percentage || ((progress.current / progress.total) * 100);
+    const fallbackPercentage = (progress.total > 0)
+        ? ((progress.current / progress.total) * 100)
+        : 0;
+    const percentage = (progress.overall_percentage ?? progress.percentage ?? fallbackPercentage);
     
     document.getElementById('progress-fill').style.width = `${percentage}%`;
     document.getElementById('progress-text').textContent = `${Math.round(percentage)}%`;

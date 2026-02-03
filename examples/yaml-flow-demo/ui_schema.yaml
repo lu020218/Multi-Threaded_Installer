@@ -1,13 +1,17 @@
+# UI 动态控件示例：组件勾选项
 version: 1
 forms:
   - id: "components"
+    # 安装选项页
     page: "options"
     controls:
+      # 复选组会写入 options.components.*
       - type: "checkbox_group"
         id: "optional_components"
         label: "Optional Components"
         bind: "options.components"
         items:
+          # key: options.components["extra-tools"]
           - id: "extra-tools"
             label: "Extra Tools"
             default: false

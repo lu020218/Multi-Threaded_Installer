@@ -599,6 +599,7 @@ fn run_cli_mode(embedded_package_path: Option<&std::path::Path>) {
                     create_shortcuts,
                     configure_registry: true,
                     auto_startup: false,
+                    components: std::collections::BTreeMap::new(),
                     silent,
                     thread_count: None,
                 };

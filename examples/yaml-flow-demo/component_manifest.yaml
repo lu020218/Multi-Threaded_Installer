@@ -1,21 +1,30 @@
+# 组件清单示例（用于可选组件下载与安装）
 version: 1
+# 发布通道（可用于灰度/稳定版）
 channel: stable
+# 对应公钥 ID（用于签名校验）
 public_key_id: "main-release-key-2026"
 
 components:
+  # 示例组件：额外工具包
   - id: "extra-tools"
     display_name: "Extra Tools"
     version: "2.1.0"
+    # required=true 表示无需勾选也会被安装
     required: false
     package:
       url: "https://downloads.example.com/components/extra-tools-2.1.0.zip"
       size: 24567890
+      # 下载文件 SHA256
       sha256: "8a2f00000000000000000000000000000000000000000000000000000000f1c9"
+      # 对组件元数据签名（Base64）
       signature: "base64-signature"
     install:
+      # 当前支持 archive/msi/exe（示例为 archive）
       kind: "archive"
       target_subdir: "components/extra-tools"
       entrypoint: "install.ps1"
     rollback:
+      # 失败回滚时删除的路径（相对安装目录）
       remove_paths:
         - "components/extra-tools"

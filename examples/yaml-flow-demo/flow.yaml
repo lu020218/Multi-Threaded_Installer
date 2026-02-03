@@ -1,10 +1,13 @@
+# 安装流程示例（基础版：脚本预检 + 解包）
 version: 1
 
 vars:
+  # 运行时变量，可在 params/when 中引用
   AppName: "YamlFlowDemo"
 
 install_flow:
   steps:
+    # 脚本预检：检查安装前置条件
     - id: precheck_script
       type: script
       engine: js
@@ -14,11 +17,13 @@ install_flow:
           minimum_mb: 64
       on_fail: abort
 
+    # 解压 payload 到安装目录
     - id: extract
       type: extract_package
       on_fail: rollback
 
   rollback:
+    # 主流程失败时回滚已写入文件
     - id: rollback_files
       type: rollback_files
       on_fail: continue

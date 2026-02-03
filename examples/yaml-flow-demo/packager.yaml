@@ -1,11 +1,19 @@
+# 打包器基础配置（YAML-only）
 application_name: "YamlFlowDemo"
 version: "1.0.0"
+# 默认安装目录（安装时会做环境变量展开）
 default_install_dir: "%ProgramFiles%\\YamlFlowDemo"
 vendor: "Demo Team"
+
+# 压缩配置
 compression_algorithm: "Zstd"
 compression_level: 3
+
+# 安装行为默认项
 desktop_icons: false
 auto_startup: false
+
+# 内嵌到安装包中的流程与脚本（会自动排除，不再重复进入 payload）
 flow_file: "./flow.yaml"
 script_files:
   - "./scripts/precheck.js"

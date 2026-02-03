@@ -1019,6 +1019,7 @@ mod property_tests {
                 create_shortcuts: false,
                 configure_registry: false,
                 auto_startup: false,
+                components: std::collections::BTreeMap::new(),
                 silent: true,
                 thread_count: None,
             };
@@ -1099,6 +1100,7 @@ mod property_tests {
                 create_shortcuts: false,
                 configure_registry: false,
                 auto_startup: false,
+                components: std::collections::BTreeMap::new(),
                 silent: true,
                 thread_count: None,
             };
@@ -1164,6 +1166,7 @@ mod property_tests {
                 create_shortcuts: false,
                 configure_registry: false,
                 auto_startup: false,
+                components: std::collections::BTreeMap::new(),
                 silent: true,
                 thread_count: None,
             };

@@ -407,6 +407,7 @@ fn run_install(args: InstallArgs) -> Result<()> {
         create_shortcuts: !args.no_shortcuts,
         configure_registry: !args.no_registry,
         auto_startup: parsed.metadata.auto_startup,
+        components: std::collections::BTreeMap::new(),
         silent: args.silent,
         thread_count: args.threads,
     };
@@ -861,6 +862,7 @@ mod property_tests {
                 create_shortcuts: false,
                 configure_registry: false,
                 auto_startup: false,
+                components: std::collections::BTreeMap::new(),
                 silent: true,  // Silent mode enabled
                 thread_count: None,
             };

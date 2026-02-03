@@ -122,6 +122,8 @@ pub struct InstallOptions {
     pub configure_registry: bool,
     /// Enable auto-startup
     pub auto_startup: bool,
+    /// Optional component selections from UI (component_id -> selected)
+    pub components: std::collections::BTreeMap<String, bool>,
     /// Silent installation (no UI prompts)
     pub silent: bool,
     /// Number of threads for parallel operations
@@ -135,6 +137,7 @@ impl Default for InstallOptions {
             create_shortcuts: true,
             configure_registry: true,
             auto_startup: false,
+            components: std::collections::BTreeMap::new(),
             silent: false,
             thread_count: None,
         }

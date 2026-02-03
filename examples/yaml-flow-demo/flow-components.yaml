@@ -1,39 +1,48 @@
+# 组件安装流程示例（批处理版）
 version: 1
 
 install_flow:
   steps:
+    # 先安装主程序文件
     - id: extract
       type: extract_package
       on_fail: rollback
 
+    # 加载组件清单
     - id: load_manifest
       type: load_component_manifest
       params:
         path: "${InstallDir}/resources/component_manifest.yaml"
       on_fail: abort
 
-    - id: download_extra_tools
-      type: download_component
-      when: "${options.components.extra-tools == true}"
+    # 根据 UI 勾选结果解析待安装组件（并可自动包含 required 组件）
+    - id: resolve_selected
+      type: resolve_selected_components
       params:
-        component_id: "extra-tools"
+        include_required: true
       on_fail: rollback
 
-    - id: verify_extra_tools
-      type: verify_component
-      when: "${options.components.extra-tools == true}"
+    # 批量下载 / 校验 / 安装
+    - id: batch_download
+      type: process_selected_components
       params:
-        component_id: "extra-tools"
+        action: "download"
       on_fail: rollback
 
-    - id: install_extra_tools
-      type: install_component
-      when: "${options.components.extra-tools == true}"
+    - id: batch_verify
+      type: process_selected_components
       params:
-        component_id: "extra-tools"
+        action: "verify"
+      on_fail: rollback
+
+    - id: batch_install
+      type: process_selected_components
+      params:
+        action: "install"
       on_fail: rollback
 
   rollback:
+    # 组件回滚 + 文件回滚（逆序执行）
     - id: rollback_components
       type: rollback_component
       on_fail: continue

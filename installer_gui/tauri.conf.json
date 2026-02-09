@@ -24,7 +24,7 @@
         "maximizable": false,
         "minimizable": true,
         "closable": true,
-        "visible": true,
+        "visible": false,
         "focus": true,
         "alwaysOnTop": false,
         "skipTaskbar": false,

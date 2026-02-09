@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Installer</title>
+    <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+    <!-- Custom Titlebar for frameless window -->
+    <div id="titlebar" data-tauri-drag-region>
+        <div class="titlebar-title" data-tauri-drag-region>
+            <span id="titlebar-app-name">Setup</span>
+        </div>
+        <div class="titlebar-buttons">
+            <button id="titlebar-minimize" class="titlebar-button" title="Minimize">
+                <svg  xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                    <path fill="currentColor" d="M128 544h768a32 32 0 1 0 0-64H128a32 32 0 0 0 0 64"></path>
+                </svg>
+            </button>
+            <button id="titlebar-close" class="titlebar-button titlebar-close" title="Close">
+                <svg  xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                    <path fill="currentColor" d="M195.2 195.2a64 64 0 0 1 90.496 0L512 421.504 738.304 195.2a64 64 0 0 1 90.496 90.496L602.496 512 828.8 738.304a64 64 0 0 1-90.496 90.496L512 602.496 285.696 828.8a64 64 0 0 1-90.496-90.496L421.504 512 195.2 285.696a64 64 0 0 1 0-90.496"></path>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <div id="app">
+        <!-- Welcome Page -->
+        <div id="welcome-page" class="page active welcome-page">
+            <div class="welcome-stage">
+                <div class="welcome-hero">
+                    <div class="welcome-logo" id="app-logo" aria-hidden="true">
+                        <svg viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M48 8l30.3 17.5v35L48 78 17.7 60.5v-35L48 8z" fill="none" stroke="currentColor" stroke-width="4"/>
+                            <path d="M28 48h10l6-8 8 16 6-12h12" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h1 id="app-name" class="welcome-title">Application Name</h1>
+                    <p id="app-version" class="welcome-version">Version 1.0.0</p>
+                    <div class="plugins-check">
+                        <div class="plugin-checkbox" id="plugin-checkbox-container">
+                            <input type="checkbox" id="accept-chrome-plugin" class="chrome-plugin-check">
+                            <span class="chrome-plugin-text">
+                                <span data-i18n="welcome.download_setup_notice">下载安装</span>
+                                <a href="#" id="chrome-plugin-link" data-i18n="welcome.chrome_plugin_link">Chrome插件</a>
+                            </span>
+                        </div>
+                        <div class="plugin-checkbox" id="plugin-checkbox-container">
+                            <input type="checkbox" id="accept-ppt-plugin" class="ppt-plugin-check">
+                            <span class="ppt-plugin-text">
+                                <span data-i18n="welcome.download_setup_notice">下载安装</span>
+                                <a href="#" id="ppt-plugin-link" data-i18n="welcome.ppt_plugin_link">PPT插件</a>
+                            </span>
+                        </div>
+                    </div>
+                    <button id="btn-next" class="btn-primary welcome-primary" data-i18n="button.quick_install">快速安装</button>
+                </div>
+                <div class="welcome-footer">
+                    <div class="welcome-license" id="license-link-container">
+                        <input type="checkbox" id="accept-license" class="welcome-license-check">
+                        <span class="welcome-license-text">
+                            <span data-i18n="welcome.license_notice">我已阅读并同意</span>
+                            <a href="#" id="license-link" data-i18n="welcome.license_link">《用户许可协议》</a>
+                        </span>
+                    </div>
+                    <div class="welcome-actions">
+                        <button id="btn-custom-options" class="welcome-link">
+                            <span class="welcome-link-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M4 6h5l2 2h9a1 1 0 0 1 1 1v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                                </svg>
+                            </span>
+                            <span class="welcome-link-text" data-i18n="button.custom_options">自定义选项</span>
+                        </button>
+                        <button id="btn-cancel" class="btn-secondary welcome-cancel" data-i18n="button.cancel">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- License Page -->
+        <div id="license-page" class="page">
+            <div class="license-content">
+                <div class="license-title">
+                    <h2 data-i18n="license.title">License Agreement</h2>
+                </div>
+                <div class="license-text-container">
+                    <div class="license-text" id="license-text"></div>
+                </div>
+            </div>
+            <div class="button-row">
+                <button id="btn-license-back" class="btn-secondary" data-i18n="button.back">Back</button>
+                <button id="btn-license-accept" class="btn-primary" data-i18n="button.accept">Accept</button>
+            </div>
+        </div>
+
+        <!-- Directory Selection Page -->
+        <div id="directory-page" class="page directory-page">
+            <div class="directory-stage">
+                <div class="welcome-hero">
+                    <div class="welcome-logo" aria-hidden="true">
+                        <svg viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M48 8l30.3 17.5v35L48 78 17.7 60.5v-35L48 8z" fill="none" stroke="currentColor" stroke-width="4"/>
+                            <path d="M28 48h10l6-8 8 16 6-12h12" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h1 id="app-name" class="welcome-title">Application Name</h1>
+                    <p id="app-version" class="welcome-version">Version 1.0.0</p>
+                </div>
+
+                <div class="space-info">
+                    <span data-i18n="install.required_space">Required space:</span>
+                    <span id="required-space">0 MB</span>
+                    <span class="separator">|</span>
+                    <span data-i18n="install.available_space">Available:</span>
+                    <span id="available-space">0 MB</span>
+                </div>
+                <div class="directory-input-row">
+                    <input type="text" id="install-dir" readonly>
+                    <button id="btn-browse" class="btn-secondary" data-i18n="button.browse">Browse</button>
+                </div>
+
+                <div class="directory-footer">
+                    <div class="directory-options">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="auto-startup">
+                            <span data-i18n="option.startup">Start with Windows</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="create-shortcuts" checked>
+                            <span data-i18n="option.shortcuts">Create desktop shortcut</span>
+                        </label>
+                    </div>
+                    <div class="directory-actions">
+                        <button id="btn-back" class="btn-secondary" data-i18n="button.cancel">Cancel</button>
+                        <button id="btn-install" class="btn-primary" data-i18n="button.install">Install</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Progress Page -->
+        <div id="progress-page" class="page progress-page">
+            <div class="progress-stage">
+                <div class="welcome-hero">
+                    <div class="welcome-logo" aria-hidden="true">
+                        <svg viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M48 8l30.3 17.5v35L48 78 17.7 60.5v-35L48 8z" fill="none" stroke="currentColor" stroke-width="4"/>
+                            <path d="M28 48h10l6-8 8 16 6-12h12" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h1 id="app-name" class="welcome-title">Application Name</h1>
+                    <p id="app-version" class="welcome-version">Version 1.0.0</p>
+                </div>
+                <div class="page-content">
+                    <div class="progress-title">
+                        <h3 data-i18n="install.progress">Installing...</h3>
+                        <span id="progress-text" class="progress-text">0%</span>
+                    </div>
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div id="progress-fill" class="progress-fill"></div>
+                        </div>
+                    </div>
+                    <div class="progress-details">
+                        <p id="progress-phase" class="phase-text"></p>
+                        <p id="current-file" class="current-file"></p>
+                        <p id="progress-speed" class="speed-text"></p>
+                    </div>
+                </div>
+                <div class="button-row">
+                    <button id="btn-cancel-install" class="btn-secondary" data-i18n="button.cancel">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Complete Page -->
+        <div id="complete-page" class="page">
+            <div class="page-content">
+                <div class="success-icon">✓</div>
+                <h2 data-i18n="install.complete">Installation Complete</h2>
+                <p class="success-message" data-i18n="install.success">
+                    The application has been installed successfully.
+                </p>
+                <div class="install-stats">
+                    <p><span data-i18n="install.files_installed">Files installed:</span> <span id="stats-files">0</span></p>
+                    <p><span data-i18n="install.total_size">Total size:</span> <span id="stats-size">0 MB</span></p>
+                    <p><span data-i18n="install.time_taken">Time taken:</span> <span id="stats-time">0s</span></p>
+                </div>
+                <div class="options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="launch-app" checked>
+                        <span data-i18n="option.launch">Launch application</span>
+                    </label>
+                </div>
+            </div>
+            <div class="button-row">
+                <button id="btn-finish" class="btn-primary" data-i18n="button.finish">Finish</button>
+            </div>
+        </div>
+
+        <!-- Error Page -->
+        <div id="error-page" class="page">
+            <div class="page-content">
+                <div class="error-icon">✕</div>
+                <h2 data-i18n="install.error">Installation Failed</h2>
+                <p class="error-message" id="error-message">
+                    An error occurred during installation.
+                </p>
+                <div class="error-details" id="error-details" style="display: none;">
+                    <pre id="error-code"></pre>
+                </div>
+            </div>
+            <div class="button-row">
+                <button id="btn-retry" class="btn-secondary" data-i18n="button.retry">Retry</button>
+                <button id="btn-close" class="btn-primary" data-i18n="button.close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Language Selector -->
+    <div class="language-selector">
+        <select id="language-select">
+            <option value="en-US">English</option>
+            <option value="zh-CN">中文</option>
+            <option value="ja-JP">日本語</option>
+            <option value="ko-KR">한국어</option>
+            <option value="de-DE">Deutsch</option>
+            <option value="fr-FR">Français</option>
+            <option value="es-ES">Español</option>
+        </select>
+    </div>
+
+    <script type="module" src="scripts/main.js"></script>
+</body>
+</html>

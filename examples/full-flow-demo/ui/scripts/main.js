@@ -34,18 +34,34 @@ async function initializeApp() {
     try {
         console.log('initializeApp called');
         
+        var isPreview = false;
+        try {
+            var params = new URLSearchParams(window.location.search || '');
+            isPreview = params.get('preview') === '1';
+        } catch (e) {
+            isPreview = false;
+        }
+
         // Re-check Tauri API availability
         if (!invoke) {
-            invoke = window.tauriInvoke || (window.__TAURI__ && window.__TAURI__.core.invoke);
+            invoke = window.tauriInvoke || (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) || (window.__TAURI__ && window.__TAURI__.invoke);
         }
         if (!listen) {
-            listen = window.tauriListen || (window.__TAURI__ && window.__TAURI__.event.listen);
+            listen = window.tauriListen || (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen);
         }
         
-        if (!invoke) {
-            console.error('Tauri invoke not available');
-            return;
-        }
+    if (!invoke && !isPreview) {
+        console.error('Tauri invoke not available');
+        return;
+    }
+    if (isPreview) {
+        invoke = invoke || function() {
+            return Promise.reject(new Error('Tauri invoke unavailable in preview mode'));
+        };
+        listen = listen || function() {
+            return Promise.reject(new Error('Tauri listen unavailable in preview mode'));
+        };
+    }
         
         // Initialize pages object (DOM elements)
         pages.welcome = document.getElementById('welcome-page');
@@ -56,33 +72,60 @@ async function initializeApp() {
         pages.error = document.getElementById('error-page');
         console.log('Pages initialized:', Object.keys(pages).filter(function(k) { return pages[k]; }));
         
-        // Get package path - check for embedded package first
-        try {
-            packagePath = await invoke('get_embedded_package_path');
-        } catch (e) {
-            console.log('No embedded package, using default path');
-        }
-        if (!packagePath) {
+        if (isPreview) {
             packagePath = './package.mti';
+            metadata = {
+                app_name: 'Demo Installer',
+                version: '1.0.0',
+                default_install_dir: 'C:\\Program Files\\Demo',
+                vendor: 'Demo Vendor',
+                license_text: 'License preview (design mode only).',
+                require_admin: false,
+                desktop_icons: true,
+                auto_startup: false,
+            };
+            currentLocale = 'zh-CN';
+            translations = {};
+            applyTranslations();
+            var licenseLinkContainer = document.getElementById('license-link-container');
+            var licenseText = document.getElementById('license-text');
+            if (licenseLinkContainer) {
+                licenseLinkContainer.style.display = 'flex';
+            }
+            if (licenseText) {
+                licenseText.textContent = metadata.license_text;
+            }
+        } else {
+            // Get package path - check for embedded package first
+            try {
+                packagePath = await invoke('get_embedded_package_path');
+            } catch (e) {
+                console.log('No embedded package, using default path');
+            }
+            if (!packagePath) {
+                packagePath = './package.mti';
+            }
+            console.log('Using package path:', packagePath);
+            
+            // Detect system locale
+            try {
+                currentLocale = await invoke('get_system_locale');
+            } catch (e) {
+                console.log('Failed to get locale:', e);
+            }
+            
+            // Load translations
+            await loadTranslations(currentLocale);
+            
+            // Load metadata
+            await loadMetadata();
         }
-        console.log('Using package path:', packagePath);
-        
-        // Detect system locale
-        try {
-            currentLocale = await invoke('get_system_locale');
-        } catch (e) {
-            console.log('Failed to get locale:', e);
-        }
-        
-        // Load translations
-        await loadTranslations(currentLocale);
-        
-        // Load metadata
-        await loadMetadata();
         
         // Setup event listeners
         setupEventListeners();
-        await setupTauriListeners();
+        if (!isPreview) {
+            await setupTauriListeners();
+        }
         setupWindowControls();
         
         // Apply translations
@@ -175,19 +218,19 @@ async function loadMetadata() {
             hasLicense = true;
             licenseText.textContent = metadata.license_text;
             if (licenseLinkContainer) {
-                licenseLinkContainer.style.display = 'block';
+                licenseLinkContainer.style.display = 'flex';
             }
         }
         
-    if (createShortcuts) createShortcuts.checked = metadata.desktop_icons;
-    if (autoStartup) autoStartup.checked = metadata.auto_startup;
+        if (createShortcuts) createShortcuts.checked = metadata.desktop_icons;
+        if (autoStartup) autoStartup.checked = metadata.auto_startup;
 
-    await applyWindowConfig(metadata.window);
-    
-    console.log('Metadata loaded:', metadata.app_name, 'hasLicense:', hasLicense);
-} catch (error) {
-    console.error('Failed to load metadata:', error);
-}
+        await applyWindowConfig(metadata.window);
+        
+        console.log('Metadata loaded:', metadata.app_name, 'hasLicense:', hasLicense);
+    } catch (error) {
+        console.error('Failed to load metadata:', error);
+    }
 }
 
 async function loadTranslations(locale) {
@@ -240,6 +283,7 @@ function setupEventListeners() {
     var btnCancel = document.getElementById('btn-cancel');
     var btnNext = document.getElementById('btn-next');
     var licenseLink = document.getElementById('license-link');
+    var btnCustomOptions = document.getElementById('btn-custom-options');
     
     if (btnCancel) {
         btnCancel.onclick = function() {
@@ -249,11 +293,25 @@ function setupEventListeners() {
     
     if (btnNext) {
         btnNext.onclick = function() {
-            // If has license and not accepted, require acceptance first
-            if (hasLicense && !licenseAccepted) {
-                showPage('license');
-                return;
+            var acceptLicenseCheckbox = document.getElementById('accept-license');
+            if (hasLicense) {
+                var accepted = licenseAccepted || (acceptLicenseCheckbox && acceptLicenseCheckbox.checked);
+                if (!accepted) {
+                    showPage('license');
+                    return;
+                }
+                licenseAccepted = true;
             }
+            startInstall();
+        };
+    }
+
+    if (btnCustomOptions) {
+        btnCustomOptions.onclick = function() {
+            // if (hasLicense && !licenseAccepted) {
+            //     showPage('license');
+            //     return;
+            // }
             showPage('directory');
         };
     }
@@ -452,6 +510,7 @@ async function startInstall() {
         return;
     }
 
+    var components = collectComponentSelections();
     var installDir = document.getElementById('install-dir');
     var createShortcuts = document.getElementById('create-shortcuts');
     var autoStartup = document.getElementById('auto-startup');
@@ -462,6 +521,9 @@ async function startInstall() {
         create_shortcuts: createShortcuts ? createShortcuts.checked : true,
         auto_startup: autoStartup ? autoStartup.checked : false,
     };
+    if (components) {
+        request.components = components;
+    }
 
     var validation;
     try {
@@ -508,6 +570,24 @@ async function startInstall() {
         console.error('start_install error:', error);
         showError(error);
     }
+}
+
+function collectComponentSelections() {
+    var chrome = document.getElementById('accept-chrome-plugin');
+    var ppt = document.getElementById('accept-ppt-plugin');
+    var hasAny = false;
+    var components = {};
+
+    if (chrome) {
+        components['chrome-plugin'] = !!chrome.checked;
+        hasAny = true;
+    }
+    if (ppt) {
+        components['ppt-plugin'] = !!ppt.checked;
+        hasAny = true;
+    }
+
+    return hasAny ? components : null;
 }
 
 async function cancelInstall() {

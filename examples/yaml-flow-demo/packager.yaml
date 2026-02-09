@@ -5,6 +5,10 @@ version: "1.0.0"
 default_install_dir: "%ProgramFiles%\\YamlFlowDemo"
 vendor: "Demo Team"
 
+folder_targets:
+  - folder_name: "plugins"
+    target_directory: "%AppData%\\YamlFlowDemo\\plugins"
+
 # 压缩配置
 compression_algorithm: "Zstd"
 compression_level: 3
@@ -12,7 +16,11 @@ compression_level: 3
 # 安装行为默认项
 desktop_icons: false
 auto_startup: false
-
+min_windows_version:
+  major: 10
+  minor: 0
+  build: 19041
+  
 # 内嵌到安装包中的流程与脚本（会自动排除，不再重复进入 payload）
 flow_file: "./flow.yaml"
 script_files:

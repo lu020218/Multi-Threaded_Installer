@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::format::{CompressionAlgorithm, RegistryEntry, WindowsVersion};
+use crate::format::{CompressionAlgorithm, RegistryEntry, WindowConfig, WindowsVersion};
 
 /// Packager configuration loaded from packager.json.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -53,6 +53,9 @@ pub struct PackagerConfig {
     /// Process name to check before installation
     #[serde(default)]
     pub process_name: Option<String>,
+    /// Optional window configuration for installer UI.
+    #[serde(default)]
+    pub window: Option<WindowConfig>,
     /// Path to UI resources directory
     #[serde(default)]
     pub ui_resources_dir: Option<PathBuf>,
@@ -94,6 +97,7 @@ impl Default for PackagerConfig {
             desktop_icons: false,
             min_windows_version: None,
             process_name: None,
+            window: None,
             ui_resources_dir: None,
             flow_file: None,
             script_files: Vec::new(),
@@ -210,6 +214,7 @@ mod tests {
                 build: 19041,
             }),
             process_name: Some("testapp.exe".to_string()),
+            window: None,
             ui_resources_dir: Some(PathBuf::from("ui")),
             flow_file: Some(PathBuf::from("flow.yaml")),
             script_files: vec![PathBuf::from("scripts/precheck.js")],
@@ -440,6 +445,7 @@ mod property_tests {
                         desktop_icons,
                         min_windows_version,
                         process_name,
+                        window: None,
                         ui_resources_dir: None, // PathBuf doesn't implement Arbitrary
                         flow_file: None,
                         script_files: Vec::new(),

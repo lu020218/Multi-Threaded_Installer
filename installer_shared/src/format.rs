@@ -189,6 +189,9 @@ pub struct PackageMetadata {
     pub process_name: Option<String>,
     /// CRC32 checksum of embedded UI resources
     pub ui_resources_checksum: Option<u32>,
+    /// Optional window configuration for the installer UI.
+    #[serde(default)]
+    pub window: Option<WindowConfig>,
     /// Optional embedded install flow YAML.
     #[serde(default)]
     pub embedded_flow_yaml: Option<String>,
@@ -223,10 +226,31 @@ impl Default for PackageMetadata {
             desktop_icons: false,
             process_name: None,
             ui_resources_checksum: None,
+            window: None,
             embedded_flow_yaml: None,
             embedded_scripts: Vec::new(),
         }
     }
+}
+
+/// Optional window configuration for installer UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowConfig {
+    /// Window width in logical pixels.
+    #[serde(default)]
+    pub width: Option<u32>,
+    /// Window height in logical pixels.
+    #[serde(default)]
+    pub height: Option<u32>,
+    /// Minimum window width in logical pixels.
+    #[serde(default)]
+    pub min_width: Option<u32>,
+    /// Minimum window height in logical pixels.
+    #[serde(default)]
+    pub min_height: Option<u32>,
+    /// Whether window is resizable.
+    #[serde(default)]
+    pub resizable: Option<bool>,
 }
 
 /// Windows version specification.

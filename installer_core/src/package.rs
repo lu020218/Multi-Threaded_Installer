@@ -615,6 +615,7 @@ mod tests {
             desktop_icons: true,
             process_name: Some("testapp.exe".to_string()),
             ui_resources_checksum: Some(0x12345678),
+            window: None,
             embedded_flow_yaml: None,
             embedded_scripts: Vec::new(),
         };
@@ -877,6 +878,7 @@ mod property_tests {
                         desktop_icons,
                         process_name: None,
                         ui_resources_checksum: None,
+                        window: None,
                         embedded_flow_yaml: None,
                         embedded_scripts: Vec::new(),
                     }

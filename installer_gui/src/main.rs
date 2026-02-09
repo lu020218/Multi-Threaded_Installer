@@ -31,6 +31,7 @@ mod ui_loader;
 mod webview2;
 
 use installer_core::{check_embedded_package, extract_embedded_package, init_gui_logging, Installer};
+use installer_shared::WindowConfig;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tauri::Manager;
@@ -241,10 +242,14 @@ fn run_tauri_app(embedded_package_path: Option<PathBuf>, custom_ui_dir: Option<P
         info!("Set INSTALLER_CUSTOM_UI_DIR={:?}", ui_dir);
     }
 
+    let window_config = load_window_config(embedded_package_path.as_deref());
+    let window_config = std::sync::Arc::new(window_config);
+
     // Build Tauri app with optional custom UI
     let mut builder = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::get_metadata,
+            commands::validate_install_request,
             commands::start_install,
             commands::cancel_install,
             commands::get_system_locale,
@@ -256,6 +261,8 @@ fn run_tauri_app(embedded_package_path: Option<PathBuf>, custom_ui_dir: Option<P
             commands::minimize_window,
             commands::close_window,
             commands::start_dragging,
+            commands::apply_window_config,
+            commands::notify_ui_ready,
             get_embedded_package_path,
             get_custom_ui_content,
         ]);
@@ -329,14 +336,26 @@ fn run_tauri_app(embedded_package_path: Option<PathBuf>, custom_ui_dir: Option<P
         });
     }
 
-    // Run the app
-    builder
-        .setup(move |app| {
-            // If we have custom UI, inject it into the page dynamically
-            // This keeps the Tauri IPC bridge working while loading custom content
-            if custom_ui_dir.is_some() {
-                let window = app.get_webview_window("main");
-                if let Some(win) = window {
+      // Run the app
+      builder
+          .setup(move |app| {
+              let has_custom_ui = custom_ui_dir.is_some();
+              let window_config = window_config.clone();
+              if let Some(window) = app.get_webview_window("main") {
+                  let _ = window.hide();
+                  if let Some(ref cfg) = *window_config {
+                      apply_window_config_to_window(&window, cfg);
+                  }
+                  if !has_custom_ui {
+                      let _ = window.show();
+                      let _ = window.set_focus();
+                  }
+              }
+              // If we have custom UI, inject it into the page dynamically
+              // This keeps the Tauri IPC bridge working while loading custom content
+              if custom_ui_dir.is_some() {
+                  let window = app.get_webview_window("main");
+                  if let Some(win) = window {
                     // Use a small delay to ensure webview is ready
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -344,10 +363,10 @@ fn run_tauri_app(embedded_package_path: Option<PathBuf>, custom_ui_dir: Option<P
                         
                         // JavaScript to load and inject custom UI
                         // We preserve the Tauri IPC bridge by not navigating away
-                        let script = r#"
-                            (async function() {
-                                try {
-                                    console.log('Loading custom UI content...');
+                          let script = r#"
+                              (async function() {
+                                  try {
+                                      console.log('Loading custom UI content...');
                                     
                                     // Wait for Tauri API to be available
                                     let attempts = 0;
@@ -361,15 +380,31 @@ fn run_tauri_app(embedded_package_path: Option<PathBuf>, custom_ui_dir: Option<P
                                         return;
                                     }
                                     
-                                    // Store Tauri API globally for custom scripts
-                                    window.tauriInvoke = window.__TAURI__.core.invoke;
-                                    window.tauriListen = window.__TAURI__.event.listen;
+                                    // Store Tauri API globally for custom scripts (handle Tauri 1.x/2.x)
+                                    const resolveInvoke = () => (
+                                        (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+                                        (window.__TAURI__ && window.__TAURI__.invoke) ||
+                                        (window.__TAURI__ && window.__TAURI__.tauri && window.__TAURI__.tauri.invoke)
+                                    );
+                                    const resolveListen = () => (
+                                        (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen)
+                                    );
+                                    
+                                    const tauriInvoke = resolveInvoke();
+                                    const tauriListen = resolveListen();
+                                    if (!tauriInvoke || !tauriListen) {
+                                        console.error('Tauri API incomplete: invoke/listen not available');
+                                        return;
+                                    }
+                                    
+                                    window.tauriInvoke = tauriInvoke;
+                                    window.tauriListen = tauriListen;
                                     
                                     // Get custom UI content from Rust backend
-                                    const content = await window.__TAURI__.core.invoke('get_custom_ui_content');
+                                      const content = await tauriInvoke('get_custom_ui_content');
                                     
-                                    if (content && content.html) {
-                                        console.log('Injecting custom HTML...');
+                                      if (content && content.html) {
+                                          console.log('Injecting custom HTML...');
                                         
                                         // Parse the HTML
                                         const parser = new DOMParser();
@@ -401,11 +436,11 @@ fn run_tauri_app(embedded_package_path: Option<PathBuf>, custom_ui_dir: Option<P
                                         }
                                         
                                         // Inject custom JS after DOM is ready
-                                        if (content.js) {
-                                            // Wait a bit for DOM to settle
-                                            await new Promise(r => setTimeout(r, 100));
-                                            
-                                            try {
+                                          if (content.js) {
+                                              // Wait a bit for DOM to settle
+                                              await new Promise(r => setTimeout(r, 100));
+                                              
+                                              try {
                                                 // Execute JS using indirect eval to run in global scope
                                                 // (0, eval)(code) runs in global scope, not local scope
                                                 (0, eval)(content.js);
@@ -426,20 +461,30 @@ fn run_tauri_app(embedded_package_path: Option<PathBuf>, custom_ui_dir: Option<P
                                                 } else {
                                                     console.warn('window.initializeApp not found after script execution');
                                                 }
-                                            } catch (e) {
-                                                console.error('Error executing custom JS:', e);
-                                            }
-                                        }
-                                        
-                                        console.log('Custom UI injection complete');
-                                    } else {
-                                        console.log('No custom UI content available, using default UI');
-                                    }
-                                } catch (error) {
-                                    console.error('Failed to load custom UI:', error);
-                                }
-                            })();
-                        "#;
+                                              } catch (e) {
+                                                  console.error('Error executing custom JS:', e);
+                                              }
+                                          }
+                                          
+                                          console.log('Custom UI injection complete');
+                                      } else {
+                                          console.log('No custom UI content available, using default UI');
+                                      }
+                                  } catch (error) {
+                                      console.error('Failed to load custom UI:', error);
+                                  } finally {
+                                      try {
+                                          if (typeof tauriInvoke === 'function') {
+                                              await tauriInvoke('notify_ui_ready');
+                                          } else if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                                              await window.__TAURI__.core.invoke('notify_ui_ready');
+                                          }
+                                      } catch (e) {
+                                          console.warn('notify_ui_ready failed:', e);
+                                      }
+                                  }
+                              })();
+                          "#;
                         
                         if let Err(e) = win.eval(script) {
                             error!("Failed to inject custom UI: {}", e);
@@ -451,6 +496,44 @@ fn run_tauri_app(embedded_package_path: Option<PathBuf>, custom_ui_dir: Option<P
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn load_window_config(package_path: Option<&Path>) -> Option<WindowConfig> {
+    let path = package_path?;
+    let installer = Installer::new(path.to_path_buf()).ok()?;
+    let parsed = installer.parse_package().ok()?;
+    parsed.metadata.window
+}
+
+fn apply_window_config_to_window(window: &tauri::WebviewWindow, config: &WindowConfig) {
+    if let (Some(w), Some(h)) = (config.width, config.height) {
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: w as f64,
+            height: h as f64,
+        }));
+    }
+
+    if config.min_width.is_some() || config.min_height.is_some() {
+        if let (Ok(current_size), Ok(scale)) = (window.inner_size(), window.scale_factor()) {
+            let logical = current_size.to_logical::<f64>(scale);
+            let min_w = config
+                .min_width
+                .unwrap_or(logical.width.round() as u32);
+            let min_h = config
+                .min_height
+                .unwrap_or(logical.height.round() as u32);
+            let _ = window.set_min_size(Some(tauri::Size::Logical(
+                tauri::LogicalSize {
+                    width: min_w as f64,
+                    height: min_h as f64,
+                },
+            )));
+        }
+    }
+
+    if let Some(resizable) = config.resizable {
+        let _ = window.set_resizable(resizable);
+    }
 }
 
 /// Tauri command to get custom UI content (HTML, CSS, JS).

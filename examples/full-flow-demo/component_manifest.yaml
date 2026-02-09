@@ -1,0 +1,36 @@
+version: 1
+channel: stable
+public_key_id: "main-release-key-2026"
+
+components:
+  - id: "chrome-plugin"
+    display_name: "Chrome Plugin"
+    version: "1.0.0"
+    required: false
+    package:
+      url: "https://downloads.example.com/chrome-plugin-1.0.0.zip"
+      size: 1234567
+      sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      signature: "base64-signature"
+    install:
+      kind: "archive"          # archive/msi/exe
+      target_subdir: "plugins/chrome"
+    rollback:
+      remove_paths:
+        - "plugins/chrome"
+
+  - id: "ppt-plugin"
+    display_name: "PPT Plugin"
+    version: "1.0.0"
+    required: false
+    package:
+      url: "https://downloads.example.com/ppt-plugin-1.0.0.zip"
+      size: 2345678
+      sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      signature: "base64-signature"
+    install:
+      kind: "archive"
+      target_subdir: "plugins/ppt"
+    rollback:
+      remove_paths:
+        - "plugins/ppt"

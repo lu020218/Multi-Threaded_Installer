@@ -263,10 +263,16 @@ min_windows_version:
   major: 10
   minor: 0
   build: 19041
-process_name: "myapp.exe"
-folder_targets:
-  - folder_name: "plugins"
-    target_directory: "%AppData%\\MyApp\\plugins"
+  process_name: "myapp.exe"
+  window:
+    width: 600
+    height: 450
+    min_width: 600
+    min_height: 450
+    resizable: false
+  folder_targets:
+    - folder_name: "plugins"
+      target_directory: "%AppData%\\MyApp\\plugins"
 registry_entries:
   - path: "HKEY_CURRENT_USER\\Software\\MyApp"
     key: "InstallDir"
@@ -295,8 +301,9 @@ script_files:
 | `auto_startup` | boolean | `false` | Add to Windows startup |
 | `desktop_icons` | boolean | `false` | Create desktop shortcut |
 | `min_windows_version` | object | optional | Minimum Windows version required |
-| `process_name` | string | optional | Process to check before install |
-| `folder_targets` | array | `[]` | Custom folder mappings |
+  | `process_name` | string | optional | Process to check before install |
+  | `window` | object | optional | Installer window size options |
+  | `folder_targets` | array | `[]` | Custom folder mappings |
 | `registry_entries` | array | `[]` | Custom registry entries |
 | `ui_resources_dir` | string | optional | Custom UI resources directory |
 | `flow_file` | string | optional | Install flow YAML to embed into package metadata |
@@ -345,12 +352,14 @@ The UI can call these Tauri commands:
 
 - `get_metadata(package_path)` - Get package metadata
 - `check_prerequisites(package_path, install_dir)` - Check system requirements
+- `validate_install_request(request)` - Validate install request (returns structured error codes)
 - `start_install(request)` - Start installation
 - `cancel_install()` - Cancel ongoing installation
 - `browse_directory(default_path)` - Open directory picker
 - `get_system_locale()` - Get system language
 - `get_translations(locale)` - Get translation strings
 - `set_locale(locale)` - Set current language
+- `apply_window_config(width, height, min_width, min_height, resizable)` - Apply window size options
 
 ### Tauri Events
 

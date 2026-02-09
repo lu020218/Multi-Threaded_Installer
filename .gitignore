@@ -31,3 +31,5 @@ Thumbs.db
 # Logs
 *.log
 /examples/yaml-flow-demo/app
+/examples/full-flow-demo/app
+/examples/yaml-flow-demo/plugins

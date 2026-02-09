@@ -9,7 +9,7 @@
 use crate::webview2;
 use installer_core::{Installer, LocalizationManager, ScriptPolicy};
 use installer_shared::{
-    FlowDefinition, InstallOptions, LocalizationConfig, PackageMetadata, Phase,
+    FlowDefinition, InstallOptions, LocalizationConfig, PackageMetadata, Phase, WindowConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -56,6 +56,7 @@ pub struct MetadataResponse {
     pub require_admin: bool,
     pub desktop_icons: bool,
     pub auto_startup: bool,
+    pub window: Option<WindowConfig>,
 }
 
 impl From<PackageMetadata> for MetadataResponse {
@@ -77,6 +78,7 @@ impl From<PackageMetadata> for MetadataResponse {
             require_admin: m.require_admin,
             desktop_icons: m.desktop_icons,
             auto_startup: m.auto_startup,
+            window: m.window,
         }
     }
 }
@@ -158,6 +160,216 @@ pub struct InstallRequest {
     pub flow_path: Option<String>,
     pub enable_scripts: Option<bool>,
     pub script_allow_roots: Option<Vec<String>>,
+}
+
+/// Validation issue for install request checks.
+#[derive(Debug, Serialize)]
+pub struct ValidationIssue {
+    pub code: String,
+    pub message: String,
+    pub detail: Option<String>,
+}
+
+/// Validation result for install request checks.
+#[derive(Debug, Serialize)]
+pub struct InstallValidationResult {
+    pub ok: bool,
+    pub errors: Vec<ValidationIssue>,
+    pub warnings: Vec<ValidationIssue>,
+    pub required_space_mb: u64,
+    pub available_space_mb: u64,
+    pub admin_required: bool,
+    pub is_admin: bool,
+    pub process_running: bool,
+    pub version_ok: bool,
+    pub disk_space_ok: bool,
+}
+
+fn issue(code: &str, message: &str, detail: Option<String>) -> ValidationIssue {
+    ValidationIssue {
+        code: code.to_string(),
+        message: message.to_string(),
+        detail,
+    }
+}
+
+/// Validate installation request without performing installation.
+///
+/// The frontend controls navigation; the backend only checks inputs
+/// and returns structured error codes/messages.
+#[tauri::command]
+pub async fn validate_install_request(
+    request: InstallRequest,
+) -> Result<InstallValidationResult, String> {
+    let mut errors: Vec<ValidationIssue> = Vec::new();
+    let mut warnings: Vec<ValidationIssue> = Vec::new();
+
+    if request.package_path.trim().is_empty() {
+        errors.push(issue(
+            "package_path_missing",
+            "Package path is required",
+            None,
+        ));
+    }
+
+    if request.install_dir.trim().is_empty() {
+        errors.push(issue(
+            "install_dir_missing",
+            "Install directory is required",
+            None,
+        ));
+    }
+
+    if !errors.is_empty() {
+        return Ok(InstallValidationResult {
+            ok: false,
+            errors,
+            warnings,
+            required_space_mb: 0,
+            available_space_mb: 0,
+            admin_required: false,
+            is_admin: false,
+            process_running: false,
+            version_ok: true,
+            disk_space_ok: true,
+        });
+    }
+
+    let installer = match Installer::new(PathBuf::from(&request.package_path)) {
+        Ok(installer) => installer,
+        Err(err) => {
+            errors.push(issue(
+                "package_invalid",
+                "Failed to open installer package",
+                Some(err.to_string()),
+            ));
+            return Ok(InstallValidationResult {
+                ok: false,
+                errors,
+                warnings,
+                required_space_mb: 0,
+                available_space_mb: 0,
+                admin_required: false,
+                is_admin: false,
+                process_running: false,
+                version_ok: true,
+                disk_space_ok: true,
+            });
+        }
+    };
+
+    let parsed = match installer.parse_package() {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            errors.push(issue(
+                "package_invalid",
+                "Failed to parse installer package",
+                Some(err.to_string()),
+            ));
+            return Ok(InstallValidationResult {
+                ok: false,
+                errors,
+                warnings,
+                required_space_mb: 0,
+                available_space_mb: 0,
+                admin_required: false,
+                is_admin: false,
+                process_running: false,
+                version_ok: true,
+                disk_space_ok: true,
+            });
+        }
+    };
+
+    let required_bytes: u64 = parsed.toc.files.iter().map(|f| f.original_size).sum();
+    let mut required_space_mb = required_bytes / (1024 * 1024);
+    let mut available_space_mb = 0;
+    let mut disk_space_ok = true;
+
+    match installer_core::get_disk_space_info(
+        &PathBuf::from(&request.install_dir),
+        required_bytes,
+        installer_core::DEFAULT_DISK_SPACE_BUFFER,
+    ) {
+        Ok(info) => {
+            required_space_mb = info.required / (1024 * 1024);
+            available_space_mb = info.available / (1024 * 1024);
+            disk_space_ok = info.sufficient;
+            if !info.sufficient {
+                errors.push(issue(
+                    "disk_space_insufficient",
+                    "Insufficient disk space",
+                    Some(format!(
+                        "required={} MB (incl. buffer), available={} MB",
+                        required_space_mb, available_space_mb
+                    )),
+                ));
+            }
+        }
+        Err(err) => {
+            disk_space_ok = false;
+            warnings.push(issue(
+                "disk_space_check_failed",
+                "Failed to check disk space",
+                Some(err.to_string()),
+            ));
+        }
+    }
+
+    let version_ok = match installer.check_windows_version() {
+        Ok(_) => true,
+        Err(err) => {
+            errors.push(issue(
+                "windows_version_unsupported",
+                "Windows version does not meet requirements",
+                Some(err.to_string()),
+            ));
+            false
+        }
+    };
+
+    let process_running = installer.check_running_process().unwrap_or(false);
+    if process_running {
+        errors.push(issue(
+            "process_running",
+            "Target application is running",
+            None,
+        ));
+    }
+
+    let is_admin = installer_core::create_platform().is_elevated();
+    let admin_required = parsed.metadata.require_admin;
+    if admin_required && !is_admin {
+        errors.push(issue(
+            "admin_required",
+            "Administrator privileges required",
+            None,
+        ));
+    }
+
+    if request.enable_scripts.unwrap_or(false) {
+        let roots = request.script_allow_roots.clone().unwrap_or_default();
+        if roots.is_empty() {
+            errors.push(issue(
+                "script_allowlist_missing",
+                "enable_scripts=true requires at least one script_allow_roots entry",
+                None,
+            ));
+        }
+    }
+
+    Ok(InstallValidationResult {
+        ok: errors.is_empty(),
+        errors,
+        warnings,
+        required_space_mb,
+        available_space_mb,
+        admin_required,
+        is_admin,
+        process_running,
+        version_ok,
+        disk_space_ok,
+    })
 }
 
 /// Start installation.
@@ -722,4 +934,66 @@ pub async fn start_dragging(app: AppHandle) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Apply window size configuration (logical pixels).
+#[tauri::command]
+pub async fn apply_window_config(
+    app: AppHandle,
+    width: Option<u32>,
+    height: Option<u32>,
+    min_width: Option<u32>,
+    min_height: Option<u32>,
+    resizable: Option<bool>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window not found".to_string())?;
+
+    if let (Some(w), Some(h)) = (width, height) {
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: w as f64,
+                height: h as f64,
+            }))
+            .map_err(|e| format!("Failed to set window size: {e}"))?;
+    }
+
+    if min_width.is_some() || min_height.is_some() {
+        let current_size = window
+            .inner_size()
+            .map_err(|e| format!("Failed to get window size: {e}"))?;
+        let scale = window
+            .scale_factor()
+            .map_err(|e| format!("Failed to get scale factor: {e}"))?;
+        let current_logical = current_size.to_logical::<f64>(scale);
+        let min_w = min_width.unwrap_or(current_logical.width.round() as u32);
+        let min_h = min_height.unwrap_or(current_logical.height.round() as u32);
+        window
+            .set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize {
+                width: min_w as f64,
+                height: min_h as f64,
+            })))
+            .map_err(|e| format!("Failed to set min window size: {e}"))?;
+    }
+
+    if let Some(resizable) = resizable {
+        window
+            .set_resizable(resizable)
+            .map_err(|e| format!("Failed to set resizable: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// Notify backend that UI is ready; shows the main window.
+#[tauri::command]
+pub async fn notify_ui_ready(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().ok();
+        Ok(())
+    } else {
+        Err("Main window not found".to_string())
+    }
 }

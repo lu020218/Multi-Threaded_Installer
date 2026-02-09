@@ -1,0 +1,35 @@
+application_name: "Tsingtao"
+version: "1.0.0"
+default_install_dir: "%ProgramFiles%\\Tsingtao"
+vendor: "My Company"
+license_text: "MIT License..."
+icon_path: "app.ico"
+compression_algorithm: "Zstd"
+compression_level: 9
+block_size: 4194304
+require_admin: true
+auto_startup: false
+desktop_icons: true
+window:
+  width: 700
+  height: 500
+  min_width: 600
+  min_height: 440
+  resizable: false
+min_windows_version:
+  major: 10
+  minor: 0
+  build: 19041
+process_name: "Tsingtao.exe"
+folder_targets:
+  - folder_name: "plugin"
+    target_directory: "%AppData%\\Tsingtao\\plugin"
+registry_entries:
+  - path: "HKEY_CURRENT_USER\\Software\\Tsingtao"
+    key: "InstallDir"
+    value: "%InstallDir%"
+    value_type: "String"
+ui_resources_dir: "./ui"
+flow_file: "./flow.yaml"
+script_files:
+  - "./scripts/precheck.js"

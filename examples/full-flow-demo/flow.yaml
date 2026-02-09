@@ -1,0 +1,71 @@
+version: 1
+
+vars:
+  AppName: "YourApp"
+
+install_flow:
+  steps:
+    - id: check_disk
+      type: check_disk
+      on_fail: abort
+
+    - id: extract
+      type: extract_package
+      on_fail: rollback
+
+    # 如果你还需要快捷方式/注册表/开机启动，放在这里
+    - id: create_shortcut
+      type: create_shortcut
+      when: "${options.create_shortcuts == true && metadata.desktop_icons == true}"
+      on_fail: continue
+
+    - id: write_registry
+      type: write_registry
+      when: "${options.configure_registry == true}"
+      on_fail: continue
+
+    - id: configure_autostart
+      type: configure_autostart
+      when: "${options.auto_startup == true && metadata.auto_startup == true}"
+      on_fail: continue
+
+    # 组件清单
+    - id: load_manifest
+      type: load_component_manifest
+      params:
+        path: "${InstallDir}/resources/component_manifest.yaml"
+      on_fail: abort
+
+    # 解析 UI 里勾选的组件
+    - id: resolve_selected
+      type: resolve_selected_components
+      params:
+        include_required: true
+      on_fail: rollback
+
+    # 批量下载 / 校验 / 安装
+    - id: batch_download
+      type: process_selected_components
+      params:
+        action: "download"
+      on_fail: rollback
+
+    - id: batch_verify
+      type: process_selected_components
+      params:
+        action: "verify"
+      on_fail: rollback
+
+    - id: batch_install
+      type: process_selected_components
+      params:
+        action: "install"
+      on_fail: rollback
+
+  rollback:
+    - id: rollback_components
+      type: rollback_component
+      on_fail: continue
+    - id: rollback_files
+      type: rollback_files
+      on_fail: continue

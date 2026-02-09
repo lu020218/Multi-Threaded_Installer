@@ -33,6 +33,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     await initializeApp();
 });
 
+function resolveInvoke() {
+    if (typeof window.tauriInvoke === 'function') {
+        return window.tauriInvoke;
+    }
+    if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
+        return window.__TAURI__.core.invoke;
+    }
+    if (window.__TAURI__ && typeof window.__TAURI__.invoke === 'function') {
+        return window.__TAURI__.invoke;
+    }
+    if (window.__TAURI__ && window.__TAURI__.tauri && typeof window.__TAURI__.tauri.invoke === 'function') {
+        return window.__TAURI__.tauri.invoke;
+    }
+    return null;
+}
+
+function resolveListen() {
+    if (typeof window.tauriListen === 'function') {
+        return window.tauriListen;
+    }
+    if (window.__TAURI__ && window.__TAURI__.event && typeof window.__TAURI__.event.listen === 'function') {
+        return window.__TAURI__.event.listen;
+    }
+    return null;
+}
+
 // Wait for Tauri global API to be injected
 async function waitForTauri() {
     return new Promise((resolve, reject) => {
@@ -40,11 +66,14 @@ async function waitForTauri() {
         const maxAttempts = 50; // 5 seconds max
         
         const checkTauri = () => {
-            if (window.__TAURI__) {
-                // Tauri 2.0 API structure
-                invoke = window.__TAURI__.core.invoke;
-                listen = window.__TAURI__.event.listen;
-                appWindow = window.__TAURI__.window.getCurrentWindow();
+            const maybeInvoke = resolveInvoke();
+            const maybeListen = resolveListen();
+            if (maybeInvoke && maybeListen) {
+                invoke = maybeInvoke;
+                listen = maybeListen;
+                appWindow = window.__TAURI__ && window.__TAURI__.window
+                    ? window.__TAURI__.window.getCurrentWindow()
+                    : null;
                 console.log('Tauri API initialized');
                 resolve();
             } else if (attempts < maxAttempts) {
@@ -96,6 +125,9 @@ function setupWindowControls() {
 
 async function initializeApp() {
     try {
+        if (typeof invoke !== 'function') {
+            throw new Error('Tauri invoke not available');
+        }
         // Detect system locale
         currentLocale = await invoke('get_system_locale');
         document.getElementById('language-select').value = currentLocale.startsWith('zh') ? 'zh-CN' : 'en-US';
@@ -166,12 +198,25 @@ async function loadMetadata() {
         // Set default options based on metadata
         document.getElementById('create-shortcuts').checked = metadata.desktop_icons;
         document.getElementById('auto-startup').checked = metadata.auto_startup;
+
+        await applyWindowConfig(metadata.window);
         
         // Check prerequisites
         await checkPrerequisites();
     } catch (error) {
         console.error('Failed to load metadata:', error);
         showError('Failed to load package: ' + error);
+    }
+}
+
+async function applyWindowConfig(windowConfig) {
+    if (!windowConfig || typeof invoke !== 'function') {
+        return;
+    }
+    try {
+        await invoke('apply_window_config', windowConfig);
+    } catch (error) {
+        console.warn('Failed to apply window config:', error);
     }
 }
 
@@ -353,7 +398,11 @@ function setupTauriListeners() {
     
     // Cancellation event
     listen('install_cancelled', () => {
-        showPage('welcome');
+        if (pages.welcome) {
+            showPage('welcome');
+        } else {
+            window.close();
+        }
     });
 }
 
@@ -398,6 +447,41 @@ async function browseDirectory() {
 }
 
 async function startInstall() {
+    if (!packagePath) {
+        showError('No package available for installation');
+        return;
+    }
+
+    const request = {
+        package_path: packagePath,
+        install_dir: document.getElementById('install-dir').value,
+        create_shortcuts: document.getElementById('create-shortcuts').checked,
+        auto_startup: document.getElementById('auto-startup').checked,
+    };
+
+    let validation;
+    try {
+        validation = await invoke('validate_install_request', { request });
+    } catch (error) {
+        showError('Failed to validate installation: ' + error);
+        return;
+    }
+
+    if (!validation || validation.ok !== true) {
+        const errorItem = validation && validation.errors && validation.errors.length > 0
+            ? validation.errors[0]
+            : null;
+        const message = errorItem
+            ? `${errorItem.message}${errorItem.detail ? ` (${errorItem.detail})` : ''}`
+            : 'Installation prerequisites failed';
+        showError(message);
+        return;
+    }
+
+    if (validation.warnings && validation.warnings.length > 0) {
+        console.warn('Validation warnings:', validation.warnings);
+    }
+
     showPage('progress');
     
     // Reset progress
@@ -406,18 +490,6 @@ async function startInstall() {
     document.getElementById('progress-phase').textContent = '';
     document.getElementById('current-file').textContent = '';
     document.getElementById('progress-speed').textContent = '';
-    
-    if (!packagePath) {
-        showError('No package available for installation');
-        return;
-    }
-    
-    const request = {
-        package_path: packagePath,
-        install_dir: document.getElementById('install-dir').value,
-        create_shortcuts: document.getElementById('create-shortcuts').checked,
-        auto_startup: document.getElementById('auto-startup').checked,
-    };
     
     try {
         await invoke('start_install', { request });
@@ -429,7 +501,11 @@ async function startInstall() {
 async function cancelInstall() {
     try {
         await invoke('cancel_install');
-        showPage('welcome');
+        if (pages.welcome) {
+            showPage('welcome');
+        } else {
+            window.close();
+        }
     } catch (error) {
         console.error('Failed to cancel:', error);
     }

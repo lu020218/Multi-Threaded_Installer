@@ -419,6 +419,7 @@ impl Packager {
             desktop_icons: self.config.desktop_icons,
             process_name: self.config.process_name.clone(),
             ui_resources_checksum,
+            window: self.config.window,
             embedded_flow_yaml,
             embedded_scripts,
         })

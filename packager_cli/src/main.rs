@@ -66,7 +66,19 @@ fn main() -> Result<()> {
         .config
         .clone()
         .unwrap_or_else(|| args.input.join("packager.yaml"));
-    let config = load_config(&config_path, &args)?;
+    let mut config = load_config(&config_path, &args)?;
+
+    // Resolve ui_resources_dir relative to config file when not overridden via CLI.
+    if args.ui_resources.is_none() {
+        if let Some(ref ui_dir) = config.ui_resources_dir {
+            if ui_dir.is_relative() {
+                let base_dir = config_path
+                    .parent()
+                    .unwrap_or_else(|| args.input.as_path());
+                config.ui_resources_dir = Some(base_dir.join(ui_dir));
+            }
+        }
+    }
 
     info!("Packaging: {}", config.application_name);
     info!("Version: {}", config.version);

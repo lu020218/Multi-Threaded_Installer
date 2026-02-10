@@ -1,4 +1,4 @@
-﻿#include "installer/uninstall_manager.h"
+#include "installer/uninstall_manager.h"
 #include "installer/file_system_operator.h"
 #include "installer/install_state_utils.h"
 #include "installer/installer_helpers.h"
@@ -103,6 +103,7 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& installDir,
                    const std::vector<std::string>& filePaths,
                    const std::vector<RegistryEntry>& registry,
+                   const std::vector<std::string>& installKillProcesses,
                    bool autoStartup,
                    bool desktopIcons,
                    const InstallStateConfig& installState,
@@ -140,6 +141,12 @@ bool writeManifest(const std::string& manifestPath,
             reg.push_back(item);
         }
         root["registry"] = reg;
+        std::vector<std::string> safeInstallKill;
+        safeInstallKill.reserve(installKillProcesses.size());
+        for (const auto& name : installKillProcesses) {
+            safeInstallKill.push_back(ensureUtf8(name));
+        }
+        root["killProcesses"] = safeInstallKill;
 
         json state;
         state["mode"] = static_cast<int>(installState.mode);
@@ -449,7 +456,20 @@ bool uninstallFromManifest(const std::string& manifestPath,
     bool desktopIcons = manifest.value("desktopIcons", false);
     bool removedUninstall = false;
     std::string uninstallPath = manifest.value("uninstallPath", "");
-    
+    std::vector<std::string> installKillProcesses;
+    if (manifest.contains("killProcesses")) {
+        const auto& kill = manifest["killProcesses"];
+        if (kill.is_array()) {
+            for (const auto& item : kill) {
+                if (item.is_string()) {
+                    installKillProcesses.push_back(item.get<std::string>());
+                }
+            }
+        } else if (kill.is_string()) {
+            installKillProcesses.push_back(kill.get<std::string>());
+        }
+    }
+
     InstallStateConfig installState;
     if (manifest.contains("installState")) {
         const auto& state = manifest["installState"];
@@ -461,6 +481,31 @@ bool uninstallFromManifest(const std::string& manifestPath,
         installState.mutexName = state.value("mutexName", "");
     }
     
+    std::vector<std::string> killTargets = buildKillProcessList(appName, installKillProcesses);
+    if (!killTargets.empty()) {
+        std::vector<std::string> running = getRunningProcessesByName(killTargets);
+        if (!running.empty()) {
+            auto joinNames = [](const std::vector<std::string>& names) {
+                std::string joined;
+                for (size_t i = 0; i < names.size(); ++i) {
+                    if (i > 0) {
+                        joined += ", ";
+                    }
+                    joined += names[i];
+                }
+                return joined;
+            };
+            console.showInfo("Terminating processes: " + joinNames(running));
+            terminateProcessesByName(running);
+#ifdef _WIN32
+            Sleep(500);
+#endif
+            std::vector<std::string> remaining = getRunningProcessesByName(killTargets);
+            if (!remaining.empty()) {
+                console.showWarning("Some processes are still running: " + joinNames(remaining));
+            }
+        }
+    }
     applyInstallState(installState, "uninstalling", resolver);
     
     if (autoStartup && !appName.empty()) {

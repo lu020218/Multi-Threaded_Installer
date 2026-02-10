@@ -1,4 +1,4 @@
-ï»¿#ifdef GUI_ENABLED
+#ifdef GUI_ENABLED
 
 #include "../../include/gui/installation_worker.h"
 #include "../../include/gui/gui_manager.h"
@@ -39,7 +39,7 @@
 namespace MultiThreadedInstaller {
 
 // ============================================================================
-// æ„é€ å‡½æ•°å’Œææ„å‡½æ•°
+// ¹¹Ôìº¯ÊıºÍÎö¹¹º¯Êı
 // ============================================================================
 
 static std::vector<std::string> collectFilesRecursive(const std::string& rootPath) {
@@ -84,7 +84,7 @@ InstallationWorker::InstallationWorker(HWND hNotifyWindow)
 }
 
 InstallationWorker::~InstallationWorker() {
-    // è¯·æ±‚å–æ¶ˆå¹¶ç­‰å¾…çº¿ç¨‹ç»“æŸ
+    // ÇëÇóÈ¡Ïû²¢µÈ´ıÏß³Ì½áÊø
     if (m_running) {
         RequestCancellation();
         if (m_workerThread.joinable()) {
@@ -94,7 +94,7 @@ InstallationWorker::~InstallationWorker() {
 }
 
 // ============================================================================
-// ä»»åŠ¡ 7.1: å®ç°çº¿ç¨‹ç®¡ç†
+// ÈÎÎñ 7.1: ÊµÏÖÏß³Ì¹ÜÀí
 // ============================================================================
 
 void InstallationWorker::StartInstallation(const std::wstring& installPath,
@@ -102,12 +102,12 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
                                            bool desktopIcons,
                                            const std::wstring& languageCode,
                                            bool cleanupOldInstall) {
-    // å¦‚æœå·²ç»åœ¨è¿è¡Œï¼Œä¸å¯åŠ¨æ–°çš„å®‰è£…
+    // Èç¹ûÒÑ¾­ÔÚÔËĞĞ£¬²»Æô¶¯ĞÂµÄ°²×°
     if (m_running) {
         return;
     }
     
-    // é‡ç½®å–æ¶ˆæ ‡å¿—
+    // ÖØÖÃÈ¡Ïû±êÖ¾
     m_cancellationRequested = false;
     m_running = true;
     m_autoRun = autoRun;
@@ -115,7 +115,7 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
     m_languageCode = languageCode;
     m_cleanupOldInstallRequested = cleanupOldInstall;
     
-    // åˆ›å»ºå·¥ä½œçº¿ç¨‹
+    // ´´½¨¹¤×÷Ïß³Ì
     m_workerThread = std::thread(&InstallationWorker::WorkerThreadFunc, this, installPath);
 }
 
@@ -128,14 +128,14 @@ bool InstallationWorker::IsRunning() const {
 }
 
 // ============================================================================
-// ä»»åŠ¡ 7.2: å®ç°è¿›åº¦å›è°ƒé€‚é…
+// ÈÎÎñ 7.2: ÊµÏÖ½ø¶È»Øµ÷ÊÊÅä
 // ============================================================================
 
 void InstallationWorker::ProgressCallback(const std::string& folder, const std::string& currentFile, float progress, void* userData) {
-    // å°†void*è½¬æ¢å›InstallationWorkeræŒ‡é’ˆ
+    // ½«void*×ª»»»ØInstallationWorkerÖ¸Õë
     InstallationWorker* worker = static_cast<InstallationWorker*>(userData);
     if (worker) {
-        // è½¬æ¢å­—ç¬¦ä¸²å¹¶å‘é€è¿›åº¦æ¶ˆæ¯
+        // ×ª»»×Ö·û´®²¢·¢ËÍ½ø¶ÈÏûÏ¢
         std::wstring wFolder = worker->StringToWString(folder);
         std::wstring wDisplay = wFolder;
         if (!currentFile.empty()) {
@@ -158,10 +158,10 @@ void InstallationWorker::ProgressCallback(const std::string& folder, const std::
 }
 
 void InstallationWorker::PostProgressMessage(const std::wstring& folder, float progress) {
-    // åˆ†é…è¿›åº¦æ¶ˆæ¯æ•°æ®
+    // ·ÖÅä½ø¶ÈÏûÏ¢Êı¾İ
     ProgressMessageData* pData = new ProgressMessageData();
     
-    // å¤åˆ¶æ–‡ä»¶å¤¹åç§°ï¼ˆç¡®ä¿ä¸è¶…è¿‡ç¼“å†²åŒºå¤§å°ï¼‰
+    // ¸´ÖÆÎÄ¼ş¼ĞÃû³Æ£¨È·±£²»³¬¹ı»º³åÇø´óĞ¡£©
     size_t copyLen = folder.length();
     if (copyLen >= MAX_PATH) {
         copyLen = MAX_PATH - 1;
@@ -169,20 +169,20 @@ void InstallationWorker::PostProgressMessage(const std::wstring& folder, float p
     wcsncpy_s(pData->currentFolder, MAX_PATH, folder.c_str(), copyLen);
     pData->currentFolder[copyLen] = L'\0';
     
-    // è®¾ç½®è¿›åº¦ç™¾åˆ†æ¯”
+    // ÉèÖÃ½ø¶È°Ù·Ö±È
     pData->percentage = progress;
     
-    // å‘é€æ¶ˆæ¯åˆ°UIçº¿ç¨‹ï¼ˆUIçº¿ç¨‹è´Ÿè´£é‡Šæ”¾å†…å­˜ï¼‰
+    // ·¢ËÍÏûÏ¢µ½UIÏß³Ì£¨UIÏß³Ì¸ºÔğÊÍ·ÅÄÚ´æ£©
     ::PostMessage(m_hNotifyWindow, WM_INSTALLATION_PROGRESS, 0, reinterpret_cast<LPARAM>(pData));
 }
 
 void InstallationWorker::PostCompletionMessage(bool success, const std::wstring& errorMsg) {
-    // åˆ†é…å®Œæˆæ¶ˆæ¯æ•°æ®
+    // ·ÖÅäÍê³ÉÏûÏ¢Êı¾İ
     CompletionMessageData* pData = new CompletionMessageData();
     
     pData->success = success;
     
-    // å¤åˆ¶é”™è¯¯æ¶ˆæ¯ï¼ˆç¡®ä¿ä¸è¶…è¿‡ç¼“å†²åŒºå¤§å°ï¼‰
+    // ¸´ÖÆ´íÎóÏûÏ¢£¨È·±£²»³¬¹ı»º³åÇø´óĞ¡£©
     size_t copyLen = errorMsg.length();
     if (copyLen >= 512) {
         copyLen = 511;
@@ -190,12 +190,12 @@ void InstallationWorker::PostCompletionMessage(bool success, const std::wstring&
     wcsncpy_s(pData->errorMessage, 512, errorMsg.c_str(), copyLen);
     pData->errorMessage[copyLen] = L'\0';
     
-    // å‘é€æ¶ˆæ¯åˆ°UIçº¿ç¨‹ï¼ˆUIçº¿ç¨‹è´Ÿè´£é‡Šæ”¾å†…å­˜ï¼‰
+    // ·¢ËÍÏûÏ¢µ½UIÏß³Ì£¨UIÏß³Ì¸ºÔğÊÍ·ÅÄÚ´æ£©
     ::PostMessage(m_hNotifyWindow, WM_INSTALLATION_COMPLETE, 0, reinterpret_cast<LPARAM>(pData));
 }
 
 // ============================================================================
-// ä»»åŠ¡ 7.3: å®ç°å®‰è£…å®Œæˆå¤„ç†
+// ÈÎÎñ 7.3: ÊµÏÖ°²×°Íê³É´¦Àí
 // ============================================================================
 
 void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
@@ -215,7 +215,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
     };
     
     try {
-        // å‘é€åˆå§‹è¿›åº¦æ¶ˆæ¯
+        // ·¢ËÍ³õÊ¼½ø¶ÈÏûÏ¢
         PostProgressMessage(
             GUIHelpers::GetLocalizedText(
                 L"msg.progress.preparing",
@@ -224,7 +224,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
         std::cout << "Installation started." << std::endl;
         logElapsed("start");
         
-        // è§£æåµŒå…¥çš„å…ƒæ•°æ®
+        // ½âÎöÇ¶ÈëµÄÔªÊı¾İ
         MetadataParser parser;
         metadata = parser.parseExtendedEmbeddedMetadata();
         
@@ -305,22 +305,31 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
 #endif
 
 #ifdef _WIN32
-        std::string processName = metadata.applicationName;
-        if (!processName.empty()) {
-            std::string lower = processName;
-            std::transform(lower.begin(), lower.end(), lower.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".exe") {
-                processName += ".exe";
+        std::vector<std::string> processNames = buildKillProcessList(
+            metadata.applicationName,
+            metadata.installKillProcesses);
+        if (!processNames.empty()) {
+            std::vector<std::string> running = getRunningProcessesByName(processNames);
+            if (!running.empty()) {
+                std::string joined;
+                for (size_t i = 0; i < running.size(); ++i) {
+                    if (i > 0) {
+                        joined += ", ";
+                    }
+                    joined += running[i];
+                }
+                std::cout << "Terminating processes: " << joined << std::endl;
+                terminateProcessesByName(running);
+                Sleep(500);
+                std::vector<std::string> remaining = getRunningProcessesByName(processNames);
+                if (!remaining.empty()) {
+                    PostCompletionMessage(false,
+                                          GUIHelpers::GetLocalizedText(
+                                              L"msg.install.app_running",
+                                              L"Failed to terminate running processes. Please close them and retry."));
+                    return;
+                }
             }
-        }
-        if (!processName.empty() && isProcessRunningByName(processName)) {
-            std::cout << "Running app detected: " << processName << std::endl;
-            PostCompletionMessage(false,
-                                  GUIHelpers::GetLocalizedText(
-                                      L"msg.install.app_running",
-                                      L"Application is still running. Please close it before installing."));
-            return;
         }
 #endif
 
@@ -351,7 +360,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
         }
         logElapsed("prechecks_complete");
 
-        // æ£€æŸ¥å–æ¶ˆè¯·æ±‚
+        // ¼ì²éÈ¡ÏûÇëÇó
         if (m_cancellationRequested) {
             throw std::runtime_error(WStringToString(
                 GUIHelpers::GetLocalizedText(
@@ -359,13 +368,13 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                     L"Installation cancelled.")));
         }
         
-        // è·å–å®‰è£…çŠ¶æ€äº’æ–¥é”
+        // »ñÈ¡°²×°×´Ì¬»¥³âËø
         if (metadata.installState.useMutex) {
             std::cout << "Acquiring install mutex..." << std::endl;
             installMutex = acquireInstallMutex(metadata.installState);
         }
         
-        // åº”ç”¨å®‰è£…çŠ¶æ€
+        // Ó¦ÓÃ°²×°×´Ì¬
         applyInstallState(metadata.installState, "installing", pathResolver);
         std::cout << "Install state set to installing." << std::endl;
         
@@ -541,6 +550,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             std::string manifestPath = getDefaultManifestPath(metadata.applicationName, pathResolver);
             writeManifest(manifestPath, metadata.applicationName, metadata.configVersion,
                           installRootPath, installedFiles, metadata.registry,
+                          metadata.installKillProcesses,
                           metadata.autoStartup, metadata.desktopIcons,
                           metadata.installState, uninstallPath,
                           WStringToString(m_languageCode));
@@ -550,6 +560,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                 std::filesystem::path localPath = PathFromUtf8(installRootPath) / "install.manifest.json";
                 writeManifest(Utf8FromPath(localPath), metadata.applicationName, metadata.configVersion,
                               installRootPath, installedFiles, metadata.registry,
+                              metadata.installKillProcesses,
                               metadata.autoStartup, metadata.desktopIcons,
                               metadata.installState, uninstallPath,
                               WStringToString(m_languageCode));
@@ -566,37 +577,26 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
                 logElapsed("registry_apply_post");
             }
 
-#ifdef _WIN32
-            if (!uninstallPath.empty()) {
-                std::cout << "Writing uninstall registry entry." << std::endl;
-                bool perMachine = isRunningAsAdmin();
-                writeUninstallRegistryEntry(metadata.applicationName,
-                                            metadata.configVersion,
-                                            installRootPath,
-                                            uninstallPath,
-                                            perMachine);
-                logElapsed("uninstall_registry");
-            }
-#endif
+
         }
 
-        // æ›´æ–°å®‰è£…çŠ¶æ€ä¸ºå·²å®Œæˆ
+        // ¸üĞÂ°²×°×´Ì¬ÎªÒÑÍê³É
         applyInstallState(metadata.installState, "installed", pathResolver);
         std::cout << "Install state set to installed." << std::endl;
         
-        // é‡Šæ”¾äº’æ–¥é”
+        // ÊÍ·Å»¥³âËø
         if (installMutex) {
             releaseInstallMutex(installMutex);
         }
         
-        // å®‰è£…æˆåŠŸ
+        // °²×°³É¹¦
         success = true;
         errorMessage = L"";
         std::cout << "Installation completed successfully." << std::endl;
         logElapsed("success");
         
     } catch (const std::exception& e) {
-        // æ•è·å¼‚å¸¸å¹¶è®°å½•é”™è¯¯
+        // ²¶»ñÒì³£²¢¼ÇÂ¼´íÎó
         success = false;
         errorMessage = StringToWString(e.what());
         std::cout << "Installation failed: " << e.what() << std::endl;
@@ -609,7 +609,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             installMutex = nullptr;
         }
     } catch (...) {
-        // æ•è·æœªçŸ¥å¼‚å¸¸
+        // ²¶»ñÎ´ÖªÒì³£
         success = false;
         errorMessage = GUIHelpers::GetLocalizedText(
             L"msg.error.unknown",
@@ -625,15 +625,15 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
         }
     }
     
-    // æ ‡è®°ä¸ºä¸å†è¿è¡Œ
+    // ±ê¼ÇÎª²»ÔÙÔËĞĞ
     m_running = false;
     
-    // å‘é€å®Œæˆæ¶ˆæ¯
+    // ·¢ËÍÍê³ÉÏûÏ¢
     PostCompletionMessage(success, errorMessage);
 }
 
 // ============================================================================
-// è¾…åŠ©å‡½æ•°ï¼šå­—ç¬¦ä¸²è½¬æ¢
+// ¸¨Öúº¯Êı£º×Ö·û´®×ª»»
 // ============================================================================
 
 std::wstring InstallationWorker::StringToWString(const std::string& str) {

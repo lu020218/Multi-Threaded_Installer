@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "common/types.h"
 #include "installer/console_interface.h"
@@ -15,6 +15,7 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& installDir,
                    const std::vector<std::string>& filePaths,
                    const std::vector<RegistryEntry>& registry,
+                   const std::vector<std::string>& installKillProcesses,
                    bool autoStartup,
                    bool desktopIcons,
                    const InstallStateConfig& installState,

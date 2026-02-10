@@ -1,4 +1,4 @@
-ï»¿#include "installer/metadata_parser.h"
+#include "installer/metadata_parser.h"
 #include "installer/thread_pool_manager.h"
 #include "installer/decompression_engine.h"
 #include "installer/file_system_operator.h"
@@ -267,7 +267,7 @@ static int runConsoleInstallerWithWideArgs() {
 #endif
 
 #ifdef GUI_ENABLED
-// å°†å­—ç¬¦ä¸²è½¬æ¢ä¸ºå®½å­—ç¬¦ä¸²
+// ½«×Ö·û´®×ª»»Îª¿í×Ö·û´®
 std::wstring stringToWString(const std::string& str) {
     if (str.empty()) return std::wstring();
     int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0);
@@ -523,7 +523,7 @@ static WindowSize GetWindowSizeFromResources(bool useZip,
 }
 #endif
 
-// ä»å…ƒæ•°æ®åˆ›å»ºInstallConfig
+// ´ÓÔªÊı¾İ´´½¨InstallConfig
 InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata& metadata) {
     InstallConfig config;
     config.applicationName = stringToWString(metadata.applicationName);
@@ -536,14 +536,14 @@ InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata
             break;
         }
     }
-    config.logoResourceId = L"logo.png";  // é»˜è®¤logo
-    config.licenseText = L"";  // å°†ä»resources/license.txtåŠ è½½
+    config.logoResourceId = L"logo.png";  // Ä¬ÈÏlogo
+    config.licenseText = L"";  // ½«´Óresources/license.txt¼ÓÔØ
     config.webPageUrl = stringToWString(metadata.webPageUrl);
     config.executableName = stringToWString(metadata.applicationName + ".exe");
     config.autoStartup = metadata.autoStartup;
     config.desktopIcons = metadata.desktopIcons;
     
-    // è®¡ç®—æ‰€éœ€ç£ç›˜ç©ºé—´
+    // ¼ÆËãËùĞè´ÅÅÌ¿Õ¼ä
     uint64_t totalSize = 0;
     for (const auto& mapping : metadata.extendedMappings) {
         totalSize += mapping.originalSize;
@@ -560,7 +560,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
     ConsoleInterface console;
     auto startTime = std::chrono::steady_clock::now();
     
-    // è§£æå‘½ä»¤è¡Œå‚æ•°
+    // ½âÎöÃüÁîĞĞ²ÎÊı
     auto args = console.parseInstallerArgs(argc, argv);
     if (!args.uninstall) {
         std::filesystem::path exePath = PathFromUtf8(getCurrentExecutablePath());
@@ -625,7 +625,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
 
     console.showInfo("Starting installation process...");
     
-    // è§£æåµŒå…¥çš„æ‰©å±•å…ƒæ•°æ®
+    // ½âÎöÇ¶ÈëµÄÀ©Õ¹ÔªÊı¾İ
     MetadataParser parser;
     if (!args.dataPackagePath.empty()) {
         parser.setDataPackagePath(args.dataPackagePath);
@@ -662,21 +662,21 @@ int runConsoleInstaller(int argc, char* argv[]) {
     console.showInfo("Found " + std::to_string(metadata.folderCount) + " folders to install");
     console.showInfo("Application: " + metadata.applicationName);
     
-    // åˆ›å»ºè·¯å¾„è§£æå™¨
+    // ´´½¨Â·¾¶½âÎöÆ÷
     InstallerPathResolver pathResolver;
     HANDLE installMutex = nullptr;
     
-    // å¦‚æœæ²¡æœ‰æä¾›æ–‡ä»¶å¤¹æ˜ å°„ï¼Œä½¿ç”¨äº¤äº’æ¨¡å¼
+    // Èç¹ûÃ»ÓĞÌá¹©ÎÄ¼ş¼ĞÓ³Éä£¬Ê¹ÓÃ½»»¥Ä£Ê½
     std::string userSelectedPath;
     std::string installRootPath;
     if (args.folderMappings.empty() && args.defaultDestination.empty() && !args.silent) {
         console.showInstallerMenu();
         
-        // æ˜¾ç¤ºé»˜è®¤å®‰è£…ç›®å½•å»ºè®®
+        // ÏÔÊ¾Ä¬ÈÏ°²×°Ä¿Â¼½¨Òé
         std::string defaultPath = pathResolver.expandEnvironmentVariables(metadata.defaultInstallDir);
         console.showInfo("Suggested installation directory: " + defaultPath);
         
-        // è·å–ç”¨æˆ·è¾“å…¥çš„å®‰è£…ç›®å½•
+        // »ñÈ¡ÓÃ»§ÊäÈëµÄ°²×°Ä¿Â¼
         std::cout << "Enter installation directory (or press Enter to use default): ";
         std::getline(std::cin, userSelectedPath);
         
@@ -756,33 +756,30 @@ int runConsoleInstaller(int argc, char* argv[]) {
     }
 #endif
 
-    std::string processName = metadata.applicationName;
 #ifdef _WIN32
-    if (!processName.empty()) {
-        std::string lower = processName;
-        std::transform(lower.begin(), lower.end(), lower.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".exe") {
-            processName += ".exe";
-        }
-    }
-    while (!processName.empty() && isProcessRunningByName(processName)) {
-        if (args.silent) {
-            console.showError("Application is running; silent install aborted.");
-            return 1;
-        }
-        console.showInfo("Detected running application: " + processName);
-        console.showInfo("Enter R to retry, K to terminate, C to cancel:");
-        std::string input;
-        std::getline(std::cin, input);
-        if (!input.empty()) {
-            char choice = static_cast<char>(std::tolower(static_cast<unsigned char>(input[0])));
-            if (choice == 'c') {
-                console.showError("Installation cancelled by user.");
+    std::vector<std::string> processNames = buildKillProcessList(
+        metadata.applicationName,
+        metadata.installKillProcesses);
+    if (!processNames.empty()) {
+        std::vector<std::string> running = getRunningProcessesByName(processNames);
+        if (!running.empty()) {
+            auto joinNames = [](const std::vector<std::string>& names) {
+                std::string joined;
+                for (size_t i = 0; i < names.size(); ++i) {
+                    if (i > 0) {
+                        joined += ", ";
+                    }
+                    joined += names[i];
+                }
+                return joined;
+            };
+            console.showInfo("Terminating processes: " + joinNames(running));
+            terminateProcessesByName(running);
+            Sleep(500);
+            std::vector<std::string> remaining = getRunningProcessesByName(processNames);
+            if (!remaining.empty()) {
+                console.showError("Failed to terminate processes: " + joinNames(remaining));
                 return 1;
-            }
-            if (choice == 'k') {
-                terminateProcessByName(processName);
             }
         }
     }
@@ -821,7 +818,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
     installRootPath = parallelResult.installRootPath;
     std::vector<std::string> installedRoots = std::move(parallelResult.installedRoots);
     
-    // æ˜¾ç¤ºå®‰è£…ç»“æœ
+    // ÏÔÊ¾°²×°½á¹û
     console.showInstallationResult(overallSuccess, errors);
 
     std::cout << "Timing summary: indexed read "
@@ -943,6 +940,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
 
         if (!writeManifest(manifestPath, metadata.applicationName, metadata.configVersion,
                            installRootPath, installedFiles, metadata.registry,
+                           metadata.installKillProcesses,
                            metadata.autoStartup, metadata.desktopIcons,
                            metadata.installState, uninstallPath, languageCode)) {
             console.showWarning("Failed to write install manifest");
@@ -952,6 +950,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
             std::filesystem::path localPath = PathFromUtf8(installRootPath) / "install.manifest.json";
             if (!writeManifest(Utf8FromPath(localPath), metadata.applicationName, metadata.configVersion,
                                installRootPath, installedFiles, metadata.registry,
+                               metadata.installKillProcesses,
                                metadata.autoStartup, metadata.desktopIcons,
                                metadata.installState, uninstallPath, languageCode)) {
                 console.showWarning("Failed to write local install manifest");
@@ -1003,7 +1002,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
 }
 
 #ifdef GUI_ENABLED
-// GUIæ¨¡å¼å…¥å£ç‚¹
+// GUIÄ£Ê½Èë¿Úµã
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     initializeInstallerLogging();
     int argc = 0;
@@ -1051,7 +1050,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         return runConsoleInstallerWithWideArgs();
     }
 
-    // åˆå§‹åŒ–COMåº“ï¼ˆç”¨äºæ–‡ä»¶å¯¹è¯æ¡†ï¼‰
+    // ³õÊ¼»¯COM¿â£¨ÓÃÓÚÎÄ¼ş¶Ô»°¿ò£©
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr)) {
         GUIHelpers::ShowErrorDialog(nullptr, L"Error", L"Failed to initialize COM library");
@@ -1120,11 +1119,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             }
         }
 
-        // æå–åµŒå…¥çš„GUIèµ„æºåˆ°ä¸´æ—¶ç›®å½•
+        // ÌáÈ¡Ç¶ÈëµÄGUI×ÊÔ´µ½ÁÙÊ±Ä¿Â¼
         EmbeddedResourceManager resourceMgr;
         std::string tempResourcePath = resourceMgr.extractResources();
 
-        // åˆ›å»ºå¹¶æ˜¾ç¤ºGUI
+        // ´´½¨²¢ÏÔÊ¾GUI
         CPaintManagerUI::SetInstance(hInstance);
 
         CDuiString resourcePath;
@@ -1208,7 +1207,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             skinsPath,
             true,
             WindowSize{ 560, 350 });
-        HWND hwnd = pFrame->Create(NULL, _T("å¸è½½å‘å¯¼"), UI_WNDSTYLE_FRAME, 0L, 0, 0,
+        HWND hwnd = pFrame->Create(NULL, _T("Ğ¶ÔØÏòµ¼"), UI_WNDSTYLE_FRAME, 0L, 0, 0,
                                    baseSize.width, baseSize.height);
         if (hwnd == NULL) {
             delete pFrame;
@@ -1226,7 +1225,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         return 0;
     }
     
-    // è§£æå…ƒæ•°æ®ä»¥è·å–é…ç½®ä¿¡æ¯
+    // ½âÎöÔªÊı¾İÒÔ»ñÈ¡ÅäÖÃĞÅÏ¢
     MetadataParser parser;
     auto metadata = parser.parseExtendedEmbeddedMetadata();
     
@@ -1252,27 +1251,27 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             CoUninitialize();
             return 0;
         }
-        GUIHelpers::ShowWarningDialog(nullptr, L"æç¤º",
-                                      L"éœ€è¦ç®¡ç†å‘˜æƒé™ï¼Œè¯·ä»¥ç®¡ç†å‘˜èº«ä»½è¿è¡Œå®‰è£…ç¨‹åºã€‚");
+        GUIHelpers::ShowWarningDialog(nullptr, L"ÌáÊ¾",
+                                      L"ĞèÒª¹ÜÀíÔ±È¨ÏŞ£¬ÇëÒÔ¹ÜÀíÔ±Éí·İÔËĞĞ°²×°³ÌĞò¡£");
         CoUninitialize();
         return 1;
     }
     
-    // åˆ›å»ºInstallConfig
+    // ´´½¨InstallConfig
     InstallConfig config = createInstallConfigFromMetadata(metadata);
     
-    // æå–åµŒå…¥çš„GUIèµ„æºåˆ°ä¸´æ—¶ç›®å½•
+    // ÌáÈ¡Ç¶ÈëµÄGUI×ÊÔ´µ½ÁÙÊ±Ä¿Â¼
     EmbeddedResourceManager resourceMgr;
     std::string tempResourcePath = resourceMgr.extractResources();
     
-    // åˆ›å»ºå¹¶æ˜¾ç¤ºGUI
+    // ´´½¨²¢ÏÔÊ¾GUI
     CPaintManagerUI::SetInstance(hInstance);
     
     CDuiString resourcePath;
     CDuiString resourceBasePath;
     CDuiString skinsPath;
     if (!tempResourcePath.empty()) {
-        // ä½¿ç”¨æå–çš„ä¸´æ—¶èµ„æº
+        // Ê¹ÓÃÌáÈ¡µÄÁÙÊ±×ÊÔ´
         // MBCS build: keep resource path as narrow string
 #if defined(UNICODE) || defined(_UNICODE)
         int size = MultiByteToWideChar(CP_UTF8, 0, tempResourcePath.c_str(), -1, NULL, 0);
@@ -1295,38 +1294,38 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         std::cout << "Using extracted resources from: " << tempResourcePath << std::endl;
     }
     
-    // å¦‚æœæå–å¤±è´¥ï¼Œå°è¯•ä½¿ç”¨å½“å‰ç›®å½•çš„resources
+    // Èç¹ûÌáÈ¡Ê§°Ü£¬³¢ÊÔÊ¹ÓÃµ±Ç°Ä¿Â¼µÄresources
     if (resourcePath.IsEmpty()) {
         CDuiString instancePath = CPaintManagerUI::GetInstancePath();
-        resourceBasePath = instancePath + _T("resources\\");  // ç¡®ä¿è·¯å¾„ä»¥åæ–œæ ç»“å°¾
+        resourceBasePath = instancePath + _T("resources\\");  // È·±£Â·¾¶ÒÔ·´Ğ±¸Ü½áÎ²
         resourcePath = resourceBasePath;
         skinsPath = resourceBasePath + _T("skins\\");
         
-        // è°ƒè¯•è¾“å‡ºï¼šæ˜¾ç¤ºè·¯å¾„ä¿¡æ¯
+        // µ÷ÊÔÊä³ö£ºÏÔÊ¾Â·¾¶ĞÅÏ¢
         std::wcout << L"Instance path: " << instancePath.GetData() << std::endl;
         std::wcout << L"Resource path: " << resourcePath.GetData() << std::endl;
         std::wcout << L"Skin path: " << skinsPath.GetData() << std::endl;
         std::wcout << L"Skin path exists: " << (PathFileExists(skinsPath) ? L"YES" : L"NO") << std::endl;
         
         if (!PathFileExists(skinsPath)) {
-            // å°è¯•æ£€æŸ¥ main.xml æ–‡ä»¶
+            // ³¢ÊÔ¼ì²é main.xml ÎÄ¼ş
             CDuiString mainXmlPath = skinsPath + _T("main.xml");
             std::wcout << L"Checking main.xml at: " << mainXmlPath.GetData() << std::endl;
             std::wcout << L"main.xml exists: " << (PathFileExists(mainXmlPath) ? L"YES" : L"NO") << std::endl;
             
-            // resourcesç›®å½•ä¸å­˜åœ¨ï¼Œæ˜¾ç¤ºé”™è¯¯æ¶ˆæ¯
+            // resourcesÄ¿Â¼²»´æÔÚ£¬ÏÔÊ¾´íÎóÏûÏ¢
             TCHAR errorMsg[1024];
             _stprintf_s(errorMsg, 1024,
-                       _T("GUIèµ„æºæ–‡ä»¶æœªæ‰¾åˆ°ã€‚\n\n")
-                       _T("æ— æ³•æå–åµŒå…¥çš„èµ„æºï¼Œä¹Ÿæ‰¾ä¸åˆ°å¤–éƒ¨èµ„æºç›®å½•ã€‚\n")
-                       _T("å®‰è£…ç¨‹åºå°†ä»¥æ§åˆ¶å°æ¨¡å¼è¿è¡Œã€‚\n\n")
-                       _T("è°ƒè¯•ä¿¡æ¯ï¼š\n")
-                       _T("å®ä¾‹è·¯å¾„: %s\n")
-                       _T("èµ„æºè·¯å¾„: %s"),
+                       _T("GUI×ÊÔ´ÎÄ¼şÎ´ÕÒµ½¡£\n\n")
+                       _T("ÎŞ·¨ÌáÈ¡Ç¶ÈëµÄ×ÊÔ´£¬Ò²ÕÒ²»µ½Íâ²¿×ÊÔ´Ä¿Â¼¡£\n")
+                       _T("°²×°³ÌĞò½«ÒÔ¿ØÖÆÌ¨Ä£Ê½ÔËĞĞ¡£\n\n")
+                       _T("µ÷ÊÔĞÅÏ¢£º\n")
+                       _T("ÊµÀıÂ·¾¶: %s\n")
+                       _T("×ÊÔ´Â·¾¶: %s"),
                        instancePath.GetData(),
                        resourceBasePath.GetData());
             
-            GUIHelpers::ShowWarningDialog(nullptr, L"èµ„æºæ–‡ä»¶ç¼ºå¤±", tcharToWString(errorMsg));
+            GUIHelpers::ShowWarningDialog(nullptr, L"×ÊÔ´ÎÄ¼şÈ±Ê§", tcharToWString(errorMsg));
             
             bool debugMode = GetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr, 0) > 0;
             if (!debugMode) {
@@ -1334,10 +1333,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                 return 1;
             }
 
-            // æ¸…ç†å¹¶å›é€€åˆ°æ§åˆ¶å°æ¨¡å¼ï¼ˆä»… --debugï¼‰
+            // ÇåÀí²¢»ØÍËµ½¿ØÖÆÌ¨Ä£Ê½£¨½ö --debug£©
             CoUninitialize();
 
-            // è¿è¡Œæ§åˆ¶å°å®‰è£…ç¨‹åº
+            // ÔËĞĞ¿ØÖÆÌ¨°²×°³ÌĞò
             char** argv_console = new char*[2];
             argv_console[0] = const_cast<char*>("installer.exe");
             argv_console[1] = nullptr;
@@ -1379,7 +1378,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         CPaintManagerUI::SetResourceZip(_T(""));
         CPaintManagerUI::SetResourcePath(resourcePath);
         std::wcout << L"Set resource path to: " << resourcePath.GetData() << std::endl;
-        // è®¾ç½®èµ„æºç±»å‹ä¸ºæ–‡ä»¶ç³»ç»Ÿ
+        // ÉèÖÃ×ÊÔ´ÀàĞÍÎªÎÄ¼şÏµÍ³
         CPaintManagerUI::SetResourceType(UILIB_FILE);
         std::cout << "Resource zip enabled: false" << std::endl;
     }
@@ -1407,7 +1406,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             skinsPath,
             false,
             WindowSize{ 800, 600 });
-        hwnd = pFrame->Create(NULL, _T("å®‰è£…å‘å¯¼"), UI_WNDSTYLE_FRAME, 0L, 0, 0,
+        hwnd = pFrame->Create(NULL, _T("°²×°Ïòµ¼"), UI_WNDSTYLE_FRAME, 0L, 0, 0,
                               baseSize.width, baseSize.height);
     } catch (const std::exception& e) {
         std::wcout << L"ERROR: Exception during Create(): " << e.what() << std::endl;
@@ -1424,7 +1423,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     if (hwnd == NULL) {
         std::wcout << L"ERROR: Create() returned NULL" << std::endl;
         
-        // å°è¯•è·å–æ›´å¤šé”™è¯¯ä¿¡æ¯
+        // ³¢ÊÔ»ñÈ¡¸ü¶à´íÎóĞÅÏ¢
         DWORD error = GetLastError();
         std::wcout << L"GetLastError() = " << error << std::endl;
         
@@ -1461,7 +1460,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 }
 #endif
 
-// ä¸»å…¥å£ç‚¹ - æ ¹æ®å‘½ä»¤è¡Œå‚æ•°é€‰æ‹©GUIæˆ–æ§åˆ¶å°æ¨¡å¼
+// Ö÷Èë¿Úµã - ¸ù¾İÃüÁîĞĞ²ÎÊıÑ¡ÔñGUI»ò¿ØÖÆÌ¨Ä£Ê½
 int main(int argc, char* argv[]) {
 #ifdef GUI_ENABLED
     bool silentMode = hasFlag(argc, argv, "-s") || hasFlag(argc, argv, "--silent");
@@ -1488,6 +1487,6 @@ int main(int argc, char* argv[]) {
 
 #endif
     
-    // é™é»˜æ¨¡å¼æˆ–æœªå¯ç”¨GUI - ä½¿ç”¨æ§åˆ¶å°æ¨¡å¼
+    // ¾²Ä¬Ä£Ê½»òÎ´ÆôÓÃGUI - Ê¹ÓÃ¿ØÖÆÌ¨Ä£Ê½
     return runConsoleInstaller(argc, argv);
 }

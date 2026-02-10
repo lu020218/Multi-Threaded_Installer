@@ -1,10 +1,11 @@
-﻿#pragma once
+#pragma once
 
 #include "common/types.h"
 #include "installer/path_resolver.h"
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -49,5 +50,10 @@ bool checkMinimumWindowsVersion(uint16_t minMajor, uint16_t minMinor, uint32_t m
                                 uint16_t& currentMajor, uint16_t& currentMinor, uint32_t& currentBuild);
 bool isProcessRunningByName(const std::string& exeName);
 bool terminateProcessByName(const std::string& exeName);
+std::string normalizeProcessName(const std::string& name);
+std::vector<std::string> buildKillProcessList(const std::string& appName,
+                                              const std::vector<std::string>& extraProcesses);
+std::vector<std::string> getRunningProcessesByName(const std::vector<std::string>& exeNames);
+bool terminateProcessesByName(const std::vector<std::string>& exeNames);
 
 } // namespace MultiThreadedInstaller

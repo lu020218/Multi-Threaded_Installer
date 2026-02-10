@@ -1,4 +1,4 @@
-﻿#ifdef GUI_ENABLED
+#ifdef GUI_ENABLED
 
 #include "../../include/gui/gui_manager.h"
 #include "../../include/gui/page_controller.h"
@@ -33,59 +33,6 @@ static constexpr int kPageProgress = static_cast<int>(PageType::Progress);
 static constexpr int kPageCompletion = static_cast<int>(PageType::Completion);
 static constexpr UINT_PTR kProgressTimerId = 1001;
 static constexpr UINT kProgressTimerIntervalMs = 33;
-
-// Convert wstring to LPCTSTR for Unicode/MBCS builds.
-// Returns a static buffer that's valid until next call.
-static LPCTSTR WStringToTStr(const std::wstring& wstr) {
-#ifdef UNICODE
-    static thread_local std::vector<std::wstring> stringPool;
-#else
-    static thread_local std::vector<std::string> stringPool;
-#endif
-    static thread_local size_t poolIndex = 0;
-
-    if (stringPool.size() < 10) {
-        stringPool.resize(10);
-    }
-
-#ifdef UNICODE
-    std::wstring& result = stringPool[poolIndex];
-#else
-    std::string& result = stringPool[poolIndex];
-#endif
-    poolIndex = (poolIndex + 1) % stringPool.size();
-
-#ifdef UNICODE
-    result = wstr;
-    return result.c_str();
-#else
-    if (wstr.empty()) {
-        result.clear();
-    } else {
-        int size = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
-        if (size > 0) {
-            result.resize(size - 1);
-            WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, &result[0], size, NULL, NULL);
-        } else {
-            result.clear();
-        }
-    }
-    return result.c_str();
-#endif
-}
-
-static std::string WStringToUtf8(const std::wstring& wstr);
-static std::wstring Utf8ToWString(const std::string& str);
-static std::wstring ToLowerString(const std::wstring& value);
-static int GetDefaultLanguageComboIndex();
-static std::wstring GetLanguageCodeForIndex(int index);
-static int GetLanguageIndexForCode(const std::wstring& code);
-static std::wstring GetLanguageFilePath(const std::wstring& code);
-static std::string NormalizePathForCompare(const std::string& path);
-static bool HandleRunningApplicationDialog(HWND hWnd, const std::string& appName);
-static bool RequestPreviousInstallCleanup(HWND hWnd,
-                                          const ExtendedInstallationMetadata& metadata,
-                                          const std::wstring& installPath);
 
 static UINT GetDpiForWindowSafe(HWND hwnd) {
 #ifdef _WIN32
@@ -136,6 +83,98 @@ static UINT GetDpiForWindowSafe(HWND hwnd) {
     return 96;
 #endif
 }
+
+
+// Convert wstring to LPCTSTR for Unicode/MBCS builds.
+// Returns a static buffer that's valid until next call.
+static LPCTSTR WStringToTStr(const std::wstring& wstr) {
+#ifdef UNICODE
+    static thread_local std::vector<std::wstring> stringPool;
+#else
+    static thread_local std::vector<std::string> stringPool;
+#endif
+    static thread_local size_t poolIndex = 0;
+
+    if (stringPool.size() < 10) {
+        stringPool.resize(10);
+    }
+
+#ifdef UNICODE
+    std::wstring& result = stringPool[poolIndex];
+#else
+    std::string& result = stringPool[poolIndex];
+#endif
+    poolIndex = (poolIndex + 1) % stringPool.size();
+
+#ifdef UNICODE
+    result = wstr;
+    return result.c_str();
+#else
+    if (wstr.empty()) {
+        result.clear();
+    } else {
+        int size = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
+        if (size > 0) {
+            result.resize(size - 1);
+            WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, &result[0], size, NULL, NULL);
+        } else {
+            result.clear();
+        }
+    }
+    return result.c_str();
+#endif
+}
+
+static std::string WStringToUtf8(const std::wstring& wstr);
+static std::wstring Utf8ToWString(const std::string& str);
+static std::wstring ToLowerString(const std::wstring& value);
+static int GetDefaultLanguageComboIndex();
+static std::wstring GetLanguageCodeForIndex(int index);
+static int GetLanguageIndexForCode(const std::wstring& code);
+static std::wstring GetLanguageFilePath(const std::wstring& code);
+static std::string NormalizePathForCompare(const std::string& path);
+static bool RequestPreviousInstallCleanup(HWND hWnd, const ExtendedInstallationMetadata& metadata, const std::wstring& installPath);
+static bool HandleRunningApplicationDialog(HWND hWnd, const std::vector<std::string>& processNames) {
+    (void)hWnd;
+    if (processNames.empty()) {
+        return true;
+    }
+
+    std::vector<std::string> running = getRunningProcessesByName(processNames);
+    if (running.empty()) {
+        return true;
+    }
+
+    auto joinNames = [](const std::vector<std::string>& names) {
+        std::string joined;
+        for (size_t i = 0; i < names.size(); ++i) {
+            if (i > 0) {
+                joined += ", ";
+            }
+            joined += names[i];
+        }
+        return joined;
+    };
+
+    std::cout << "Terminating processes: " << joinNames(running) << std::endl;
+    terminateProcessesByName(running);
+    Sleep(500);
+
+    std::vector<std::string> remaining = getRunningProcessesByName(processNames);
+    if (!remaining.empty()) {
+        std::wstring title = GUIHelpers::GetLocalizedText(
+            L"msg.dialog.title.error",
+            L"Error");
+        std::wstring message = GUIHelpers::GetLocalizedText(
+            L"msg.dialog.running_app.failed",
+            L"Failed to terminate running processes. Please close them and try again.");
+        GUIHelpers::ShowErrorDialog(hWnd, title, message);
+        return false;
+    }
+
+    return true;
+}
+
 
 static std::wstring ExpandEnvVars(const std::wstring& value) {
 #ifdef _WIN32
@@ -763,11 +802,15 @@ void GUIManager::OnInstallButtonClick() {
         return;
     }
 
-    if (!HandleRunningApplicationDialog(m_hWnd, metadata.applicationName)) {
+    bool cleanupOldInstall = RequestPreviousInstallCleanup(m_hWnd, metadata, installPath);
+
+    std::vector<std::string> processNames = buildKillProcessList(
+        metadata.applicationName,
+        metadata.installKillProcesses);
+    if (!HandleRunningApplicationDialog(m_hWnd, processNames)) {
         return;
     }
 
-    bool cleanupOldInstall = RequestPreviousInstallCleanup(m_hWnd, metadata, installPath);
 
     m_pPageController->StartInstallation(installPath, autoRun, desktopIcons, languageCode,
                                          cleanupOldInstall, m_hWnd);
@@ -1173,55 +1216,6 @@ static std::string NormalizePathForCompare(const std::string& path) {
     std::transform(result.begin(), result.end(), result.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return result;
-}
-
-static bool HandleRunningApplicationDialog(HWND hWnd, const std::string& appName) {
-    if (appName.empty()) {
-        return true;
-    }
-
-    std::string processName = appName;
-    std::string lower = processName;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".exe") {
-        processName += ".exe";
-    }
-
-    while (isProcessRunningByName(processName)) {
-        std::wstring title = GUIHelpers::GetLocalizedText(
-            L"msg.dialog.running_app.title",
-            L"Warning");
-        std::wstring okText = GUIHelpers::GetLocalizedText(
-            L"msg.dialog.running_app.retry",
-            L"Retry");
-        std::wstring cancelText = GUIHelpers::GetLocalizedText(
-            L"msg.dialog.running_app.cancel",
-            L"Cancel");
-        std::wstring altText = GUIHelpers::GetLocalizedText(
-            L"msg.dialog.running_app.terminate",
-            L"Terminate");
-        std::wstring message = GUIHelpers::GetLocalizedText(
-            L"msg.dialog.running_app.message",
-            L"Application is running.\n\nRetry: check again\nCancel: stop installation\nTerminate: close the app and continue");
-
-        DialogResult result = GUIHelpers::ShowCustomDialog(
-            hWnd,
-            title,
-            message,
-            okText,
-            cancelText,
-            altText);
-        if (result == DialogResult::Cancel) {
-            return false;
-        }
-        if (result == DialogResult::Alt) {
-            terminateProcessByName(processName);
-            Sleep(500);
-        }
-    }
-
-    return true;
 }
 
 static bool RequestPreviousInstallCleanup(HWND hWnd,

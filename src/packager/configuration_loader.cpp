@@ -1,4 +1,4 @@
-ï»¿#include "packager/configuration_loader.h"
+#include "packager/configuration_loader.h"
 #include "common/utf8_utils.h"
 #include <json.hpp>
 #include <fstream>
@@ -18,7 +18,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::loadConfiguration(
     lastError_.clear();
     loadedConfigPath_.clear();
     
-    // é¦–å…ˆæ£€æŸ¥ç¯å¢ƒå˜é‡PACKAGER_CONFIG
+    // Ê×ÏÈ¼ì²é»·¾³±äÁ¿PACKAGER_CONFIG
 #ifdef _WIN32
     const wchar_t* envConfigW = _wgetenv(L"PACKAGER_CONFIG");
     if (envConfigW && envConfigW[0] != L'\0') {
@@ -43,10 +43,10 @@ std::optional<PackagerConfiguration> ConfigurationLoader::loadConfiguration(
     }
 #endif
     
-    // åœ¨è¾“å…¥ç›®å½•ä¸­æŸ¥æ‰¾é…ç½®æ–‡ä»¶
+    // ÔÚÊäÈëÄ¿Â¼ÖĞ²éÕÒÅäÖÃÎÄ¼ş
     auto configPath = findConfigFile(inputDirectory);
     if (!configPath) {
-        // é…ç½®æ–‡ä»¶ä¸å­˜åœ¨ä¸æ˜¯é”™è¯¯ï¼Œè¿”å›nulloptè®©è°ƒç”¨è€…ä½¿ç”¨é»˜è®¤é…ç½®
+        // ÅäÖÃÎÄ¼ş²»´æÔÚ²»ÊÇ´íÎó£¬·µ»ØnulloptÈÃµ÷ÓÃÕßÊ¹ÓÃÄ¬ÈÏÅäÖÃ
         return std::nullopt;
     }
     
@@ -65,7 +65,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::loadConfigurationFromP
 std::optional<std::string> ConfigurationLoader::findConfigFile(
     const std::string& directory) {
     
-    // æŒ‰ä¼˜å…ˆçº§æŸ¥æ‰¾é…ç½®æ–‡ä»¶
+    // °´ÓÅÏÈ¼¶²éÕÒÅäÖÃÎÄ¼ş
     std::vector<std::string> configNames = {
         "packager.json",
         ".packager.json"
@@ -85,14 +85,14 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
     const std::string& filePath) {
     
     try {
-        // è¯»å–æ–‡ä»¶
+        // ¶ÁÈ¡ÎÄ¼ş
         std::ifstream file(PathFromUtf8(filePath));
         if (!file.is_open()) {
             lastError_ = "Failed to open configuration file: " + filePath;
             return std::nullopt;
         }
         
-        // è§£æJSON
+        // ½âÎöJSON
         json j;
         try {
             file >> j;
@@ -101,41 +101,41 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
             return std::nullopt;
         }
         
-        // åˆ›å»ºé…ç½®å¯¹è±¡ï¼ˆä½¿ç”¨é»˜è®¤å€¼ï¼‰
+        // ´´½¨ÅäÖÃ¶ÔÏó£¨Ê¹ÓÃÄ¬ÈÏÖµ£©
         PackagerConfiguration config;
         
-    // è§£æ Versionï¼ˆå¿…éœ€å­—æ®µï¼‰
+    // ½âÎö Version£¨±ØĞè×Ö¶Î£©
     if (!j.contains("Version")) {
         lastError_ = "Missing required field 'Version' in configuration file";
         return std::nullopt;
     }
     config.version = j["Version"].get<std::string>();
     
-    // è§£æ AppNameï¼ˆå¿…éœ€å­—æ®µï¼‰
+    // ½âÎö AppName£¨±ØĞè×Ö¶Î£©
     if (!j.contains("AppName")) {
         lastError_ = "Missing required field 'AppName' in configuration file";
         return std::nullopt;
     }
     config.applicationName = j["AppName"].get<std::string>();
     
-    // è§£æ InstallDirï¼ˆå¿…éœ€å­—æ®µï¼‰
+    // ½âÎö InstallDir£¨±ØĞè×Ö¶Î£©
     if (!j.contains("InstallDir")) {
         lastError_ = "Missing required field 'InstallDir' in configuration file";
         return std::nullopt;
     }
     config.defaultInstallDir = j["InstallDir"].get<std::string>();
 
-    // è§£æ Iconï¼ˆå¯é€‰ï¼‰
+    // ½âÎö Icon£¨¿ÉÑ¡£©
     if (j.contains("Icon") && j["Icon"].is_string()) {
         config.iconPath = j["Icon"].get<std::string>();
     }
 
-    // è§£æ WebPageUrlï¼ˆå¯é€‰ï¼‰
+    // ½âÎö WebPageUrl£¨¿ÉÑ¡£©
     if (j.contains("WebPageUrl") && j["WebPageUrl"].is_string()) {
         config.webPageUrl = j["WebPageUrl"].get<std::string>();
     }
 
-    // è§£æç‰ˆæœ¬ä¿¡æ¯ï¼ˆå¯é€‰ï¼‰
+    // ½âÎö°æ±¾ĞÅÏ¢£¨¿ÉÑ¡£©
     if (j.contains("ProductName") && j["ProductName"].is_string()) {
         config.productName = j["ProductName"].get<std::string>();
     }
@@ -155,7 +155,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         config.copyright = j["Copyright"].get<std::string>();
     }
         
-        // è§£æcompressionAlgorithmï¼ˆå¯é€‰ï¼‰
+        // ½âÎöcompressionAlgorithm£¨¿ÉÑ¡£©
         if (j.contains("compressionAlgorithm")) {
             std::string algo = j["compressionAlgorithm"].get<std::string>();
             if (algo == "lzma") {
@@ -166,7 +166,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
             }
         }
         
-    // è§£æ Folderï¼ˆå¯é€‰ï¼‰
+    // ½âÎö Folder£¨¿ÉÑ¡£©
     if (j.contains("Folder") && j["Folder"].is_object()) {
         const auto& folderObj = j["Folder"];
         
@@ -195,7 +195,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         }
     }
     
-    // è§£æ Registryï¼ˆå¯é€‰ï¼‰
+    // ½âÎö Registry£¨¿ÉÑ¡£©
     if (j.contains("Registry") && j["Registry"].is_array()) {
         for (const auto& entry : j["Registry"]) {
             if (!entry.is_object()) {
@@ -231,7 +231,20 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         }
     }
     
-    // è§£æ InstallStateï¼ˆå¯é€‰ï¼‰
+    // ½âÎö KillProcesses£¨¿ÉÑ¡£©
+    if (j.contains("KillProcesses")) {
+        const auto& killObj = j["KillProcesses"];
+        if (killObj.is_array()) {
+            for (const auto& item : killObj) {
+                if (item.is_string()) {
+                    config.installKillProcesses.push_back(item.get<std::string>());
+                }
+            }
+        } else if (killObj.is_string()) {
+            config.installKillProcesses.push_back(killObj.get<std::string>());
+        }
+    }
+    // ½âÎö InstallState£¨¿ÉÑ¡£©
     config.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + config.applicationName;
     config.installState.filePath = "%ProgramData%\\" + config.applicationName + "\\install.state";
     config.installState.mutexName = "Global\\" + config.applicationName + "_Install";
@@ -261,32 +274,31 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         if (state.contains("UseMutex") && state["UseMutex"].is_boolean()) {
             config.installState.useMutex = state["UseMutex"].get<bool>();
         }
-    if (state.contains("MutexName") && state["MutexName"].is_string()) {
-        config.installState.mutexName = state["MutexName"].get<std::string>();
+        if (state.contains("MutexName") && state["MutexName"].is_string()) {
+            config.installState.mutexName = state["MutexName"].get<std::string>();
+        }
     }
-
-    // è§£æ AutoCleanOldInstallï¼ˆå¯é€‰ï¼‰
+    // ½âÎö AutoCleanOldInstall£¨¿ÉÑ¡£©
     if (j.contains("AutoCleanOldInstall") && j["AutoCleanOldInstall"].is_boolean()) {
         config.autoCleanOldInstall = j["AutoCleanOldInstall"].get<bool>();
     }
-    }
     
-    // è§£æ AutoStartupï¼ˆå¯é€‰ï¼‰
+    // ½âÎö AutoStartup£¨¿ÉÑ¡£©
     if (j.contains("AutoStartup") && j["AutoStartup"].is_boolean()) {
         config.autoStartup = j["AutoStartup"].get<bool>();
     }
     
-    // è§£æ DesktopIconsï¼ˆå¯é€‰ï¼‰
+    // ½âÎö DesktopIcons£¨¿ÉÑ¡£©
     if (j.contains("DesktopIcons") && j["DesktopIcons"].is_boolean()) {
         config.desktopIcons = j["DesktopIcons"].get<bool>();
     }
 
-    // è§£æ RequireAdminï¼ˆå¯é€‰ï¼‰
+    // ½âÎö RequireAdmin£¨¿ÉÑ¡£©
     if (j.contains("RequireAdmin") && j["RequireAdmin"].is_boolean()) {
         config.requireAdmin = j["RequireAdmin"].get<bool>();
     }
 
-    // è§£æ MinWindowsVersionï¼ˆå¯é€‰ï¼Œä¾‹å¦‚ "10.0.19041"ï¼‰
+    // ½âÎö MinWindowsVersion£¨¿ÉÑ¡£¬ÀıÈç "10.0.19041"£©
     if (j.contains("MinWindowsVersion") && j["MinWindowsVersion"].is_string()) {
         std::string versionText = j["MinWindowsVersion"].get<std::string>();
         std::vector<int> parts;
@@ -319,7 +331,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         config.minWindowsBuild = static_cast<uint32_t>(parts.size() > 2 ? parts[2] : 0);
     }
 
-    // è§£æ SparseFileThresholdBytesï¼ˆå¯é€‰ï¼‰
+    // ½âÎö SparseFileThresholdBytes£¨¿ÉÑ¡£©
     if (j.contains("SparseFileThresholdBytes")) {
         if (j["SparseFileThresholdBytes"].is_number_unsigned() ||
             j["SparseFileThresholdBytes"].is_number_integer()) {
@@ -341,12 +353,12 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
 SpecialDirectoryType ConfigurationLoader::parseDirectoryType(
     const std::string& dirStr) {
     
-    // æ£€æŸ¥æ˜¯å¦ä¸ºinstallDirectory
+    // ¼ì²éÊÇ·ñÎªinstallDirectory
     if (dirStr == "installDirectory") {
         return SpecialDirectoryType::INSTALL_DIRECTORY;
     }
     
-    // æ£€æŸ¥æ˜¯å¦åŒ…å«ç¯å¢ƒå˜é‡
+    // ¼ì²éÊÇ·ñ°üº¬»·¾³±äÁ¿
     if (dirStr.find("%ProgramFiles%") != std::string::npos) {
         return SpecialDirectoryType::PROGRAM_FILES;
     }
@@ -363,7 +375,7 @@ SpecialDirectoryType ConfigurationLoader::parseDirectoryType(
         return SpecialDirectoryType::PROGRAM_DATA;
     }
     
-    // é»˜è®¤è¿”å›INSTALL_DIRECTORY
+    // Ä¬ÈÏ·µ»ØINSTALL_DIRECTORY
     return SpecialDirectoryType::INSTALL_DIRECTORY;
 }
 

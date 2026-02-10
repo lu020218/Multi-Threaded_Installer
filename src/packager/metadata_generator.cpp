@@ -1,4 +1,4 @@
-﻿#include "packager/metadata_generator.h"
+#include "packager/metadata_generator.h"
 #include "common/utf8_utils.h"
 #include <cstring>
 #include <filesystem>
@@ -30,7 +30,7 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.folderCount = static_cast<uint32_t>(results.size());
     metadata.totalCompressedSize = calculateTotalCompressedSize(results);
     
-    // 设置配置信息
+    // ����������Ϣ
     metadata.applicationName = config.applicationName;
     metadata.configVersion = config.version;
     metadata.defaultInstallDir = config.defaultInstallDir;
@@ -45,14 +45,15 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.sparseFileThresholdBytes = config.sparseFileThresholdBytes;
     metadata.installState = config.installState;
     metadata.registry = config.registry;
+    metadata.installKillProcesses = config.installKillProcesses;
     
     uint64_t currentOffset = 0;
     for (size_t i = 0; i < results.size() && i < folderInfos.size(); ++i) {
-        // 创建扩展文件夹映射
+        // ������չ�ļ���ӳ��
         ExtendedFolderMapping extMapping = createExtendedFolderMapping(results[i], folderInfos[i], currentOffset, config);
         metadata.extendedMappings.push_back(extMapping);
         
-        // 同时填充基类的folderMappings以保持向后兼容
+        // ͬʱ�������folderMappings�Ա���������
         FolderMapping baseMapping = createFolderMapping(results[i], folderInfos[i], currentOffset);
         metadata.folderMappings.push_back(baseMapping);
         
@@ -65,14 +66,14 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
 std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMetadata& metadata) {
     std::vector<uint8_t> serialized;
     
-    // 计算字符串数据的总大小
+    // �����ַ������ݵ��ܴ�С
     size_t stringDataSize = 0;
     for (const auto& mapping : metadata.folderMappings) {
         stringDataSize += mapping.folderName.length() + 1; // +1 for null terminator
         stringDataSize += mapping.targetPath.length() + 1; // +1 for null terminator
     }
     
-    // 创建二进制头
+    // ����������ͷ
     BinaryMetadata header;
     header.magic = Constants::MAGIC_NUMBER;
     header.version = metadata.version;
@@ -82,13 +83,13 @@ std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMeta
                          stringDataSize;
     header.dataOffset = header.metadataSize;
     
-    // 序列化头部
+    // ���л�ͷ��
     const uint8_t* headerBytes = reinterpret_cast<const uint8_t*>(&header);
     serialized.insert(serialized.end(), headerBytes, headerBytes + sizeof(BinaryMetadata));
     
-    // 序列化文件夹映射
+    // ���л��ļ���ӳ��
     for (const auto& mapping : metadata.folderMappings) {
-        // 序列化数值字段
+        // ���л���ֵ�ֶ�
         const uint8_t* offsetBytes = reinterpret_cast<const uint8_t*>(&mapping.offset);
         serialized.insert(serialized.end(), offsetBytes, offsetBytes + sizeof(uint64_t));
         
@@ -104,7 +105,7 @@ std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMeta
         const uint8_t* algorithmBytes = reinterpret_cast<const uint8_t*>(&mapping.algorithm);
         serialized.insert(serialized.end(), algorithmBytes, algorithmBytes + sizeof(CompressionAlgorithm));
         
-        // 序列化字符串长度和内容
+        // ���л��ַ������Ⱥ�����
         uint32_t folderNameLen = static_cast<uint32_t>(mapping.folderName.length());
         const uint8_t* folderNameLenBytes = reinterpret_cast<const uint8_t*>(&folderNameLen);
         serialized.insert(serialized.end(), folderNameLenBytes, folderNameLenBytes + sizeof(uint32_t));
@@ -231,7 +232,15 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
         serialized.insert(serialized.end(), valueLenBytes, valueLenBytes + sizeof(uint32_t));
         serialized.insert(serialized.end(), reg.value.begin(), reg.value.end());
     }
-    
+    uint32_t installKillCount = static_cast<uint32_t>(metadata.installKillProcesses.size());
+    const uint8_t* installKillCountBytes = reinterpret_cast<const uint8_t*>(&installKillCount);
+    serialized.insert(serialized.end(), installKillCountBytes, installKillCountBytes + sizeof(uint32_t));
+    for (const auto& name : metadata.installKillProcesses) {
+        uint32_t nameLen = static_cast<uint32_t>(name.length());
+        const uint8_t* nameLenBytes = reinterpret_cast<const uint8_t*>(&nameLen);
+        serialized.insert(serialized.end(), nameLenBytes, nameLenBytes + sizeof(uint32_t));
+        serialized.insert(serialized.end(), name.begin(), name.end());
+    }    
     for (size_t i = 0; i < metadata.extendedMappings.size(); ++i) {
         const auto& extMapping = metadata.extendedMappings[i];
         
@@ -319,7 +328,7 @@ FolderMapping MetadataGenerator::createFolderMapping(const CompressionResult& re
                                                    uint64_t offset) {
     FolderMapping mapping;
     
-    // 从sourcePath提取文件夹名称（最后一个路径组件）
+    // ��sourcePath��ȡ�ļ������ƣ����һ��·�������
     std::filesystem::path sourcePath = PathFromUtf8(folderInfo.sourcePath);
     std::string folderName = Utf8FromPath(sourcePath.filename());
     
@@ -340,11 +349,11 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
                                                                     const PackagerConfiguration& config) {
     ExtendedFolderMapping mapping;
     
-    // 从sourcePath提取文件夹名称（最后一个路径组件）
+    // ��sourcePath��ȡ�ļ������ƣ����һ��·�������
     std::filesystem::path sourcePath = PathFromUtf8(folderInfo.sourcePath);
     std::string folderName = Utf8FromPath(sourcePath.filename());
     
-    // 填充基类字段
+    // �������ֶ�
     mapping.folderName = folderName;
     mapping.targetPath = folderInfo.targetPath;
     mapping.offset = offset;
@@ -355,8 +364,8 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
     mapping.fileIndex = result.fileIndex;
     mapping.blockIndex = result.blockIndex;
     
-    // 查找该文件夹的目标配置
-    mapping.targetDirType = SpecialDirectoryType::INSTALL_DIRECTORY; // 默认值
+    // ���Ҹ��ļ��е�Ŀ������
+    mapping.targetDirType = SpecialDirectoryType::INSTALL_DIRECTORY; // Ĭ��ֵ
     mapping.customTargetPath = "";
     
     for (const auto& folderTarget : config.folderTargets) {

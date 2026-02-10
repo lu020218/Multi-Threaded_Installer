@@ -1,4 +1,4 @@
-﻿#include "installer/installer_helpers.h"
+#include "installer/installer_helpers.h"
 #include "installer/file_system_operator.h"
 #include "common/utf8_utils.h"
 #include <algorithm>
@@ -8,6 +8,7 @@
 #include <exception>
 #include <cstdlib>
 #include <iostream>
+#include <unordered_set>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -44,6 +45,39 @@ std::string normalizePathForCompare(const std::string& path) {
     return normalized;
 }
 
+std::string trimAscii(const std::string& value) {
+    size_t start = 0;
+    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) {
+        ++start;
+    }
+    if (start == value.size()) {
+        return std::string();
+    }
+    size_t end = value.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+        --end;
+    }
+    return value.substr(start, end - start);
+}
+
+std::string normalizeProcessNameInternal(const std::string& name) {
+    std::string trimmed = trimAscii(name);
+    if (trimmed.empty()) {
+        return std::string();
+    }
+    std::filesystem::path path = PathFromUtf8(trimmed);
+    std::string base = Utf8FromPath(path.filename());
+    if (base.empty()) {
+        return std::string();
+    }
+    std::string lower = base;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".exe") {
+        lower += ".exe";
+    }
+    return lower;
+}
 bool isPathUnder(const std::string& path, const std::string& base) {
     if (path.empty() || base.empty()) {
         return false;
@@ -733,4 +767,54 @@ bool terminateProcessByName(const std::string& exeName) {
 #endif
 }
 
+std::string normalizeProcessName(const std::string& name) {
+    return normalizeProcessNameInternal(name);
+}
+
+std::vector<std::string> buildKillProcessList(const std::string& appName,
+                                              const std::vector<std::string>& extraProcesses) {
+    std::unordered_set<std::string> seen;
+    std::vector<std::string> result;
+    result.reserve(extraProcesses.size() + 1);
+
+    auto addName = [&](const std::string& raw) {
+        std::string normalized = normalizeProcessNameInternal(raw);
+        if (normalized.empty()) {
+            return;
+        }
+        if (seen.insert(normalized).second) {
+            result.push_back(normalized);
+        }
+    };
+
+    if (!appName.empty()) {
+        addName(appName);
+    }
+    for (const auto& name : extraProcesses) {
+        addName(name);
+    }
+
+    return result;
+}
+
+std::vector<std::string> getRunningProcessesByName(const std::vector<std::string>& exeNames) {
+    std::vector<std::string> running;
+    running.reserve(exeNames.size());
+    for (const auto& name : exeNames) {
+        if (!name.empty() && isProcessRunningByName(name)) {
+            running.push_back(name);
+        }
+    }
+    return running;
+}
+
+bool terminateProcessesByName(const std::vector<std::string>& exeNames) {
+    bool any = false;
+    for (const auto& name : exeNames) {
+        if (!name.empty()) {
+            any = terminateProcessByName(name) || any;
+        }
+    }
+    return any;
+}
 } // namespace MultiThreadedInstaller

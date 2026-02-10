@@ -1,4 +1,4 @@
-ï»¿#include "installer/metadata_parser.h"
+#include "installer/metadata_parser.h"
 #include "common/utf8_utils.h"
 #include <fstream>
 #include <iostream>
@@ -63,12 +63,12 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
         return {};
     }
     
-    // ç§»åŠ¨åˆ°æ–‡ä»¶æœ«å°¾
+    // ÒÆ¶¯µ½ÎÄ¼şÄ©Î²
     file.seekg(0, std::ios::end);
     std::streampos fileSize = file.tellg();
     
-    // ä»æ–‡ä»¶æœ«å°¾è¯»å–DataLocatorç»“æ„
-    // æ–‡ä»¶ç»“æ„ï¼š[executable][metadata][data][DataLocator][magic]
+    // ´ÓÎÄ¼şÄ©Î²¶ÁÈ¡DataLocator½á¹¹
+    // ÎÄ¼ş½á¹¹£º[executable][metadata][data][DataLocator][magic]
     size_t locatorSize = sizeof(DataLocator) + sizeof(uint32_t); // DataLocator + end magic
     
     if (static_cast<size_t>(fileSize) < locatorSize) {
@@ -76,7 +76,7 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
         return {};
     }
     
-    // è¯»å–æ–‡ä»¶æœ«å°¾çš„é­”æ•°
+    // ¶ÁÈ¡ÎÄ¼şÄ©Î²µÄÄ§Êı
     file.seekg(-static_cast<std::streamoff>(sizeof(uint32_t)), std::ios::end);
     uint32_t endMagic;
     file.read(reinterpret_cast<char*>(&endMagic), sizeof(uint32_t));
@@ -86,7 +86,7 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
         return {};
     }
     
-    // è¯»å–DataLocator
+    // ¶ÁÈ¡DataLocator
     file.seekg(-static_cast<std::streamoff>(locatorSize), std::ios::end);
     DataLocator locator;
     file.read(reinterpret_cast<char*>(&locator), sizeof(DataLocator));
@@ -96,14 +96,14 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
         return {};
     }
     
-    // éªŒè¯åç§»é‡çš„åˆç†æ€§
+    // ÑéÖ¤Æ«ÒÆÁ¿µÄºÏÀíĞÔ
     if (locator.metadataOffset >= static_cast<uint64_t>(fileSize) ||
         locator.metadataOffset + locator.metadataSize > static_cast<uint64_t>(fileSize)) {
         std::cerr << "Invalid metadata offset or size" << std::endl;
         return {};
     }
     
-    // è¯»å–å…ƒæ•°æ®
+    // ¶ÁÈ¡ÔªÊı¾İ
     file.seekg(locator.metadataOffset);
     std::vector<uint8_t> metadata(locator.metadataSize);
     file.read(reinterpret_cast<char*>(metadata.data()), locator.metadataSize);
@@ -124,7 +124,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         return metadata;
     }
     
-    // è§£æå¤´éƒ¨
+    // ½âÎöÍ·²¿
     const BinaryMetadata* header = reinterpret_cast<const BinaryMetadata*>(data.data());
     
     if (!validateHeader(*header)) {
@@ -134,18 +134,18 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
     metadata.version = header->version;
     metadata.folderCount = header->folderCount;
     
-    // è§£ææ–‡ä»¶å¤¹æ˜ å°„
+    // ½âÎöÎÄ¼ş¼ĞÓ³Éä
     size_t offset = sizeof(BinaryMetadata);
     for (uint32_t i = 0; i < header->folderCount; ++i) {
         FolderMapping mapping;
         
-        // æ£€æŸ¥æ˜¯å¦æœ‰è¶³å¤Ÿçš„æ•°æ®è¯»å–æ•°å€¼å­—æ®µ
+        // ¼ì²éÊÇ·ñÓĞ×ã¹»µÄÊı¾İ¶ÁÈ¡ÊıÖµ×Ö¶Î
         if (offset + sizeof(uint64_t) * 3 + sizeof(uint32_t) * 3 > data.size()) {
             std::cerr << "Insufficient data for folder mapping " << i << " numeric fields" << std::endl;
             break;
         }
         
-        // è¯»å–æ•°å€¼å­—æ®µ
+        // ¶ÁÈ¡ÊıÖµ×Ö¶Î
         mapping.offset = *reinterpret_cast<const uint64_t*>(data.data() + offset);
         offset += sizeof(uint64_t);
         
@@ -161,7 +161,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         mapping.algorithm = *reinterpret_cast<const CompressionAlgorithm*>(data.data() + offset);
         offset += sizeof(CompressionAlgorithm);
         
-        // è¯»å–æ–‡ä»¶å¤¹åç§°
+        // ¶ÁÈ¡ÎÄ¼ş¼ĞÃû³Æ
         if (offset + sizeof(uint32_t) > data.size()) {
             std::cerr << "Insufficient data for folder name length" << std::endl;
             break;
@@ -178,7 +178,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         mapping.folderName = std::string(reinterpret_cast<const char*>(data.data() + offset), folderNameLen);
         offset += folderNameLen;
         
-        // è¯»å–ç›®æ ‡è·¯å¾„
+        // ¶ÁÈ¡Ä¿±êÂ·¾¶
         if (offset + sizeof(uint32_t) > data.size()) {
             std::cerr << "Insufficient data for target path length" << std::endl;
             break;
@@ -198,7 +198,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         metadata.folderMappings.push_back(mapping);
     }
     
-    // è®¡ç®—æ€»å‹ç¼©å¤§å°
+    // ¼ÆËã×ÜÑ¹Ëõ´óĞ¡
     metadata.totalCompressedSize = 0;
     for (const auto& mapping : metadata.folderMappings) {
         metadata.totalCompressedSize += mapping.compressedSize;
@@ -463,6 +463,31 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         metadata.registry.push_back(std::move(reg));
     }
     
+    if (header->version >= 12) {
+        if (offset + sizeof(uint32_t) > data.size()) {
+            std::cerr << "Missing kill process count" << std::endl;
+            return metadata;
+        }
+        uint32_t killCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+        metadata.installKillProcesses.reserve(killCount);
+        for (uint32_t k = 0; k < killCount; ++k) {
+            if (offset + sizeof(uint32_t) > data.size()) {
+                std::cerr << "Missing kill process name length" << std::endl;
+                return metadata;
+            }
+            uint32_t nameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+            offset += sizeof(uint32_t);
+            if (offset + nameLen > data.size()) {
+                std::cerr << "Insufficient data for kill process name" << std::endl;
+                return metadata;
+            }
+            metadata.installKillProcesses.emplace_back(reinterpret_cast<const char*>(data.data() + offset), nameLen);
+            offset += nameLen;
+        }
+    } else {
+        metadata.installKillProcesses.clear();
+    }
     for (uint32_t i = 0; i < header->folderCount; ++i) {
         ExtendedFolderMapping mapping;
         
@@ -623,11 +648,11 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
         return {};
     }
     
-    // ç§»åŠ¨åˆ°æ–‡ä»¶æœ«å°¾è·å–æ–‡ä»¶å¤§å°
+    // ÒÆ¶¯µ½ÎÄ¼şÄ©Î²»ñÈ¡ÎÄ¼ş´óĞ¡
     file.seekg(0, std::ios::end);
     std::streampos fileSize = file.tellg();
     
-    // ä»æ–‡ä»¶æœ«å°¾è¯»å–DataLocatorç»“æ„
+    // ´ÓÎÄ¼şÄ©Î²¶ÁÈ¡DataLocator½á¹¹
     size_t locatorSize = sizeof(DataLocator) + sizeof(uint32_t);
     
     if (static_cast<size_t>(fileSize) < locatorSize) {
@@ -635,7 +660,7 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
         return {};
     }
     
-    // è¯»å–DataLocator
+    // ¶ÁÈ¡DataLocator
     file.seekg(-static_cast<std::streamoff>(locatorSize), std::ios::end);
     DataLocator locator;
     file.read(reinterpret_cast<char*>(&locator), sizeof(DataLocator));
@@ -645,17 +670,17 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
         return {};
     }
     
-    // è®¡ç®—ç»å¯¹åç§»é‡ï¼ˆç›¸å¯¹äºæ•°æ®åŒºåŸŸå¼€å§‹ï¼‰
+    // ¼ÆËã¾ø¶ÔÆ«ÒÆÁ¿£¨Ïà¶ÔÓÚÊı¾İÇøÓò¿ªÊ¼£©
     uint64_t absoluteOffset = locator.dataOffset + offset;
     
-    // éªŒè¯åç§»é‡å’Œå¤§å°çš„åˆç†æ€§
+    // ÑéÖ¤Æ«ÒÆÁ¿ºÍ´óĞ¡µÄºÏÀíĞÔ
     if (absoluteOffset >= static_cast<uint64_t>(fileSize) ||
         absoluteOffset + size > static_cast<uint64_t>(fileSize)) {
         std::cerr << "Invalid data offset or size" << std::endl;
         return {};
     }
     
-    // è¯»å–å‹ç¼©æ•°æ®
+    // ¶ÁÈ¡Ñ¹ËõÊı¾İ
     file.seekg(absoluteOffset);
     std::vector<uint8_t> compressedData(size);
     file.read(reinterpret_cast<char*>(compressedData.data()), size);

@@ -1,4 +1,4 @@
-ï»¿#pragma once
+#pragma once
 
 #include <string>
 #include <vector>
@@ -8,35 +8,35 @@
 
 namespace MultiThreadedInstaller {
 
-// å‹ç¼©ç®—æ³•æšä¸¾
+// Ñ¹ËõËã·¨Ã¶¾Ù
 enum class CompressionAlgorithm {
-    LZMA_HIGH     // 7z LZMAé«˜å‹ç¼©æ¯”æ¨¡å¼
+    LZMA_HIGH     // 7z LZMA¸ßÑ¹Ëõ±ÈÄ£Ê½
 };
 
-// ç‰¹æ®Šç›®å½•ç±»å‹æšä¸¾
+// ÌØÊâÄ¿Â¼ÀàĞÍÃ¶¾Ù
 enum class SpecialDirectoryType {
-    INSTALL_DIRECTORY,  // ç”¨æˆ·é€‰æ‹©çš„å®‰è£…ç›®å½•
+    INSTALL_DIRECTORY,  // ÓÃ»§Ñ¡ÔñµÄ°²×°Ä¿Â¼
     PROGRAM_FILES,      // %ProgramFiles%
     APPDATA_ROAMING,    // %AppData%
     APPDATA_LOCAL,      // %LocalAppData%
     PROGRAM_DATA        // %ProgramData%
 };
 
-// å®‰è£…çŠ¶æ€å†™å…¥æ–¹å¼
+// °²×°×´Ì¬Ğ´Èë·½Ê½
 enum class InstallStateMode {
     REGISTRY,
     FILE,
     BOTH
 };
 
-// æ³¨å†Œè¡¨å€¼ç±»å‹
+// ×¢²á±íÖµÀàĞÍ
 enum class RegistryValueType {
     STRING,
     DWORD,
     EXPAND_STRING
 };
 
-// å®‰è£…çŠ¶æ€é…ç½®
+// °²×°×´Ì¬ÅäÖÃ
 struct InstallStateConfig {
     InstallStateMode mode;
     std::string registryPath;
@@ -51,7 +51,7 @@ struct InstallStateConfig {
           useMutex(true) {}
 };
 
-// æ–‡ä»¶å¤¹ä¿¡æ¯ç»“æ„
+// ÎÄ¼ş¼ĞĞÅÏ¢½á¹¹
 struct FolderInfo {
     std::string sourcePath;
     std::string targetPath;
@@ -64,54 +64,55 @@ struct FolderInfo {
         : sourcePath(source), targetPath(target), totalSize(0) {}
 };
 
-// æ–‡ä»¶å¤¹ç›®æ ‡ç›®å½•é…ç½®
+// ÎÄ¼ş¼ĞÄ¿±êÄ¿Â¼ÅäÖÃ
 struct FolderTargetConfig {
-    std::string folderName;           // æ–‡ä»¶å¤¹åç§°ï¼ˆç›¸å¯¹äºè¾“å…¥ç›®å½•ï¼‰
-    std::string targetDirectory;      // ç›®æ ‡ç›®å½•é…ç½®å­—ç¬¦ä¸²
-    SpecialDirectoryType dirType;     // ç›®æ ‡ç›®å½•ç±»å‹
+    std::string folderName;           // ÎÄ¼ş¼ĞÃû³Æ£¨Ïà¶ÔÓÚÊäÈëÄ¿Â¼£©
+    std::string targetDirectory;      // Ä¿±êÄ¿Â¼ÅäÖÃ×Ö·û´®
+    SpecialDirectoryType dirType;     // Ä¿±êÄ¿Â¼ÀàĞÍ
     
     FolderTargetConfig()
         : dirType(SpecialDirectoryType::INSTALL_DIRECTORY) {}
 };
 
-// æ³¨å†Œè¡¨é…ç½®
+// ×¢²á±íÅäÖÃ
 struct RegistryEntry {
-    std::string path;   // æ³¨å†Œè¡¨è·¯å¾„
-    std::string key;    // é”®å
-    std::string value;  // å€¼
-    RegistryValueType type; // å€¼ç±»å‹
+    std::string path;   // ×¢²á±íÂ·¾¶
+    std::string key;    // ¼üÃû
+    std::string value;  // Öµ
+    RegistryValueType type; // ÖµÀàĞÍ
     
     RegistryEntry()
         : type(RegistryValueType::STRING) {}
 };
 
-// æ‰“åŒ…å™¨é…ç½®
+// ´ò°üÆ÷ÅäÖÃ
 struct PackagerConfiguration {
-    std::string version;                           // é…ç½®ç‰ˆæœ¬
-    std::string applicationName;                    // åº”ç”¨ç¨‹åºåç§°
-    std::string defaultInstallDir;                  // å»ºè®®çš„é»˜è®¤å®‰è£…ç›®å½•ï¼ˆä¸å«åº”ç”¨ç¨‹åºåï¼‰
-    std::string iconPath;                           // å®‰è£…ç¨‹åºå›¾æ ‡è·¯å¾„ï¼ˆå¯é€‰ï¼‰
-    std::string webPageUrl;                         // ä»‹ç»ç½‘é¡µURLï¼ˆå¯é€‰ï¼‰
-    std::string productName;                        // äº§å“åç§°ï¼ˆå¯é€‰ï¼‰
-    std::string fileVersion;                        // æ–‡ä»¶ç‰ˆæœ¬ï¼ˆå¯é€‰ï¼‰
-    std::string productVersion;                     // äº§å“ç‰ˆæœ¬ï¼ˆå¯é€‰ï¼‰
-    std::string companyName;                        // å…¬å¸åç§°ï¼ˆå¯é€‰ï¼‰
-    std::string fileDescription;                    // æ–‡ä»¶æè¿°ï¼ˆå¯é€‰ï¼‰
-    std::string copyright;                          // ç‰ˆæƒä¿¡æ¯ï¼ˆå¯é€‰ï¼‰
-    CompressionAlgorithm compressionAlgorithm;      // å‹ç¼©ç®—æ³•
-    std::vector<FolderTargetConfig> folderTargets;  // æ–‡ä»¶å¤¹ç›®æ ‡é…ç½®
-    std::vector<RegistryEntry> registry;           // æ³¨å†Œè¡¨é…ç½®ï¼ˆé¢„ç•™ï¼‰
-    bool autoStartup;                              // é»˜è®¤å¼€æœºè‡ªå¯åŠ¨ï¼ˆé¢„ç•™ï¼‰
-    bool desktopIcons;                             // é»˜è®¤åˆ›å»ºæ¡Œé¢å›¾æ ‡ï¼ˆé¢„ç•™ï¼‰
-    bool autoCleanOldInstall;                      // è‡ªåŠ¨æ¸…ç†æ—§å®‰è£…ç›®å½•ï¼ˆä»…å½“ç›®å½•ä¸åŒï¼‰
-    bool requireAdmin;                             // å®‰è£…ç¨‹åºéœ€è¦ç®¡ç†å‘˜æƒé™
-    uint16_t minWindowsMajor;                      // æœ€å°Windowsä¸»ç‰ˆæœ¬
-    uint16_t minWindowsMinor;                      // æœ€å°Windowsæ¬¡ç‰ˆæœ¬
-    uint32_t minWindowsBuild;                      // æœ€å°Windowsæ„å»ºå·
-    uint64_t sparseFileThresholdBytes;             // ç¨€ç–æ–‡ä»¶é˜ˆå€¼ï¼ˆå­—èŠ‚ï¼‰
-    InstallStateConfig installState;               // å®‰è£…çŠ¶æ€å†™å…¥é…ç½®
+    std::string version;                           // ÅäÖÃ°æ±¾
+    std::string applicationName;                    // Ó¦ÓÃ³ÌĞòÃû³Æ
+    std::string defaultInstallDir;                  // ½¨ÒéµÄÄ¬ÈÏ°²×°Ä¿Â¼£¨²»º¬Ó¦ÓÃ³ÌĞòÃû£©
+    std::string iconPath;                           // °²×°³ÌĞòÍ¼±êÂ·¾¶£¨¿ÉÑ¡£©
+    std::string webPageUrl;                         // ½éÉÜÍøÒ³URL£¨¿ÉÑ¡£©
+    std::string productName;                        // ²úÆ·Ãû³Æ£¨¿ÉÑ¡£©
+    std::string fileVersion;                        // ÎÄ¼ş°æ±¾£¨¿ÉÑ¡£©
+    std::string productVersion;                     // ²úÆ·°æ±¾£¨¿ÉÑ¡£©
+    std::string companyName;                        // ¹«Ë¾Ãû³Æ£¨¿ÉÑ¡£©
+    std::string fileDescription;                    // ÎÄ¼şÃèÊö£¨¿ÉÑ¡£©
+    std::string copyright;                          // °æÈ¨ĞÅÏ¢£¨¿ÉÑ¡£©
+    CompressionAlgorithm compressionAlgorithm;      // Ñ¹ËõËã·¨
+    std::vector<FolderTargetConfig> folderTargets;  // ÎÄ¼ş¼ĞÄ¿±êÅäÖÃ
+    std::vector<RegistryEntry> registry;           // ×¢²á±íÅäÖÃ£¨Ô¤Áô£©
+    std::vector<std::string> installKillProcesses; // °²×°/Ğ¶ÔØÊ±ĞèÒªÖÕÖ¹µÄ½ø³ÌÁĞ±í
+    bool autoStartup;                              // Ä¬ÈÏ¿ª»ú×ÔÆô¶¯£¨Ô¤Áô£©
+    bool desktopIcons;                             // Ä¬ÈÏ´´½¨×ÀÃæÍ¼±ê£¨Ô¤Áô£©
+    bool autoCleanOldInstall;                      // ×Ô¶¯ÇåÀí¾É°²×°Ä¿Â¼£¨½öµ±Ä¿Â¼²»Í¬£©
+    bool requireAdmin;                             // °²×°³ÌĞòĞèÒª¹ÜÀíÔ±È¨ÏŞ
+    uint16_t minWindowsMajor;                      // ×îĞ¡WindowsÖ÷°æ±¾
+    uint16_t minWindowsMinor;                      // ×îĞ¡Windows´Î°æ±¾
+    uint32_t minWindowsBuild;                      // ×îĞ¡Windows¹¹½¨ºÅ
+    uint64_t sparseFileThresholdBytes;             // Ï¡ÊèÎÄ¼şãĞÖµ£¨×Ö½Ú£©
+    InstallStateConfig installState;               // °²×°×´Ì¬Ğ´ÈëÅäÖÃ
     
-    // é»˜è®¤å€¼
+    // Ä¬ÈÏÖµ
     PackagerConfiguration() 
         : version("1.0"),
           applicationName("MyApplication"),
@@ -127,14 +128,14 @@ struct PackagerConfiguration {
           sparseFileThresholdBytes(4 * 1024 * 1024) {}
 };
 
-// æ–‡ä»¶ç´¢å¼•æ¡ç›®
+// ÎÄ¼şË÷ÒıÌõÄ¿
 struct FileIndexEntry {
     std::string relativePath;
     uint64_t offset;
     uint64_t size;
 };
 
-// å—ç´¢å¼•æ¡ç›®
+// ¿éË÷ÒıÌõÄ¿
 struct BlockIndexEntry {
     uint32_t blockId;
     uint64_t offset;
@@ -143,7 +144,7 @@ struct BlockIndexEntry {
     uint32_t checksum;
 };
 
-// å‹ç¼©ç»“æœç»“æ„
+// Ñ¹Ëõ½á¹û½á¹¹
 struct CompressionResult {
     std::vector<uint8_t> compressedData;
     uint32_t checksum;
@@ -157,7 +158,7 @@ struct CompressionResult {
                          algorithm(CompressionAlgorithm::LZMA_HIGH) {}
 };
 
-// æ–‡ä»¶å¤¹æ˜ å°„ç»“æ„
+// ÎÄ¼ş¼ĞÓ³Éä½á¹¹
 struct FolderMapping {
     std::string folderName;
     std::string targetPath;
@@ -171,10 +172,10 @@ struct FolderMapping {
                      checksum(0), algorithm(CompressionAlgorithm::LZMA_HIGH) {}
 };
 
-// æ‰©å±•çš„æ–‡ä»¶å¤¹æ˜ å°„ç»“æ„ï¼ˆå‘åå…¼å®¹ï¼‰
+// À©Õ¹µÄÎÄ¼ş¼ĞÓ³Éä½á¹¹£¨Ïòºó¼æÈİ£©
 struct ExtendedFolderMapping : public FolderMapping {
-    SpecialDirectoryType targetDirType;   // ç›®æ ‡ç›®å½•ç±»å‹
-    std::string customTargetPath;         // è‡ªå®šä¹‰ç›®æ ‡è·¯å¾„
+    SpecialDirectoryType targetDirType;   // Ä¿±êÄ¿Â¼ÀàĞÍ
+    std::string customTargetPath;         // ×Ô¶¨ÒåÄ¿±êÂ·¾¶
     std::vector<FileIndexEntry> fileIndex;
     std::vector<BlockIndexEntry> blockIndex;
     
@@ -183,7 +184,7 @@ struct ExtendedFolderMapping : public FolderMapping {
           targetDirType(SpecialDirectoryType::INSTALL_DIRECTORY) {}
 };
 
-// å®‰è£…å…ƒæ•°æ®ç»“æ„
+// °²×°ÔªÊı¾İ½á¹¹
 struct InstallationMetadata {
     uint32_t version;
     uint32_t folderCount;
@@ -193,23 +194,24 @@ struct InstallationMetadata {
     InstallationMetadata() : version(1), folderCount(0), totalCompressedSize(0) {}
 };
 
-// æ‰©å±•çš„å®‰è£…å…ƒæ•°æ®ç»“æ„ï¼ˆå‘åå…¼å®¹ï¼‰
+// À©Õ¹µÄ°²×°ÔªÊı¾İ½á¹¹£¨Ïòºó¼æÈİ£©
 struct ExtendedInstallationMetadata : public InstallationMetadata {
-    std::string applicationName;                    // åº”ç”¨ç¨‹åºåç§°
-    std::string configVersion;                      // é…ç½®ç‰ˆæœ¬
-    std::string defaultInstallDir;                  // å»ºè®®çš„é»˜è®¤å®‰è£…ç›®å½•
-    std::string webPageUrl;                         // ä»‹ç»ç½‘é¡µURL
-    bool autoStartup;                               // é»˜è®¤å¼€æœºè‡ªå¯åŠ¨
-    bool desktopIcons;                              // é»˜è®¤åˆ›å»ºæ¡Œé¢å›¾æ ‡
-    bool autoCleanOldInstall;                       // è‡ªåŠ¨æ¸…ç†æ—§å®‰è£…ç›®å½•ï¼ˆä»…å½“ç›®å½•ä¸åŒï¼‰
-    bool requireAdmin;                              // å®‰è£…ç¨‹åºéœ€è¦ç®¡ç†å‘˜æƒé™
-    uint16_t minWindowsMajor;                       // æœ€å°Windowsä¸»ç‰ˆæœ¬
-    uint16_t minWindowsMinor;                       // æœ€å°Windowsæ¬¡ç‰ˆæœ¬
-    uint32_t minWindowsBuild;                       // æœ€å°Windowsæ„å»ºå·
-    uint64_t sparseFileThresholdBytes;             // ç¨€ç–æ–‡ä»¶é˜ˆå€¼ï¼ˆå­—èŠ‚ï¼‰
-    InstallStateConfig installState;               // å®‰è£…çŠ¶æ€å†™å…¥é…ç½®
-    std::vector<ExtendedFolderMapping> extendedMappings; // æ‰©å±•çš„æ–‡ä»¶å¤¹æ˜ å°„
-    std::vector<RegistryEntry> registry;            // æ³¨å†Œè¡¨å†™å…¥é…ç½®
+    std::string applicationName;                    // Ó¦ÓÃ³ÌĞòÃû³Æ
+    std::string configVersion;                      // ÅäÖÃ°æ±¾
+    std::string defaultInstallDir;                  // ½¨ÒéµÄÄ¬ÈÏ°²×°Ä¿Â¼
+    std::string webPageUrl;                         // ½éÉÜÍøÒ³URL
+    bool autoStartup;                               // Ä¬ÈÏ¿ª»ú×ÔÆô¶¯
+    bool desktopIcons;                              // Ä¬ÈÏ´´½¨×ÀÃæÍ¼±ê
+    bool autoCleanOldInstall;                       // ×Ô¶¯ÇåÀí¾É°²×°Ä¿Â¼£¨½öµ±Ä¿Â¼²»Í¬£©
+    bool requireAdmin;                              // °²×°³ÌĞòĞèÒª¹ÜÀíÔ±È¨ÏŞ
+    uint16_t minWindowsMajor;                       // ×îĞ¡WindowsÖ÷°æ±¾
+    uint16_t minWindowsMinor;                       // ×îĞ¡Windows´Î°æ±¾
+    uint32_t minWindowsBuild;                       // ×îĞ¡Windows¹¹½¨ºÅ
+    uint64_t sparseFileThresholdBytes;             // Ï¡ÊèÎÄ¼şãĞÖµ£¨×Ö½Ú£©
+    InstallStateConfig installState;               // °²×°×´Ì¬Ğ´ÈëÅäÖÃ
+    std::vector<ExtendedFolderMapping> extendedMappings; // À©Õ¹µÄÎÄ¼ş¼ĞÓ³Éä
+    std::vector<RegistryEntry> registry;            // ×¢²á±íĞ´ÈëÅäÖÃ
+    std::vector<std::string> installKillProcesses; // °²×°/Ğ¶ÔØÊ±ĞèÒªÖÕÖ¹µÄ½ø³ÌÁĞ±í
     
     ExtendedInstallationMetadata() 
         : InstallationMetadata(),
@@ -227,19 +229,19 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
           sparseFileThresholdBytes(4 * 1024 * 1024) {}
 };
 
-// äºŒè¿›åˆ¶å…ƒæ•°æ®å¤´ç»“æ„
+// ¶ş½øÖÆÔªÊı¾İÍ·½á¹¹
 struct BinaryMetadata {
-    uint32_t magic;           // é­”æ•°æ ‡è¯†: 0x4D544950 ("MTIP")
-    uint32_t version;         // ç‰ˆæœ¬å·
-    uint32_t folderCount;     // æ–‡ä»¶å¤¹æ•°é‡
-    uint64_t metadataSize;    // å…ƒæ•°æ®æ€»å¤§å°
-    uint64_t dataOffset;      // å‹ç¼©æ•°æ®èµ·å§‹åç§»
+    uint32_t magic;           // Ä§Êı±êÊ¶: 0x4D544950 ("MTIP")
+    uint32_t version;         // °æ±¾ºÅ
+    uint32_t folderCount;     // ÎÄ¼ş¼ĞÊıÁ¿
+    uint64_t metadataSize;    // ÔªÊı¾İ×Ü´óĞ¡
+    uint64_t dataOffset;      // Ñ¹ËõÊı¾İÆğÊ¼Æ«ÒÆ
     
     BinaryMetadata() : magic(0x4D544950), version(1), folderCount(0), 
                       metadataSize(0), dataOffset(0) {}
 };
 
-// è§£å‹ä»»åŠ¡ç»“æ„
+// ½âÑ¹ÈÎÎñ½á¹¹
 struct DecompressionTask {
     std::vector<uint8_t> compressedData;
     std::string targetPath;
@@ -251,31 +253,31 @@ struct DecompressionTask {
                          algorithm(CompressionAlgorithm::LZMA_HIGH) {}
 };
 
-// è¿›åº¦å›è°ƒå‡½æ•°ç±»å‹
+// ½ø¶È»Øµ÷º¯ÊıÀàĞÍ
 using ProgressCallback = std::function<void(const std::string&, const std::string&, float)>;
 
-// å¸¸é‡å®šä¹‰
+// ³£Á¿¶¨Òå
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;  // "MTDP"
-    constexpr uint32_t VERSION = 10;
+    constexpr uint32_t VERSION = 12;
     
-    // å—å¤§å°é…ç½® (ä¼˜åŒ–å)
-    constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;  // 2MB (ä» 64KB ä¼˜åŒ–)
+    // ¿é´óĞ¡ÅäÖÃ (ÓÅ»¯ºó)
+    constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;  // 2MB (´Ó 64KB ÓÅ»¯)
     constexpr size_t MIN_BLOCK_SIZE = 4 * 1024 * 1024;      // 1MB
     constexpr size_t MAX_BLOCK_SIZE = 128 * 1024 * 1024;      // 8MB
     
-    constexpr int DEFAULT_LZMA_LEVEL = 9;          // å¹³è¡¡å‹ç¼©
+    constexpr int DEFAULT_LZMA_LEVEL = 9;          // Æ½ºâÑ¹Ëõ
 }
 
-// å¤–éƒ¨æ•°æ®åŒ…å¤´
+// Íâ²¿Êı¾İ°üÍ·
 struct DataPackageHeader {
     uint32_t magic;           // "MTDP"
-    uint32_t version;         // ç‰ˆæœ¬å·
-    uint64_t metadataOffset;  // å…ƒæ•°æ®åç§»
-    uint64_t metadataSize;    // å…ƒæ•°æ®å¤§å°
-    uint64_t dataOffset;      // å‹ç¼©æ•°æ®åç§»
-    uint64_t dataSize;        // å‹ç¼©æ•°æ®å¤§å°
+    uint32_t version;         // °æ±¾ºÅ
+    uint64_t metadataOffset;  // ÔªÊı¾İÆ«ÒÆ
+    uint64_t metadataSize;    // ÔªÊı¾İ´óĞ¡
+    uint64_t dataOffset;      // Ñ¹ËõÊı¾İÆ«ÒÆ
+    uint64_t dataSize;        // Ñ¹ËõÊı¾İ´óĞ¡
     
     DataPackageHeader()
         : magic(Constants::DATA_MAGIC_NUMBER),

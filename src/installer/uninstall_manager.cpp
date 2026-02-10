@@ -3,6 +3,7 @@
 #include "installer/install_state_utils.h"
 #include "installer/installer_helpers.h"
 #include "installer/registry_utils.h"
+#include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -149,11 +150,11 @@ bool writeManifest(const std::string& manifestPath,
         state["mutexName"] = ensureUtf8(installState.mutexName);
         root["installState"] = state;
 
-        std::filesystem::path path(manifestPath);
+        std::filesystem::path path = PathFromUtf8(manifestPath);
         std::filesystem::path parent = path.parent_path();
         if (!parent.empty()) {
             FileSystemOperator fs;
-            if (!fs.createDirectoryRecursive(toLongPath(parent).string())) {
+            if (!fs.createDirectoryRecursive(Utf8FromPath(parent))) {
                 return false;
             }
         }
@@ -175,7 +176,7 @@ bool readManifest(const std::string& manifestPath, json& outManifest) {
     if (manifestPath.empty()) {
         return false;
     }
-    std::ifstream in(toLongPath(std::filesystem::path(manifestPath)), std::ios::binary);
+    std::ifstream in(toLongPath(PathFromUtf8(manifestPath)), std::ios::binary);
     if (!in) {
         return false;
     }
@@ -214,17 +215,17 @@ bool resolveExistingInstallInfo(const std::string& appName,
     std::string legacyInstallDir;
     if (readRegistryStringValue(legacyPath, "InstallDir", legacyInstallDir)) {
         installDir = legacyInstallDir;
-        std::filesystem::path localManifest = std::filesystem::path(legacyInstallDir) / "install.manifest.json";
+        std::filesystem::path localManifest = PathFromUtf8(legacyInstallDir) / "install.manifest.json";
         if (std::filesystem::exists(localManifest)) {
-            manifestPath = localManifest.string();
+            manifestPath = Utf8FromPath(localManifest);
         }
     } else {
         std::string legacyPathHklm = "HKEY_LOCAL_MACHINE\\Software\\" + appName;
         if (readRegistryStringValue(legacyPathHklm, "InstallDir", legacyInstallDir)) {
             installDir = legacyInstallDir;
-            std::filesystem::path localManifest = std::filesystem::path(legacyInstallDir) / "install.manifest.json";
+            std::filesystem::path localManifest = PathFromUtf8(legacyInstallDir) / "install.manifest.json";
             if (std::filesystem::exists(localManifest)) {
-                manifestPath = localManifest.string();
+                manifestPath = Utf8FromPath(localManifest);
             }
         }
     }
@@ -239,9 +240,9 @@ bool resolveExistingInstallInfo(const std::string& appName,
     }
     if (!installLocation.empty()) {
         installDir = installLocation;
-        std::filesystem::path localManifest = std::filesystem::path(installLocation) / "install.manifest.json";
+        std::filesystem::path localManifest = PathFromUtf8(installLocation) / "install.manifest.json";
         if (std::filesystem::exists(localManifest)) {
-            manifestPath = localManifest.string();
+            manifestPath = Utf8FromPath(localManifest);
         }
     }
 
@@ -251,15 +252,15 @@ bool resolveExistingInstallInfo(const std::string& appName,
             readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
         }
         if (!uninstallString.empty()) {
-            std::filesystem::path uninstallPath(uninstallString);
+            std::filesystem::path uninstallPath = PathFromUtf8(uninstallString);
             if (std::filesystem::exists(uninstallPath)) {
                 std::filesystem::path baseDir = uninstallPath.parent_path();
                 if (!baseDir.empty()) {
                     std::filesystem::path localManifest = baseDir / "install.manifest.json";
                     if (std::filesystem::exists(localManifest)) {
-                        manifestPath = localManifest.string();
+                        manifestPath = Utf8FromPath(localManifest);
                         if (installDir.empty()) {
-                            installDir = baseDir.string();
+                            installDir = Utf8FromPath(baseDir);
                         }
                     }
                 }
@@ -269,7 +270,7 @@ bool resolveExistingInstallInfo(const std::string& appName,
 
     if (manifestPath.empty()) {
         std::string defaultManifest = getDefaultManifestPath(appName, resolver);
-        if (!defaultManifest.empty() && std::filesystem::exists(defaultManifest)) {
+        if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
             manifestPath = defaultManifest;
         }
     }
@@ -310,51 +311,75 @@ bool scheduleSelfDeleteImmediate(const std::vector<std::string>& cleanupRoots,
     if (exePath.empty()) {
         return false;
     }
-    
-    char tempPath[MAX_PATH] = {0};
-    DWORD len = GetTempPathA(MAX_PATH, tempPath);
+
+    std::wstring exePathW = Utf8ToWide(exePath);
+    if (exePathW.empty()) {
+        return false;
+    }
+
+    wchar_t tempPath[MAX_PATH] = {};
+    DWORD len = GetTempPathW(MAX_PATH, tempPath);
     if (len == 0 || len >= MAX_PATH) {
         return false;
     }
-    
-    char tempFile[MAX_PATH] = {0};
-    if (GetTempFileNameA(tempPath, "un", 0, tempFile) == 0) {
+
+    wchar_t tempFile[MAX_PATH] = {};
+    if (GetTempFileNameW(tempPath, L"un", 0, tempFile) == 0) {
         return false;
     }
-    
-    std::string scriptPath = std::string(tempFile) + ".cmd";
-    std::ofstream script(scriptPath, std::ios::binary | std::ios::trunc);
+
+    std::wstring scriptPath = std::wstring(tempFile) + L".cmd";
+    std::filesystem::path scriptFs(scriptPath);
+    std::ofstream script(scriptFs, std::ios::binary | std::ios::trunc);
     if (!script) {
         return false;
     }
-    
-    script << "@echo off\n";
-    script << ":repeat\n";
-    script << "del /f /q \"" << exePath << "\" >nul 2>&1\n";
-    script << "if exist \"" << exePath << "\" (\n";
-    script << "  ping 127.0.0.1 -n 2 >nul\n";
-    script << "  goto repeat\n";
-    script << ")\n";
+
+    auto writeLine = [&](const std::wstring& line) {
+        script.write(reinterpret_cast<const char*>(line.c_str()),
+                     static_cast<std::streamsize>(line.size() * sizeof(wchar_t)));
+    };
+
+    const unsigned char bom[] = {0xFF, 0xFE};
+    script.write(reinterpret_cast<const char*>(bom), sizeof(bom));
+
+    writeLine(L"@echo off\r\n");
+    writeLine(L":repeat\r\n");
+    writeLine(L"del /f /q \"" + exePathW + L"\" >nul 2>&1\r\n");
+    writeLine(L"if exist \"" + exePathW + L"\" (\r\n");
+    writeLine(L"  ping 127.0.0.1 -n 2 >nul\r\n");
+    writeLine(L"  goto repeat\r\n");
+    writeLine(L")\r\n");
+
     if (!manifestPath.empty()) {
-        script << "if exist \"" << manifestPath << "\" del /f /q \"" << manifestPath << "\" >nul 2>&1\n";
+        std::wstring manifestW = Utf8ToWide(manifestPath);
+        if (!manifestW.empty()) {
+            writeLine(L"if exist \"" + manifestW + L"\" del /f /q \"" + manifestW + L"\" >nul 2>&1\r\n");
+        }
     }
     for (const auto& root : cleanupRoots) {
         if (root.empty()) {
             continue;
         }
-        script << "if exist \"" << root << "\" (\n";
-        script << "  for /f \"delims=\" %%d in ('dir /ad /b /s \"" << root << "\" ^| sort /r') do rmdir \"%%d\" 2>nul\n";
-        script << "  rmdir \"" << root << "\" 2>nul\n";
-        script << ")\n";
+        std::wstring rootW = Utf8ToWide(root);
+        if (rootW.empty()) {
+            continue;
+        }
+        writeLine(L"if exist \"" + rootW + L"\" (\r\n");
+        writeLine(L"  for /f \"delims=\" %%d in ('dir /ad /b /s \"" + rootW + L"\" ^| sort /r') do rmdir \"%%d\" 2>nul\r\n");
+        writeLine(L"  rmdir \"" + rootW + L"\" 2>nul\r\n");
+        writeLine(L")\r\n");
     }
-    script << "del /f /q \"%~f0\" >nul 2>&1\n";
+    writeLine(L"del /f /q \"%~f0\" >nul 2>&1\r\n");
     script.close();
-    
-    std::string cmd = "cmd.exe /c start \"\" /b \"" + scriptPath + "\"";
-    STARTUPINFOA si{};
+
+    std::wstring cmd = L"cmd.exe /c start \"\" /b \"" + scriptPath + L"\"";
+    STARTUPINFOW si{};
     PROCESS_INFORMATION pi{};
     si.cb = sizeof(si);
-    BOOL ok = CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+    std::vector<wchar_t> cmdLine(cmd.begin(), cmd.end());
+    cmdLine.push_back(L'\0');
+    BOOL ok = CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr, FALSE,
                              CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
     if (ok) {
         CloseHandle(pi.hThread);
@@ -371,17 +396,23 @@ bool cleanupEmptyDirectoriesCmd(const std::string& root) {
     if (root.empty()) {
         return false;
     }
-    
-    std::string cmd = "cmd.exe /c \"";
-    cmd += "del /f /q /a \"" + root + "\\\\desktop.ini\" /s >nul 2>&1 & ";
-    cmd += "del /f /q /a \"" + root + "\\\\thumbs.db\" /s >nul 2>&1 & ";
-    cmd += "for /f \\\"delims=\\\" %%d in ('dir /ad /b /s \\\"" + root + "\\\" ^| sort /r') do rmdir \\\"%%d\\\" 2>nul & ";
-    cmd += "rmdir \\\"" + root + "\\\" 2>nul\"";
-    
-    STARTUPINFOA si{};
+    std::wstring rootW = Utf8ToWide(root);
+    if (rootW.empty()) {
+        return false;
+    }
+
+    std::wstring cmd = L"cmd.exe /c \"";
+    cmd += L"del /f /q /a \"" + rootW + L"\\\\desktop.ini\" /s >nul 2>&1 & ";
+    cmd += L"del /f /q /a \"" + rootW + L"\\\\thumbs.db\" /s >nul 2>&1 & ";
+    cmd += L"for /f \\\"delims=\\\" %%d in ('dir /ad /b /s \\\"" + rootW + L"\\\" ^| sort /r') do rmdir \\\"%%d\\\" 2>nul & ";
+    cmd += L"rmdir \\\"" + rootW + L"\\\" 2>nul\"";
+
+    STARTUPINFOW si{};
     PROCESS_INFORMATION pi{};
     si.cb = sizeof(si);
-    BOOL ok = CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+    std::vector<wchar_t> cmdLine(cmd.begin(), cmd.end());
+    cmdLine.push_back(L'\0');
+    BOOL ok = CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr, FALSE,
                              CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
     if (!ok) {
         return false;
@@ -473,9 +504,9 @@ bool uninstallFromManifest(const std::string& manifestPath,
         std::string appLower = appName;
         std::transform(appLower.begin(), appLower.end(), appLower.begin(), ::tolower);
         for (const auto& file : files) {
-            std::filesystem::path path(file);
+            std::filesystem::path path = PathFromUtf8(file);
             for (const auto& part : path) {
-                std::string partStr = part.string();
+                std::string partStr = Utf8FromPath(part);
                 std::string partLower = partStr;
                 std::transform(partLower.begin(), partLower.end(), partLower.begin(), ::tolower);
                 if (partLower == appLower) {
@@ -483,7 +514,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
                     for (const auto& build : path) {
                         root /= build;
                         if (build == part) {
-                            cleanupRoots.push_back(root.string());
+                            cleanupRoots.push_back(Utf8FromPath(root));
                             break;
                         }
                     }
@@ -509,7 +540,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
         if (!currentExe.empty() && uninstallPathNorm == currentExeNorm) {
             console.showInfo("Skipping uninstall.exe removal (currently running).");
         } else {
-            std::filesystem::path path(uninstallPath);
+            std::filesystem::path path = PathFromUtf8(uninstallPath);
             std::error_code removeEc;
             std::filesystem::remove(toLongPath(path), removeEc);
             if (removeEc && std::filesystem::exists(path)) {
@@ -526,7 +557,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
             console.showInfo("Skipping file removal (current exe): " + file);
             continue;
         }
-        std::filesystem::path path(file);
+        std::filesystem::path path = PathFromUtf8(file);
         std::error_code removeEc;
         std::filesystem::remove(toLongPath(path), removeEc);
         if (removeEc && std::filesystem::exists(path)) {
@@ -543,7 +574,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
             if (!entry.is_regular_file()) {
                 continue;
             }
-            std::string name = entry.path().filename().string();
+            std::string name = Utf8FromPath(entry.path().filename());
             std::transform(name.begin(), name.end(), name.begin(), ::tolower);
             if (name == "desktop.ini" || name == "thumbs.db") {
                 continue;
@@ -555,7 +586,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
     
     for (const auto& root : cleanupRoots) {
         std::vector<std::filesystem::path> emptyDirs;
-        std::filesystem::path rootPath(root);
+        std::filesystem::path rootPath = PathFromUtf8(root);
         if (!std::filesystem::exists(rootPath)) {
             continue;
         }
@@ -564,7 +595,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
         std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
         for (const auto& entry : std::filesystem::recursive_directory_iterator(toLongPath(rootPath), options)) {
             if (entry.is_regular_file()) {
-                std::string name = entry.path().filename().string();
+                std::string name = Utf8FromPath(entry.path().filename());
                 std::transform(name.begin(), name.end(), name.begin(), ::tolower);
                 if (name == "desktop.ini" || name == "thumbs.db") {
                     std::error_code ec;
@@ -582,13 +613,13 @@ bool uninstallFromManifest(const std::string& manifestPath,
             std::error_code ec;
             std::filesystem::remove(toLongPath(dir), ec);
             if (ec && std::filesystem::exists(dir)) {
-                console.showWarning("Failed to remove empty directory: " + dir.string());
+                console.showWarning("Failed to remove empty directory: " + Utf8FromPath(dir));
             }
         }
         std::error_code ec;
         std::filesystem::remove(toLongPath(rootPath), ec);
         if (ec && std::filesystem::exists(rootPath)) {
-            console.showWarning("Failed to remove root directory: " + rootPath.string());
+            console.showWarning("Failed to remove root directory: " + Utf8FromPath(rootPath));
         }
         auto cleanupEnd = std::chrono::steady_clock::now();
         auto cleanupMs = std::chrono::duration_cast<std::chrono::milliseconds>(cleanupEnd - cleanupStart).count();
@@ -598,31 +629,31 @@ bool uninstallFromManifest(const std::string& manifestPath,
             std::error_code removeEc;
             std::filesystem::remove_all(toLongPath(rootPath), removeEc);
             if (removeEc && std::filesystem::exists(rootPath)) {
-                console.showWarning("Failed to remove empty root tree: " + rootPath.string());
+                console.showWarning("Failed to remove empty root tree: " + Utf8FromPath(rootPath));
             } else if (!removeEc) {
-                console.showInfo("Removed empty root tree: " + rootPath.string());
+                console.showInfo("Removed empty root tree: " + Utf8FromPath(rootPath));
             }
         } else {
-            console.showWarning("Root not empty after cleanup: " + rootPath.string());
+            console.showWarning("Root not empty after cleanup: " + Utf8FromPath(rootPath));
         }
     }
     
     removeInstallStateArtifacts(installState, resolver);
     applyInstallState(installState, "uninstalled", resolver);
-    if (!std::filesystem::remove(toLongPath(std::filesystem::path(manifestPath)))) {
-        if (std::filesystem::exists(manifestPath)) {
+    if (!std::filesystem::remove(toLongPath(PathFromUtf8(manifestPath)))) {
+        if (std::filesystem::exists(PathFromUtf8(manifestPath))) {
             console.showWarning("Failed to remove manifest: " + manifestPath);
         }
     }
     if (!appName.empty()) {
         std::string defaultPath = getDefaultManifestPath(appName, resolver);
         if (!defaultPath.empty() && defaultPath != manifestPath) {
-            std::filesystem::remove(toLongPath(std::filesystem::path(defaultPath)));
+            std::filesystem::remove(toLongPath(PathFromUtf8(defaultPath)));
         }
     }
     
-    std::filesystem::path exePath(getCurrentExecutablePath());
-    std::string exeName = exePath.filename().string();
+    std::filesystem::path exePath = PathFromUtf8(getCurrentExecutablePath());
+    std::string exeName = Utf8FromPath(exePath.filename());
     std::transform(exeName.begin(), exeName.end(), exeName.begin(), ::tolower);
     if (exeName == "uninstall.exe") {
         if (!scheduleSelfDeleteImmediate(cleanupRoots, manifestPath)) {

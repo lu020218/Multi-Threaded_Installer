@@ -1,5 +1,6 @@
 ﻿#include "common/installer_logger.h"
 
+#include "common/utf8_utils.h"
 #include <filesystem>
 #include <cstdio>
 #include <ctime>
@@ -102,7 +103,11 @@ std::string getCrashLogPath() {
 
 void writeCrashLogLine(const char* reason, DWORD code) {
     std::string path = getCrashLogPath();
-    HANDLE file = CreateFileA(path.c_str(),
+    std::wstring pathW = Utf8ToWide(path);
+    if (pathW.empty()) {
+        return;
+    }
+    HANDLE file = CreateFileW(pathW.c_str(),
                               FILE_APPEND_DATA,
                               FILE_SHARE_READ,
                               nullptr,
@@ -154,42 +159,43 @@ void initializeInstallerLogging() {
     }
     std::filesystem::path logPath;
     try {
-        char appNameBuf[256] = {};
-        DWORD len = GetEnvironmentVariableA("MTINSTALLER_APPNAME", appNameBuf, sizeof(appNameBuf));
-        std::string name = (len > 0 && len < sizeof(appNameBuf)) ? appNameBuf : "Installer";
-        std::string sanitized = name;
-        for (char& c : sanitized) {
-            if (c == '\\' || c == '/' || c == ':' || c == '*' ||
-                c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
-                c = '_';
+        wchar_t appNameBuf[256] = {};
+        DWORD appNameCap = static_cast<DWORD>(sizeof(appNameBuf) / sizeof(appNameBuf[0]));
+        DWORD len = GetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appNameBuf, appNameCap);
+        std::wstring name = (len > 0 && len < appNameCap) ? appNameBuf : L"Installer";
+        std::wstring sanitized = name;
+        for (wchar_t& c : sanitized) {
+            if (c == L'\\' || c == L'/' || c == L':' || c == L'*' ||
+                c == L'?' || c == L'"' || c == L'<' || c == L'>' || c == L'|') {
+                c = L'_';
             }
         }
-        char localAppData[MAX_PATH] = {};
-        DWORD localLen = GetEnvironmentVariableA("LOCALAPPDATA", localAppData, MAX_PATH);
+        wchar_t localAppData[MAX_PATH] = {};
+        DWORD localLen = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH);
         if (localLen > 0 && localLen < MAX_PATH) {
-            std::filesystem::path logDir = std::filesystem::path(localAppData) / "MTInstaller";
+            std::filesystem::path logDir = std::filesystem::path(localAppData) / L"MTInstaller";
             std::error_code ec;
             std::filesystem::create_directories(logDir, ec);
-            logPath = logDir / ("MTInstaller_" + sanitized + ".log");
+            logPath = logDir / (L"MTInstaller_" + sanitized + L".log");
         } else {
             logPath = std::filesystem::temp_directory_path() /
-                      ("MTInstaller_" + sanitized + ".log");
+                      (L"MTInstaller_" + sanitized + L".log");
         }
     } catch (...) {
-        logPath = "MTInstaller_Installer.log";
+        logPath = std::filesystem::path(L"MTInstaller_Installer.log");
     }
     FILE* fp = nullptr;
-    fopen_s(&fp, logPath.string().c_str(), "a");
+    _wfopen_s(&fp, logPath.c_str(), L"a");
     if (!fp) {
         return;
     }
     setvbuf(fp, nullptr, _IOLBF, 4096);
     g_logFile = fp;
-    g_logPath = logPath.string();
+    g_logPath = Utf8FromPath(logPath);
     g_logBuffer = std::make_unique<TimestampedBuffer>(g_logFile);
     std::cout.rdbuf(g_logBuffer.get());
     std::cerr.rdbuf(g_logBuffer.get());
-    std::cout << "Installer log started. Log: " << logPath.string() << std::endl;
+    std::cout << "Installer log started. Log: " << g_logPath << std::endl;
 
     if (!g_crashHandlersRegistered) {
         SetUnhandledExceptionFilter(InstallerUnhandledExceptionFilter);

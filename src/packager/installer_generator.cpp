@@ -1,4 +1,5 @@
 ﻿#include "packager/installer_generator.h"
+#include "common/utf8_utils.h"
 #include <fstream>
 #include <iostream>
 #include <filesystem>
@@ -104,7 +105,7 @@ static void collectResourceFiles(const std::filesystem::path& resourceDir,
             if (!entry.is_regular_file()) {
                 continue;
             }
-            const std::string fileName = entry.path().filename().string();
+            const std::string fileName = Utf8FromPath(entry.path().filename());
             addEntry(prefix + fileName, entry.path());
             for (const auto& extra : extraPrefixes) {
                 addEntry(extra + fileName, entry.path());
@@ -126,7 +127,7 @@ static void collectResourceFiles(const std::filesystem::path& resourceDir,
             if (!entry.is_regular_file()) {
                 continue;
             }
-            imageFiles.emplace_back(entry.path().filename().string(), entry.path());
+            imageFiles.emplace_back(Utf8FromPath(entry.path().filename()), entry.path());
         }
 
         for (const auto& item : imageFiles) {
@@ -261,7 +262,7 @@ bool InstallerGenerator::generateDataPackage(const std::string& outputPath,
                                              const std::vector<uint8_t>& metadata,
                                              const std::vector<std::vector<uint8_t>>& compressedData) {
     try {
-        std::ofstream outFile(outputPath, std::ios::binary);
+        std::ofstream outFile(PathFromUtf8(outputPath), std::ios::binary);
         if (!outFile) {
             std::cerr << "Failed to create data package: " << outputPath << std::endl;
             return false;
@@ -297,7 +298,7 @@ bool InstallerGenerator::generateDataPackage(const std::string& outputPath,
 
 bool InstallerGenerator::embedInstallerTemplate(const std::string& templatePath) {
     // 验证模板文件是否存在
-    if (!std::filesystem::exists(templatePath)) {
+    if (!std::filesystem::exists(PathFromUtf8(templatePath))) {
         std::cerr << "Installer template not found: " << templatePath << std::endl;
         return false;
     }
@@ -321,7 +322,7 @@ std::string InstallerGenerator::findDefaultInstallerTemplatePath() const {
     };
 
     for (const auto& path : possiblePaths) {
-        if (std::filesystem::exists(path)) {
+        if (std::filesystem::exists(PathFromUtf8(path))) {
             return path;
         }
     }
@@ -347,13 +348,13 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
         }
         
         // 创建输出目录（如果不存在）
-        std::filesystem::path outputDir = std::filesystem::path(outputPath).parent_path();
+        std::filesystem::path outputDir = PathFromUtf8(outputPath).parent_path();
         if (!outputDir.empty() && !std::filesystem::exists(outputDir)) {
             std::filesystem::create_directories(outputDir);
         }
         
         // 创建输出文件
-        std::ofstream outFile(outputPath, std::ios::binary);
+        std::ofstream outFile(PathFromUtf8(outputPath), std::ios::binary);
         if (!outFile) {
             std::cerr << "Failed to create output file: " << outputPath << std::endl;
             return false;
@@ -440,7 +441,7 @@ std::vector<uint8_t> InstallerGenerator::getDefaultInstallerTemplate() {
 
 std::vector<uint8_t> InstallerGenerator::loadInstallerTemplate(const std::string& templatePath) {
     try {
-        std::ifstream file(templatePath, std::ios::binary | std::ios::ate);
+        std::ifstream file(PathFromUtf8(templatePath), std::ios::binary | std::ios::ate);
         if (!file) {
             std::cerr << "Failed to open installer template: " << templatePath << std::endl;
             return {};
@@ -498,7 +499,7 @@ bool InstallerGenerator::setExecutablePermissions(const std::string& filePath) {
 bool InstallerGenerator::appendDataToExecutable(const std::string& executablePath,
                                                const std::vector<uint8_t>& data) {
     try {
-        std::ofstream file(executablePath, std::ios::binary | std::ios::app);
+        std::ofstream file(PathFromUtf8(executablePath), std::ios::binary | std::ios::app);
         if (!file) {
             return false;
         }
@@ -518,7 +519,7 @@ std::filesystem::path InstallerGenerator::resolveTemplateDirectory() const {
     }
 
     if (!installerTemplatePath.empty()) {
-        return std::filesystem::path(installerTemplatePath).parent_path();
+        return PathFromUtf8(installerTemplatePath).parent_path();
     }
 
     std::vector<std::string> possibleDirs = {
@@ -529,9 +530,10 @@ std::filesystem::path InstallerGenerator::resolveTemplateDirectory() const {
     };
 
     for (const auto& dir : possibleDirs) {
-        if (std::filesystem::exists(std::filesystem::path(dir) / "installer.exe") ||
-            std::filesystem::exists(std::filesystem::path(dir) / "installer")) {
-            return std::filesystem::path(dir);
+        std::filesystem::path dirPath = PathFromUtf8(dir);
+        if (std::filesystem::exists(dirPath / "installer.exe") ||
+            std::filesystem::exists(dirPath / "installer")) {
+            return dirPath;
         }
     }
 
@@ -738,7 +740,7 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
                     if (entry.path().extension() != ".xml") {
                         continue;
                     }
-                    std::string fileName = entry.path().filename().string();
+                    std::string fileName = Utf8FromPath(entry.path().filename());
                     std::string resourceName = toResourceName("XML_", fileName);
                     if (appendEntry(resourceName, entry.path())) {
                         std::cout << "  Embedded: " << fileName << std::endl;
@@ -753,7 +755,7 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
                     if (!entry.is_regular_file()) {
                         continue;
                     }
-                    std::string fileName = entry.path().filename().string();
+                    std::string fileName = Utf8FromPath(entry.path().filename());
                     if (fileName.empty() || fileName.front() == '.') {
                         continue;
                     }
@@ -772,7 +774,7 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
                     if (!entry.is_regular_file()) {
                         continue;
                     }
-                    std::string fileName = entry.path().filename().string();
+                    std::string fileName = Utf8FromPath(entry.path().filename());
                     if (fileName.empty() || fileName.front() == '.') {
                         continue;
                     }
@@ -837,7 +839,7 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
 
 bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPath, bool resourcesEmbedded) {
     try {
-        std::filesystem::path installerFile(installerPath);
+        std::filesystem::path installerFile = PathFromUtf8(installerPath);
         std::filesystem::path outputDir = installerFile.parent_path();
         
         // 如果输出目录为空，使用当前目录

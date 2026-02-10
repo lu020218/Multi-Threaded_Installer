@@ -2,6 +2,7 @@
 #include "installer/file_system_operator.h"
 #include "installer/installer_helpers.h"
 #include "installer/registry_utils.h"
+#include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -42,17 +43,27 @@ bool applyInstallStateRegistry(const InstallStateConfig& config, const std::stri
         return false;
     }
     
+    std::wstring subkeyW = Utf8ToWide(subkey);
+    if (subkeyW.empty()) {
+        return false;
+    }
     HKEY key = nullptr;
     DWORD disposition = 0;
-    LONG status = RegCreateKeyExA(root, subkey.c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, &disposition);
+    LONG status = RegCreateKeyExW(root, subkeyW.c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, &disposition);
     if (status != ERROR_SUCCESS) {
         return false;
     }
     
     const std::string& name = config.registryKey.empty() ? std::string("InstallState") : config.registryKey;
-    status = RegSetValueExA(key, name.c_str(), 0, REG_SZ,
-                            reinterpret_cast<const BYTE*>(stateValue.c_str()),
-                            static_cast<DWORD>(stateValue.size() + 1));
+    std::wstring nameW = Utf8ToWide(name);
+    std::wstring valueW = Utf8ToWide(stateValue);
+    if (nameW.empty()) {
+        RegCloseKey(key);
+        return false;
+    }
+    status = RegSetValueExW(key, nameW.c_str(), 0, REG_SZ,
+                            reinterpret_cast<const BYTE*>(valueW.c_str()),
+                            static_cast<DWORD>((valueW.size() + 1) * sizeof(wchar_t)));
     RegCloseKey(key);
     return status == ERROR_SUCCESS;
 #else
@@ -73,11 +84,11 @@ bool applyInstallStateFile(const InstallStateConfig& config, const std::string& 
         return false;
     }
     
-    std::filesystem::path filePath(expandedPath);
+    std::filesystem::path filePath = PathFromUtf8(expandedPath);
     std::filesystem::path parent = filePath.parent_path();
     if (!parent.empty()) {
         FileSystemOperator fs;
-        if (!fs.createDirectoryRecursive(parent.string())) {
+        if (!fs.createDirectoryRecursive(Utf8FromPath(parent))) {
             return false;
         }
     }
@@ -138,7 +149,7 @@ bool removeInstallStateArtifacts(const InstallStateConfig& config, InstallerPath
     if (config.mode == InstallStateMode::FILE || config.mode == InstallStateMode::BOTH) {
         std::string expanded = resolver.expandEnvironmentVariables(config.filePath);
         if (!expanded.empty()) {
-            std::filesystem::remove(toLongPath(std::filesystem::path(expanded)));
+            std::filesystem::remove(toLongPath(PathFromUtf8(expanded)));
         }
     }
     return ok;

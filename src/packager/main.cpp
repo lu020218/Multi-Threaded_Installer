@@ -6,6 +6,7 @@
 #include "packager/icon_updater.h"
 #include "packager/version_info_updater.h"
 #include "installer/console_interface.h"
+#include "common/utf8_utils.h"
 #include <iostream>
 #include <filesystem>
 #include <chrono>
@@ -35,7 +36,7 @@ void showUsage(const std::string& programName) {
 
 static fs::path makeTempTemplatePath(const fs::path& outputPath) {
     fs::path baseDir = outputPath.has_parent_path() ? outputPath.parent_path() : fs::path(".");
-    std::string baseName = outputPath.filename().string();
+    std::string baseName = Utf8FromPath(outputPath.filename());
 #ifdef _WIN32
     auto pid = static_cast<unsigned long>(GetCurrentProcessId());
 #else
@@ -64,17 +65,17 @@ int main(int argc, char* argv[]) {
     std::string outputPath = args.outputPath;
     
     // 验证输入目录存在
-    if (!fs::exists(inputPath) || !fs::is_directory(inputPath)) {
+    if (!fs::exists(PathFromUtf8(inputPath)) || !fs::is_directory(PathFromUtf8(inputPath))) {
         console.showError("Error: Input directory does not exist: " + inputPath);
         return 1;
     }
     
     // 验证输出文件路径有效
-    fs::path outputFilePath(outputPath);
+    fs::path outputFilePath = PathFromUtf8(outputPath);
     if (outputFilePath.has_parent_path()) {
         fs::path parentPath = outputFilePath.parent_path();
         if (!fs::exists(parentPath)) {
-            console.showError("Error: Output directory does not exist: " + parentPath.string());
+            console.showError("Error: Output directory does not exist: " + Utf8FromPath(parentPath));
             return 1;
         }
     }
@@ -179,17 +180,17 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        installerGen.setTemplateResourceDir(fs::path(baseTemplate).parent_path());
+        installerGen.setTemplateResourceDir(PathFromUtf8(baseTemplate).parent_path());
 
         tempTemplatePath = makeTempTemplatePath(outputFilePath);
         std::error_code copyError;
-        fs::copy_file(baseTemplate, tempTemplatePath, fs::copy_options::overwrite_existing, copyError);
+        fs::copy_file(PathFromUtf8(baseTemplate), tempTemplatePath, fs::copy_options::overwrite_existing, copyError);
         if (copyError) {
             console.showError("Failed to create temporary installer template: " + copyError.message());
             return 1;
         }
 
-        if (!installerGen.embedInstallerTemplate(tempTemplatePath.string())) {
+        if (!installerGen.embedInstallerTemplate(Utf8FromPath(tempTemplatePath))) {
             console.showError("Failed to use temporary installer template");
             return 1;
         }
@@ -197,13 +198,13 @@ int main(int argc, char* argv[]) {
         usesTempTemplate = true;
 
         if (!config.iconPath.empty()) {
-            fs::path iconPath(config.iconPath);
+            fs::path iconPath = PathFromUtf8(config.iconPath);
             if (!iconPath.is_absolute()) {
-                iconPath = fs::path(inputPath) / iconPath;
+                iconPath = PathFromUtf8(inputPath) / iconPath;
             }
             std::string iconError;
-            if (UpdateInstallerIcon(tempTemplatePath.string(), iconPath.string(), iconError)) {
-                console.showInfo("Applied installer icon: " + iconPath.string());
+            if (UpdateInstallerIcon(Utf8FromPath(tempTemplatePath), Utf8FromPath(iconPath), iconError)) {
+                console.showInfo("Applied installer icon: " + Utf8FromPath(iconPath));
             } else {
                 console.showWarning("Failed to apply installer icon: " + iconError);
             }
@@ -218,10 +219,10 @@ int main(int argc, char* argv[]) {
         versionInfo.copyright = config.copyright;
         versionInfo.fileVersion = config.fileVersion.empty() ? config.version : config.fileVersion;
         versionInfo.productVersion = config.productVersion.empty() ? config.version : config.productVersion;
-        versionInfo.originalFilename = fs::path(outputPath).filename().string();
+        versionInfo.originalFilename = Utf8FromPath(PathFromUtf8(outputPath).filename());
 
         std::string versionError;
-        if (UpdateInstallerVersionInfo(tempTemplatePath.string(), versionInfo, versionError)) {
+        if (UpdateInstallerVersionInfo(Utf8FromPath(tempTemplatePath), versionInfo, versionError)) {
             console.showInfo("Applied installer version info");
         } else {
             console.showWarning("Failed to apply installer version info: " + versionError);

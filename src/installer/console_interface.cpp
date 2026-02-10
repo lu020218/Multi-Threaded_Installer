@@ -1,6 +1,7 @@
 ﻿#include "installer/console_interface.h"
 #include <iostream>
 #include <sstream>
+#include "common/utf8_utils.h"
 #include <algorithm>
 #include <filesystem>
 
@@ -255,7 +256,7 @@ bool ConsoleInterface::validatePath(const std::string& path, bool shouldExist) {
     
     if (shouldExist) {
         try {
-            return std::filesystem::exists(path);
+            return std::filesystem::exists(PathFromUtf8(path));
         } catch (const std::exception&) {
             return false;
         }

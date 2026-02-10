@@ -1,6 +1,7 @@
 ﻿#ifdef GUI_ENABLED
 
 #include "../../include/installer/embedded_resources.h"
+#include "common/utf8_utils.h"
 #include <Windows.h>
 #include <filesystem>
 #include <fstream>
@@ -30,11 +31,12 @@ std::string EmbeddedResourceManager::extractResources() {
     }
     
     std::cout << "Extracting embedded resources to: " << m_resourcePath << std::endl;
-    
+
+    std::filesystem::path basePath = PathFromUtf8(m_resourcePath);
     // 创建子目录
-    std::filesystem::create_directories(m_resourcePath + "\\skins");
-    std::filesystem::create_directories(m_resourcePath + "\\images");
-    std::filesystem::create_directories(m_resourcePath + "\\lang");
+    std::filesystem::create_directories(basePath / "skins");
+    std::filesystem::create_directories(basePath / "images");
+    std::filesystem::create_directories(basePath / "lang");
     
     bool anyExtracted = false;
     
@@ -181,7 +183,7 @@ std::string EmbeddedResourceManager::extractResources() {
 void EmbeddedResourceManager::cleanup() {
     if (!m_resourcePath.empty() && m_extracted) {
         try {
-            std::filesystem::remove_all(m_resourcePath);
+            std::filesystem::remove_all(PathFromUtf8(m_resourcePath));
             std::cout << "Cleaned up temporary resources: " << m_resourcePath << std::endl;
         } catch (const std::exception& e) {
             std::cerr << "Failed to cleanup resources: " << e.what() << std::endl;
@@ -204,21 +206,13 @@ std::string EmbeddedResourceManager::createTempDirectory() {
     tempDir += L"_";
     tempDir += std::to_wstring(GetTickCount64());
     
-    // 转换为窄字符串
-    int size = WideCharToMultiByte(CP_UTF8, 0, tempDir.c_str(), -1, NULL, 0, NULL, NULL);
-    if (size <= 0) {
-        return "";
-    }
-    
-    std::string result(size - 1, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, tempDir.c_str(), -1, &result[0], size, NULL, NULL);
-    
+    std::filesystem::path tempDirPath(tempDir);
     // 创建目录
-    if (!std::filesystem::create_directories(result)) {
+    if (!std::filesystem::create_directories(tempDirPath)) {
         return "";
     }
     
-    return result;
+    return Utf8FromPath(tempDirPath);
 }
 
 bool EmbeddedResourceManager::extractFile(const std::string& relativePath, 
@@ -227,12 +221,12 @@ bool EmbeddedResourceManager::extractFile(const std::string& relativePath,
         return false;
     }
     
-    std::string fullPath = m_resourcePath + "\\" + relativePath;
+    std::filesystem::path fullPath = PathFromUtf8(m_resourcePath) / PathFromUtf8(relativePath);
     
     try {
         std::ofstream file(fullPath, std::ios::binary);
         if (!file) {
-            std::cerr << "Failed to create file: " << fullPath << std::endl;
+            std::cerr << "Failed to create file: " << Utf8FromPath(fullPath) << std::endl;
             return false;
         }
         
@@ -278,15 +272,8 @@ std::vector<uint8_t> EmbeddedResourceManager::readEmbeddedResourceFromFile(const
         return {};
     }
 
-    int size = WideCharToMultiByte(CP_UTF8, 0, exePath, -1, NULL, 0, NULL, NULL);
-    if (size <= 0) {
-        return {};
-    }
-
-    std::string exePathStr(size - 1, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, exePath, -1, &exePathStr[0], size, NULL, NULL);
-
-    std::ifstream file(exePathStr, std::ios::binary);
+    std::filesystem::path exePathFs(exePath);
+    std::ifstream file(exePathFs, std::ios::binary);
     if (!file) {
         return {};
     }

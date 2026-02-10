@@ -1,4 +1,5 @@
 ﻿#include "packager/configuration_manager.h"
+#include "common/utf8_utils.h"
 #include <filesystem>
 #include <algorithm>
 
@@ -77,8 +78,8 @@ void ConfigurationManager::applyFolderTargets(std::vector<FolderInfo>& folders) 
     // 为每个文件夹应用目标配置
     for (auto& folder : folders) {
         // 提取文件夹名称（从sourcePath中获取最后一个目录名）
-        fs::path sourcePath(folder.sourcePath);
-        std::string folderName = sourcePath.filename().string();
+        fs::path sourcePath = PathFromUtf8(folder.sourcePath);
+        std::string folderName = Utf8FromPath(sourcePath.filename());
         
         // 查找匹配的文件夹目标配置
         auto it = std::find_if(config_.folderTargets.begin(), 

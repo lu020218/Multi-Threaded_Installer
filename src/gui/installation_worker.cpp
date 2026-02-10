@@ -11,6 +11,7 @@
 #include "../../include/installer/uninstall_manager.h"
 #include "../../include/installer/console_interface.h"
 #include "../../include/common/installer_parallel_install.h"
+#include "common/utf8_utils.h"
 
 #include <codecvt>
 #include <locale>
@@ -46,13 +47,13 @@ static std::vector<std::string> collectFilesRecursive(const std::string& rootPat
     if (rootPath.empty()) {
         return files;
     }
-    std::filesystem::path root(rootPath);
+    std::filesystem::path root = PathFromUtf8(rootPath);
     if (!std::filesystem::exists(root)) {
         return files;
     }
     for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
         if (entry.is_regular_file()) {
-            files.push_back(entry.path().string());
+            files.push_back(Utf8FromPath(entry.path()));
         }
     }
     return files;
@@ -489,7 +490,8 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             }
 
             if (!installRootPath.empty()) {
-                std::filesystem::path exePath = findPrimaryExecutable(installRootPath, metadata.applicationName);
+                std::filesystem::path exePath = findPrimaryExecutable(PathFromUtf8(installRootPath),
+                                                                      metadata.applicationName);
                 if ((metadata.autoStartup || metadata.desktopIcons) && exePath.empty()) {
                     std::cout << "WARNING: No executable found for AutoStartup/DesktopIcons" << std::endl;
                 } else {
@@ -514,17 +516,19 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
 
             std::string uninstallPath;
             if (!installRootPath.empty()) {
-                std::filesystem::path target = std::filesystem::path(installRootPath) / "uninstall.exe";
+                std::filesystem::path target = PathFromUtf8(installRootPath) / "uninstall.exe";
                 std::string currentExe = getCurrentExecutablePath();
+                std::filesystem::path currentExePath = PathFromUtf8(currentExe);
                 std::error_code ec;
-                if (!currentExe.empty() && std::filesystem::exists(currentExe)) {
-                    if (createUninstallStub(currentExe, target.string())) {
-                        uninstallPath = target.string();
+                if (!currentExe.empty() && std::filesystem::exists(currentExePath)) {
+                    std::string targetUtf8 = Utf8FromPath(target);
+                    if (createUninstallStub(currentExe, targetUtf8)) {
+                        uninstallPath = targetUtf8;
                     } else {
-                        std::filesystem::copy_file(currentExe, target,
+                        std::filesystem::copy_file(currentExePath, target,
                                                    std::filesystem::copy_options::overwrite_existing, ec);
                         if (!ec) {
-                            uninstallPath = target.string();
+                            uninstallPath = targetUtf8;
                         }
                     }
                 }
@@ -543,13 +547,13 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
             std::cout << "Manifest written: " << manifestPath << std::endl;
 
             if (!installRootPath.empty()) {
-                std::filesystem::path localPath = std::filesystem::path(installRootPath) / "install.manifest.json";
-                writeManifest(localPath.string(), metadata.applicationName, metadata.configVersion,
+                std::filesystem::path localPath = PathFromUtf8(installRootPath) / "install.manifest.json";
+                writeManifest(Utf8FromPath(localPath), metadata.applicationName, metadata.configVersion,
                               installRootPath, installedFiles, metadata.registry,
                               metadata.autoStartup, metadata.desktopIcons,
                               metadata.installState, uninstallPath,
                               WStringToString(m_languageCode));
-                std::cout << "Local manifest written: " << localPath.string() << std::endl;
+                std::cout << "Local manifest written: " << Utf8FromPath(localPath) << std::endl;
             }
 
             if (!metadata.registry.empty()) {

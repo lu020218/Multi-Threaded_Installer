@@ -1,4 +1,5 @@
 ﻿#include "packager/compression_module.h"
+#include "common/utf8_utils.h"
 #include <fstream>
 #include <iostream>
 #include <cstring>
@@ -194,7 +195,7 @@ uint32_t CompressionModule::calculateChecksum(const std::vector<uint8_t>& data) 
 }
 
 std::vector<uint8_t> CompressionModule::readFileContent(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(PathFromUtf8(filePath), std::ios::binary);
     if (!file) {
         std::cerr << "Failed to open file: " << filePath << std::endl;
         return {};

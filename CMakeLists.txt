@@ -229,6 +229,7 @@ endif()
 set(COMMON_SOURCES
     src/common/types.cpp
     src/common/installer_logger.cpp
+    src/common/utf8_utils.cpp
 )
 
 # Create packager executable

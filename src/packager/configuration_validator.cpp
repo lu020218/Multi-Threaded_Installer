@@ -1,4 +1,5 @@
 ﻿#include "packager/configuration_validator.h"
+#include "common/utf8_utils.h"
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
@@ -53,15 +54,15 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
 
     // 验证图标文件（可选）
     if (!config.iconPath.empty()) {
-        fs::path iconPath(config.iconPath);
+        fs::path iconPath = PathFromUtf8(config.iconPath);
         if (!iconPath.is_absolute()) {
-            iconPath = fs::path(inputDirectory) / iconPath;
+            iconPath = PathFromUtf8(inputDirectory) / iconPath;
         }
         if (!fs::exists(iconPath)) {
-            result.errors.push_back("ERROR: Icon file not found: " + iconPath.string());
+            result.errors.push_back("ERROR: Icon file not found: " + Utf8FromPath(iconPath));
             result.isValid = false;
         } else if (iconPath.extension() != ".ico") {
-            result.errors.push_back("ERROR: Icon file must be .ico: " + iconPath.string());
+            result.errors.push_back("ERROR: Icon file must be .ico: " + Utf8FromPath(iconPath));
             result.isValid = false;
         }
     }
@@ -150,14 +151,14 @@ bool ConfigurationValidator::validateFolderExists(
     }
     
     // 构建完整路径
-    fs::path folderPath = fs::path(inputDir) / folder;
+    fs::path folderPath = PathFromUtf8(inputDir) / PathFromUtf8(folder);
     
     // 检查文件夹是否存在
     if (!fs::exists(folderPath)) {
         errors.push_back("ERROR: Folder does not exist in input directory\n"
                         "  Folder: " + folder + "\n"
                         "  Input Directory: " + inputDir + "\n"
-                        "  Full Path: " + folderPath.string() + "\n"
+                        "  Full Path: " + Utf8FromPath(folderPath) + "\n"
                         "  Suggestion: Ensure the folder exists in the input directory or remove it from folderTargets");
         return false;
     }
@@ -165,7 +166,7 @@ bool ConfigurationValidator::validateFolderExists(
     // 检查是否为目录
     if (!fs::is_directory(folderPath)) {
         errors.push_back("ERROR: Path is not a directory\n"
-                        "  Path: " + folderPath.string() + "\n"
+                        "  Path: " + Utf8FromPath(folderPath) + "\n"
                         "  Suggestion: Ensure the path points to a directory, not a file");
         return false;
     }

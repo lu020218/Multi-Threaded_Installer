@@ -1,4 +1,5 @@
 ﻿#include "installer/file_system_operator.h"
+#include "common/utf8_utils.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -9,8 +10,9 @@ bool FileSystemOperator::createDirectoryRecursive(const std::string& path) {
     try {
         // create_directories returns false if directory already exists
         // but we want to return true if the directory exists after the call
-        std::filesystem::create_directories(path);
-        return std::filesystem::exists(path) && std::filesystem::is_directory(path);
+        std::filesystem::path fsPath = PathFromUtf8(path);
+        std::filesystem::create_directories(fsPath);
+        return std::filesystem::exists(fsPath) && std::filesystem::is_directory(fsPath);
     } catch (const std::filesystem::filesystem_error& e) {
         std::cerr << "Failed to create directory " << path << ": " << e.what() << std::endl;
         return false;
@@ -26,7 +28,7 @@ bool FileSystemOperator::writeFile(const std::string& filePath, const std::vecto
             }
         }
         
-        std::ofstream file(filePath, std::ios::binary);
+        std::ofstream file(PathFromUtf8(filePath), std::ios::binary);
         if (!file) {
             std::cerr << "Failed to create file: " << filePath << std::endl;
             return false;
@@ -54,7 +56,7 @@ bool FileSystemOperator::handleFileConflict(const std::string& filePath) {
     // 直接覆盖策略 - 删除现有文件
     try {
         if (fileExists(filePath)) {
-            std::filesystem::remove(filePath);
+            std::filesystem::remove(PathFromUtf8(filePath));
         }
         return true;
     } catch (const std::filesystem::filesystem_error& e) {
@@ -65,7 +67,8 @@ bool FileSystemOperator::handleFileConflict(const std::string& filePath) {
 
 bool FileSystemOperator::fileExists(const std::string& filePath) {
     try {
-        return std::filesystem::exists(filePath) && std::filesystem::is_regular_file(filePath);
+        std::filesystem::path fsPath = PathFromUtf8(filePath);
+        return std::filesystem::exists(fsPath) && std::filesystem::is_regular_file(fsPath);
     } catch (const std::filesystem::filesystem_error&) {
         return false;
     }
@@ -73,7 +76,7 @@ bool FileSystemOperator::fileExists(const std::string& filePath) {
 
 size_t FileSystemOperator::getFileSize(const std::string& filePath) {
     try {
-        return std::filesystem::file_size(filePath);
+        return std::filesystem::file_size(PathFromUtf8(filePath));
     } catch (const std::filesystem::filesystem_error&) {
         return 0;
     }
@@ -81,14 +84,15 @@ size_t FileSystemOperator::getFileSize(const std::string& filePath) {
 
 bool FileSystemOperator::directoryExists(const std::string& dirPath) {
     try {
-        return std::filesystem::exists(dirPath) && std::filesystem::is_directory(dirPath);
+        std::filesystem::path fsPath = PathFromUtf8(dirPath);
+        return std::filesystem::exists(fsPath) && std::filesystem::is_directory(fsPath);
     } catch (const std::filesystem::filesystem_error&) {
         return false;
     }
 }
 
 uint32_t FileSystemOperator::getFileChecksum(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(PathFromUtf8(filePath), std::ios::binary);
     if (!file) {
         return 0;
     }
@@ -99,7 +103,7 @@ uint32_t FileSystemOperator::getFileChecksum(const std::string& filePath) {
 
 bool FileSystemOperator::createSingleDirectory(const std::string& path) {
     try {
-        return std::filesystem::create_directory(path);
+        return std::filesystem::create_directory(PathFromUtf8(path));
     } catch (const std::filesystem::filesystem_error&) {
         return false;
     }
@@ -107,7 +111,7 @@ bool FileSystemOperator::createSingleDirectory(const std::string& path) {
 
 std::string FileSystemOperator::getParentDirectory(const std::string& path) {
     try {
-        return std::filesystem::path(path).parent_path().string();
+        return Utf8FromPath(PathFromUtf8(path).parent_path());
     } catch (const std::exception&) {
         return "";
     }
@@ -115,7 +119,7 @@ std::string FileSystemOperator::getParentDirectory(const std::string& path) {
 
 std::string FileSystemOperator::normalizePath(const std::string& path) {
     try {
-        return std::filesystem::path(path).lexically_normal().string();
+        return Utf8FromPath(PathFromUtf8(path).lexically_normal());
     } catch (const std::exception&) {
         return path;
     }

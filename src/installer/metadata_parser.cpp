@@ -1,4 +1,5 @@
 ﻿#include "installer/metadata_parser.h"
+#include "common/utf8_utils.h"
 #include <fstream>
 #include <iostream>
 
@@ -56,7 +57,7 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
         return {};
     }
     
-    std::ifstream file(executablePath, std::ios::binary);
+    std::ifstream file(PathFromUtf8(executablePath), std::ios::binary);
     if (!file) {
         std::cerr << "Failed to open executable file: " << executablePath << std::endl;
         return {};
@@ -616,7 +617,7 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
         return {};
     }
     
-    std::ifstream file(executablePath, std::ios::binary);
+    std::ifstream file(PathFromUtf8(executablePath), std::ios::binary);
     if (!file) {
         std::cerr << "Failed to open executable file: " << executablePath << std::endl;
         return {};
@@ -668,7 +669,7 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
 }
 
 std::vector<uint8_t> MetadataParser::readExternalMetadata() {
-    std::ifstream file(dataPackagePath_, std::ios::binary);
+    std::ifstream file(PathFromUtf8(dataPackagePath_), std::ios::binary);
     if (!file) {
         std::cerr << "Failed to open data package: " << dataPackagePath_ << std::endl;
         return {};
@@ -694,7 +695,7 @@ std::vector<uint8_t> MetadataParser::readExternalMetadata() {
 }
 
 std::vector<uint8_t> MetadataParser::readExternalCompressedData(uint64_t offset, uint64_t size) {
-    std::ifstream file(dataPackagePath_, std::ios::binary);
+    std::ifstream file(PathFromUtf8(dataPackagePath_), std::ios::binary);
     if (!file) {
         std::cerr << "Failed to open data package: " << dataPackagePath_ << std::endl;
         return {};
@@ -741,9 +742,12 @@ bool MetadataParser::validateHeader(const BinaryMetadata& header) {
 
 std::string MetadataParser::getCurrentExecutablePath() {
     #ifdef _WIN32
-    char buffer[MAX_PATH];
-    GetModuleFileNameA(NULL, buffer, MAX_PATH);
-    return std::string(buffer);
+    wchar_t buffer[MAX_PATH];
+    DWORD len = GetModuleFileNameW(NULL, buffer, MAX_PATH);
+    if (len == 0) {
+        return std::string();
+    }
+    return WideToUtf8(std::wstring(buffer, len));
     #else
     char buffer[PATH_MAX];
     ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);

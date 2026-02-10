@@ -1,4 +1,5 @@
-﻿#include "installer/registry_utils.h"
+#include "installer/registry_utils.h"
+#include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -85,14 +86,20 @@ bool deleteRegistryValue(const RegistryEntry& entry) {
     } else {
         return false;
     }
-    
+
+    std::wstring subkeyW = Utf8ToWide(subkey);
+    std::wstring keyW = Utf8ToWide(entry.key);
+    if (subkeyW.empty() || keyW.empty()) {
+        return false;
+    }
+
     HKEY key = nullptr;
-    LONG status = RegOpenKeyExA(root, subkey.c_str(), 0, KEY_SET_VALUE, &key);
+    LONG status = RegOpenKeyExW(root, subkeyW.c_str(), 0, KEY_SET_VALUE, &key);
     if (status != ERROR_SUCCESS) {
         return false;
     }
-    
-    status = RegDeleteValueA(key, entry.key.c_str());
+
+    status = RegDeleteValueW(key, keyW.c_str());
     RegCloseKey(key);
     return status == ERROR_SUCCESS;
 #else
@@ -100,6 +107,7 @@ bool deleteRegistryValue(const RegistryEntry& entry) {
     return false;
 #endif
 }
+
 
 bool writeRegistryValue(const RegistryEntry& entry, const std::string& value, RegistryValueType type) {
 #ifdef _WIN32
@@ -133,10 +141,16 @@ bool writeRegistryValue(const RegistryEntry& entry, const std::string& value, Re
     } else {
         return false;
     }
-    
+
+    std::wstring subkeyW = Utf8ToWide(subkey);
+    std::wstring keyW = Utf8ToWide(entry.key);
+    if (subkeyW.empty() || keyW.empty()) {
+        return false;
+    }
+
     HKEY key = nullptr;
     DWORD disposition = 0;
-    LONG status = RegCreateKeyExA(root, subkey.c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, &disposition);
+    LONG status = RegCreateKeyExW(root, subkeyW.c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, &disposition);
     if (status != ERROR_SUCCESS) {
         return false;
     }
@@ -145,7 +159,7 @@ bool writeRegistryValue(const RegistryEntry& entry, const std::string& value, Re
     if (type == RegistryValueType::DWORD) {
         try {
             uint32_t number = std::stoul(value, nullptr, 0);
-            status = RegSetValueExA(key, entry.key.c_str(), 0, REG_DWORD,
+            status = RegSetValueExW(key, keyW.c_str(), 0, REG_DWORD,
                                     reinterpret_cast<const BYTE*>(&number),
                                     static_cast<DWORD>(sizeof(uint32_t)));
             ok = (status == ERROR_SUCCESS);
@@ -153,14 +167,16 @@ bool writeRegistryValue(const RegistryEntry& entry, const std::string& value, Re
             ok = false;
         }
     } else if (type == RegistryValueType::EXPAND_STRING) {
-        status = RegSetValueExA(key, entry.key.c_str(), 0, REG_EXPAND_SZ,
-                                reinterpret_cast<const BYTE*>(value.c_str()),
-                                static_cast<DWORD>(value.size() + 1));
+        std::wstring wideValue = Utf8ToWide(value);
+        status = RegSetValueExW(key, keyW.c_str(), 0, REG_EXPAND_SZ,
+                                reinterpret_cast<const BYTE*>(wideValue.c_str()),
+                                static_cast<DWORD>((wideValue.size() + 1) * sizeof(wchar_t)));
         ok = (status == ERROR_SUCCESS);
     } else {
-        status = RegSetValueExA(key, entry.key.c_str(), 0, REG_SZ,
-                                reinterpret_cast<const BYTE*>(value.c_str()),
-                                static_cast<DWORD>(value.size() + 1));
+        std::wstring wideValue = Utf8ToWide(value);
+        status = RegSetValueExW(key, keyW.c_str(), 0, REG_SZ,
+                                reinterpret_cast<const BYTE*>(wideValue.c_str()),
+                                static_cast<DWORD>((wideValue.size() + 1) * sizeof(wchar_t)));
         ok = (status == ERROR_SUCCESS);
     }
     
@@ -173,6 +189,7 @@ bool writeRegistryValue(const RegistryEntry& entry, const std::string& value, Re
     return false;
 #endif
 }
+
 
 void applyRegistryEntries(const std::vector<RegistryEntry>& entries,
                           const std::string& installDir,
@@ -223,42 +240,55 @@ bool readRegistryStringValue(const std::string& path, const std::string& key, st
         return false;
     }
 
+    std::wstring subkeyW = Utf8ToWide(subkey);
+    std::wstring keyW = Utf8ToWide(key);
+    if (subkeyW.empty() || keyW.empty()) {
+        return false;
+    }
+
     HKEY hKey = nullptr;
-    LONG status = RegOpenKeyExA(root, subkey.c_str(), 0, KEY_QUERY_VALUE, &hKey);
+    LONG status = RegOpenKeyExW(root, subkeyW.c_str(), 0, KEY_QUERY_VALUE, &hKey);
     if (status != ERROR_SUCCESS) {
         return false;
     }
 
     DWORD type = 0;
     DWORD size = 0;
-    status = RegQueryValueExA(hKey, key.c_str(), nullptr, &type, nullptr, &size);
+    status = RegQueryValueExW(hKey, keyW.c_str(), nullptr, &type, nullptr, &size);
     if (status != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ)) {
         RegCloseKey(hKey);
         return false;
     }
 
-    std::string buffer(size, '\0');
-    status = RegQueryValueExA(hKey, key.c_str(), nullptr, &type,
+    std::wstring buffer;
+    buffer.resize(size / sizeof(wchar_t));
+    status = RegQueryValueExW(hKey, keyW.c_str(), nullptr, &type,
                               reinterpret_cast<BYTE*>(&buffer[0]), &size);
     RegCloseKey(hKey);
     if (status != ERROR_SUCCESS) {
         return false;
     }
 
-    if (!buffer.empty() && buffer.back() == '\0') {
+    if (!buffer.empty() && buffer.back() == L'\0') {
         buffer.pop_back();
     }
 
     if (type == REG_EXPAND_SZ) {
-        char expanded[MAX_PATH];
-        DWORD expandedSize = ExpandEnvironmentStringsA(buffer.c_str(), expanded, MAX_PATH);
-        if (expandedSize > 0 && expandedSize < MAX_PATH) {
-            value.assign(expanded);
-            return true;
+        DWORD expandedSize = ExpandEnvironmentStringsW(buffer.c_str(), nullptr, 0);
+        if (expandedSize > 0) {
+            std::wstring expanded;
+            expanded.resize(expandedSize);
+            if (ExpandEnvironmentStringsW(buffer.c_str(), expanded.data(), expandedSize) > 0) {
+                if (!expanded.empty() && expanded.back() == L'\0') {
+                    expanded.pop_back();
+                }
+                value = WideToUtf8(expanded);
+                return true;
+            }
         }
     }
 
-    value = buffer;
+    value = WideToUtf8(buffer);
     return !value.empty();
 #else
     (void)path;
@@ -267,6 +297,7 @@ bool readRegistryStringValue(const std::string& path, const std::string& key, st
     return false;
 #endif
 }
+
 
 bool writeUninstallRegistryEntry(const std::string& appName,
                                  const std::string& version,
@@ -331,6 +362,7 @@ bool writeUninstallRegistryEntry(const std::string& appName,
 #endif
 }
 
+
 bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine) {
 #ifdef _WIN32
     if (appName.empty()) {
@@ -368,7 +400,12 @@ bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine) {
         return false;
     }
 
-    LONG status = RegDeleteTreeA(root, subkey.c_str());
+    std::wstring subkeyW = Utf8ToWide(subkey);
+    if (subkeyW.empty()) {
+        return false;
+    }
+
+    LONG status = RegDeleteTreeW(root, subkeyW.c_str());
     if (status == ERROR_FILE_NOT_FOUND) {
         return true;
     }
@@ -379,5 +416,6 @@ bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine) {
     return false;
 #endif
 }
+
 
 } // namespace MultiThreadedInstaller

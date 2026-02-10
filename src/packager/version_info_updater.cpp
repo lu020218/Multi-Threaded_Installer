@@ -2,6 +2,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include "common/utf8_utils.h"
 #include <Windows.h>
 #include <vector>
 #include <string>
@@ -9,19 +10,6 @@
 #include <algorithm>
 
 namespace MultiThreadedInstaller {
-
-static std::wstring Utf8ToWide(const std::string& value) {
-    if (value.empty()) {
-        return {};
-    }
-    int size = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
-    if (size <= 0) {
-        return {};
-    }
-    std::wstring out(static_cast<size_t>(size - 1), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, out.data(), size);
-    return out;
-}
 
 static void AppendWord(std::vector<uint8_t>& out, WORD value) {
     out.push_back(static_cast<uint8_t>(value & 0xFF));
@@ -181,7 +169,12 @@ bool UpdateInstallerVersionInfo(const std::string& exePath, const VersionInfoDat
     AlignDword(data);
     EndBlock(data, start);
 
-    HANDLE update = BeginUpdateResourceA(exePath.c_str(), FALSE);
+    std::wstring exePathW = Utf8ToWide(exePath);
+    if (exePathW.empty()) {
+        error = "Invalid installer path: " + exePath;
+        return false;
+    }
+    HANDLE update = BeginUpdateResourceW(exePathW.c_str(), FALSE);
     if (!update) {
         error = "BeginUpdateResource failed";
         return false;

@@ -1,4 +1,5 @@
 ﻿#include "packager/icon_updater.h"
+#include "common/utf8_utils.h"
 #include <Windows.h>
 #include <fstream>
 #include <vector>
@@ -37,7 +38,7 @@ struct GrpIconDirEntry {
 #pragma pack(pop)
 
 static bool ReadFileBytes(const std::string& path, std::vector<uint8_t>& out) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    std::ifstream file(PathFromUtf8(path), std::ios::binary | std::ios::ate);
     if (!file) {
         return false;
     }
@@ -75,7 +76,12 @@ bool UpdateInstallerIcon(const std::string& exePath, const std::string& iconPath
         return false;
     }
 
-    HANDLE update = BeginUpdateResourceA(exePath.c_str(), FALSE);
+    std::wstring exePathW = Utf8ToWide(exePath);
+    if (exePathW.empty()) {
+        error = "Invalid installer path: " + exePath;
+        return false;
+    }
+    HANDLE update = BeginUpdateResourceW(exePathW.c_str(), FALSE);
     if (!update) {
         error = "BeginUpdateResource failed: " + exePath;
         return false;

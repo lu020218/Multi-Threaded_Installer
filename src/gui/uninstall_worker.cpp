@@ -7,6 +7,7 @@
 #include "../../include/installer/uninstall_manager.h"
 #include "../../include/installer/console_interface.h"
 #include "../../include/installer/path_resolver.h"
+#include "common/utf8_utils.h"
 
 #include <filesystem>
 #include <algorithm>
@@ -33,7 +34,7 @@ std::string resolveManifestPath(const std::string& appName,
                                 const std::string& exePath,
                                 InstallerPathResolver& resolver) {
     std::string localManifest = getLocalManifestPath(exePath);
-    if (!localManifest.empty() && std::filesystem::exists(localManifest)) {
+    if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
         return localManifest;
     }
 
@@ -52,9 +53,9 @@ std::string resolveManifestPath(const std::string& appName,
         readRegistryStringValue(hklmPath, "InstallLocation", installLocation);
     }
     if (!installLocation.empty()) {
-        std::filesystem::path localPath = std::filesystem::path(installLocation) / "install.manifest.json";
+        std::filesystem::path localPath = PathFromUtf8(installLocation) / "install.manifest.json";
         if (std::filesystem::exists(localPath)) {
-            return localPath.string();
+            return Utf8FromPath(localPath);
         }
     }
 
@@ -63,20 +64,20 @@ std::string resolveManifestPath(const std::string& appName,
         readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
     }
     if (!uninstallString.empty()) {
-        std::filesystem::path uninstallPath(uninstallString);
+        std::filesystem::path uninstallPath = PathFromUtf8(uninstallString);
         if (std::filesystem::exists(uninstallPath)) {
             std::filesystem::path baseDir = uninstallPath.parent_path();
             if (!baseDir.empty()) {
                 std::filesystem::path localPath = baseDir / "install.manifest.json";
                 if (std::filesystem::exists(localPath)) {
-                    return localPath.string();
+                    return Utf8FromPath(localPath);
                 }
             }
         }
     }
 
     std::string defaultManifest = getDefaultManifestPath(appName, resolver);
-    if (!defaultManifest.empty() && std::filesystem::exists(defaultManifest)) {
+    if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
         return defaultManifest;
     }
 

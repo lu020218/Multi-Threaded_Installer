@@ -1,4 +1,5 @@
 ﻿#include "packager/configuration_loader.h"
+#include "common/utf8_utils.h"
 #include <json.hpp>
 #include <fstream>
 #include <filesystem>
@@ -18,16 +19,29 @@ std::optional<PackagerConfiguration> ConfigurationLoader::loadConfiguration(
     loadedConfigPath_.clear();
     
     // 首先检查环境变量PACKAGER_CONFIG
-    const char* envConfig = std::getenv("PACKAGER_CONFIG");
-    if (envConfig != nullptr && std::strlen(envConfig) > 0) {
-        std::string envPath(envConfig);
-        if (fs::exists(envPath)) {
+#ifdef _WIN32
+    const wchar_t* envConfigW = _wgetenv(L"PACKAGER_CONFIG");
+    if (envConfigW && envConfigW[0] != L'\0') {
+        std::string envPath = WideToUtf8(envConfigW);
+        if (fs::exists(PathFromUtf8(envPath))) {
             return loadConfigurationFromPath(envPath);
         } else {
             lastError_ = "Configuration file specified in PACKAGER_CONFIG does not exist: " + envPath;
             return std::nullopt;
         }
     }
+#else
+    const char* envConfig = std::getenv("PACKAGER_CONFIG");
+    if (envConfig != nullptr && std::strlen(envConfig) > 0) {
+        std::string envPath(envConfig);
+        if (fs::exists(PathFromUtf8(envPath))) {
+            return loadConfigurationFromPath(envPath);
+        } else {
+            lastError_ = "Configuration file specified in PACKAGER_CONFIG does not exist: " + envPath;
+            return std::nullopt;
+        }
+    }
+#endif
     
     // 在输入目录中查找配置文件
     auto configPath = findConfigFile(inputDirectory);
@@ -58,9 +72,9 @@ std::optional<std::string> ConfigurationLoader::findConfigFile(
     };
     
     for (const auto& name : configNames) {
-        fs::path configPath = fs::path(directory) / name;
+        fs::path configPath = PathFromUtf8(directory) / name;
         if (fs::exists(configPath)) {
-            return configPath.string();
+            return Utf8FromPath(configPath);
         }
     }
     
@@ -72,7 +86,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
     
     try {
         // 读取文件
-        std::ifstream file(filePath);
+        std::ifstream file(PathFromUtf8(filePath));
         if (!file.is_open()) {
             lastError_ = "Failed to open configuration file: " + filePath;
             return std::nullopt;

@@ -1,5 +1,6 @@
 ﻿#include "installer/installer_helpers.h"
 #include "installer/file_system_operator.h"
+#include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
 #include <ctime>
@@ -121,21 +122,7 @@ std::wstring buildRelaunchArguments() {
 }
 
 std::string wstringToUtf8(const std::wstring& value) {
-#ifdef _WIN32
-    if (value.empty()) {
-        return {};
-    }
-    int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) {
-        return {};
-    }
-    std::string result(size - 1, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), size, nullptr, nullptr);
-    return result;
-#else
-    (void)value;
-    return {};
-#endif
+    return WideToUtf8(value);
 }
 
 } // namespace
@@ -227,26 +214,12 @@ bool openFileForWrite(const std::filesystem::path& path, std::fstream& stream) {
 }
 
 std::wstring toWideUtf8(const std::string& text) {
-#ifdef _WIN32
-    if (text.empty()) {
-        return std::wstring();
-    }
-    int len = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
-    if (len <= 0) {
-        return std::wstring();
-    }
-    std::wstring wide(static_cast<size_t>(len - 1), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, wide.data(), len);
-    return wide;
-#else
-    (void)text;
-    return std::wstring();
-#endif
+    return Utf8ToWide(text);
 }
 
 std::filesystem::path findPrimaryExecutable(const std::filesystem::path& installRoot,
                                             const std::string& appName) {
-    std::filesystem::path candidate = installRoot / (appName + ".exe");
+    std::filesystem::path candidate = installRoot / PathFromUtf8(appName + ".exe");
     if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate)) {
         return candidate;
     }
@@ -274,17 +247,18 @@ std::filesystem::path findPrimaryExecutable(const std::filesystem::path& install
 bool setAutoStartup(const std::string& appName, const std::filesystem::path& exePath) {
 #ifdef _WIN32
     HKEY key = nullptr;
-    LONG status = RegOpenKeyExA(HKEY_CURRENT_USER,
-                                "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+    LONG status = RegOpenKeyExW(HKEY_CURRENT_USER,
+                                L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
                                 0, KEY_SET_VALUE, &key);
     if (status != ERROR_SUCCESS) {
         return false;
     }
     
-    std::string value = "\"" + exePath.string() + "\"";
-    status = RegSetValueExA(key, appName.c_str(), 0, REG_SZ,
+    std::wstring name = Utf8ToWide(appName);
+    std::wstring value = L"\"" + exePath.wstring() + L"\"";
+    status = RegSetValueExW(key, name.c_str(), 0, REG_SZ,
                             reinterpret_cast<const BYTE*>(value.c_str()),
-                            static_cast<DWORD>(value.size() + 1));
+                            static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
     RegCloseKey(key);
     return status == ERROR_SUCCESS;
 #else
@@ -297,13 +271,14 @@ bool setAutoStartup(const std::string& appName, const std::filesystem::path& exe
 bool removeAutoStartup(const std::string& appName) {
 #ifdef _WIN32
     HKEY key = nullptr;
-    LONG status = RegOpenKeyExA(HKEY_CURRENT_USER,
-                                "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+    LONG status = RegOpenKeyExW(HKEY_CURRENT_USER,
+                                L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
                                 0, KEY_SET_VALUE, &key);
     if (status != ERROR_SUCCESS) {
         return false;
     }
-    status = RegDeleteValueA(key, appName.c_str());
+    std::wstring name = Utf8ToWide(appName);
+    status = RegDeleteValueW(key, name.c_str());
     RegCloseKey(key);
     return status == ERROR_SUCCESS;
 #else
@@ -339,13 +314,13 @@ bool createDesktopShortcut(const std::string& appName, const std::filesystem::pa
         return false;
     }
     
-    std::wstring targetPath = toWideUtf8(exePath.string());
-    std::wstring workingDir = toWideUtf8(exePath.parent_path().string());
+    std::wstring targetPath = exePath.wstring();
+    std::wstring workingDir = exePath.parent_path().wstring();
     link->SetPath(targetPath.c_str());
     if (!workingDir.empty()) {
         link->SetWorkingDirectory(workingDir.c_str());
     }
-    link->SetDescription(toWideUtf8(appName).c_str());
+    link->SetDescription(Utf8ToWide(appName).c_str());
     
     IPersistFile* persist = nullptr;
     hr = link->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&persist));
@@ -390,12 +365,12 @@ bool deleteDesktopShortcut(const std::string& appName) {
 
 std::string getCurrentExecutablePath() {
 #ifdef _WIN32
-    char buffer[MAX_PATH];
-    DWORD len = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
+    wchar_t buffer[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
     if (len == 0) {
         return "";
     }
-    return std::string(buffer, len);
+    return WideToUtf8(std::wstring(buffer, len));
 #else
     char buffer[1024];
     ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
@@ -413,22 +388,22 @@ std::string getDefaultManifestPath(const std::string& appName, InstallerPathReso
     if (expanded.empty()) {
         return "";
     }
-    std::filesystem::path path(expanded);
+    std::filesystem::path path = PathFromUtf8(expanded);
     path /= "install.manifest.json";
-    return path.string();
+    return Utf8FromPath(path);
 }
 
 std::string getLocalManifestPath(const std::string& exePath) {
     if (exePath.empty()) {
         return "";
     }
-    std::filesystem::path path(exePath);
+    std::filesystem::path path = PathFromUtf8(exePath);
     std::filesystem::path parent = path.parent_path();
     if (parent.empty()) {
         return "";
     }
     parent /= "install.manifest.json";
-    return parent.string();
+    return Utf8FromPath(parent);
 }
 
 bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath) {
@@ -440,7 +415,7 @@ bool createUninstallStub(const std::string& sourcePath, const std::string& targe
         uint64_t dataSize;
     };
     
-    std::ifstream in(toLongPath(std::filesystem::path(sourcePath)), std::ios::binary);
+    std::ifstream in(toLongPath(PathFromUtf8(sourcePath)), std::ios::binary);
     if (!in) {
         return false;
     }
@@ -470,7 +445,7 @@ bool createUninstallStub(const std::string& sourcePath, const std::string& targe
         return false;
     }
     
-    std::ofstream out(toLongPath(std::filesystem::path(targetPath)), std::ios::binary | std::ios::trunc);
+    std::ofstream out(toLongPath(PathFromUtf8(targetPath)), std::ios::binary | std::ios::trunc);
     if (!out) {
         return false;
     }
@@ -575,7 +550,7 @@ uint64_t getAvailableDiskSpaceBytes(const std::string& path) {
     if (path.empty()) {
         return 0;
     }
-    std::filesystem::path candidate(path);
+    std::filesystem::path candidate = PathFromUtf8(path);
     std::error_code ec;
     std::filesystem::path probe = candidate;
     while (!probe.empty() && !std::filesystem::exists(probe, ec)) {
@@ -587,7 +562,7 @@ uint64_t getAvailableDiskSpaceBytes(const std::string& path) {
     if (probe.empty()) {
         probe = candidate;
     }
-    std::wstring widePath = toWideUtf8(probe.string());
+    std::wstring widePath = probe.wstring();
     ULARGE_INTEGER freeBytes = {};
     if (!GetDiskFreeSpaceExW(widePath.c_str(), &freeBytes, nullptr, nullptr)) {
         return 0;
@@ -598,7 +573,7 @@ uint64_t getAvailableDiskSpaceBytes(const std::string& path) {
         return 0;
     }
     std::error_code ec;
-    auto info = std::filesystem::space(std::filesystem::path(path), ec);
+    auto info = std::filesystem::space(PathFromUtf8(path), ec);
     if (ec) {
         return 0;
     }

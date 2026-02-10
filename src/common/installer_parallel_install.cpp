@@ -6,6 +6,7 @@
 #include "installer/file_system_operator.h"
 #include "installer/installer_helpers.h"
 #include "installer/path_resolver.h"
+#include "common/utf8_utils.h"
 
 #include <algorithm>
 #include <atomic>
@@ -243,10 +244,10 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         std::unordered_set<std::string> parentDirs;
         parentDirs.reserve(mapping.fileIndex.size());
         for (const auto& fileEntry : mapping.fileIndex) {
-            std::filesystem::path fullPath = std::filesystem::path(folderTask.targetPath) / fileEntry.relativePath;
+            std::filesystem::path fullPath = PathFromUtf8(folderTask.targetPath) / PathFromUtf8(fileEntry.relativePath);
             std::filesystem::path parent = fullPath.parent_path();
             if (!parent.empty()) {
-                parentDirs.insert(parent.string());
+                parentDirs.insert(Utf8FromPath(parent));
             }
         }
         FileSystemOperator fsOp;
@@ -259,8 +260,8 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
 
         uint64_t totalBytes = 0;
         for (const auto& fileEntry : mapping.fileIndex) {
-            std::filesystem::path fullPath = std::filesystem::path(folderTask.targetPath) / fileEntry.relativePath;
-            std::string fullPathStr = fullPath.string();
+            std::filesystem::path fullPath = PathFromUtf8(folderTask.targetPath) / PathFromUtf8(fileEntry.relativePath);
+            std::string fullPathStr = Utf8FromPath(fullPath);
             if (!ensureFileWithSize(fullPath, fileEntry.size, metadata.sparseFileThresholdBytes)) {
                 logError("Failed to create file: " + fullPathStr);
                 return false;

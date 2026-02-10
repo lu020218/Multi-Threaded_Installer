@@ -7,6 +7,7 @@
 #include "installer/installer_helpers.h"
 #include "common/installer_logger.h"
 #include "common/installer_parallel_install.h"
+#include "common/utf8_utils.h"
 #include "installer/install_state_utils.h"
 #include "installer/registry_utils.h"
 #include "installer/uninstall_manager.h"
@@ -86,13 +87,13 @@ std::vector<std::string> collectFilesRecursive(const std::string& rootPath) {
     if (rootPath.empty()) {
         return files;
     }
-    std::filesystem::path root(rootPath);
+    std::filesystem::path root = PathFromUtf8(rootPath);
     if (!std::filesystem::exists(root)) {
         return files;
     }
     for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
         if (entry.is_regular_file()) {
-            files.push_back(entry.path().string());
+            files.push_back(Utf8FromPath(entry.path()));
         }
     }
     return files;
@@ -125,9 +126,9 @@ std::string findManifestFromRegistry(const std::string& appName, InstallerPathRe
     }
 
     if (!installLocation.empty()) {
-        std::filesystem::path localManifest = std::filesystem::path(installLocation) / "install.manifest.json";
+        std::filesystem::path localManifest = PathFromUtf8(installLocation) / "install.manifest.json";
         if (std::filesystem::exists(localManifest)) {
-            return localManifest.string();
+            return Utf8FromPath(localManifest);
         }
     }
 
@@ -137,20 +138,20 @@ std::string findManifestFromRegistry(const std::string& appName, InstallerPathRe
     }
 
     if (!uninstallString.empty()) {
-        std::filesystem::path uninstallPath(uninstallString);
+        std::filesystem::path uninstallPath = PathFromUtf8(uninstallString);
         if (std::filesystem::exists(uninstallPath)) {
             std::filesystem::path baseDir = uninstallPath.parent_path();
             if (!baseDir.empty()) {
                 std::filesystem::path localManifest = baseDir / "install.manifest.json";
                 if (std::filesystem::exists(localManifest)) {
-                    return localManifest.string();
+                    return Utf8FromPath(localManifest);
                 }
             }
         }
     }
 
     std::string defaultManifest = getDefaultManifestPath(appName, resolver);
-    if (!defaultManifest.empty() && std::filesystem::exists(defaultManifest)) {
+    if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
         return defaultManifest;
     }
 
@@ -562,8 +563,8 @@ int runConsoleInstaller(int argc, char* argv[]) {
     // 解析命令行参数
     auto args = console.parseInstallerArgs(argc, argv);
     if (!args.uninstall) {
-        std::filesystem::path exePath = getCurrentExecutablePath();
-        std::string exeName = exePath.filename().string();
+        std::filesystem::path exePath = PathFromUtf8(getCurrentExecutablePath());
+        std::string exeName = Utf8FromPath(exePath.filename());
         std::transform(exeName.begin(), exeName.end(), exeName.begin(), ::tolower);
         if (exeName == "uninstall.exe") {
             args.uninstall = true;
@@ -580,20 +581,20 @@ int runConsoleInstaller(int argc, char* argv[]) {
         InstallerPathResolver pathResolver;
         std::string exePath = getCurrentExecutablePath();
         std::string localManifest = getLocalManifestPath(exePath);
-        if (!localManifest.empty() && std::filesystem::exists(localManifest)) {
+        if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
             bool ok = uninstallFromManifest(localManifest, pathResolver, console);
             return ok ? 0 : 1;
         }
         std::string fallbackAppName;
         if (!exePath.empty()) {
-            std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
+            std::filesystem::path exeDir = PathFromUtf8(exePath).parent_path();
             if (!exeDir.empty()) {
-                fallbackAppName = exeDir.filename().string();
+                fallbackAppName = Utf8FromPath(exeDir.filename());
             }
         }
         if (fallbackAppName.empty()) {
-            std::filesystem::path exeName = std::filesystem::path(exePath).filename();
-            fallbackAppName = exeName.stem().string();
+            std::filesystem::path exeName = PathFromUtf8(exePath).filename();
+            fallbackAppName = Utf8FromPath(exeName.stem());
         }
         if (!fallbackAppName.empty()) {
             std::string manifestPath = findManifestFromRegistry(fallbackAppName, pathResolver);
@@ -604,7 +605,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
         }
         if (!fallbackAppName.empty()) {
             std::string manifestPath = getDefaultManifestPath(fallbackAppName, pathResolver);
-            if (!manifestPath.empty() && std::filesystem::exists(manifestPath)) {
+            if (!manifestPath.empty() && std::filesystem::exists(PathFromUtf8(manifestPath))) {
                 bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
                 return ok ? 0 : 1;
             }
@@ -613,7 +614,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
         auto metadata = parser.parseExtendedEmbeddedMetadata();
         if (parser.validateMetadata(metadata)) {
             std::string manifestPath = getDefaultManifestPath(metadata.applicationName, pathResolver);
-            if (!manifestPath.empty() && std::filesystem::exists(manifestPath)) {
+            if (!manifestPath.empty() && std::filesystem::exists(PathFromUtf8(manifestPath))) {
                 bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
                 return ok ? 0 : 1;
             }
@@ -853,7 +854,8 @@ int runConsoleInstaller(int argc, char* argv[]) {
         }
         
         if (!installRootPath.empty()) {
-            std::filesystem::path exePath = findPrimaryExecutable(installRootPath, metadata.applicationName);
+            std::filesystem::path exePath = findPrimaryExecutable(PathFromUtf8(installRootPath),
+                                                                  metadata.applicationName);
             if ((metadata.autoStartup || metadata.desktopIcons) && exePath.empty()) {
                 console.showWarning("No executable found for AutoStartup/DesktopIcons");
             } else {
@@ -884,19 +886,21 @@ int runConsoleInstaller(int argc, char* argv[]) {
         
         std::string uninstallPath;
         if (!installRootPath.empty()) {
-            std::filesystem::path target = std::filesystem::path(installRootPath) / "uninstall.exe";
+            std::filesystem::path target = PathFromUtf8(installRootPath) / "uninstall.exe";
             std::string currentExe = getCurrentExecutablePath();
+            std::filesystem::path currentExePath = PathFromUtf8(currentExe);
             std::error_code ec;
-            if (!currentExe.empty() && std::filesystem::exists(currentExe)) {
-                if (createUninstallStub(currentExe, target.string())) {
-                    uninstallPath = target.string();
+            if (!currentExe.empty() && std::filesystem::exists(currentExePath)) {
+                std::string targetUtf8 = Utf8FromPath(target);
+                if (createUninstallStub(currentExe, targetUtf8)) {
+                    uninstallPath = targetUtf8;
                 } else {
-                    std::filesystem::copy_file(currentExe, target,
+                    std::filesystem::copy_file(currentExePath, target,
                                                std::filesystem::copy_options::overwrite_existing, ec);
                     if (ec) {
                         console.showWarning("Failed to create uninstall.exe");
                     } else {
-                        uninstallPath = target.string();
+                        uninstallPath = targetUtf8;
                     }
                 }
             }
@@ -945,8 +949,8 @@ int runConsoleInstaller(int argc, char* argv[]) {
         }
         
         if (!installRootPath.empty()) {
-            std::filesystem::path localPath = std::filesystem::path(installRootPath) / "install.manifest.json";
-            if (!writeManifest(localPath.string(), metadata.applicationName, metadata.configVersion,
+            std::filesystem::path localPath = PathFromUtf8(installRootPath) / "install.manifest.json";
+            if (!writeManifest(Utf8FromPath(localPath), metadata.applicationName, metadata.configVersion,
                                installRootPath, installedFiles, metadata.registry,
                                metadata.autoStartup, metadata.desktopIcons,
                                metadata.installState, uninstallPath, languageCode)) {
@@ -1012,7 +1016,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     std::string exePathString = getCurrentExecutablePath();
     std::string exeNameString;
     if (!exePathString.empty()) {
-        exeNameString = std::filesystem::path(exePathString).filename().string();
+        exeNameString = Utf8FromPath(PathFromUtf8(exePathString).filename());
     }
     if (argvW) {
         LocalFree(argvW);
@@ -1026,7 +1030,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             uninstallMode = true;
         } else {
             std::string localManifest = getLocalManifestPath(exePathString);
-            if (!localManifest.empty() && std::filesystem::exists(localManifest)) {
+            if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
                 uninstallMode = true;
             }
         }
@@ -1057,13 +1061,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     if (uninstallMode) {
         std::string appName;
         if (!exePathString.empty()) {
-            std::filesystem::path exeDir = std::filesystem::path(exePathString).parent_path();
+            std::filesystem::path exeDir = PathFromUtf8(exePathString).parent_path();
             if (!exeDir.empty()) {
-                appName = exeDir.filename().string();
+                appName = Utf8FromPath(exeDir.filename());
             }
             if (appName.empty()) {
-                std::filesystem::path exeName = std::filesystem::path(exePathString).filename();
-                appName = exeName.stem().string();
+                std::filesystem::path exeName = PathFromUtf8(exePathString).filename();
+                appName = Utf8FromPath(exeName.stem());
             }
         }
         if (appName.empty()) {
@@ -1090,19 +1094,19 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         std::string manifestPath;
         if (!exePathString.empty()) {
             std::string localManifest = getLocalManifestPath(exePathString);
-            if (!localManifest.empty() && std::filesystem::exists(localManifest)) {
+            if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
                 manifestPath = localManifest;
             }
         }
         if (manifestPath.empty()) {
             manifestPath = findManifestFromRegistry(appName, pathResolver);
-            if (!manifestPath.empty() && !std::filesystem::exists(manifestPath)) {
+            if (!manifestPath.empty() && !std::filesystem::exists(PathFromUtf8(manifestPath))) {
                 manifestPath.clear();
             }
         }
         if (manifestPath.empty()) {
             std::string defaultManifest = getDefaultManifestPath(appName, pathResolver);
-            if (!defaultManifest.empty() && std::filesystem::exists(defaultManifest)) {
+            if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
                 manifestPath = defaultManifest;
             }
         }
@@ -1156,7 +1160,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
         bool useZip = false;
         if (!tempResourcePath.empty()) {
-            std::filesystem::path zipPath = std::filesystem::path(tempResourcePath) / "resources.zip";
+            std::filesystem::path zipPath = PathFromUtf8(tempResourcePath) / "resources.zip";
             useZip = std::filesystem::exists(zipPath);
         }
         if (!useZip && !resourceBasePath.IsEmpty()) {
@@ -1343,7 +1347,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     
     bool useZip = false;
     if (!tempResourcePath.empty()) {
-        std::filesystem::path zipPath = std::filesystem::path(tempResourcePath) / "resources.zip";
+        std::filesystem::path zipPath = PathFromUtf8(tempResourcePath) / "resources.zip";
         useZip = std::filesystem::exists(zipPath);
     }
     if (!useZip && !resourceBasePath.IsEmpty()) {

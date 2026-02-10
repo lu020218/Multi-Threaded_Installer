@@ -1,4 +1,5 @@
 ﻿#include "packager/metadata_generator.h"
+#include "common/utf8_utils.h"
 #include <cstring>
 #include <filesystem>
 
@@ -319,8 +320,8 @@ FolderMapping MetadataGenerator::createFolderMapping(const CompressionResult& re
     FolderMapping mapping;
     
     // 从sourcePath提取文件夹名称（最后一个路径组件）
-    std::filesystem::path sourcePath(folderInfo.sourcePath);
-    std::string folderName = sourcePath.filename().string();
+    std::filesystem::path sourcePath = PathFromUtf8(folderInfo.sourcePath);
+    std::string folderName = Utf8FromPath(sourcePath.filename());
     
     mapping.folderName = folderName;
     mapping.targetPath = folderInfo.targetPath;
@@ -340,8 +341,8 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
     ExtendedFolderMapping mapping;
     
     // 从sourcePath提取文件夹名称（最后一个路径组件）
-    std::filesystem::path sourcePath(folderInfo.sourcePath);
-    std::string folderName = sourcePath.filename().string();
+    std::filesystem::path sourcePath = PathFromUtf8(folderInfo.sourcePath);
+    std::string folderName = Utf8FromPath(sourcePath.filename());
     
     // 填充基类字段
     mapping.folderName = folderName;

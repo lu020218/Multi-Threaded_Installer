@@ -1,5 +1,6 @@
 ﻿#include "installer/tar_stream_extractor.h"
 #include "installer/file_system_operator.h"
+#include "common/utf8_utils.h"
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -107,14 +108,14 @@ void TarStreamExtractor::flush() {
 }
 
 bool TarStreamExtractor::openCurrentFile() {
-    std::filesystem::path root(targetRoot_);
-    std::filesystem::path rel(currentPath_);
+    std::filesystem::path root = PathFromUtf8(targetRoot_);
+    std::filesystem::path rel = PathFromUtf8(currentPath_);
     std::filesystem::path fullPath = root / rel;
     
     FileSystemOperator fsOperator;
     std::filesystem::path parent = fullPath.parent_path();
     if (!parent.empty()) {
-        if (!fsOperator.createDirectoryRecursive(parent.string())) {
+        if (!fsOperator.createDirectoryRecursive(Utf8FromPath(parent))) {
             return false;
         }
     }

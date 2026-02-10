@@ -1,4 +1,5 @@
-ï»¿#include "installer/path_resolver.h"
+#include "installer/path_resolver.h"
+#include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
 #include <windows.h>
@@ -12,20 +13,20 @@ std::string InstallerPathResolver::resolveFinalPath(
     
     std::string basePath;
     
-    // æ ¹æ®ç›®æ ‡ç›®å½•ç±»åž‹ç¡®å®šåŸºç¡€è·¯å¾„
+    // ¸ù¾ÝÄ¿±êÄ¿Â¼ÀàÐÍÈ·¶¨»ù´¡Â·¾¶
     if (targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
         basePath = userSelectedPath;
     } else {
         basePath = getSpecialDirectoryPath(targetDirType);
     }
     
-    // å±•å¼€çŽ¯å¢ƒå˜é‡
+    // Õ¹¿ª»·¾³±äÁ¿
     basePath = expandEnvironmentVariables(basePath);
     
-    // è§„èŒƒåŒ–è·¯å¾„
+    // ¹æ·¶»¯Â·¾¶
     basePath = normalizePath(basePath);
     
-    // æ™ºèƒ½è¡¥é½åº”ç”¨ç¨‹åºå
+    // ÖÇÄÜ²¹ÆëÓ¦ÓÃ³ÌÐòÃû
     return appendAppNameIfNeeded(basePath, applicationName);
 }
 
@@ -33,18 +34,27 @@ std::string InstallerPathResolver::expandEnvironmentVariables(const std::string&
     if (path.empty()) {
         return path;
     }
-    
-    std::string result = path;
-    
-    // ä½¿ç”¨Windows APIå±•å¼€çŽ¯å¢ƒå˜é‡
-    char expanded[MAX_PATH * 2];
-    DWORD size = ExpandEnvironmentStringsA(result.c_str(), expanded, sizeof(expanded));
-    
-    if (size > 0 && size <= sizeof(expanded)) {
-        result = expanded;
+
+    std::wstring wide = Utf8ToWide(path);
+    if (wide.empty()) {
+        return path;
     }
-    
-    return result;
+
+    DWORD size = ExpandEnvironmentStringsW(wide.c_str(), nullptr, 0);
+    if (size == 0) {
+        return path;
+    }
+
+    std::wstring expanded;
+    expanded.resize(size);
+    DWORD written = ExpandEnvironmentStringsW(wide.c_str(), expanded.data(), size);
+    if (written == 0) {
+        return path;
+    }
+    if (!expanded.empty() && expanded.back() == L'\0') {
+        expanded.pop_back();
+    }
+    return WideToUtf8(expanded);
 }
 
 bool InstallerPathResolver::pathContainsAppName(
@@ -57,7 +67,7 @@ bool InstallerPathResolver::pathContainsAppName(
     
     std::string lastDir = getLastDirectoryName(path);
     
-    // ä¸åŒºåˆ†å¤§å°å†™æ¯”è¾ƒ
+    // ²»Çø·Ö´óÐ¡Ð´±È½Ï
     std::string lastDirLower = lastDir;
     std::string appNameLower = appName;
     
@@ -77,15 +87,15 @@ std::string InstallerPathResolver::appendAppNameIfNeeded(
         return basePath;
     }
     
-    // æ£€æŸ¥æ˜¯å¦å·²åŒ…å«åº”ç”¨ç¨‹åºå
+    // ¼ì²éÊÇ·ñÒÑ°üº¬Ó¦ÓÃ³ÌÐòÃû
     if (pathContainsAppName(basePath, appName)) {
         return basePath;
     }
     
-    // è¿½åŠ åº”ç”¨ç¨‹åºå
+    // ×·¼ÓÓ¦ÓÃ³ÌÐòÃû
     std::string result = normalizePath(basePath);
     
-    // ç¡®ä¿è·¯å¾„ä»¥åæ–œæ ç»“å°¾
+    // È·±£Â·¾¶ÒÔ·´Ð±¸Ü½áÎ²
     if (!result.empty() && result.back() != '\\' && result.back() != '/') {
         result += '\\';
     }
@@ -118,7 +128,7 @@ std::string InstallerPathResolver::normalizePath(const std::string& path) {
     
     std::string result = path;
     
-    // ç§»é™¤å°¾éƒ¨çš„æ–œæ 
+    // ÒÆ³ýÎ²²¿µÄÐ±¸Ü
     while (!result.empty() && (result.back() == '\\' || result.back() == '/')) {
         result.pop_back();
     }
@@ -133,15 +143,15 @@ std::string InstallerPathResolver::getLastDirectoryName(const std::string& path)
     
     std::string normalized = normalizePath(path);
     
-    // æŸ¥æ‰¾æœ€åŽä¸€ä¸ªè·¯å¾„åˆ†éš”ç¬¦
+    // ²éÕÒ×îºóÒ»¸öÂ·¾¶·Ö¸ô·û
     size_t lastSlash = normalized.find_last_of("\\/");
     
     if (lastSlash == std::string::npos) {
-        // æ²¡æœ‰è·¯å¾„åˆ†éš”ç¬¦ï¼Œæ•´ä¸ªå­—ç¬¦ä¸²å°±æ˜¯ç›®å½•å
+        // Ã»ÓÐÂ·¾¶·Ö¸ô·û£¬Õû¸ö×Ö·û´®¾ÍÊÇÄ¿Â¼Ãû
         return normalized;
     }
     
-    // è¿”å›žæœ€åŽä¸€ä¸ªåˆ†éš”ç¬¦ä¹‹åŽçš„éƒ¨åˆ†
+    // ·µ»Ø×îºóÒ»¸ö·Ö¸ô·ûÖ®ºóµÄ²¿·Ö
     return normalized.substr(lastSlash + 1);
 }
 

@@ -1,4 +1,5 @@
 ﻿#include "common/lzma_loader.h"
+#include "common/utf8_utils.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -6,40 +7,52 @@
 #ifdef _WIN32
 namespace {
 
+using MultiThreadedInstaller::Utf8ToWide;
+using MultiThreadedInstaller::WideToUtf8;
+
 std::string getEnvVar(const char* name) {
-    char buffer[32767];
-    DWORD len = GetEnvironmentVariableA(name, buffer, static_cast<DWORD>(sizeof(buffer)));
-    if (len == 0 || len >= sizeof(buffer)) {
+    std::wstring nameW = Utf8ToWide(name ? std::string(name) : std::string());
+    if (nameW.empty()) {
         return {};
     }
-    return std::string(buffer, len);
+    wchar_t buffer[32767];
+    DWORD cap = static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0]));
+    DWORD len = GetEnvironmentVariableW(nameW.c_str(), buffer, cap);
+    if (len == 0 || len >= cap) {
+        return {};
+    }
+    return WideToUtf8(std::wstring(buffer, len));
 }
 
 std::string getExecutableDir() {
-    char path[MAX_PATH];
-    DWORD len = GetModuleFileNameA(NULL, path, MAX_PATH);
+    wchar_t path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(NULL, path, MAX_PATH);
     if (len == 0 || len >= MAX_PATH) {
         return {};
     }
-    std::string exePath(path, len);
-    size_t pos = exePath.find_last_of("\/");
-    if (pos == std::string::npos) {
+    std::wstring exePath(path, len);
+    size_t pos = exePath.find_last_of(L"\\/");
+    if (pos == std::wstring::npos) {
         return {};
     }
-    return exePath.substr(0, pos);
+    return WideToUtf8(exePath.substr(0, pos));
 }
 
 std::string getCurrentDir() {
-    char buffer[MAX_PATH];
-    DWORD len = GetCurrentDirectoryA(MAX_PATH, buffer);
+    wchar_t buffer[MAX_PATH];
+    DWORD len = GetCurrentDirectoryW(MAX_PATH, buffer);
     if (len == 0 || len >= MAX_PATH) {
         return {};
     }
-    return std::string(buffer, len);
+    return WideToUtf8(std::wstring(buffer, len));
 }
 
 bool fileExists(const std::string& path) {
-    DWORD attrs = GetFileAttributesA(path.c_str());
+    std::wstring pathW = Utf8ToWide(path);
+    if (pathW.empty()) {
+        return false;
+    }
+    DWORD attrs = GetFileAttributesW(pathW.c_str());
     return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
@@ -47,7 +60,11 @@ HMODULE tryLoadLibrary(const std::string& path) {
     if (path.empty() || !fileExists(path)) {
         return nullptr;
     }
-    return LoadLibraryA(path.c_str());
+    std::wstring pathW = Utf8ToWide(path);
+    if (pathW.empty()) {
+        return nullptr;
+    }
+    return LoadLibraryW(pathW.c_str());
 }
 
 } // namespace
@@ -111,7 +128,7 @@ bool LzmaLoader::loadLibrary() {
     }
 
     if (!hModule) {
-        hModule = LoadLibraryA("liblzma.dll");
+        hModule = LoadLibraryW(L"liblzma.dll");
     }
     if (!hModule) {
         std::cerr << "Failed to load liblzma.dll" << std::endl;

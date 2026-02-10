@@ -1,4 +1,5 @@
 ﻿#include "packager/folder_scanner.h"
+#include "common/utf8_utils.h"
 #include <filesystem>
 #include <iostream>
 
@@ -13,11 +14,11 @@ std::vector<FolderInfo> FolderScanner::scanInputDirectory(const std::string& inp
     }
     
     try {
-        for (const auto& entry : std::filesystem::directory_iterator(inputPath)) {
+        for (const auto& entry : std::filesystem::directory_iterator(PathFromUtf8(inputPath))) {
             if (entry.is_directory()) {
                 FolderInfo folderInfo;
-                folderInfo.sourcePath = entry.path().string();
-                folderInfo.targetPath = entry.path().filename().string();
+                folderInfo.sourcePath = Utf8FromPath(entry.path());
+                folderInfo.targetPath = Utf8FromPath(entry.path().filename());
                 
                 scanSingleFolder(folderInfo.sourcePath, folderInfo);
                 folders.push_back(folderInfo);
@@ -60,9 +61,9 @@ bool FolderScanner::validateFolderStructure(const std::vector<FolderInfo>& folde
 
 void FolderScanner::scanSingleFolder(const std::string& folderPath, FolderInfo& folderInfo) {
     try {
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(folderPath)) {
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(PathFromUtf8(folderPath))) {
             if (entry.is_regular_file()) {
-                folderInfo.files.push_back(entry.path().string());
+                folderInfo.files.push_back(Utf8FromPath(entry.path()));
             }
         }
         
@@ -77,7 +78,7 @@ size_t FolderScanner::calculateFolderSize(const std::vector<std::string>& files)
     
     for (const auto& file : files) {
         try {
-            totalSize += std::filesystem::file_size(file);
+            totalSize += std::filesystem::file_size(PathFromUtf8(file));
         } catch (const std::filesystem::filesystem_error& e) {
             std::cerr << "Error getting file size for " << file << ": " << e.what() << std::endl;
         }
@@ -88,7 +89,7 @@ size_t FolderScanner::calculateFolderSize(const std::vector<std::string>& files)
 
 bool FolderScanner::isDirectory(const std::string& path) {
     try {
-        return std::filesystem::is_directory(path);
+        return std::filesystem::is_directory(PathFromUtf8(path));
     } catch (const std::filesystem::filesystem_error&) {
         return false;
     }
@@ -96,7 +97,8 @@ bool FolderScanner::isDirectory(const std::string& path) {
 
 bool FolderScanner::isFileReadable(const std::string& filePath) {
     try {
-        return std::filesystem::exists(filePath) && std::filesystem::is_regular_file(filePath);
+        auto path = PathFromUtf8(filePath);
+        return std::filesystem::exists(path) && std::filesystem::is_regular_file(path);
     } catch (const std::filesystem::filesystem_error&) {
         return false;
     }

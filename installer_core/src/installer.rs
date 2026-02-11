@@ -32,12 +32,16 @@ use installer_shared::{
     FlowDefinition, FlowStep, InstallFlow, InstallOptions, InstallerError, OnFailPolicy,
     PackageMetadata, Phase, ProgressEvent, Result,
 };
+use serde_yaml;
+use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
@@ -708,7 +712,19 @@ impl Installer {
         let file = File::open(&self.package_path)?;
         let mut reader = BufReader::new(file);
         let total_blocks = parsed.toc.blocks.len() as u64;
-        let mut blocks_processed = 0u64;
+        let processed = Arc::new(AtomicU64::new(0));
+        let pool = if let Some(thread_count) = options.thread_count {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(thread_count)
+                .build()
+                .ok()
+        } else {
+            None
+        };
+        let window_blocks = options
+            .thread_count
+            .map(|n| n.max(1) * 2)
+            .unwrap_or(8);
 
         progress(ProgressEvent::new(
             Phase::Writing,
@@ -720,119 +736,167 @@ impl Installer {
         let mut current_file_index = 0usize;
         let mut current_file: Option<(std::fs::File, PathBuf, u32, crc32fast::Hasher, u64)> = None;
 
-        for block_entry in &parsed.toc.blocks {
-            reader.seek(SeekFrom::Start(parsed.data_offset + block_entry.offset))?;
-            let mut compressed_data = vec![0u8; block_entry.compressed_size as usize];
-            reader.read_exact(&mut compressed_data)?;
+        struct BlockWork {
+            index: usize,
+            entry: installer_shared::BlockEntry,
+            data: Vec<u8>,
+        }
 
-            verify_crc32(&compressed_data, block_entry.checksum)?;
-            let decompressed = decompress(&compressed_data, block_entry.algorithm)?;
+        struct DecompressedBlock {
+            index: usize,
+            data: Vec<u8>,
+        }
 
-            blocks_processed += 1;
-            progress(ProgressEvent::new(
-                Phase::Decompressing,
-                blocks_processed,
-                total_blocks,
-            ));
+        let mut block_index = 0usize;
+        while block_index < parsed.toc.blocks.len() {
+            let end = (block_index + window_blocks).min(parsed.toc.blocks.len());
+            let mut work_items = Vec::with_capacity(end - block_index);
 
-            let mut offset = 0usize;
-            while offset < decompressed.len() {
-                if current_file.is_none() {
-                    if current_file_index >= parsed.toc.files.len() {
-                        return Err(InstallerError::InvalidFormat(
-                            "Decompressed data exceeds file table".to_string(),
+            for (offset, block_entry) in parsed.toc.blocks[block_index..end].iter().enumerate() {
+                reader.seek(SeekFrom::Start(parsed.data_offset + block_entry.offset))?;
+                let mut compressed_data = vec![0u8; block_entry.compressed_size as usize];
+                reader.read_exact(&mut compressed_data)?;
+                work_items.push(BlockWork {
+                    index: block_index + offset,
+                    entry: *block_entry,
+                    data: compressed_data,
+                });
+            }
+
+            let processed = Arc::clone(&processed);
+            let decompress_fn = |items: &[BlockWork]| {
+                items
+                    .par_iter()
+                    .map(|item| {
+                        verify_crc32(&item.data, item.entry.checksum)?;
+                        let decompressed = decompress(&item.data, item.entry.algorithm)?;
+                        let count = processed.fetch_add(1, Ordering::SeqCst) + 1;
+                        progress(ProgressEvent::new(
+                            Phase::Decompressing,
+                            count,
+                            total_blocks,
+                        ));
+                        Ok(DecompressedBlock {
+                            index: item.index,
+                            data: decompressed,
+                        })
+                    })
+                    .collect::<Vec<Result<DecompressedBlock>>>()
+            };
+
+            let decompressed_blocks: Vec<Result<DecompressedBlock>> = if let Some(pool) = &pool {
+                pool.install(|| decompress_fn(&work_items))
+            } else {
+                decompress_fn(&work_items)
+            };
+
+            let mut decompressed_blocks: Vec<DecompressedBlock> =
+                decompressed_blocks.into_iter().collect::<Result<Vec<_>>>()?;
+            decompressed_blocks.sort_by_key(|block| block.index);
+
+            for decompressed_block in decompressed_blocks {
+                let decompressed = decompressed_block.data;
+                let mut offset = 0usize;
+                while offset < decompressed.len() {
+                    if current_file.is_none() {
+                        if current_file_index >= parsed.toc.files.len() {
+                            return Err(InstallerError::InvalidFormat(
+                                "Decompressed data exceeds file table".to_string(),
+                            ));
+                        }
+
+                        let file_entry = &parsed.toc.files[current_file_index];
+                        let expanded_path = expand_env_vars_in_path(&file_entry.path);
+                        let file_path = if is_absolute_path(&expanded_path) {
+                            PathBuf::from(&expanded_path)
+                        } else {
+                            options.install_dir.join(&expanded_path)
+                        };
+
+                        if let Some(parent) = file_path.parent() {
+                            create_dir_all(parent)?;
+                        }
+
+                        let output_file = std::fs::File::create(&file_path)?;
+                        current_file = Some((
+                            output_file,
+                            file_path,
+                            file_entry.mode,
+                            crc32fast::Hasher::new(),
+                            file_entry.original_size,
                         ));
                     }
 
-                    let file_entry = &parsed.toc.files[current_file_index];
-                    let expanded_path = expand_env_vars_in_path(&file_entry.path);
-                    let file_path = if is_absolute_path(&expanded_path) {
-                        PathBuf::from(&expanded_path)
-                    } else {
-                        options.install_dir.join(&expanded_path)
-                    };
+                    let (ref mut output_file, _path, _mode, ref mut hasher, remaining) =
+                        current_file.as_mut().unwrap();
+                    let remaining_usize = *remaining as usize;
 
-                    if let Some(parent) = file_path.parent() {
-                        create_dir_all(parent)?;
+                    if remaining_usize == 0 {
+                        let (mut output_file, path, mode, hasher, _remaining) =
+                            current_file.take().unwrap();
+                        output_file.flush()?;
+                        set_file_permissions_public(&path, mode)?;
+                        let actual_checksum = hasher.finalize();
+                        let expected_checksum = parsed.toc.files[current_file_index].checksum;
+                        if actual_checksum != expected_checksum {
+                            return Err(InstallerError::ChecksumMismatch {
+                                expected: expected_checksum,
+                                actual: actual_checksum,
+                            });
+                        }
+                        installed_files.push(path);
+                        files_written += 1;
+                        progress(
+                            ProgressEvent::new(
+                                Phase::Writing,
+                                files_written,
+                                parsed.toc.files.len() as u64,
+                            )
+                            .with_file(&parsed.toc.files[current_file_index].path),
+                        );
+                        current_file_index += 1;
+                        continue;
                     }
 
-                    let output_file = std::fs::File::create(&file_path)?;
-                    current_file = Some((
-                        output_file,
-                        file_path,
-                        file_entry.mode,
-                        crc32fast::Hasher::new(),
-                        file_entry.original_size,
-                    ));
-                }
+                    let available = decompressed.len() - offset;
+                    let take = available.min(remaining_usize);
+                    let slice = &decompressed[offset..offset + take];
 
-                let (ref mut output_file, _path, _mode, ref mut hasher, remaining) =
-                    current_file.as_mut().unwrap();
-                let remaining_usize = *remaining as usize;
+                    output_file.write_all(slice)?;
+                    hasher.update(slice);
 
-                if remaining_usize == 0 {
-                    let (mut output_file, path, mode, hasher, _remaining) =
-                        current_file.take().unwrap();
-                    output_file.flush()?;
-                    set_file_permissions_public(&path, mode)?;
-                    let actual_checksum = hasher.finalize();
-                    let expected_checksum = parsed.toc.files[current_file_index].checksum;
-                    if actual_checksum != expected_checksum {
-                        return Err(InstallerError::ChecksumMismatch {
-                            expected: expected_checksum,
-                            actual: actual_checksum,
-                        });
+                    offset += take;
+                    *remaining -= take as u64;
+
+                    if *remaining == 0 {
+                        let (mut output_file, path, mode, hasher, _remaining) =
+                            current_file.take().unwrap();
+                        output_file.flush()?;
+                        set_file_permissions_public(&path, mode)?;
+                        let actual_checksum = hasher.finalize();
+                        let expected_checksum = parsed.toc.files[current_file_index].checksum;
+                        if actual_checksum != expected_checksum {
+                            return Err(InstallerError::ChecksumMismatch {
+                                expected: expected_checksum,
+                                actual: actual_checksum,
+                            });
+                        }
+                        installed_files.push(path);
+                        files_written += 1;
+                        progress(
+                            ProgressEvent::new(
+                                Phase::Writing,
+                                files_written,
+                                parsed.toc.files.len() as u64,
+                            )
+                            .with_file(&parsed.toc.files[current_file_index].path),
+                        );
+                        current_file_index += 1;
                     }
-                    installed_files.push(path);
-                    files_written += 1;
-                    progress(
-                        ProgressEvent::new(
-                            Phase::Writing,
-                            files_written,
-                            parsed.toc.files.len() as u64,
-                        )
-                        .with_file(&parsed.toc.files[current_file_index].path),
-                    );
-                    current_file_index += 1;
-                    continue;
-                }
-
-                let available = decompressed.len() - offset;
-                let take = available.min(remaining_usize);
-                let slice = &decompressed[offset..offset + take];
-
-                output_file.write_all(slice)?;
-                hasher.update(slice);
-
-                offset += take;
-                *remaining -= take as u64;
-
-                if *remaining == 0 {
-                    let (mut output_file, path, mode, hasher, _remaining) =
-                        current_file.take().unwrap();
-                    output_file.flush()?;
-                    set_file_permissions_public(&path, mode)?;
-                    let actual_checksum = hasher.finalize();
-                    let expected_checksum = parsed.toc.files[current_file_index].checksum;
-                    if actual_checksum != expected_checksum {
-                        return Err(InstallerError::ChecksumMismatch {
-                            expected: expected_checksum,
-                            actual: actual_checksum,
-                        });
-                    }
-                    installed_files.push(path);
-                    files_written += 1;
-                    progress(
-                        ProgressEvent::new(
-                            Phase::Writing,
-                            files_written,
-                            parsed.toc.files.len() as u64,
-                        )
-                        .with_file(&parsed.toc.files[current_file_index].path),
-                    );
-                    current_file_index += 1;
                 }
             }
+
+            block_index = end;
         }
 
         while current_file.is_none() && current_file_index < parsed.toc.files.len() {
@@ -1002,7 +1066,19 @@ impl Installer {
                 step.id
             ))
         })?;
-        let manifest = load_component_manifest(Path::new(path))?;
+        let manifest = if path == "embedded" {
+            let parsed = self.parse_package()?;
+            let yaml = parsed.metadata.embedded_component_manifest.ok_or_else(|| {
+                InstallerError::Config(
+                    "Embedded component manifest not found in package metadata".to_string(),
+                )
+            })?;
+            serde_yaml::from_str(&yaml).map_err(|e| {
+                InstallerError::Config(format!("Failed to parse embedded component manifest: {}", e))
+            })?
+        } else {
+            load_component_manifest(Path::new(path))?
+        };
         state.manifest = Some(manifest);
         Ok(())
     }
@@ -1781,7 +1857,6 @@ impl Installer {
         let executor = FlowExecutor::new(flow)?;
         let mut runtime = InstallFlowRuntime::new(self, &parsed, &options, &progress);
 
-        progress(ProgressEvent::new(Phase::Completing, 0, 1));
         let execution_result = executor.execute(&mut runtime, &mut context);
         if let Some(root) = embedded_scripts_root {
             if let Err(e) = std::fs::remove_dir_all(&root) {

@@ -31,6 +31,11 @@ if (document.readyState === 'loading') {
 }
 
 async function initializeApp() {
+    if (window.__installer_ui_initialized) {
+        console.log('initializeApp already called, skipping');
+        return;
+    }
+    window.__installer_ui_initialized = true;
     try {
         console.log('initializeApp called');
         

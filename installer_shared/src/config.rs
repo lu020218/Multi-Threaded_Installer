@@ -65,6 +65,9 @@ pub struct PackagerConfig {
     /// Optional script files to embed for flow `script` steps.
     #[serde(default)]
     pub script_files: Vec<PathBuf>,
+    /// Optional component manifest YAML file to embed into package metadata.
+    #[serde(default)]
+    pub component_manifest_file: Option<PathBuf>,
     /// Number of threads for parallel operations (default: CPU count)
     #[serde(default)]
     pub thread_count: Option<usize>,
@@ -101,6 +104,7 @@ impl Default for PackagerConfig {
             ui_resources_dir: None,
             flow_file: None,
             script_files: Vec::new(),
+            component_manifest_file: None,
             thread_count: None,
         }
     }
@@ -218,6 +222,7 @@ mod tests {
             ui_resources_dir: Some(PathBuf::from("ui")),
             flow_file: Some(PathBuf::from("flow.yaml")),
             script_files: vec![PathBuf::from("scripts/precheck.js")],
+            component_manifest_file: Some(PathBuf::from("components.yaml")),
             thread_count: Some(4),
         };
 

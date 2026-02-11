@@ -153,21 +153,22 @@ cargo build --release --target x86_64-pc-windows-msvc
 
 ### Creating a Package
 
-The `packager_cli` tool creates installer packages from a directory of files.
+The `packager_cli` tool creates installer packages from an input directory. By default it
+auto-discovers configuration at `INPUT/config/packager.yaml` (or `INPUT/packager.yaml`).
 
 ```bash
-# Basic usage with configuration file
+# Basic usage (auto-discovered config in INPUT/config/packager.yaml)
 packager --input ./my-app --output ./my-app-installer.mti
 
-# Specify configuration file explicitly
-packager --input ./my-app --output ./installer.mti --config ./packager.yaml
+# Specify configuration file explicitly (override auto-discovery)
+packager --input ./my-app --output ./installer.mti --config ./config/packager.yaml
 
 # Override compression settings
 packager --input ./my-app --output ./installer.mti \
     --compression-algorithm zstd \
     --compression-level 9
 
-# Include custom UI resources
+# Override UI resources directory
 packager --input ./my-app --output ./installer.mti \
     --ui-resources ./custom-ui
 
@@ -231,7 +232,24 @@ installer --package ./installer.mti --uninstall
 
 ## Configuration
 
-Create a `packager.yaml` file in your input directory or specify it with `--config`.
+Create a `packager.yaml` file under `INPUT/config/packager.yaml` (recommended) or specify it
+explicitly with `--config`. When using the recommended layout, `packager` will treat
+`INPUT/payload/` as the install payload root.
+
+Recommended layout:
+
+```
+my-app/
+├─ payload/            # payload root (installed content)
+│  ├─ app/
+│  ├─ plugin/
+│  └─ resources/       # runtime assets (e.g., component_manifest.yaml)
+└─ config/             # packager config + UI + scripts
+   ├─ packager.yaml
+   ├─ flow.yaml
+   ├─ scripts/
+   └─ ui/
+```
 
 ### Basic Configuration
 

@@ -33,7 +33,7 @@ install_flow:
     - id: load_manifest
       type: load_component_manifest
       params:
-        path: "${InstallDir}/resources/component_manifest.yaml"
+        path: "embedded"
       on_fail: abort
 
     # 解析 UI 里勾选的组件
@@ -48,18 +48,21 @@ install_flow:
       type: process_selected_components
       params:
         action: "download"
+      when: "${vars.SelectedComponents}"
       on_fail: rollback
 
     - id: batch_verify
       type: process_selected_components
       params:
         action: "verify"
+      when: "${vars.SelectedComponents}"
       on_fail: rollback
 
     - id: batch_install
       type: process_selected_components
       params:
         action: "install"
+      when: "${vars.SelectedComponents}"
       on_fail: rollback
 
   rollback:

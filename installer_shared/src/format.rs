@@ -198,6 +198,9 @@ pub struct PackageMetadata {
     /// Optional embedded script sources referenced by flow script nodes.
     #[serde(default)]
     pub embedded_scripts: Vec<EmbeddedScript>,
+    /// Optional embedded component manifest YAML.
+    #[serde(default)]
+    pub embedded_component_manifest: Option<String>,
 }
 
 /// Embedded script source.
@@ -229,6 +232,7 @@ impl Default for PackageMetadata {
             window: None,
             embedded_flow_yaml: None,
             embedded_scripts: Vec::new(),
+            embedded_component_manifest: None,
         }
     }
 }

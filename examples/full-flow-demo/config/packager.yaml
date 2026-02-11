@@ -3,7 +3,7 @@ version: "1.0.0"
 default_install_dir: "%ProgramFiles%\\Tsingtao"
 vendor: "My Company"
 license_text: "MIT License..."
-icon_path: "app.ico"
+icon_path: "app/app.ico"
 compression_algorithm: "Zstd"
 compression_level: 9
 block_size: 4194304
@@ -33,3 +33,4 @@ ui_resources_dir: "./ui"
 flow_file: "./flow.yaml"
 script_files:
   - "./scripts/precheck.js"
+component_manifest_file: "./component_manifest.yaml"

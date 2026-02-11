@@ -25,6 +25,8 @@ lazy_static::lazy_static! {
     static ref LOCALIZATION: Mutex<Option<LocalizationManager>> = Mutex::new(None);
 }
 
+static BROWSE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
 /// Installation state shared across commands.
 pub struct InstallState {
     /// Flag to signal cancellation
@@ -681,6 +683,20 @@ pub async fn browse_directory(
     _app: AppHandle,
     default_path: Option<String>,
 ) -> Result<Option<String>, String> {
+    let acquired = BROWSE_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok();
+    if !acquired {
+        return Ok(None);
+    }
+    struct BrowseGuard;
+    impl Drop for BrowseGuard {
+        fn drop(&mut self) {
+            BROWSE_IN_PROGRESS.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = BrowseGuard;
+
     info!("Browse directory requested, default: {:?}", default_path);
 
     // Use rfd (Rust File Dialog) for cross-platform folder picker

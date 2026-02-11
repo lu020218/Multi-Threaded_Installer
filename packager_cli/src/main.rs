@@ -65,39 +65,57 @@ fn main() -> Result<()> {
     let config_path = args
         .config
         .clone()
-        .unwrap_or_else(|| args.input.join("packager.yaml"));
-    let mut config = load_config(&config_path, &args)?;
+        .unwrap_or_else(|| find_default_config(&args.input));
 
-    // Resolve ui_resources_dir relative to config file when not overridden via CLI.
-    if args.ui_resources.is_none() {
-        if let Some(ref ui_dir) = config.ui_resources_dir {
-            if ui_dir.is_relative() {
-                let base_dir = config_path
-                    .parent()
-                    .unwrap_or_else(|| args.input.as_path());
-                config.ui_resources_dir = Some(base_dir.join(ui_dir));
-            }
+    if args.config.is_none() {
+        let config_dir = args.input.join("config");
+        let payload_dir = args.input.join("payload");
+        if !config_dir.is_dir() || !payload_dir.is_dir() {
+            anyhow::bail!(
+                "Input directory must contain both 'config' and 'payload' folders. \
+Found config: {}, payload: {}",
+                config_dir.exists(),
+                payload_dir.exists()
+            );
+        }
+        if !config_path.exists() {
+            anyhow::bail!(
+                "Missing config file at {:?}. Provide --config to override.",
+                config_path
+            );
         }
     }
+    let mut config = load_config(&config_path, &args)?;
+
+    // Resolve config-relative paths against config file directory.
+    let config_base = config_path
+        .parent()
+        .unwrap_or_else(|| args.input.as_path());
+
+    let payload_root = resolve_payload_root(&args.input, &config_path)?;
 
     info!("Packaging: {}", config.application_name);
     info!("Version: {}", config.version);
-    info!("Input: {:?}", args.input);
+    info!("Input: {:?}", payload_root);
     info!("Output: {:?}", args.output);
 
     // Create packager
     let packager = Packager::new(config)?;
 
     // Determine UI resources directory
-    let ui_resources_dir = args
-        .ui_resources
-        .as_deref()
-        .or_else(|| packager.config().ui_resources_dir.as_deref());
+    let ui_resources_dir_resolved = args.ui_resources.clone().or_else(|| {
+        packager
+            .config()
+            .ui_resources_dir
+            .as_ref()
+            .map(|path| if path.is_relative() { config_base.join(path) } else { path.clone() })
+    });
+    let ui_resources_dir = ui_resources_dir_resolved.as_deref();
 
     let stats = if args.package_only {
         // Legacy mode: generate package data file only
         warn!("Using legacy package-only mode. The output file cannot be run directly.");
-        packager.build_package(&args.input, &args.output, ui_resources_dir, |event| {
+        packager.build_package(&payload_root, &args.output, ui_resources_dir, |event| {
             print_progress(&event)
         })?
     } else {
@@ -106,7 +124,7 @@ fn main() -> Result<()> {
         info!("Using template: {:?}", template_exe);
 
         packager.build_installer(
-            &args.input,
+            &payload_root,
             &template_exe,
             &args.output,
             ui_resources_dir,
@@ -222,6 +240,43 @@ fn load_config(config_path: &PathBuf, args: &Args) -> Result<PackagerConfig> {
     }
 
     Ok(config)
+}
+
+fn find_default_config(input_dir: &PathBuf) -> PathBuf {
+    let candidates = [
+        input_dir.join("config").join("packager.yaml"),
+        input_dir.join("packager.yaml"),
+    ];
+    for path in &candidates {
+        if path.exists() {
+            return path.clone();
+        }
+    }
+    candidates
+        .last()
+        .cloned()
+        .unwrap_or_else(|| input_dir.join("packager.yaml"))
+}
+
+// No config path normalization needed here; installer_core resolves flow/scripts relative to input.
+
+fn resolve_payload_root(input_dir: &PathBuf, config_path: &PathBuf) -> Result<PathBuf> {
+    let config_parent = match config_path.parent() {
+        Some(parent) => parent,
+        None => return Ok(input_dir.clone()),
+    };
+    let config_root = match config_parent.parent() {
+        Some(parent) => parent,
+        None => return Ok(input_dir.clone()),
+    };
+
+    let config_in_input = config_parent.ends_with("config") && config_root == input_dir.as_path();
+    let payload_candidate = input_dir.join("payload");
+    if config_in_input && payload_candidate.is_dir() {
+        return Ok(payload_candidate);
+    }
+
+    Ok(input_dir.clone())
 }
 
 /// Print progress to console.

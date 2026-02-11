@@ -92,6 +92,17 @@ impl Packager {
 
         let input_canonical = input_dir.canonicalize().ok();
         if let Some(input_root) = input_canonical {
+            if let Some(ui_dir) = &self.config.ui_resources_dir {
+                let ui_abs = Self::resolve_config_path(input_dir, ui_dir);
+                if let Ok(ui_can) = ui_abs.canonicalize() {
+                    if let Ok(rel) = ui_can.strip_prefix(&input_root) {
+                        let rel = Self::normalize_rel_path(rel);
+                        patterns.push(rel.clone());
+                        patterns.push(format!("{}/**", rel));
+                    }
+                }
+            }
+
             if let Some(flow_file) = &self.config.flow_file {
                 let flow_abs = Self::resolve_config_path(input_dir, flow_file);
                 if let Ok(flow_can) = flow_abs.canonicalize() {
@@ -401,6 +412,7 @@ impl Packager {
         ui_resources_checksum: Option<u32>,
         embedded_flow_yaml: Option<String>,
         embedded_scripts: Vec<EmbeddedScript>,
+        embedded_component_manifest: Option<String>,
     ) -> Result<PackageMetadata> {
         info!("Generating metadata for '{}'", self.config.application_name);
 
@@ -422,6 +434,7 @@ impl Packager {
             window: self.config.window,
             embedded_flow_yaml,
             embedded_scripts,
+            embedded_component_manifest,
         })
     }
 
@@ -429,7 +442,17 @@ impl Packager {
         if path.is_absolute() {
             path.to_path_buf()
         } else {
-            base.join(path)
+            let direct = base.join(path);
+            if direct.exists() {
+                return direct;
+            }
+            if let Some(parent) = base.parent() {
+                let candidate = parent.join("config").join(path);
+                if candidate.exists() {
+                    return candidate;
+                }
+            }
+            direct
         }
     }
 
@@ -467,6 +490,23 @@ impl Packager {
         }
 
         Ok((embedded_flow_yaml, embedded_scripts))
+    }
+
+    fn load_embedded_component_manifest(&self, input_dir: &Path) -> Result<Option<String>> {
+        let Some(manifest_path) = &self.config.component_manifest_file else {
+            return Ok(None);
+        };
+
+        let manifest_path = Self::resolve_config_path(input_dir, manifest_path);
+        let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
+            InstallerError::Config(format!(
+                "Failed to read component manifest '{}': {}",
+                manifest_path.display(),
+                e
+            ))
+        })?;
+
+        Ok(Some(content))
     }
 
     /// Embed UI resources from a directory.
@@ -555,7 +595,13 @@ impl Packager {
         let toc = self.generate_toc(file_entries, &blocks)?;
         let ui_checksum = ui_resources.as_ref().map(|r| r.checksum);
         let (embedded_flow_yaml, embedded_scripts) = self.load_embedded_flow_assets(input_dir)?;
-        let metadata = self.generate_metadata(ui_checksum, embedded_flow_yaml, embedded_scripts)?;
+        let embedded_component_manifest = self.load_embedded_component_manifest(input_dir)?;
+        let metadata = self.generate_metadata(
+            ui_checksum,
+            embedded_flow_yaml,
+            embedded_scripts,
+            embedded_component_manifest,
+        )?;
 
         // Serialize TOC with checksum wrapper to get the actual size
         let mut toc_data = Vec::new();
@@ -743,7 +789,13 @@ impl Packager {
         let toc = self.generate_toc(file_entries, &blocks)?;
         let ui_checksum = ui_resources.as_ref().map(|r| r.checksum);
         let (embedded_flow_yaml, embedded_scripts) = self.load_embedded_flow_assets(input_dir)?;
-        let metadata = self.generate_metadata(ui_checksum, embedded_flow_yaml, embedded_scripts)?;
+        let embedded_component_manifest = self.load_embedded_component_manifest(input_dir)?;
+        let metadata = self.generate_metadata(
+            ui_checksum,
+            embedded_flow_yaml,
+            embedded_scripts,
+            embedded_component_manifest,
+        )?;
 
         // Serialize TOC with checksum wrapper
         let mut toc_data = Vec::new();

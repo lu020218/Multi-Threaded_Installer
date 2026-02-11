@@ -5,43 +5,43 @@ A C++ packager and installer system that creates self-extracting installers with
 ## Project Structure
 
 ```
-├── CMakeLists.txt              # Build configuration
-├── README.md                   # This file
-├── include/                    # Header files
-�?  ├── common/
-�?  �?  └── types.h            # Core data structures and enums
-�?  ├── packager/              # Packager component headers
-�?  �?  ├── folder_scanner.h
-�?  �?  ├── compression_module.h
-�?  �?  ├── metadata_generator.h
-�?  �?  └── installer_generator.h
-�?  └── installer/             # Installer component headers
-�?      ├── metadata_parser.h
-�?      ├── thread_pool_manager.h
-�?      ├── decompression_engine.h
-�?      ├── file_system_operator.h
-�?      └── console_interface.h
-├── src/                       # Source files
-�?  ├── common/
-�?  �?  └── types.cpp
-�?  ├── packager/              # Packager implementation
-�?  �?  ├── main.cpp
-�?  �?  ├── folder_scanner.cpp
-�?  �?  ├── compression_module.cpp
-�?  �?  ├── metadata_generator.cpp
-�?  �?  └── installer_generator.cpp
-�?  └── installer/             # Installer implementation
-�?      ├── main.cpp
-�?      ├── metadata_parser.cpp
-�?      ├── thread_pool_manager.cpp
-�?      ├── decompression_engine.cpp
-�?      ├── file_system_operator.cpp
-�?      └── console_interface.cpp
-└── tests/                     # Test files
-    ├── test_main.cpp          # Unit test runner
-    ├── test_*.cpp             # Unit test files
-    └── pbt/                   # Property-based tests
-        └── test_compression_roundtrip.cpp
+鈹溾攢鈹€ CMakeLists.txt              # Build configuration
+鈹溾攢鈹€ README.md                   # This file
+鈹溾攢鈹€ include/                    # Header files
+鈹?  鈹溾攢鈹€ common/
+鈹?  鈹?  鈹斺攢鈹€ types.h            # Core data structures and enums
+鈹?  鈹溾攢鈹€ packager/              # Packager component headers
+鈹?  鈹?  鈹溾攢鈹€ folder_scanner.h
+鈹?  鈹?  鈹溾攢鈹€ compression_module.h
+鈹?  鈹?  鈹溾攢鈹€ metadata_generator.h
+鈹?  鈹?  鈹斺攢鈹€ installer_generator.h
+鈹?  鈹斺攢鈹€ installer/             # Installer component headers
+鈹?      鈹溾攢鈹€ metadata_parser.h
+鈹?      鈹溾攢鈹€ thread_pool_manager.h
+鈹?      鈹溾攢鈹€ decompression_engine.h
+鈹?      鈹溾攢鈹€ file_system_operator.h
+鈹?      鈹斺攢鈹€ console_interface.h
+鈹溾攢鈹€ src/                       # Source files
+鈹?  鈹溾攢鈹€ common/
+鈹?  鈹?  鈹斺攢鈹€ types.cpp
+鈹?  鈹溾攢鈹€ packager/              # Packager implementation
+鈹?  鈹?  鈹溾攢鈹€ main.cpp
+鈹?  鈹?  鈹溾攢鈹€ folder_scanner.cpp
+鈹?  鈹?  鈹溾攢鈹€ compression_module.cpp
+鈹?  鈹?  鈹溾攢鈹€ metadata_generator.cpp
+鈹?  鈹?  鈹斺攢鈹€ installer_generator.cpp
+鈹?  鈹斺攢鈹€ installer/             # Installer implementation
+鈹?      鈹溾攢鈹€ main.cpp
+鈹?      鈹溾攢鈹€ metadata_parser.cpp
+鈹?      鈹溾攢鈹€ thread_pool_manager.cpp
+鈹?      鈹溾攢鈹€ decompression_engine.cpp
+鈹?      鈹溾攢鈹€ file_system_operator.cpp
+鈹?      鈹斺攢鈹€ console_interface.cpp
+鈹斺攢鈹€ tests/                     # Test files
+    鈹溾攢鈹€ test_main.cpp          # Unit test runner
+    鈹溾攢鈹€ test_*.cpp             # Unit test files
+    鈹斺攢鈹€ pbt/                   # Property-based tests
+        鈹斺攢鈹€ test_compression_roundtrip.cpp
 ```
 
 ## Dependencies

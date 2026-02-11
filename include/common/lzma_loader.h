@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #ifdef LibLZMA_FOUND
 #include <lzma.h>

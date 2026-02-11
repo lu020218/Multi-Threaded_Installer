@@ -1,4 +1,4 @@
-﻿#include "packager/configuration_validator.h"
+#include "packager/configuration_validator.h"
 #include "common/utf8_utils.h"
 #include <filesystem>
 #include <algorithm>
@@ -14,7 +14,7 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
     
     ValidationResult result;
     
-    // 验证配置版本
+
     if (config.version.empty()) {
         result.errors.push_back("ERROR: Missing required field 'Version'\n"
                                 "  Reason: Version is required\n"
@@ -22,25 +22,25 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         result.isValid = false;
     }
     
-    // 验证应用程序名称
+
     if (!validateApplicationName(config.applicationName, result.errors)) {
         result.isValid = false;
     }
     
-    // 验证文件夹目标配置
+
     for (const auto& folderTarget : config.folderTargets) {
-        // 验证文件夹是否存在
+
         if (!validateFolderExists(folderTarget.folderName, inputDirectory, result.errors)) {
             result.isValid = false;
         }
         
-        // 验证目标目录配置
+
         if (!validateTargetDirectory(folderTarget.targetDirectory, result.errors)) {
             result.isValid = false;
         }
     }
     
-    // 验证默认安装目录格式
+
     if (!config.defaultInstallDir.empty()) {
         if (!validateTargetDirectory(config.defaultInstallDir, result.errors)) {
             result.isValid = false;
@@ -52,7 +52,7 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         result.isValid = false;
     }
 
-    // 验证图标文件（可选）
+
     if (!config.iconPath.empty()) {
         fs::path iconPath = PathFromUtf8(config.iconPath);
         if (!iconPath.is_absolute()) {
@@ -67,7 +67,7 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         }
     }
     
-    // 验证注册表配置（结构完整性）
+
     for (const auto& reg : config.registry) {
         if (reg.path.empty() || reg.key.empty()) {
             result.errors.push_back("ERROR: Invalid Registry entry\n"
@@ -78,7 +78,7 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         }
     }
 
-    // 验证安装状态配置
+
     if ((config.installState.mode == InstallStateMode::REGISTRY ||
          config.installState.mode == InstallStateMode::BOTH) &&
         config.installState.registryPath.empty()) {
@@ -105,7 +105,7 @@ bool ConfigurationValidator::validateApplicationName(
     const std::string& name,
     std::vector<std::string>& errors) {
     
-    // 验证应用程序名称不为空
+
     if (name.empty()) {
         errors.push_back("ERROR: Missing required field 'applicationName'\n"
                         "  Reason: Application name is required\n"
@@ -113,8 +113,8 @@ bool ConfigurationValidator::validateApplicationName(
         return false;
     }
     
-    // 验证应用程序名称不包含非法字符
-    // Windows文件名非法字符: < > : " / \ | ? *
+
+
     const std::string illegalChars = "<>:\"/\\|?*";
     for (char c : name) {
         if (illegalChars.find(c) != std::string::npos) {
@@ -125,7 +125,7 @@ bool ConfigurationValidator::validateApplicationName(
         }
     }
     
-    // 验证应用程序名称不包含控制字符
+
     for (char c : name) {
         if (std::iscntrl(static_cast<unsigned char>(c))) {
             errors.push_back("ERROR: Invalid application name\n"
@@ -150,10 +150,10 @@ bool ConfigurationValidator::validateFolderExists(
         return false;
     }
     
-    // 构建完整路径
+
     fs::path folderPath = PathFromUtf8(inputDir) / PathFromUtf8(folder);
     
-    // 检查文件夹是否存在
+
     if (!fs::exists(folderPath)) {
         errors.push_back("ERROR: Folder does not exist in input directory\n"
                         "  Folder: " + folder + "\n"
@@ -163,7 +163,7 @@ bool ConfigurationValidator::validateFolderExists(
         return false;
     }
     
-    // 检查是否为目录
+
     if (!fs::is_directory(folderPath)) {
         errors.push_back("ERROR: Path is not a directory\n"
                         "  Path: " + Utf8FromPath(folderPath) + "\n"
@@ -185,12 +185,12 @@ bool ConfigurationValidator::validateTargetDirectory(
         return false;
     }
     
-    // 检查是否为特殊关键字
+
     if (targetDir == "installDirectory") {
         return true;
     }
     
-    // 检查是否包含有效的环境变量
+
     const std::vector<std::string> validEnvVars = {
         "%ProgramFiles%",
         "%ProgramFiles(x86)%",
@@ -208,7 +208,7 @@ bool ConfigurationValidator::validateTargetDirectory(
         }
     }
     
-    // 如果包含%但不是有效的环境变量，报错
+
     if (targetDir.find('%') != std::string::npos && !hasValidEnvVar) {
         errors.push_back("ERROR: Invalid environment variable in target directory\n"
                         "  Target Directory: " + targetDir + "\n"
@@ -223,8 +223,8 @@ bool ConfigurationValidator::validateTargetDirectory(
         return false;
     }
     
-    // 验证路径格式（检查非法字符，但允许环境变量）
-    // 移除环境变量后检查剩余部分
+
+
     std::string pathToCheck = targetDir;
     for (const auto& envVar : validEnvVars) {
         size_t pos = pathToCheck.find(envVar);
@@ -233,7 +233,7 @@ bool ConfigurationValidator::validateTargetDirectory(
         }
     }
     
-    // 检查非法字符（排除路径分隔符）
+
     const std::string illegalChars = "<>:\"|?*";
     for (char c : pathToCheck) {
         if (illegalChars.find(c) != std::string::npos) {

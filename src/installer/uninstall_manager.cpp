@@ -62,26 +62,6 @@ static bool isValidUtf8(const std::string& text) {
     return true;
 }
 
-static std::string ansiToUtf8(const std::string& text) {
-    if (text.empty()) {
-        return text;
-    }
-    int wideLen = MultiByteToWideChar(CP_ACP, 0, text.c_str(), -1, nullptr, 0);
-    if (wideLen <= 0) {
-        return text;
-    }
-    std::wstring wide(static_cast<size_t>(wideLen - 1), L'\0');
-    MultiByteToWideChar(CP_ACP, 0, text.c_str(), -1, wide.data(), wideLen);
-
-    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (utf8Len <= 0) {
-        return text;
-    }
-    std::string utf8(static_cast<size_t>(utf8Len - 1), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, utf8.data(), utf8Len, nullptr, nullptr);
-    return utf8;
-}
-
 static std::string ensureUtf8(const std::string& text) {
     if (text.empty()) {
         return text;
@@ -89,7 +69,8 @@ static std::string ensureUtf8(const std::string& text) {
     if (isValidUtf8(text)) {
         return text;
     }
-    return ansiToUtf8(text);
+    std::string utf8 = AcpToUtf8(text);
+    return utf8.empty() ? text : utf8;
 }
 #else
 static std::string ensureUtf8(const std::string& text) {
@@ -301,7 +282,7 @@ bool scheduleSelfDelete() {
     if (exePath.empty()) {
         return false;
     }
-    std::wstring wide = toWideUtf8(exePath);
+    std::wstring wide = Utf8ToWide(exePath);
     if (wide.empty()) {
         return false;
     }

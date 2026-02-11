@@ -1,6 +1,7 @@
-﻿#ifdef GUI_ENABLED
+#ifdef GUI_ENABLED
 
 #include "../../include/gui/message_box_dialog.h"
+#include "common/utf8_utils.h"
 #include <vector>
 
 #ifdef _WIN32
@@ -78,13 +79,7 @@ static LPCTSTR WStringToTStr(const std::wstring& wstr) {
     if (wstr.empty()) {
         result.clear();
     } else {
-        int size = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
-        if (size > 0) {
-            result.resize(size - 1);
-            WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, &result[0], size, NULL, NULL);
-        } else {
-            result.clear();
-        }
+        result = WideToMultiByte(wstr, CP_ACP, 0);
     }
     return result.c_str();
 #endif
@@ -212,3 +207,5 @@ void MessageBoxDialog::InitWindow() {
 } // namespace MultiThreadedInstaller
 
 #endif // GUI_ENABLED
+
+

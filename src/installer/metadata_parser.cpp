@@ -63,12 +63,12 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
         return {};
     }
     
-    // 移动到文件末尾
+
     file.seekg(0, std::ios::end);
     std::streampos fileSize = file.tellg();
     
-    // 从文件末尾读取DataLocator结构
-    // 文件结构：[executable][metadata][data][DataLocator][magic]
+
+
     size_t locatorSize = sizeof(DataLocator) + sizeof(uint32_t); // DataLocator + end magic
     
     if (static_cast<size_t>(fileSize) < locatorSize) {
@@ -76,7 +76,7 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
         return {};
     }
     
-    // 读取文件末尾的魔数
+
     file.seekg(-static_cast<std::streamoff>(sizeof(uint32_t)), std::ios::end);
     uint32_t endMagic;
     file.read(reinterpret_cast<char*>(&endMagic), sizeof(uint32_t));
@@ -86,7 +86,7 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
         return {};
     }
     
-    // 读取DataLocator
+
     file.seekg(-static_cast<std::streamoff>(locatorSize), std::ios::end);
     DataLocator locator;
     file.read(reinterpret_cast<char*>(&locator), sizeof(DataLocator));
@@ -96,14 +96,14 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
         return {};
     }
     
-    // 验证偏移量的合理性
+
     if (locator.metadataOffset >= static_cast<uint64_t>(fileSize) ||
         locator.metadataOffset + locator.metadataSize > static_cast<uint64_t>(fileSize)) {
         std::cerr << "Invalid metadata offset or size" << std::endl;
         return {};
     }
     
-    // 读取元数据
+
     file.seekg(locator.metadataOffset);
     std::vector<uint8_t> metadata(locator.metadataSize);
     file.read(reinterpret_cast<char*>(metadata.data()), locator.metadataSize);
@@ -124,7 +124,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         return metadata;
     }
     
-    // 解析头部
+
     const BinaryMetadata* header = reinterpret_cast<const BinaryMetadata*>(data.data());
     
     if (!validateHeader(*header)) {
@@ -134,18 +134,18 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
     metadata.version = header->version;
     metadata.folderCount = header->folderCount;
     
-    // 解析文件夹映射
+
     size_t offset = sizeof(BinaryMetadata);
     for (uint32_t i = 0; i < header->folderCount; ++i) {
         FolderMapping mapping;
         
-        // 检查是否有足够的数据读取数值字段
+
         if (offset + sizeof(uint64_t) * 3 + sizeof(uint32_t) * 3 > data.size()) {
             std::cerr << "Insufficient data for folder mapping " << i << " numeric fields" << std::endl;
             break;
         }
         
-        // 读取数值字段
+
         mapping.offset = *reinterpret_cast<const uint64_t*>(data.data() + offset);
         offset += sizeof(uint64_t);
         
@@ -161,7 +161,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         mapping.algorithm = *reinterpret_cast<const CompressionAlgorithm*>(data.data() + offset);
         offset += sizeof(CompressionAlgorithm);
         
-        // 读取文件夹名称
+
         if (offset + sizeof(uint32_t) > data.size()) {
             std::cerr << "Insufficient data for folder name length" << std::endl;
             break;
@@ -178,7 +178,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         mapping.folderName = std::string(reinterpret_cast<const char*>(data.data() + offset), folderNameLen);
         offset += folderNameLen;
         
-        // 读取目标路径
+
         if (offset + sizeof(uint32_t) > data.size()) {
             std::cerr << "Insufficient data for target path length" << std::endl;
             break;
@@ -198,7 +198,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         metadata.folderMappings.push_back(mapping);
     }
     
-    // 计算总压缩大小
+
     metadata.totalCompressedSize = 0;
     for (const auto& mapping : metadata.folderMappings) {
         metadata.totalCompressedSize += mapping.compressedSize;
@@ -648,11 +648,11 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
         return {};
     }
     
-    // 移动到文件末尾获取文件大小
+
     file.seekg(0, std::ios::end);
     std::streampos fileSize = file.tellg();
     
-    // 从文件末尾读取DataLocator结构
+
     size_t locatorSize = sizeof(DataLocator) + sizeof(uint32_t);
     
     if (static_cast<size_t>(fileSize) < locatorSize) {
@@ -660,7 +660,7 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
         return {};
     }
     
-    // 读取DataLocator
+
     file.seekg(-static_cast<std::streamoff>(locatorSize), std::ios::end);
     DataLocator locator;
     file.read(reinterpret_cast<char*>(&locator), sizeof(DataLocator));
@@ -670,17 +670,17 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
         return {};
     }
     
-    // 计算绝对偏移量（相对于数据区域开始）
+
     uint64_t absoluteOffset = locator.dataOffset + offset;
     
-    // 验证偏移量和大小的合理性
+
     if (absoluteOffset >= static_cast<uint64_t>(fileSize) ||
         absoluteOffset + size > static_cast<uint64_t>(fileSize)) {
         std::cerr << "Invalid data offset or size" << std::endl;
         return {};
     }
     
-    // 读取压缩数据
+
     file.seekg(absoluteOffset);
     std::vector<uint8_t> compressedData(size);
     file.read(reinterpret_cast<char*>(compressedData.data()), size);

@@ -8,35 +8,35 @@
 
 namespace MultiThreadedInstaller {
 
-// 压缩算法枚举
+
 enum class CompressionAlgorithm {
-    LZMA_HIGH     // 7z LZMA高压缩比模式
+    LZMA_HIGH
 };
 
-// 特殊目录类型枚举
+
 enum class SpecialDirectoryType {
-    INSTALL_DIRECTORY,  // 用户选择的安装目录
+    INSTALL_DIRECTORY,
     PROGRAM_FILES,      // %ProgramFiles%
     APPDATA_ROAMING,    // %AppData%
     APPDATA_LOCAL,      // %LocalAppData%
     PROGRAM_DATA        // %ProgramData%
 };
 
-// 安装状态写入方式
+
 enum class InstallStateMode {
     REGISTRY,
     FILE,
     BOTH
 };
 
-// 注册表值类型
+
 enum class RegistryValueType {
     STRING,
     DWORD,
     EXPAND_STRING
 };
 
-// 安装状态配置
+
 struct InstallStateConfig {
     InstallStateMode mode;
     std::string registryPath;
@@ -51,7 +51,7 @@ struct InstallStateConfig {
           useMutex(true) {}
 };
 
-// 文件夹信息结构
+
 struct FolderInfo {
     std::string sourcePath;
     std::string targetPath;
@@ -64,55 +64,55 @@ struct FolderInfo {
         : sourcePath(source), targetPath(target), totalSize(0) {}
 };
 
-// 文件夹目标目录配置
+
 struct FolderTargetConfig {
-    std::string folderName;           // 文件夹名称（相对于输入目录）
-    std::string targetDirectory;      // 目标目录配置字符串
-    SpecialDirectoryType dirType;     // 目标目录类型
+    std::string folderName;
+    std::string targetDirectory;
+    SpecialDirectoryType dirType;
     
     FolderTargetConfig()
         : dirType(SpecialDirectoryType::INSTALL_DIRECTORY) {}
 };
 
-// 注册表配置
+
 struct RegistryEntry {
-    std::string path;   // 注册表路径
-    std::string key;    // 键名
-    std::string value;  // 值
-    RegistryValueType type; // 值类型
+    std::string path;
+    std::string key;
+    std::string value;
+    RegistryValueType type;
     
     RegistryEntry()
         : type(RegistryValueType::STRING) {}
 };
 
-// 打包器配置
+
 struct PackagerConfiguration {
-    std::string version;                           // 配置版本
-    std::string applicationName;                    // 应用程序名称
-    std::string defaultInstallDir;                  // 建议的默认安装目录（不含应用程序名）
-    std::string iconPath;                           // 安装程序图标路径（可选）
-    std::string webPageUrl;                         // 介绍网页URL（可选）
-    std::string productName;                        // 产品名称（可选）
-    std::string fileVersion;                        // 文件版本（可选）
-    std::string productVersion;                     // 产品版本（可选）
-    std::string companyName;                        // 公司名称（可选）
-    std::string fileDescription;                    // 文件描述（可选）
-    std::string copyright;                          // 版权信息（可选）
-    CompressionAlgorithm compressionAlgorithm;      // 压缩算法
-    std::vector<FolderTargetConfig> folderTargets;  // 文件夹目标配置
-    std::vector<RegistryEntry> registry;           // 注册表配置（预留）
-    std::vector<std::string> installKillProcesses; // 安装/卸载时需要终止的进程列表
-    bool autoStartup;                              // 默认开机自启动（预留）
-    bool desktopIcons;                             // 默认创建桌面图标（预留）
-    bool autoCleanOldInstall;                      // 自动清理旧安装目录（仅当目录不同）
-    bool requireAdmin;                             // 安装程序需要管理员权限
-    uint16_t minWindowsMajor;                      // 最小Windows主版本
-    uint16_t minWindowsMinor;                      // 最小Windows次版本
-    uint32_t minWindowsBuild;                      // 最小Windows构建号
-    uint64_t sparseFileThresholdBytes;             // 稀疏文件阈值（字节）
-    InstallStateConfig installState;               // 安装状态写入配置
+    std::string version;
+    std::string applicationName;
+    std::string defaultInstallDir;
+    std::string iconPath;
+    std::string webPageUrl;
+    std::string productName;
+    std::string fileVersion;
+    std::string productVersion;
+    std::string companyName;
+    std::string fileDescription;
+    std::string copyright;
+    CompressionAlgorithm compressionAlgorithm;
+    std::vector<FolderTargetConfig> folderTargets;
+    std::vector<RegistryEntry> registry;
+    std::vector<std::string> installKillProcesses;
+    bool autoStartup;
+    bool desktopIcons;
+    bool autoCleanOldInstall;
+    bool requireAdmin;
+    uint16_t minWindowsMajor;
+    uint16_t minWindowsMinor;
+    uint32_t minWindowsBuild;
+    uint64_t sparseFileThresholdBytes;
+    InstallStateConfig installState;
     
-    // 默认值
+
     PackagerConfiguration() 
         : version("1.0"),
           applicationName("MyApplication"),
@@ -128,14 +128,14 @@ struct PackagerConfiguration {
           sparseFileThresholdBytes(4 * 1024 * 1024) {}
 };
 
-// 文件索引条目
+
 struct FileIndexEntry {
     std::string relativePath;
     uint64_t offset;
     uint64_t size;
 };
 
-// 块索引条目
+
 struct BlockIndexEntry {
     uint32_t blockId;
     uint64_t offset;
@@ -144,7 +144,7 @@ struct BlockIndexEntry {
     uint32_t checksum;
 };
 
-// 压缩结果结构
+
 struct CompressionResult {
     std::vector<uint8_t> compressedData;
     uint32_t checksum;
@@ -158,7 +158,7 @@ struct CompressionResult {
                          algorithm(CompressionAlgorithm::LZMA_HIGH) {}
 };
 
-// 文件夹映射结构
+
 struct FolderMapping {
     std::string folderName;
     std::string targetPath;
@@ -172,10 +172,10 @@ struct FolderMapping {
                      checksum(0), algorithm(CompressionAlgorithm::LZMA_HIGH) {}
 };
 
-// 扩展的文件夹映射结构（向后兼容）
+
 struct ExtendedFolderMapping : public FolderMapping {
-    SpecialDirectoryType targetDirType;   // 目标目录类型
-    std::string customTargetPath;         // 自定义目标路径
+    SpecialDirectoryType targetDirType;
+    std::string customTargetPath;
     std::vector<FileIndexEntry> fileIndex;
     std::vector<BlockIndexEntry> blockIndex;
     
@@ -184,7 +184,7 @@ struct ExtendedFolderMapping : public FolderMapping {
           targetDirType(SpecialDirectoryType::INSTALL_DIRECTORY) {}
 };
 
-// 安装元数据结构
+
 struct InstallationMetadata {
     uint32_t version;
     uint32_t folderCount;
@@ -194,24 +194,24 @@ struct InstallationMetadata {
     InstallationMetadata() : version(1), folderCount(0), totalCompressedSize(0) {}
 };
 
-// 扩展的安装元数据结构（向后兼容）
+
 struct ExtendedInstallationMetadata : public InstallationMetadata {
-    std::string applicationName;                    // 应用程序名称
-    std::string configVersion;                      // 配置版本
-    std::string defaultInstallDir;                  // 建议的默认安装目录
-    std::string webPageUrl;                         // 介绍网页URL
-    bool autoStartup;                               // 默认开机自启动
-    bool desktopIcons;                              // 默认创建桌面图标
-    bool autoCleanOldInstall;                       // 自动清理旧安装目录（仅当目录不同）
-    bool requireAdmin;                              // 安装程序需要管理员权限
-    uint16_t minWindowsMajor;                       // 最小Windows主版本
-    uint16_t minWindowsMinor;                       // 最小Windows次版本
-    uint32_t minWindowsBuild;                       // 最小Windows构建号
-    uint64_t sparseFileThresholdBytes;             // 稀疏文件阈值（字节）
-    InstallStateConfig installState;               // 安装状态写入配置
-    std::vector<ExtendedFolderMapping> extendedMappings; // 扩展的文件夹映射
-    std::vector<RegistryEntry> registry;            // 注册表写入配置
-    std::vector<std::string> installKillProcesses; // 安装/卸载时需要终止的进程列表
+    std::string applicationName;
+    std::string configVersion;
+    std::string defaultInstallDir;
+    std::string webPageUrl;
+    bool autoStartup;
+    bool desktopIcons;
+    bool autoCleanOldInstall;
+    bool requireAdmin;
+    uint16_t minWindowsMajor;
+    uint16_t minWindowsMinor;
+    uint32_t minWindowsBuild;
+    uint64_t sparseFileThresholdBytes;
+    InstallStateConfig installState;
+    std::vector<ExtendedFolderMapping> extendedMappings;
+    std::vector<RegistryEntry> registry;
+    std::vector<std::string> installKillProcesses;
     
     ExtendedInstallationMetadata() 
         : InstallationMetadata(),
@@ -229,19 +229,19 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
           sparseFileThresholdBytes(4 * 1024 * 1024) {}
 };
 
-// 二进制元数据头结构
+
 struct BinaryMetadata {
-    uint32_t magic;           // 魔数标识: 0x4D544950 ("MTIP")
-    uint32_t version;         // 版本号
-    uint32_t folderCount;     // 文件夹数量
-    uint64_t metadataSize;    // 元数据总大小
-    uint64_t dataOffset;      // 压缩数据起始偏移
+    uint32_t magic;
+    uint32_t version;
+    uint32_t folderCount;
+    uint64_t metadataSize;
+    uint64_t dataOffset;
     
     BinaryMetadata() : magic(0x4D544950), version(1), folderCount(0), 
                       metadataSize(0), dataOffset(0) {}
 };
 
-// 解压任务结构
+
 struct DecompressionTask {
     std::vector<uint8_t> compressedData;
     std::string targetPath;
@@ -253,31 +253,31 @@ struct DecompressionTask {
                          algorithm(CompressionAlgorithm::LZMA_HIGH) {}
 };
 
-// 进度回调函数类型
+
 using ProgressCallback = std::function<void(const std::string&, const std::string&, float)>;
 
-// 常量定义
+
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;  // "MTDP"
     constexpr uint32_t VERSION = 12;
     
-    // 块大小配置 (优化后)
-    constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;  // 2MB (从 64KB 优化)
+
+    constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;
     constexpr size_t MIN_BLOCK_SIZE = 4 * 1024 * 1024;      // 1MB
     constexpr size_t MAX_BLOCK_SIZE = 128 * 1024 * 1024;      // 8MB
     
-    constexpr int DEFAULT_LZMA_LEVEL = 9;          // 平衡压缩
+    constexpr int DEFAULT_LZMA_LEVEL = 9;
 }
 
-// 外部数据包头
+
 struct DataPackageHeader {
     uint32_t magic;           // "MTDP"
-    uint32_t version;         // 版本号
-    uint64_t metadataOffset;  // 元数据偏移
-    uint64_t metadataSize;    // 元数据大小
-    uint64_t dataOffset;      // 压缩数据偏移
-    uint64_t dataSize;        // 压缩数据大小
+    uint32_t version;
+    uint64_t metadataOffset;
+    uint64_t metadataSize;
+    uint64_t dataOffset;
+    uint64_t dataSize;
     
     DataPackageHeader()
         : magic(Constants::DATA_MAGIC_NUMBER),

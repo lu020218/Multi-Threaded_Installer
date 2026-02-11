@@ -1,4 +1,4 @@
-﻿#include "packager/version_info_updater.h"
+#include "packager/version_info_updater.h"
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif

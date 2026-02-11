@@ -1,4 +1,4 @@
-﻿#include "common/installer_parallel_install.h"
+#include "common/installer_parallel_install.h"
 
 #include "installer/metadata_parser.h"
 #include "installer/thread_pool_manager.h"
@@ -12,18 +12,20 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <future>
 #include <fstream>
 #include <mutex>
 #include <unordered_set>
 #include <thread>
+#include <stdexcept>
 
 namespace MultiThreadedInstaller {
 
 namespace {
 
 struct FileWriter {
-    std::string path;
+    std::filesystem::path path;
     uint64_t start;
     uint64_t end;
     std::mutex mutex;
@@ -87,7 +89,8 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                                          int threadCount,
                                          const ProgressCallback& progressCallback,
                                          const LogCallback& infoCallback,
-                                         const LogCallback& errorCallback) {
+                                         const LogCallback& errorCallback,
+                                         const CancellationCallback& cancellationCallback) {
     ParallelInstallResult result;
     auto logInfo = [&](const std::string& msg) {
         if (infoCallback) {
@@ -123,11 +126,44 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     std::atomic<long long> totalLegacyNs(0);
     std::mutex timingMutex;
     std::vector<FolderTiming> folderTimings;
+    std::atomic<bool> cancellationDetected(false);
+    std::atomic<bool> cancellationRecorded(false);
+    auto markCancelled = [&](const std::string& detail) {
+        cancellationDetected.store(true);
+        overallSuccess.store(false);
+        if (!cancellationRecorded.exchange(true)) {
+            std::string message = detail.empty() ? "Installation cancelled." : detail;
+            std::lock_guard<std::mutex> lock(errorsMutex);
+            errors.push_back(message);
+        }
+    };
+    auto isCancellationRequested = [&]() {
+        if (cancellationDetected.load()) {
+            return true;
+        }
+        if (cancellationCallback && cancellationCallback()) {
+            markCancelled("Installation cancelled.");
+            return true;
+        }
+        return false;
+    };
+    if (progressCallback) {
+        decompressor.registerProgressCallback(
+            [&](const std::string& folder, const std::string& currentFile, float progress) {
+                if (isCancellationRequested()) {
+                    throw std::runtime_error("Installation cancelled.");
+                }
+                progressCallback(folder, currentFile, progress);
+            });
+    }
 
     std::vector<FolderTask> folderTasks;
     folderTasks.reserve(metadata.extendedMappings.size());
 
     for (const auto& mapping : metadata.extendedMappings) {
+        if (isCancellationRequested()) {
+            break;
+        }
         std::string targetPath;
         bool foundMapping = false;
 
@@ -226,6 +262,9 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     }
 
     auto installWithIndex = [&](const FolderTask& folderTask, FolderTiming& timing) -> bool {
+        if (isCancellationRequested()) {
+            return false;
+        }
         const auto& mapping = folderTask.mapping;
         if (mapping.fileIndex.empty() || mapping.blockIndex.empty()) {
             logError("Indexed metadata missing for '" + folderTask.folderName + "'");
@@ -268,7 +307,7 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
             }
 
             auto writer = std::make_unique<FileWriter>();
-            writer->path = std::move(fullPathStr);
+            writer->path = std::move(fullPath);
             writer->start = fileEntry.offset;
             writer->end = fileEntry.offset + fileEntry.size;
             writers.push_back(std::move(writer));
@@ -360,6 +399,9 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         std::vector<std::vector<BlockSegment>> segments(blocks.size());
         size_t fileIdx = 0;
         for (size_t i = 0; i < blocks.size(); ++i) {
+                if (isCancellationRequested()) {
+                    return false;
+                }
             uint64_t blockStart = blocks[i].startOffset;
             uint64_t blockEnd = blockStart + blocks[i].originalSize;
 
@@ -419,8 +461,11 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
             futures.reserve(blocks.size());
 
             for (size_t i = 0; i < blocks.size(); ++i) {
+                if (isCancellationRequested()) {
+                    return false;
+                }
                 futures.push_back(threadPool->enqueue([&, i]() -> bool {
-                    if (blockFailed.load()) {
+                    if (blockFailed.load() || isCancellationRequested()) {
                         return true;
                     }
 
@@ -530,6 +575,9 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
             }
         } else {
             for (size_t i = 0; i < blocks.size(); ++i) {
+                if (isCancellationRequested()) {
+                    return false;
+                }
                 const auto& block = blocks[i];
                 auto readStart = std::chrono::steady_clock::now();
                 std::vector<uint8_t> compressedData = parser.readCompressedData(
@@ -637,6 +685,10 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         return true;
     };
 
+    if (isCancellationRequested()) {
+        markCancelled("Installation cancelled.");
+    }
+
     if (!folderTasks.empty()) {
         logInfo("Decompressing " + std::to_string(folderTasks.size()) + " folders in parallel...");
 
@@ -653,10 +705,20 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         for (auto* folderTask : regularTasks) {
             threadPool->enqueue([folderTask, &decompressor, &logError, &errors, &errorsMutex,
                                 &overallSuccess, &completedFolders, &totalLegacyNs, &folderTimings, &timingMutex,
+                                &isCancellationRequested, &markCancelled,
                                 logInfo, totalFolders = folderTasks.size(), hasInfoCallback]() {
+                if (isCancellationRequested()) {
+                    markCancelled("Installation cancelled.");
+                    return;
+                }
+
                 auto legacyStart = std::chrono::steady_clock::now();
                 bool ok = decompressor.decompressFolder(folderTask->decompTask, &folderTask->legacyStage);
                 auto legacyEnd = std::chrono::steady_clock::now();
+                if (isCancellationRequested()) {
+                    markCancelled("Installation cancelled.");
+                    return;
+                }
                 long long legacyNs = std::chrono::duration_cast<std::chrono::nanoseconds>(legacyEnd - legacyStart).count();
                 totalLegacyNs.fetch_add(legacyNs);
 
@@ -691,6 +753,9 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         }
 
         for (auto* folderTask : indexedTasks) {
+            if (isCancellationRequested()) {
+                break;
+            }
             FolderTiming timing;
             bool ok = installWithIndex(*folderTask, timing);
             if (!ok) {
@@ -718,7 +783,8 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     threadPool->waitForAll();
 
     result.errors = std::move(errors);
-    result.success = overallSuccess.load() && result.errors.empty();
+    result.cancelled = cancellationDetected.load();
+    result.success = overallSuccess.load() && result.errors.empty() && !result.cancelled;
     result.timing.indexedReadSec = static_cast<double>(totalReadNs.load()) / 1e9;
     result.timing.indexedDecompressSec = static_cast<double>(totalDecompressNs.load()) / 1e9;
     result.timing.indexedWriteSec = static_cast<double>(totalWriteNs.load()) / 1e9;
@@ -729,3 +795,17 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
 }
 
 } // namespace MultiThreadedInstaller
+
+
+
+
+
+
+
+
+
+
+
+
+
+

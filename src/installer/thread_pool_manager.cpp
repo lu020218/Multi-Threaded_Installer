@@ -1,4 +1,4 @@
-﻿#include "installer/thread_pool_manager.h"
+#include "installer/thread_pool_manager.h"
 #include <iostream>
 
 namespace MultiThreadedInstaller {
@@ -64,20 +64,20 @@ void ThreadPoolManager::workerThread() {
             tasks.pop();
         }
         
-        // 增加活跃线程计数
+
         {
             std::lock_guard<std::mutex> lock(activeThreadsMutex);
             ++activeThreads;
         }
         
-        // 执行任务
+
         try {
             task();
         } catch (const std::exception& e) {
             std::cerr << "Task execution failed: " << e.what() << std::endl;
         }
         
-        // 减少活跃线程计数
+
         {
             std::lock_guard<std::mutex> lock(activeThreadsMutex);
             --activeThreads;

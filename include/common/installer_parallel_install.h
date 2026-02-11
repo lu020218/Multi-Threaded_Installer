@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <string>
 #include <vector>
@@ -31,6 +31,7 @@ struct ParallelInstallSummary {
 
 struct ParallelInstallResult {
     bool success = false;
+    bool cancelled = false;
     std::string installRootPath;
     std::vector<std::string> installedRoots;
     std::vector<std::string> errors;
@@ -39,6 +40,7 @@ struct ParallelInstallResult {
 
 using ProgressCallback = std::function<void(const std::string&, const std::string&, float)>;
 using LogCallback = std::function<void(const std::string&)>;
+using CancellationCallback = std::function<bool()>;
 
 ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& metadata,
                                          MetadataParser& parser,
@@ -48,6 +50,8 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                                          int threadCount,
                                          const ProgressCallback& progressCallback,
                                          const LogCallback& infoCallback,
-                                         const LogCallback& errorCallback);
+                                         const LogCallback& errorCallback,
+                                         const CancellationCallback& cancellationCallback = {});
 
 } // namespace MultiThreadedInstaller
+

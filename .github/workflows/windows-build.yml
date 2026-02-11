@@ -1,0 +1,30 @@
+name: Windows Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DBUILD_GUI=ON
+          -DSTATIC_LINK_RUNTIME=ON
+          -DVERIFY_THIRD_PARTY_HASHES=ON
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.config }} --clean-first

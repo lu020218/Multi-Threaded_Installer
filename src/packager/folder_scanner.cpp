@@ -1,4 +1,4 @@
-﻿#include "packager/folder_scanner.h"
+#include "packager/folder_scanner.h"
 #include "common/utf8_utils.h"
 #include <filesystem>
 #include <iostream>
@@ -47,7 +47,7 @@ bool FolderScanner::validateFolderStructure(const std::vector<FolderInfo>& folde
             std::cerr << "Warning: Empty folder: " << folder.sourcePath << std::endl;
         }
         
-        // 验证所有文件都可读
+
         for (const auto& file : folder.files) {
             if (!isFileReadable(file)) {
                 std::cerr << "Error: File is not readable: " << file << std::endl;

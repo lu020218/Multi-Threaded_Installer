@@ -60,11 +60,11 @@
   <Text id="msg.space.total" value="磁盘容量: "/>
   <Text id="msg.space.free" value="剩余空间: "/>
   <Text id="msg.progress.preparing" value="正在准备安装..."/>
-  <Text id="msg.progress.installing_prefix" value="????: "/>
-  <Text id="msg.progress.eta_prefix" value="??????: "/>
-  <Text id="msg.time.seconds" value=" ?"/>
-  <Text id="msg.time.minutes" value=" ? "/>
-  <Text id="msg.time.hours" value=" ? "/>
+  <Text id="msg.progress.installing_prefix" value="正在安装: "/>
+  <Text id="msg.progress.eta_prefix" value="预计剩余时间: "/>
+  <Text id="msg.time.seconds" value=" 秒"/>
+  <Text id="msg.time.minutes" value=" 分 "/>
+  <Text id="msg.time.hours" value=" 时 "/>
   <Text id="msg.error.metadata_invalid" value="安装包元数据无效或已损坏。"/>
   <Text id="msg.error.require_admin_relaunch" value="需要管理员权限，已尝试重新启动安装程序。"/>
   <Text id="msg.error.require_admin" value="需要管理员权限，请以管理员身份运行安装程序。"/>
@@ -90,6 +90,19 @@
   <Text id="msg.dialog.license_not_impl" value="许可协议对话框尚未实现。"/>
   <Text id="msg.dialog.launch_failed" value="无法启动应用程序，请手动运行。"/>
   <Text id="msg.dialog.web_failed" value="无法打开网页，请手动访问。"/>
+  <Text id="msg.dialog.com_init_failed" value="初始化 COM 失败。"/>
+  <Text id="msg.dialog.resources_missing.title" value="资源缺失"/>
+  <Text id="msg.dialog.resources_missing.summary" value="未找到 GUI 资源文件，安装程序将切换到控制台模式。"/>
+  <Text id="msg.dialog.resources_missing.debug" value="调试信息："/>
+  <Text id="msg.dialog.resources_missing.instance_path" value="程序目录"/>
+  <Text id="msg.dialog.resources_missing.resource_path" value="资源目录"/>
+  <Text id="msg.dialog.running_app.failed" value="结束进程失败，请先手动关闭相关进程后重试。"/>
+  <Text id="msg.dialog.metadata_invalid" value="安装包元数据无效或已损坏。"/>
+  <Text id="msg.dialog.metadata_read_failed" value="读取安装包元数据失败。"/>
+  <Text id="msg.progress.cancelling" value="正在取消安装..."/>
+  <Text id="msg.welcome.invalid_install_path" value="无效的安装路径"/>
+  <Text id="msg.welcome.space_insufficient" value=" (空间不足!)"/>
+  <Text id="msg.license.text_missing" value="未找到许可协议文本，请确认 resources/license.txt 存在。"/>
   <Text id="msg.dialog.running_app.title" value="提示"/>
   <Text id="msg.dialog.running_app.retry" value="重试"/>
   <Text id="msg.dialog.running_app.cancel" value="取消安装"/>
@@ -100,4 +113,7 @@
   <Text id="msg.dialog.cleanup_old.yes" value="是"/>
   <Text id="msg.dialog.cleanup_old.no" value="否"/>
   <Text id="msg.install.app_running" value="检测到应用仍在运行，请先关闭后再安装。"/>
+  <Text id="msg.error.detail.error_code" value="\n错误码: "/>
+  <Text id="msg.error.detail.path1" value="\n路径1: "/>
+  <Text id="msg.error.detail.path2" value="\n路径2: "/>
 </Language>

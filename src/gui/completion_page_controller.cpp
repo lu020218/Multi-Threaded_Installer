@@ -1,4 +1,4 @@
-﻿#ifdef GUI_ENABLED
+#ifdef GUI_ENABLED
 
 #include "../../include/gui/completion_page_controller.h"
 
@@ -12,7 +12,7 @@ CompletionPageController::CompletionPageController()
 }
 
 CompletionPageController::~CompletionPageController() {
-    // 控件由DuiLib管理，不需要手动释放
+
 }
 
 void CompletionPageController::Initialize(CPaintManagerUI* pManager) {
@@ -20,34 +20,34 @@ void CompletionPageController::Initialize(CPaintManagerUI* pManager) {
         return;
     }
     
-    // 获取控件指针
+
     m_pResultMessageLabel = static_cast<CLabelUI*>(pManager->FindControl(_T("result_message")));
     m_pRunAppCheckbox = static_cast<CCheckBoxUI*>(pManager->FindControl(_T("run_app_checkbox")));
     m_pOpenWebCheckbox = static_cast<CCheckBoxUI*>(pManager->FindControl(_T("open_web_checkbox")));
     
-    // 初始化时隐藏复选框（直到设置结果）
+
     UpdateCheckboxVisibility();
 }
 
 void CompletionPageController::SetInstallationResult(bool success, const std::wstring& message) {
     m_installSuccess = success;
     
-    // 更新结果消息
+
     if (m_pResultMessageLabel) {
         CDuiString messageText(message.c_str());
         m_pResultMessageLabel->SetText(messageText);
         
-        // 根据结果设置文本颜色
+
         if (success) {
-            // 成功：绿色
+
             m_pResultMessageLabel->SetTextColor(0xFF4CAF50);
         } else {
-            // 失败：红色
+
             m_pResultMessageLabel->SetTextColor(0xFFF44336);
         }
     }
     
-    // 更新复选框可见性
+
     UpdateCheckboxVisibility();
 }
 
@@ -70,13 +70,13 @@ bool CompletionPageController::ShouldOpenWebPage() const {
 void CompletionPageController::Reset() {
     m_installSuccess = false;
     
-    // 重置结果消息
+
     if (m_pResultMessageLabel) {
         m_pResultMessageLabel->SetText(_T(""));
-        m_pResultMessageLabel->SetTextColor(0xFF333333); // 默认颜色
+        m_pResultMessageLabel->SetTextColor(0xFF333333);
     }
     
-    // 取消选中复选框
+
     if (m_pRunAppCheckbox) {
         m_pRunAppCheckbox->SetCheck(false);
     }
@@ -85,12 +85,12 @@ void CompletionPageController::Reset() {
         m_pOpenWebCheckbox->SetCheck(false);
     }
     
-    // 隐藏复选框
+
     UpdateCheckboxVisibility();
 }
 
 void CompletionPageController::UpdateCheckboxVisibility() {
-    // 只有在安装成功时才显示复选框
+
     bool visible = m_installSuccess;
     
     if (m_pRunAppCheckbox) {

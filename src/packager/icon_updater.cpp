@@ -1,4 +1,4 @@
-﻿#include "packager/icon_updater.h"
+#include "packager/icon_updater.h"
 #include "common/utf8_utils.h"
 #include <Windows.h>
 #include <fstream>

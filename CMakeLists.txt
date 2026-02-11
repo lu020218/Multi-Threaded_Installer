@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # GUI option
 option(BUILD_GUI "Build with GUI support using DuiLib" ON)
+option(BUILD_TESTS "Build test executables" OFF)
+option(VERIFY_THIRD_PARTY_HASHES "Validate prebuilt third-party library hashes" ON)
 
 # Static linking option for Windows
 if(WIN32)
@@ -21,6 +23,11 @@ if(WIN32)
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         message(STATUS "Using dynamic C/C++ runtime library")
     endif()
+
+    if(BUILD_GUI AND NOT STATIC_LINK_RUNTIME)
+        message(FATAL_ERROR
+            "BUILD_GUI=ON requires STATIC_LINK_RUNTIME=ON because third_party DuiLib static archive is built with /MT.")
+    endif()
 endif()
 
 # Find required packages
@@ -28,6 +35,8 @@ find_package(Threads REQUIRED)
 
 # Set paths for local third-party libraries
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/third_party")
+set(EXPECTED_LIBLZMA_SHA256 "229209de2a901b987543e1496a02d4874260c3b6f2f2f459bcd6fa2e7bc6f746")
+set(EXPECTED_DUILIB_SHA256 "6f7a28965d57daee3a213bd134ba2112f9f2cfdd842bef4b71ec028f8eb7bc54")
 
 # Try to find liblzma (local installation first, then system)
 find_path(LIBLZMA_INCLUDE_DIR 
@@ -50,20 +59,16 @@ if(LIBLZMA_INCLUDE_DIR)
             set(LIBLZMA_LIBRARIES ${LIBLZMA_STATIC_LIB})
             set(LIBLZMA_STATIC ON)
             message(STATUS "Using liblzma static library: ${LIBLZMA_STATIC_LIB}")
-        else()
-            # Fallback to dynamic DLL if static lib not found
-            set(LIBLZMA_LIBRARIES "")
-            find_file(LIBLZMA_DLL
-                NAMES liblzma.dll
-                PATHS 
-                    "${THIRD_PARTY_DIR}/xz/bin_x86-64"
-                    "${THIRD_PARTY_DIR}/xz/bin_i686-sse2"
-                NO_DEFAULT_PATH
-            )
-            if(LIBLZMA_DLL)
-                message(STATUS "Found liblzma DLL: ${LIBLZMA_DLL}")
-                set(LIBLZMA_DLL_PATH ${LIBLZMA_DLL})
+            file(SHA256 "${LIBLZMA_STATIC_LIB}" LIBLZMA_SHA256)
+            message(STATUS "liblzma static SHA256: ${LIBLZMA_SHA256}")
+            if(VERIFY_THIRD_PARTY_HASHES AND NOT LIBLZMA_SHA256 STREQUAL EXPECTED_LIBLZMA_SHA256)
+                message(FATAL_ERROR "Unexpected liblzma static hash. Expected ${EXPECTED_LIBLZMA_SHA256}, got ${LIBLZMA_SHA256}")
             endif()
+        else()
+            message(FATAL_ERROR
+                "Pinned dependency missing: ${LIBLZMA_STATIC_LIB}. "
+                "This project requires the prebuilt liblzma static archive in third_party/xz/lib_static."
+            )
         endif()
     else()
         set(LIBLZMA_LIBRARIES "")  # Use system paths on non-Windows below
@@ -96,7 +101,7 @@ if(BUILD_GUI)
     message(STATUS "DuiLib include directory: ${DUILIB_INCLUDE_DIR}")
     
     # Use static library for single-file installer
-    set(USE_DUILIB_STATIC ON CACHE BOOL "Use DuiLib static library")
+    set(USE_DUILIB_STATIC ON CACHE BOOL "Use DuiLib static library" FORCE)
     
     if(USE_DUILIB_STATIC)
         # Use static library
@@ -104,6 +109,11 @@ if(BUILD_GUI)
         if(EXISTS ${DUILIB_LIB})
             message(STATUS "Using DuiLib static library: ${DUILIB_LIB}")
             add_definitions(-DUILIB_STATIC)
+            file(SHA256 "${DUILIB_LIB}" DUILIB_SHA256)
+            message(STATUS "DuiLib static SHA256: ${DUILIB_SHA256}")
+            if(VERIFY_THIRD_PARTY_HASHES AND NOT DUILIB_SHA256 STREQUAL EXPECTED_DUILIB_SHA256)
+                message(FATAL_ERROR "Unexpected DuiLib static hash. Expected ${EXPECTED_DUILIB_SHA256}, got ${DUILIB_SHA256}")
+            endif()
         else()
             message(FATAL_ERROR "DuiLib static library not found at ${DUILIB_LIB}")
         endif()
@@ -167,6 +177,18 @@ function(copy_dlls_to_target target_name)
     endif()
 endfunction()
 
+# Handle known CRT mismatch noise from prebuilt liblzma static archive.
+# The project runtime stays /MT to match DuiLib static library.
+function(apply_msvc_liblzma_link_fixes target_name)
+    if(MSVC AND WIN32 AND STATIC_LINK_RUNTIME AND LIBLZMA_STATIC)
+        target_link_options(${target_name} PRIVATE
+            /NODEFAULTLIB:MSVCRT
+            /IGNORE:4098
+            /IGNORE:4217
+        )
+    endif()
+endfunction()
+
 # Source files for packager
 set(PACKAGER_SOURCES
     src/packager/folder_scanner.cpp
@@ -194,6 +216,7 @@ set(INSTALLER_SOURCES
     src/installer/installer_helpers.cpp
     src/installer/registry_utils.cpp
     src/installer/install_state_utils.cpp
+    src/installer/install_service.cpp
     src/installer/uninstall_manager.cpp
     src/installer/main.cpp
     src/common/installer_parallel_install.cpp
@@ -239,6 +262,7 @@ target_include_directories(packager PRIVATE ${LIBLZMA_INCLUDE_DIRS})
 if(LIBLZMA_STATIC)
     target_compile_definitions(packager PRIVATE LZMA_API_STATIC)
 endif()
+apply_msvc_liblzma_link_fixes(packager)
 copy_dlls_to_target(packager)
 
 # Create installer executable
@@ -255,6 +279,7 @@ target_include_directories(installer PRIVATE ${LIBLZMA_INCLUDE_DIRS})
 if(LIBLZMA_STATIC)
     target_compile_definitions(installer PRIVATE LZMA_API_STATIC)
 endif()
+apply_msvc_liblzma_link_fixes(installer)
 copy_dlls_to_target(installer)
 
 # Add GUI support to installer if enabled
@@ -312,4 +337,38 @@ if(BUILD_GUI)
     message(STATUS "  - DuiLib library: ${DUILIB_LIB}")
     message(STATUS "  - Windows GUI libraries: ${GUI_WINDOWS_LIBS}")
     message(STATUS "  - Resources will be copied from: ${CMAKE_SOURCE_DIR}/resources")
+endif()
+
+
+# Test targets
+if(BUILD_TESTS)
+    enable_testing()
+
+    add_executable(test_manifest_roundtrip
+        tests/test_manifest_roundtrip.cpp
+        src/installer/uninstall_manager.cpp
+        src/installer/file_system_operator.cpp
+        src/installer/installer_helpers.cpp
+        src/installer/install_state_utils.cpp
+        src/installer/registry_utils.cpp
+        src/installer/path_resolver.cpp
+        src/installer/console_interface.cpp
+        src/common/utf8_utils.cpp
+        src/common/types.cpp
+    )
+
+    target_link_libraries(test_manifest_roundtrip Threads::Threads)
+    if(WIN32)
+        target_link_libraries(test_manifest_roundtrip ole32 shell32 advapi32 user32)
+    endif()
+
+    add_test(NAME manifest_roundtrip COMMAND test_manifest_roundtrip)
+
+    add_executable(test_utf8_utils
+        tests/test_utf8_utils.cpp
+        src/common/utf8_utils.cpp
+    )
+
+    target_link_libraries(test_utf8_utils Threads::Threads)
+    add_test(NAME utf8_utils COMMAND test_utf8_utils)
 endif()

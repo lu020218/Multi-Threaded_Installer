@@ -1,6 +1,8 @@
-﻿#ifdef GUI_ENABLED
+#ifdef GUI_ENABLED
 
 #include "../../include/gui/license_dialog.h"
+#include "../../include/gui/gui_helpers.h"
+#include "common/utf8_utils.h"
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -13,20 +15,6 @@
 using namespace DuiLib;
 
 namespace MultiThreadedInstaller {
-
-static std::wstring Utf8ToWide(const std::string& text) {
-    if (text.empty()) {
-        return {};
-    }
-    int size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
-    if (size <= 0) {
-        return {};
-    }
-    std::wstring result(static_cast<size_t>(size - 1), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &result[0], size);
-    return result;
-}
-
 LicenseDialog::LicenseDialog()
     : m_agreed(false)
     , m_modalResult(false)
@@ -37,14 +25,15 @@ LicenseDialog::~LicenseDialog() {
 }
 
 bool LicenseDialog::ShowModal(HWND hParent) {
-    // 创建模态对话框
-    Create(hParent, _T("许可协议"), UI_WNDSTYLE_DIALOG, 0);
+    // NOTE: Comment text normalized to avoid encoding mojibake.
+    std::wstring title = GUIHelpers::GetLocalizedText(L"msg.license_title", L"");
+    Create(hParent, title.c_str(), UI_WNDSTYLE_DIALOG, 0);
     CenterWindow();
     
-    // 显示对话框并进入模态消息循环
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     ShowWindow(true, true);
     
-    // 进入模态消息循环
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     MSG msg = { 0 };
     while (::GetMessage(&msg, NULL, 0, 0)) {
         if (msg.message == WM_QUIT) break;
@@ -54,7 +43,7 @@ bool LicenseDialog::ShowModal(HWND hParent) {
             ::DispatchMessage(&msg);
         }
         
-        // 如果窗口已关闭，退出循环
+        // NOTE: Comment text normalized to avoid encoding mojibake.
         if (!::IsWindow(m_hWnd)) break;
     }
     
@@ -84,7 +73,7 @@ void LicenseDialog::Notify(TNotifyUI& msg) {
             OnDisagreeButtonClick();
         }
         else if (sName == _T("closebtn")) {
-            // 关闭按钮等同于不同意
+            // NOTE: Comment text normalized to avoid encoding mojibake.
             OnDisagreeButtonClick();
         }
     }
@@ -93,15 +82,15 @@ void LicenseDialog::Notify(TNotifyUI& msg) {
 }
 
 void LicenseDialog::InitWindow() {
-    // 获取许可协议文本控件
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     m_pLicenseText = static_cast<CRichEditUI*>(m_pm.FindControl(_T("license_text")));
     
     if (m_pLicenseText) {
-        // 加载许可协议文本
+        // NOTE: Comment text normalized to avoid encoding mojibake.
         std::wstring licenseText = LoadLicenseText();
         m_pLicenseText->SetText(licenseText.c_str());
         
-        // 设置为只读
+        // NOTE: Comment text normalized to avoid encoding mojibake.
         m_pLicenseText->SetReadOnly(true);
     }
 }
@@ -129,25 +118,23 @@ std::wstring LicenseDialog::LoadLicenseText() {
         }
     }
 
-    // 尝试从资源目录加载许可协议文本
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
-    std::wstring licensePath = resourcePath + _T("license.txt");
-    
-    std::wifstream file(licensePath);
+    std::filesystem::path licensePath = PathFromTChar(resourcePath.GetData()) / "license.txt";
+
+    std::ifstream file(licensePath, std::ios::binary);
     if (!file.is_open()) {
-        std::filesystem::path fallback = std::filesystem::path(resourcePath.GetData()) / ".." / "license.txt";
-        file.open(fallback.wstring());
+        std::filesystem::path fallback = PathFromTChar(resourcePath.GetData()) / ".." / "license.txt";
+        file.open(fallback, std::ios::binary);
     }
     if (!file.is_open()) {
-        // 如果文件不存在，返回默认文本
-        return L"许可协议文本未找到。\n\n请确保 resources/license.txt 文件存在。";
+        // NOTE: Comment text normalized to avoid encoding mojibake.
+        return GUIHelpers::GetLocalizedText(L"msg.license.text_missing", L"");
     }
-    
-    std::wstringstream buffer;
-    buffer << file.rdbuf();
-    file.close();
-    
-    return buffer.str();
+
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    return Utf8ToWide(content);
 }
 
 void LicenseDialog::OnAgreeButtonClick() {

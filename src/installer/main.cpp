@@ -5,10 +5,10 @@
 #include "installer/console_interface.h"
 #include "installer/path_resolver.h"
 #include "installer/installer_helpers.h"
+#include "installer/install_service.h"
 #include "common/installer_logger.h"
-#include "common/installer_parallel_install.h"
+#include "common/installer_exit_codes.h"
 #include "common/utf8_utils.h"
-#include "installer/install_state_utils.h"
 #include "installer/registry_utils.h"
 #include "installer/uninstall_manager.h"
 
@@ -81,23 +81,6 @@ struct FolderTiming {
     bool indexed = false;
     std::string folderName;
 };
-
-std::vector<std::string> collectFilesRecursive(const std::string& rootPath) {
-    std::vector<std::string> files;
-    if (rootPath.empty()) {
-        return files;
-    }
-    std::filesystem::path root = PathFromUtf8(rootPath);
-    if (!std::filesystem::exists(root)) {
-        return files;
-    }
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
-        if (entry.is_regular_file()) {
-            files.push_back(Utf8FromPath(entry.path()));
-        }
-    }
-    return files;
-}
 
 std::string findManifestFromRegistry(const std::string& appName, InstallerPathResolver& resolver) {
     if (appName.empty()) {
@@ -198,6 +181,13 @@ static bool hasFlag(int argc, char* argv[], const std::string& flag) {
     return false;
 }
 
+static bool isCancellationText(const std::string& message) {
+    std::string lowered = message;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lowered.find("cancelled") != std::string::npos ||
+           lowered.find("canceled") != std::string::npos;
+}
 static std::string normalizePathForCompare(const std::string& path) {
     std::string result = path;
     std::replace(result.begin(), result.end(), '/', '\\');
@@ -210,19 +200,6 @@ static std::string normalizePathForCompare(const std::string& path) {
 }
 
 #ifdef _WIN32
-static std::string wideToUtf8(const std::wstring& value) {
-    if (value.empty()) {
-        return {};
-    }
-    int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) {
-        return {};
-    }
-    std::string result(size - 1, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), size, nullptr, nullptr);
-    return result;
-}
-
 static bool hasFlagWide(int argc, wchar_t** argv, const std::wstring& flag) {
     std::wstring target = flag;
     std::transform(target.begin(), target.end(), target.begin(),
@@ -251,7 +228,7 @@ static int runConsoleInstallerWithWideArgs() {
     std::vector<std::string> utf8Args;
     utf8Args.reserve(static_cast<size_t>(argc));
     for (int i = 0; i < argc; ++i) {
-        utf8Args.push_back(wideToUtf8(argvW[i]));
+        utf8Args.push_back(WideToUtf8(argvW[i]));
     }
     LocalFree(argvW);
 
@@ -267,31 +244,6 @@ static int runConsoleInstallerWithWideArgs() {
 #endif
 
 #ifdef GUI_ENABLED
-// 将字符串转换为宽字符串
-std::wstring stringToWString(const std::string& str) {
-    if (str.empty()) return std::wstring();
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0);
-    std::wstring wstrTo(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &wstrTo[0], size_needed);
-    return wstrTo;
-}
-
-static std::wstring tcharToWString(const TCHAR* text) {
-#ifdef UNICODE
-    return text ? std::wstring(text) : std::wstring();
-#else
-    if (!text) {
-        return {};
-    }
-    int size_needed = MultiByteToWideChar(CP_ACP, 0, text, -1, NULL, 0);
-    if (size_needed <= 0) {
-        return {};
-    }
-    std::wstring result(static_cast<size_t>(size_needed - 1), L'\0');
-    MultiByteToWideChar(CP_ACP, 0, text, -1, &result[0], size_needed);
-    return result;
-#endif
-}
 
 static void EnablePerMonitorDpiAwareness() {
 #ifdef _WIN32
@@ -393,22 +345,6 @@ static std::string ReadFileToString(const std::filesystem::path& path) {
                        std::istreambuf_iterator<char>());
 }
 
-static std::string WideToUtf8(const std::wstring& value) {
-#ifdef _WIN32
-    if (value.empty()) {
-        return {};
-    }
-    int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) {
-        return {};
-    }
-    std::string out(static_cast<size_t>(size - 1), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, out.data(), size, nullptr, nullptr);
-    return out;
-#else
-    return std::string(value.begin(), value.end());
-#endif
-}
 
 static bool ZipEntryExists(const CDuiString& zipPath, const CDuiString& entry) {
     HZIP hz = OpenZip(zipPath.GetData(), 0);
@@ -423,12 +359,12 @@ static bool ZipEntryExists(const CDuiString& zipPath, const CDuiString& entry) {
 }
 
 static void LogZipEntryCheck(const CDuiString& zipPath, const std::vector<CDuiString>& entries) {
-    std::string zipPathUtf8 = WideToUtf8(tcharToWString(zipPath.GetData()));
+    std::string zipPathUtf8 = WideToUtf8(TCharToWide(zipPath.GetData()));
     if (!zipPathUtf8.empty()) {
         std::cout << "Resource zip path: " << zipPathUtf8 << std::endl;
     }
     for (const auto& entry : entries) {
-        std::string entryUtf8 = WideToUtf8(tcharToWString(entry.GetData()));
+        std::string entryUtf8 = WideToUtf8(TCharToWide(entry.GetData()));
         std::cout << "Zip entry check: " << entryUtf8 << " -> "
                   << (ZipEntryExists(zipPath, entry) ? "found" : "missing")
                   << std::endl;
@@ -513,7 +449,7 @@ static WindowSize GetWindowSizeFromResources(bool useZip,
         return fallback;
     }
 
-    std::filesystem::path filePath(skinsPath.GetData());
+    std::filesystem::path filePath = PathFromTChar(skinsPath.GetData());
     filePath /= mainFile;
     std::string content = ReadFileToString(filePath);
     if (content.empty()) {
@@ -523,35 +459,36 @@ static WindowSize GetWindowSizeFromResources(bool useZip,
 }
 #endif
 
-// 从元数据创建InstallConfig
+// NOTE: Comment text normalized to avoid encoding mojibake.
 InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata& metadata) {
     InstallConfig config;
-    config.applicationName = stringToWString(metadata.applicationName);
-    config.version = stringToWString(metadata.configVersion);
-    config.defaultInstallPath = stringToWString(metadata.defaultInstallDir);
+    config.applicationName = Utf8ToWide(metadata.applicationName);
+    config.version = Utf8ToWide(metadata.configVersion);
+    config.defaultInstallPath = Utf8ToWide(metadata.defaultInstallDir);
     for (const auto& entry : metadata.registry) {
         if (entry.key == "InstallDir") {
-            config.registryPath = stringToWString(entry.path);
-            config.registryKey = stringToWString(entry.key);
+            config.registryPath = Utf8ToWide(entry.path);
+            config.registryKey = Utf8ToWide(entry.key);
             break;
         }
     }
-    config.logoResourceId = L"logo.png";  // 默认logo
-    config.licenseText = L"";  // 将从resources/license.txt加载
-    config.webPageUrl = stringToWString(metadata.webPageUrl);
-    config.executableName = stringToWString(metadata.applicationName + ".exe");
+    config.logoResourceId = L"logo.png"; // NOTE: Comment text normalized to avoid encoding mojibake.
+    config.licenseText = L""; // NOTE: Comment text normalized to avoid encoding mojibake.
+    config.webPageUrl = Utf8ToWide(metadata.webPageUrl);
+    config.executableName = Utf8ToWide(metadata.applicationName + ".exe");
     config.autoStartup = metadata.autoStartup;
     config.desktopIcons = metadata.desktopIcons;
-    
-    // 计算所需磁盘空间
+
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     uint64_t totalSize = 0;
     for (const auto& mapping : metadata.extendedMappings) {
         totalSize += mapping.originalSize;
     }
     config.requiredDiskSpace = totalSize;
-    
+
     return config;
 }
+
 #endif
 
 } // namespace
@@ -559,8 +496,11 @@ InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata
 int runConsoleInstaller(int argc, char* argv[]) {
     ConsoleInterface console;
     auto startTime = std::chrono::steady_clock::now();
-    
-    // 解析命令行参数
+    InstallerPathResolver pathResolver;
+    ExtendedInstallationMetadata metadata;
+
+    try {
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     auto args = console.parseInstallerArgs(argc, argv);
     if (!args.uninstall) {
         std::filesystem::path exePath = PathFromUtf8(getCurrentExecutablePath());
@@ -570,20 +510,19 @@ int runConsoleInstaller(int argc, char* argv[]) {
             args.uninstall = true;
         }
     }
-    
+
     if (args.showHelp) {
         console.showInstallerHelp();
-        return 0;
+        return INSTALLER_EXIT_SUCCESS;
     }
-    
+
     if (args.uninstall) {
         console.showInfo("Starting uninstall process...");
-        InstallerPathResolver pathResolver;
         std::string exePath = getCurrentExecutablePath();
         std::string localManifest = getLocalManifestPath(exePath);
         if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
             bool ok = uninstallFromManifest(localManifest, pathResolver, console);
-            return ok ? 0 : 1;
+            return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
         }
         std::string fallbackAppName;
         if (!exePath.empty()) {
@@ -600,46 +539,46 @@ int runConsoleInstaller(int argc, char* argv[]) {
             std::string manifestPath = findManifestFromRegistry(fallbackAppName, pathResolver);
             if (!manifestPath.empty()) {
                 bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
-                return ok ? 0 : 1;
+                return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
             }
         }
         if (!fallbackAppName.empty()) {
             std::string manifestPath = getDefaultManifestPath(fallbackAppName, pathResolver);
             if (!manifestPath.empty() && std::filesystem::exists(PathFromUtf8(manifestPath))) {
                 bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
-                return ok ? 0 : 1;
+                return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
             }
         }
         MetadataParser parser;
-        auto metadata = parser.parseExtendedEmbeddedMetadata();
+        metadata = parser.parseExtendedEmbeddedMetadata();
         if (parser.validateMetadata(metadata)) {
             std::string manifestPath = getDefaultManifestPath(metadata.applicationName, pathResolver);
             if (!manifestPath.empty() && std::filesystem::exists(PathFromUtf8(manifestPath))) {
                 bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
-                return ok ? 0 : 1;
+                return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
             }
         }
         console.showError("Manifest not found for uninstall");
-        return 1;
+        return INSTALLER_EXIT_FAILED;
     }
 
     console.showInfo("Starting installation process...");
-    
-    // 解析嵌入的扩展元数据
+
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     MetadataParser parser;
     if (!args.dataPackagePath.empty()) {
         parser.setDataPackagePath(args.dataPackagePath);
     }
-    auto metadata = parser.parseExtendedEmbeddedMetadata();
-    
+    metadata = parser.parseExtendedEmbeddedMetadata();
+
     if (!parser.validateMetadata(metadata)) {
         console.showError("Invalid or corrupted installer metadata");
-        return 1;
+        return INSTALLER_EXIT_FAILED;
     }
 
 #ifdef _WIN32
     if (!metadata.applicationName.empty()) {
-        std::wstring appName = toWideUtf8(metadata.applicationName);
+        std::wstring appName = Utf8ToWide(metadata.applicationName);
         if (!appName.empty()) {
             SetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appName.c_str());
         }
@@ -652,38 +591,30 @@ int runConsoleInstaller(int argc, char* argv[]) {
     if (metadata.requireAdmin && !isRunningAsAdmin()) {
         console.showError("Administrator privileges required by configuration.");
         if (relaunchSelfAsAdmin()) {
-            return 0;
+            return INSTALLER_EXIT_SUCCESS;
         }
         console.showError("Please run the installer as Administrator.");
-        return 1;
+        return INSTALLER_EXIT_ADMIN_REQUIRED;
     }
 #endif
-    
+
     console.showInfo("Found " + std::to_string(metadata.folderCount) + " folders to install");
     console.showInfo("Application: " + metadata.applicationName);
-    
-    // 创建路径解析器
-    InstallerPathResolver pathResolver;
-    HANDLE installMutex = nullptr;
-    
-    // 如果没有提供文件夹映射，使用交互模式
+
     std::string userSelectedPath;
-    std::string installRootPath;
     if (args.folderMappings.empty() && args.defaultDestination.empty() && !args.silent) {
         console.showInstallerMenu();
-        
-        // 显示默认安装目录建议
+
         std::string defaultPath = pathResolver.expandEnvironmentVariables(metadata.defaultInstallDir);
         console.showInfo("Suggested installation directory: " + defaultPath);
-        
-        // 获取用户输入的安装目录
+
         std::cout << "Enter installation directory (or press Enter to use default): ";
         std::getline(std::cin, userSelectedPath);
-        
+
         if (userSelectedPath.empty()) {
             userSelectedPath = defaultPath;
         }
-        
+
         console.showInfo("Installing to: " + userSelectedPath);
     } else if (!args.defaultDestination.empty()) {
         userSelectedPath = args.defaultDestination;
@@ -693,7 +624,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
         userSelectedPath = pathResolver.expandEnvironmentVariables(metadata.defaultInstallDir);
         if (userSelectedPath.empty()) {
             console.showError("Silent install requires a valid default install directory.");
-            return 1;
+            return INSTALLER_EXIT_FAILED;
         }
     }
 
@@ -709,126 +640,63 @@ int runConsoleInstaller(int argc, char* argv[]) {
         !isRunningAsAdmin()) {
         console.showError("Administrator privileges required for selected installation path.");
         if (relaunchSelfAsAdmin()) {
-            return 0;
+            return INSTALLER_EXIT_SUCCESS;
         }
         console.showError("Please run the installer as Administrator.");
-        return 1;
+        return INSTALLER_EXIT_ADMIN_REQUIRED;
     }
 #endif
 
-#ifndef _WIN32
-    std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
-        userSelectedPath,
-        SpecialDirectoryType::INSTALL_DIRECTORY,
-        metadata.applicationName
-    );
-#endif
-
-    uint64_t requiredBytes = 0;
-    for (const auto& mapping : metadata.extendedMappings) {
-        requiredBytes += mapping.originalSize;
-    }
-    std::string diskCheckPath = resolvedInstallRoot.empty() ? userSelectedPath : resolvedInstallRoot;
-    uint64_t availableBytes = 0;
-    if (!checkDiskSpaceForInstall(diskCheckPath, requiredBytes, availableBytes)) {
-        console.showError("Insufficient disk space for installation.");
-        console.showError("Required bytes: " + std::to_string(requiredBytes));
-        console.showError("Available bytes: " + std::to_string(availableBytes));
-        return 1;
-    }
-
-#ifdef _WIN32
-    uint16_t currentMajor = 0;
-    uint16_t currentMinor = 0;
-    uint32_t currentBuild = 0;
-    if (!checkMinimumWindowsVersion(metadata.minWindowsMajor,
-                                    metadata.minWindowsMinor,
-                                    metadata.minWindowsBuild,
-                                    currentMajor, currentMinor, currentBuild)) {
-        console.showError("Windows version does not meet minimum requirement.");
-        console.showError("Required: " + std::to_string(metadata.minWindowsMajor) + "." +
-                          std::to_string(metadata.minWindowsMinor) + "." +
-                          std::to_string(metadata.minWindowsBuild));
-        console.showError("Current: " + std::to_string(currentMajor) + "." +
-                          std::to_string(currentMinor) + "." +
-                          std::to_string(currentBuild));
-        return 1;
-    }
-#endif
-
-#ifdef _WIN32
-    std::vector<std::string> processNames = buildKillProcessList(
-        metadata.applicationName,
-        metadata.installKillProcesses);
-    if (!processNames.empty()) {
-        std::vector<std::string> running = getRunningProcessesByName(processNames);
-        if (!running.empty()) {
-            auto joinNames = [](const std::vector<std::string>& names) {
-                std::string joined;
-                for (size_t i = 0; i < names.size(); ++i) {
-                    if (i > 0) {
-                        joined += ", ";
-                    }
-                    joined += names[i];
-                }
-                return joined;
-            };
-            console.showInfo("Terminating processes: " + joinNames(running));
-            terminateProcessesByName(running);
-            Sleep(500);
-            std::vector<std::string> remaining = getRunningProcessesByName(processNames);
-            if (!remaining.empty()) {
-                console.showError("Failed to terminate processes: " + joinNames(remaining));
-                return 1;
+    InstallServiceCallbacks serviceCallbacks;
+    serviceCallbacks.onEvent = [&console](const InstallServiceEvent& event) {
+        switch (event.type) {
+            case InstallServiceEventType::Progress: {
+                const std::string& display = event.currentFile.empty() ? event.folder : event.currentFile;
+                console.showInstallationProgress(display, event.progress);
+                break;
             }
+            case InstallServiceEventType::Info:
+                console.showInfo(event.message);
+                break;
+            case InstallServiceEventType::Warning:
+                console.showWarning(event.message);
+                break;
+            case InstallServiceEventType::Error:
+                console.showError(event.message);
+                break;
+            case InstallServiceEventType::Status:
+                if (!event.message.empty()) {
+                    console.showInfo(event.message);
+                }
+                break;
+            default:
+                break;
         }
-    }
-#endif
-
-    if (metadata.installState.useMutex) {
-        installMutex = acquireInstallMutex(metadata.installState);
-    }
-    applyInstallState(metadata.installState, "installing", pathResolver);
-    
-    auto progressCallback = [&console](const std::string& folder, const std::string& currentFile, float progress) {
-        const std::string& display = currentFile.empty() ? folder : currentFile;
-        console.showInstallationProgress(display, progress);
-    };
-    auto infoCallback = [&console](const std::string& message) {
-        console.showInfo(message);
-    };
-    auto errorCallback = [&console](const std::string& message) {
-        console.showError(message);
     };
 
-    ParallelInstallResult parallelResult = RunParallelInstall(
+    InstallServiceOptions serviceOptions;
+    serviceOptions.installPath = userSelectedPath;
+    serviceOptions.folderMappings = args.folderMappings;
+    serviceOptions.threadCount = args.threadCount;
+    serviceOptions.writeUninstallRegistry = true;
+
+    InstallServiceResult serviceResult = ExecuteInstallService(
         metadata,
         parser,
         pathResolver,
-        userSelectedPath,
-        args.folderMappings,
-        args.threadCount,
-        progressCallback,
-        infoCallback,
-        errorCallback
-    );
+        serviceOptions,
+        serviceCallbacks);
 
-    std::vector<std::string> errors = parallelResult.errors;
-    bool overallSuccess = parallelResult.success;
-    installRootPath = parallelResult.installRootPath;
-    std::vector<std::string> installedRoots = std::move(parallelResult.installedRoots);
-    
-    // 显示安装结果
-    console.showInstallationResult(overallSuccess, errors);
+    console.showInstallationResult(serviceResult.success, serviceResult.errors);
 
     std::cout << "Timing summary: indexed read "
               << std::fixed << std::setprecision(2)
-              << parallelResult.timing.indexedReadSec << "s, indexed decompress "
-              << parallelResult.timing.indexedDecompressSec << "s, indexed write "
-              << parallelResult.timing.indexedWriteSec << "s, legacy total "
-              << parallelResult.timing.legacyTotalSec << "s" << std::endl;
+              << serviceResult.timing.indexedReadSec << "s, indexed decompress "
+              << serviceResult.timing.indexedDecompressSec << "s, indexed write "
+              << serviceResult.timing.indexedWriteSec << "s, legacy total "
+              << serviceResult.timing.legacyTotalSec << "s" << std::endl;
 
-    for (const auto& timing : parallelResult.timing.folderTimings) {
+    for (const auto& timing : serviceResult.timing.folderTimings) {
         if (timing.indexed) {
             std::cout << "Timing (indexed) " << timing.folderName
                       << ": total " << std::fixed << std::setprecision(2) << timing.totalSec
@@ -844,165 +712,29 @@ int runConsoleInstaller(int argc, char* argv[]) {
                       << "s, process " << timing.processSec << "s" << std::endl;
         }
     }
-    
-    if (overallSuccess) {
-        if ((metadata.autoStartup || metadata.desktopIcons) && installRootPath.empty()) {
-            console.showWarning("Install root not detected; AutoStartup/DesktopIcons skipped");
-        }
-        
-        if (!installRootPath.empty()) {
-            std::filesystem::path exePath = findPrimaryExecutable(PathFromUtf8(installRootPath),
-                                                                  metadata.applicationName);
-            if ((metadata.autoStartup || metadata.desktopIcons) && exePath.empty()) {
-                console.showWarning("No executable found for AutoStartup/DesktopIcons");
-            } else {
-                if (metadata.autoStartup) {
-                    if (setAutoStartup(metadata.applicationName, exePath)) {
-                        console.showInfo("AutoStartup enabled");
-                    } else {
-                        console.showWarning("Failed to enable AutoStartup");
-                    }
-                }
-                if (metadata.desktopIcons) {
-                    if (createDesktopShortcut(metadata.applicationName, exePath)) {
-                        console.showInfo("Desktop icon created");
-                    } else {
-                        console.showWarning("Failed to create desktop icon");
-                    }
-                }
-            }
-        }
 
-        std::vector<std::string> installedFiles;
-        for (const auto& root : installedRoots) {
-            auto files = collectFilesRecursive(root);
-            installedFiles.insert(installedFiles.end(), files.begin(), files.end());
-        }
-        std::sort(installedFiles.begin(), installedFiles.end());
-        installedFiles.erase(std::unique(installedFiles.begin(), installedFiles.end()), installedFiles.end());
-        
-        std::string uninstallPath;
-        if (!installRootPath.empty()) {
-            std::filesystem::path target = PathFromUtf8(installRootPath) / "uninstall.exe";
-            std::string currentExe = getCurrentExecutablePath();
-            std::filesystem::path currentExePath = PathFromUtf8(currentExe);
-            std::error_code ec;
-            if (!currentExe.empty() && std::filesystem::exists(currentExePath)) {
-                std::string targetUtf8 = Utf8FromPath(target);
-                if (createUninstallStub(currentExe, targetUtf8)) {
-                    uninstallPath = targetUtf8;
-                } else {
-                    std::filesystem::copy_file(currentExePath, target,
-                                               std::filesystem::copy_options::overwrite_existing, ec);
-                    if (ec) {
-                        console.showWarning("Failed to create uninstall.exe");
-                    } else {
-                        uninstallPath = targetUtf8;
-                    }
-                }
-            }
-        }
-        if (!uninstallPath.empty()) {
-            installedFiles.erase(std::remove(installedFiles.begin(), installedFiles.end(), uninstallPath),
-                                 installedFiles.end());
-        }
-        
-        std::string manifestPath = getDefaultManifestPath(metadata.applicationName, pathResolver);
-        std::string languageCode;
-#ifdef _WIN32
-        LANGID langId = GetUserDefaultUILanguage();
-        switch (PRIMARYLANGID(langId)) {
-            case LANG_CHINESE:
-                languageCode = "zh_CN";
-                break;
-            case LANG_ENGLISH:
-                languageCode = "en_US";
-                break;
-            case LANG_JAPANESE:
-                languageCode = "ja_JP";
-                break;
-            case LANG_KOREAN:
-                languageCode = "ko_KR";
-                break;
-            case LANG_SPANISH:
-                languageCode = "es_ES";
-                break;
-            case LANG_FRENCH:
-                languageCode = "fr_FR";
-                break;
-            default:
-                languageCode = "en_US";
-                break;
-        }
-#else
-        languageCode = "en_US";
-#endif
+    auto endTime = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = endTime - startTime;
+    std::cout << "Total time: " << std::fixed << std::setprecision(2) << elapsed.count()
+              << " seconds" << std::endl;
 
-        if (!writeManifest(manifestPath, metadata.applicationName, metadata.configVersion,
-                           installRootPath, installedFiles, metadata.registry,
-                           metadata.installKillProcesses,
-                           metadata.autoStartup, metadata.desktopIcons,
-                           metadata.installState, uninstallPath, languageCode)) {
-            console.showWarning("Failed to write install manifest");
-        }
-        
-        if (!installRootPath.empty()) {
-            std::filesystem::path localPath = PathFromUtf8(installRootPath) / "install.manifest.json";
-            if (!writeManifest(Utf8FromPath(localPath), metadata.applicationName, metadata.configVersion,
-                               installRootPath, installedFiles, metadata.registry,
-                               metadata.installKillProcesses,
-                               metadata.autoStartup, metadata.desktopIcons,
-                               metadata.installState, uninstallPath, languageCode)) {
-                console.showWarning("Failed to write local install manifest");
-            }
-        }
-        
-        if (!metadata.registry.empty()) {
-            applyRegistryEntries(metadata.registry, installRootPath,
-                                 metadata.configVersion, metadata.applicationName);
-        }
-
-#ifdef _WIN32
-        if (!uninstallPath.empty()) {
-            bool perMachine = isRunningAsAdmin();
-            if (!writeUninstallRegistryEntry(metadata.applicationName,
-                                             metadata.configVersion,
-                                             installRootPath,
-                                             uninstallPath,
-                                             perMachine)) {
-                console.showWarning("Failed to write uninstall registry entry");
-            }
-        }
-#endif
-        
-        applyInstallState(metadata.installState, "installed", pathResolver);
-        if (installMutex) {
-            releaseInstallMutex(installMutex);
-            installMutex = nullptr;
-        }
+    if (serviceResult.success) {
         console.showInfo("Installation completed successfully!");
-        auto endTime = std::chrono::steady_clock::now();
-        std::chrono::duration<double> elapsed = endTime - startTime;
-        std::cout << "Total time: " << std::fixed << std::setprecision(2) << elapsed.count()
-                  << " seconds" << std::endl;
-        return 0;
-    } else {
-        applyInstallState(metadata.installState, "failed", pathResolver);
-        if (installMutex) {
-            releaseInstallMutex(installMutex);
-            installMutex = nullptr;
-        }
-        console.showError("Installation completed with errors");
-        auto endTime = std::chrono::steady_clock::now();
-        std::chrono::duration<double> elapsed = endTime - startTime;
-        std::cout << "Total time: " << std::fixed << std::setprecision(2) << elapsed.count()
-                  << " seconds" << std::endl;
-        return 1;
+        return INSTALLER_EXIT_SUCCESS;
+    }
+
+    console.showError("Installation completed with errors");
+    return serviceResult.cancelled ? INSTALLER_EXIT_CANCELLED : INSTALLER_EXIT_FAILED;
+    } catch (const std::exception& ex) {
+        console.showError(std::string("Unhandled error: ") + ex.what());
+        return isCancellationText(ex.what()) ? INSTALLER_EXIT_CANCELLED : INSTALLER_EXIT_FAILED;
+    } catch (...) {
+        console.showError("Unhandled unknown error.");
+        return INSTALLER_EXIT_FAILED;
     }
 }
-
 #ifdef GUI_ENABLED
-// GUI模式入口点
+// NOTE: Comment text normalized to avoid encoding mojibake.
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     initializeInstallerLogging();
     int argc = 0;
@@ -1050,10 +782,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         return runConsoleInstallerWithWideArgs();
     }
 
-    // 初始化COM库（用于文件对话框）
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr)) {
-        GUIHelpers::ShowErrorDialog(nullptr, L"Error", L"Failed to initialize COM library");
+        GUIHelpers::ShowErrorDialog(
+            nullptr,
+            GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L""),
+            GUIHelpers::GetLocalizedText(L"msg.dialog.com_init_failed", L""));
         return 1;
     }
 
@@ -1074,7 +809,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         }
 
 #ifdef _WIN32
-        std::wstring appNameWide = toWideUtf8(appName);
+        std::wstring appNameWide = Utf8ToWide(appName);
         if (!appNameWide.empty()) {
             SetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appNameWide.c_str());
         }
@@ -1084,7 +819,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         std::cout << "Uninstall mode active. exe=" << exeNameString << std::endl;
 
         InstallConfig config;
-        config.applicationName = stringToWString(appName);
+        config.applicationName = Utf8ToWide(appName);
         config.version = L"";
         config.defaultInstallPath.clear();
         config.languageCode.clear();
@@ -1114,16 +849,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             if (readManifest(manifestPath, manifest)) {
                 std::string lang = manifest.value("language", "");
                 if (!lang.empty()) {
-                    config.languageCode = stringToWString(lang);
+                    config.languageCode = Utf8ToWide(lang);
                 }
             }
         }
 
-        // 提取嵌入的GUI资源到临时目录
+        // NOTE: Comment text normalized to avoid encoding mojibake.
         EmbeddedResourceManager resourceMgr;
         std::string tempResourcePath = resourceMgr.extractResources();
 
-        // 创建并显示GUI
+        // NOTE: Comment text normalized to avoid encoding mojibake.
         CPaintManagerUI::SetInstance(hInstance);
 
         CDuiString resourcePath;
@@ -1131,11 +866,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         CDuiString skinsPath;
         if (!tempResourcePath.empty()) {
 #if defined(UNICODE) || defined(_UNICODE)
-            int size = MultiByteToWideChar(CP_UTF8, 0, tempResourcePath.c_str(), -1, NULL, 0);
-            if (size > 0) {
-                std::vector<wchar_t> wpath(size);
-                MultiByteToWideChar(CP_UTF8, 0, tempResourcePath.c_str(), -1, wpath.data(), size);
-                resourceBasePath = wpath.data();
+            std::wstring wpath = Utf8ToWide(tempResourcePath);
+            if (!wpath.empty()) {
+                resourceBasePath = wpath.c_str();
             }
 #else
             resourceBasePath = tempResourcePath.c_str();
@@ -1163,7 +896,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             useZip = std::filesystem::exists(zipPath);
         }
         if (!useZip && !resourceBasePath.IsEmpty()) {
-            std::filesystem::path zipPath = std::filesystem::path(resourceBasePath.GetData()) / "resources.zip";
+            std::filesystem::path zipPath = PathFromTChar(resourceBasePath.GetData()) / "resources.zip";
             useZip = std::filesystem::exists(zipPath);
         }
 
@@ -1207,7 +940,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             skinsPath,
             true,
             WindowSize{ 560, 350 });
-        HWND hwnd = pFrame->Create(NULL, _T("卸载向导"), UI_WNDSTYLE_FRAME, 0L, 0, 0,
+        std::wstring uninstallTitle = GUIHelpers::GetLocalizedText(L"msg.title.uninstall", L"");
+        HWND hwnd = pFrame->Create(NULL, uninstallTitle.c_str(), UI_WNDSTYLE_FRAME, 0L, 0, 0,
                                    baseSize.width, baseSize.height);
         if (hwnd == NULL) {
             delete pFrame;
@@ -1225,19 +959,22 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         return 0;
     }
     
-    // 解析元数据以获取配置信息
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     MetadataParser parser;
     auto metadata = parser.parseExtendedEmbeddedMetadata();
     
     if (!parser.validateMetadata(metadata)) {
-        GUIHelpers::ShowErrorDialog(nullptr, L"Error", L"Invalid or corrupted installer metadata");
+        GUIHelpers::ShowErrorDialog(
+            nullptr,
+            GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L""),
+            GUIHelpers::GetLocalizedText(L"msg.error.metadata_invalid", L""));
         CoUninitialize();
         return 1;
     }
 
 #ifdef _WIN32
     if (!metadata.applicationName.empty()) {
-        std::wstring appName = toWideUtf8(metadata.applicationName);
+        std::wstring appName = Utf8ToWide(metadata.applicationName);
         if (!appName.empty()) {
             SetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appName.c_str());
         }
@@ -1251,34 +988,34 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             CoUninitialize();
             return 0;
         }
-        GUIHelpers::ShowWarningDialog(nullptr, L"提示",
-                                      L"需要管理员权限，请以管理员身份运行安装程序。");
+        GUIHelpers::ShowWarningDialog(
+            nullptr,
+            GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L""),
+            GUIHelpers::GetLocalizedText(L"msg.error.require_admin", L""));
         CoUninitialize();
         return 1;
     }
     
-    // 创建InstallConfig
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     InstallConfig config = createInstallConfigFromMetadata(metadata);
     
-    // 提取嵌入的GUI资源到临时目录
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     EmbeddedResourceManager resourceMgr;
     std::string tempResourcePath = resourceMgr.extractResources();
     
-    // 创建并显示GUI
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     CPaintManagerUI::SetInstance(hInstance);
     
     CDuiString resourcePath;
     CDuiString resourceBasePath;
     CDuiString skinsPath;
     if (!tempResourcePath.empty()) {
-        // 使用提取的临时资源
+        // NOTE: Comment text normalized to avoid encoding mojibake.
         // MBCS build: keep resource path as narrow string
 #if defined(UNICODE) || defined(_UNICODE)
-        int size = MultiByteToWideChar(CP_UTF8, 0, tempResourcePath.c_str(), -1, NULL, 0);
-        if (size > 0) {
-            std::vector<wchar_t> wpath(size);
-            MultiByteToWideChar(CP_UTF8, 0, tempResourcePath.c_str(), -1, wpath.data(), size);
-            resourceBasePath = wpath.data();
+        std::wstring wpath = Utf8ToWide(tempResourcePath);
+        if (!wpath.empty()) {
+            resourceBasePath = wpath.c_str();
         }
 #else
         resourceBasePath = tempResourcePath.c_str();
@@ -1294,38 +1031,38 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         std::cout << "Using extracted resources from: " << tempResourcePath << std::endl;
     }
     
-    // 如果提取失败，尝试使用当前目录的resources
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     if (resourcePath.IsEmpty()) {
         CDuiString instancePath = CPaintManagerUI::GetInstancePath();
-        resourceBasePath = instancePath + _T("resources\\");  // 确保路径以反斜杠结尾
+        resourceBasePath = instancePath + _T("resources\\"); // NOTE: Comment text normalized to avoid encoding mojibake.
         resourcePath = resourceBasePath;
         skinsPath = resourceBasePath + _T("skins\\");
         
-        // 调试输出：显示路径信息
+        // NOTE: Comment text normalized to avoid encoding mojibake.
         std::wcout << L"Instance path: " << instancePath.GetData() << std::endl;
         std::wcout << L"Resource path: " << resourcePath.GetData() << std::endl;
         std::wcout << L"Skin path: " << skinsPath.GetData() << std::endl;
         std::wcout << L"Skin path exists: " << (PathFileExists(skinsPath) ? L"YES" : L"NO") << std::endl;
         
         if (!PathFileExists(skinsPath)) {
-            // 尝试检查 main.xml 文件
+            // NOTE: Comment text normalized to avoid encoding mojibake.
             CDuiString mainXmlPath = skinsPath + _T("main.xml");
             std::wcout << L"Checking main.xml at: " << mainXmlPath.GetData() << std::endl;
             std::wcout << L"main.xml exists: " << (PathFileExists(mainXmlPath) ? L"YES" : L"NO") << std::endl;
             
-            // resources目录不存在，显示错误消息
-            TCHAR errorMsg[1024];
-            _stprintf_s(errorMsg, 1024,
-                       _T("GUI资源文件未找到。\n\n")
-                       _T("无法提取嵌入的资源，也找不到外部资源目录。\n")
-                       _T("安装程序将以控制台模式运行。\n\n")
-                       _T("调试信息：\n")
-                       _T("实例路径: %s\n")
-                       _T("资源路径: %s"),
-                       instancePath.GetData(),
-                       resourceBasePath.GetData());
-            
-            GUIHelpers::ShowWarningDialog(nullptr, L"资源文件缺失", tcharToWString(errorMsg));
+            // NOTE: Comment text normalized to avoid encoding mojibake.
+            std::wstring resourceMissingSummary = GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.summary", L"");
+            std::wstring debugHeader = GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.debug", L"");
+            std::wstring instanceLabel = GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.instance_path", L"");
+            std::wstring resourceLabel = GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.resource_path", L"");
+            std::wstring errorMessage = resourceMissingSummary + L"\n\n" + debugHeader + L"\n" +
+                                        instanceLabel + L": " + TCharToWide(instancePath.GetData()) +
+                                        L"\n" + resourceLabel + L": " + TCharToWide(resourceBasePath.GetData());
+
+            GUIHelpers::ShowWarningDialog(
+                nullptr,
+                GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.title", L""),
+                errorMessage);
             
             bool debugMode = GetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr, 0) > 0;
             if (!debugMode) {
@@ -1333,14 +1070,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                 return 1;
             }
 
-            // 清理并回退到控制台模式（仅 --debug）
+            // NOTE: Comment text normalized to avoid encoding mojibake.
             CoUninitialize();
 
-            // 运行控制台安装程序
-            char** argv_console = new char*[2];
-            argv_console[0] = const_cast<char*>("installer.exe");
-            argv_console[1] = nullptr;
-            return runConsoleInstaller(1, argv_console);
+            // NOTE: Comment text normalized to avoid encoding mojibake.
+            return runConsoleInstallerWithWideArgs();
         }
     }
     
@@ -1350,7 +1084,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         useZip = std::filesystem::exists(zipPath);
     }
     if (!useZip && !resourceBasePath.IsEmpty()) {
-        std::filesystem::path zipPath = std::filesystem::path(resourceBasePath.GetData()) / "resources.zip";
+        std::filesystem::path zipPath = PathFromTChar(resourceBasePath.GetData()) / "resources.zip";
         useZip = std::filesystem::exists(zipPath);
     }
 
@@ -1378,7 +1112,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         CPaintManagerUI::SetResourceZip(_T(""));
         CPaintManagerUI::SetResourcePath(resourcePath);
         std::wcout << L"Set resource path to: " << resourcePath.GetData() << std::endl;
-        // 设置资源类型为文件系统
+        // NOTE: Comment text normalized to avoid encoding mojibake.
         CPaintManagerUI::SetResourceType(UILIB_FILE);
         std::cout << "Resource zip enabled: false" << std::endl;
     }
@@ -1406,7 +1140,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             skinsPath,
             false,
             WindowSize{ 800, 600 });
-        hwnd = pFrame->Create(NULL, _T("安装向导"), UI_WNDSTYLE_FRAME, 0L, 0, 0,
+        std::wstring installTitle = GUIHelpers::GetLocalizedText(L"msg.title.install", L"");
+        hwnd = pFrame->Create(NULL, installTitle.c_str(), UI_WNDSTYLE_FRAME, 0L, 0, 0,
                               baseSize.width, baseSize.height);
     } catch (const std::exception& e) {
         std::wcout << L"ERROR: Exception during Create(): " << e.what() << std::endl;
@@ -1423,7 +1158,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     if (hwnd == NULL) {
         std::wcout << L"ERROR: Create() returned NULL" << std::endl;
         
-        // 尝试获取更多错误信息
+        // NOTE: Comment text normalized to avoid encoding mojibake.
         DWORD error = GetLastError();
         std::wcout << L"GetLastError() = " << error << std::endl;
         
@@ -1460,7 +1195,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 }
 #endif
 
-// 主入口点 - 根据命令行参数选择GUI或控制台模式
+// NOTE: Comment text normalized to avoid encoding mojibake.
 int main(int argc, char* argv[]) {
 #ifdef GUI_ENABLED
     bool silentMode = hasFlag(argc, argv, "-s") || hasFlag(argc, argv, "--silent");
@@ -1487,6 +1222,6 @@ int main(int argc, char* argv[]) {
 
 #endif
     
-    // 静默模式或未启用GUI - 使用控制台模式
+    // NOTE: Comment text normalized to avoid encoding mojibake.
     return runConsoleInstaller(argc, argv);
 }

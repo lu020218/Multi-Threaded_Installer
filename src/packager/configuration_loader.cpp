@@ -18,7 +18,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::loadConfiguration(
     lastError_.clear();
     loadedConfigPath_.clear();
     
-    // 首先检查环境变量PACKAGER_CONFIG
+
 #ifdef _WIN32
     const wchar_t* envConfigW = _wgetenv(L"PACKAGER_CONFIG");
     if (envConfigW && envConfigW[0] != L'\0') {
@@ -43,10 +43,10 @@ std::optional<PackagerConfiguration> ConfigurationLoader::loadConfiguration(
     }
 #endif
     
-    // 在输入目录中查找配置文件
+
     auto configPath = findConfigFile(inputDirectory);
     if (!configPath) {
-        // 配置文件不存在不是错误，返回nullopt让调用者使用默认配置
+
         return std::nullopt;
     }
     
@@ -65,7 +65,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::loadConfigurationFromP
 std::optional<std::string> ConfigurationLoader::findConfigFile(
     const std::string& directory) {
     
-    // 按优先级查找配置文件
+
     std::vector<std::string> configNames = {
         "packager.json",
         ".packager.json"
@@ -85,14 +85,14 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
     const std::string& filePath) {
     
     try {
-        // 读取文件
+
         std::ifstream file(PathFromUtf8(filePath));
         if (!file.is_open()) {
             lastError_ = "Failed to open configuration file: " + filePath;
             return std::nullopt;
         }
         
-        // 解析JSON
+
         json j;
         try {
             file >> j;
@@ -101,41 +101,41 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
             return std::nullopt;
         }
         
-        // 创建配置对象（使用默认值）
+
         PackagerConfiguration config;
         
-    // 解析 Version（必需字段）
+
     if (!j.contains("Version")) {
         lastError_ = "Missing required field 'Version' in configuration file";
         return std::nullopt;
     }
     config.version = j["Version"].get<std::string>();
     
-    // 解析 AppName（必需字段）
+
     if (!j.contains("AppName")) {
         lastError_ = "Missing required field 'AppName' in configuration file";
         return std::nullopt;
     }
     config.applicationName = j["AppName"].get<std::string>();
     
-    // 解析 InstallDir（必需字段）
+
     if (!j.contains("InstallDir")) {
         lastError_ = "Missing required field 'InstallDir' in configuration file";
         return std::nullopt;
     }
     config.defaultInstallDir = j["InstallDir"].get<std::string>();
 
-    // 解析 Icon（可选）
+
     if (j.contains("Icon") && j["Icon"].is_string()) {
         config.iconPath = j["Icon"].get<std::string>();
     }
 
-    // 解析 WebPageUrl（可选）
+
     if (j.contains("WebPageUrl") && j["WebPageUrl"].is_string()) {
         config.webPageUrl = j["WebPageUrl"].get<std::string>();
     }
 
-    // 解析版本信息（可选）
+
     if (j.contains("ProductName") && j["ProductName"].is_string()) {
         config.productName = j["ProductName"].get<std::string>();
     }
@@ -155,7 +155,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         config.copyright = j["Copyright"].get<std::string>();
     }
         
-        // 解析compressionAlgorithm（可选）
+
         if (j.contains("compressionAlgorithm")) {
             std::string algo = j["compressionAlgorithm"].get<std::string>();
             if (algo == "lzma") {
@@ -166,7 +166,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
             }
         }
         
-    // 解析 Folder（可选）
+
     if (j.contains("Folder") && j["Folder"].is_object()) {
         const auto& folderObj = j["Folder"];
         
@@ -195,7 +195,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         }
     }
     
-    // 解析 Registry（可选）
+
     if (j.contains("Registry") && j["Registry"].is_array()) {
         for (const auto& entry : j["Registry"]) {
             if (!entry.is_object()) {
@@ -231,7 +231,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         }
     }
     
-    // 解析 KillProcesses（可选）
+
     if (j.contains("KillProcesses")) {
         const auto& killObj = j["KillProcesses"];
         if (killObj.is_array()) {
@@ -244,7 +244,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
             config.installKillProcesses.push_back(killObj.get<std::string>());
         }
     }
-    // 解析 InstallState（可选）
+
     config.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + config.applicationName;
     config.installState.filePath = "%ProgramData%\\" + config.applicationName + "\\install.state";
     config.installState.mutexName = "Global\\" + config.applicationName + "_Install";
@@ -278,27 +278,27 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
             config.installState.mutexName = state["MutexName"].get<std::string>();
         }
     }
-    // 解析 AutoCleanOldInstall（可选）
+
     if (j.contains("AutoCleanOldInstall") && j["AutoCleanOldInstall"].is_boolean()) {
         config.autoCleanOldInstall = j["AutoCleanOldInstall"].get<bool>();
     }
     
-    // 解析 AutoStartup（可选）
+
     if (j.contains("AutoStartup") && j["AutoStartup"].is_boolean()) {
         config.autoStartup = j["AutoStartup"].get<bool>();
     }
     
-    // 解析 DesktopIcons（可选）
+
     if (j.contains("DesktopIcons") && j["DesktopIcons"].is_boolean()) {
         config.desktopIcons = j["DesktopIcons"].get<bool>();
     }
 
-    // 解析 RequireAdmin（可选）
+
     if (j.contains("RequireAdmin") && j["RequireAdmin"].is_boolean()) {
         config.requireAdmin = j["RequireAdmin"].get<bool>();
     }
 
-    // 解析 MinWindowsVersion（可选，例如 "10.0.19041"）
+
     if (j.contains("MinWindowsVersion") && j["MinWindowsVersion"].is_string()) {
         std::string versionText = j["MinWindowsVersion"].get<std::string>();
         std::vector<int> parts;
@@ -331,7 +331,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
         config.minWindowsBuild = static_cast<uint32_t>(parts.size() > 2 ? parts[2] : 0);
     }
 
-    // 解析 SparseFileThresholdBytes（可选）
+
     if (j.contains("SparseFileThresholdBytes")) {
         if (j["SparseFileThresholdBytes"].is_number_unsigned() ||
             j["SparseFileThresholdBytes"].is_number_integer()) {
@@ -353,12 +353,12 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
 SpecialDirectoryType ConfigurationLoader::parseDirectoryType(
     const std::string& dirStr) {
     
-    // 检查是否为installDirectory
+
     if (dirStr == "installDirectory") {
         return SpecialDirectoryType::INSTALL_DIRECTORY;
     }
     
-    // 检查是否包含环境变量
+
     if (dirStr.find("%ProgramFiles%") != std::string::npos) {
         return SpecialDirectoryType::PROGRAM_FILES;
     }
@@ -375,7 +375,7 @@ SpecialDirectoryType ConfigurationLoader::parseDirectoryType(
         return SpecialDirectoryType::PROGRAM_DATA;
     }
     
-    // 默认返回INSTALL_DIRECTORY
+
     return SpecialDirectoryType::INSTALL_DIRECTORY;
 }
 

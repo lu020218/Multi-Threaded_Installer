@@ -1,4 +1,4 @@
-﻿#include "common/installer_logger.h"
+#include "common/installer_logger.h"
 
 #include "common/utf8_utils.h"
 #include <filesystem>

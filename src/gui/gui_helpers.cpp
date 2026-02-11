@@ -1,7 +1,8 @@
-﻿#ifdef GUI_ENABLED
+#ifdef GUI_ENABLED
 
 #include "../../include/gui/gui_helpers.h"
 #include "../../include/gui/message_box_dialog.h"
+#include "common/utf8_utils.h"
 #include <UIlib.h>
 #include "Utils/unzip.h"
 #include <shlobj.h>
@@ -24,12 +25,15 @@ bool CanUseCustomDialog() {
         if (zipName.IsEmpty()) {
             return false;
         }
-        std::filesystem::path zipPath = CPaintManagerUI::GetResourcePath().GetData();
-        zipPath /= zipName.GetData();
+
+        CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
+        CDuiString zipPathText = resourcePath + zipName;
+        std::filesystem::path zipPath = PathFromTChar(zipPathText.GetData());
         if (!std::filesystem::exists(zipPath)) {
             return false;
         }
-        HZIP hz = OpenZip(zipPath.wstring().c_str(), 0);
+
+        HZIP hz = OpenZip(zipPathText.GetData(), 0);
         if (hz == NULL) {
             return false;
         }
@@ -46,12 +50,11 @@ bool CanUseCustomDialog() {
         return found;
     }
 
-    std::filesystem::path skinPath = CPaintManagerUI::GetResourcePath().GetData();
-    skinPath /= "skins";
-    skinPath /= "msgBox.xml";
+    std::filesystem::path skinPath = PathFromTChar(CPaintManagerUI::GetResourcePath().GetData());
+    skinPath /= L"skins";
+    skinPath /= L"msgBox.xml";
     return std::filesystem::exists(skinPath);
 }
-
 DialogResult ShowFallbackMessageBox(HWND hParent,
                                     const std::wstring& title,
                                     const std::wstring& message,
@@ -87,11 +90,11 @@ DialogResult ShowCustomDialogInternal(HWND hParent,
 }
 } // namespace
 
-// 静态变量：跟踪COM初始化状态
+
 static bool g_comInitialized = false;
 
 // ============================================================================
-// 8.1 文件浏览对话框
+
 // ============================================================================
 
 bool GUIHelpers::ShowFolderBrowserDialog(
@@ -100,7 +103,7 @@ bool GUIHelpers::ShowFolderBrowserDialog(
     const std::wstring& initialPath,
     std::wstring& selectedPath) {
     
-    // 确保COM已初始化
+
     bool needUninitialize = false;
     if (!g_comInitialized) {
         if (!InitializeCOM()) {
@@ -109,13 +112,13 @@ bool GUIHelpers::ShowFolderBrowserDialog(
         needUninitialize = true;
     }
     
-    // 使用SHBrowseForFolder显示文件夹选择对话框
+
     BROWSEINFO bi = { 0 };
     bi.hwndOwner = hParent;
     bi.lpszTitle = title.c_str();
     bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
     
-    // 设置初始路径（如果提供）
+
     if (!initialPath.empty()) {
         bi.lParam = reinterpret_cast<LPARAM>(initialPath.c_str());
         bi.lpfn = [](HWND hwnd, UINT uMsg, LPARAM lParam, LPARAM lpData) -> int {
@@ -127,23 +130,23 @@ bool GUIHelpers::ShowFolderBrowserDialog(
         };
     }
     
-    // 显示对话框
+
     LPITEMIDLIST pidl = SHBrowseForFolder(&bi);
     bool result = false;
     
     if (pidl != nullptr) {
-        // 获取选择的路径
+
         wchar_t path[MAX_PATH];
         if (SHGetPathFromIDList(pidl, path)) {
             selectedPath = path;
             result = true;
         }
         
-        // 释放PIDL
+
         CoTaskMemFree(pidl);
     }
     
-    // 如果是临时初始化的COM，需要反初始化
+
     if (needUninitialize) {
         UninitializeCOM();
     }
@@ -152,7 +155,7 @@ bool GUIHelpers::ShowFolderBrowserDialog(
 }
 
 // ============================================================================
-// 8.2 磁盘空间查询
+
 // ============================================================================
 
 uint64_t GUIHelpers::GetAvailableDiskSpace(const std::wstring& path) {
@@ -160,13 +163,13 @@ uint64_t GUIHelpers::GetAvailableDiskSpace(const std::wstring& path) {
         return 0;
     }
     
-    // 提取驱动器根路径
+
     std::wstring rootPath = ExtractRootPath(path);
     if (rootPath.empty()) {
         return 0;
     }
     
-    // 使用GetDiskFreeSpaceEx查询可用空间
+
     ULARGE_INTEGER freeBytesAvailable;
     ULARGE_INTEGER totalNumberOfBytes;
     ULARGE_INTEGER totalNumberOfFreeBytes;
@@ -232,7 +235,7 @@ bool GUIHelpers::CheckDiskSpace(
 }
 
 // ============================================================================
-// 8.3 应用程序启动和网页打开
+
 // ============================================================================
 
 bool GUIHelpers::LaunchApplication(
@@ -243,30 +246,30 @@ bool GUIHelpers::LaunchApplication(
         return false;
     }
     
-    // 验证可执行文件是否存在
+
     if (!std::filesystem::exists(executablePath)) {
         return false;
     }
     
-    // 确定工作目录
+
     std::wstring workDir = workingDirectory;
     if (workDir.empty()) {
-        // 使用可执行文件所在目录作为工作目录
+
         std::filesystem::path exePath(executablePath);
         workDir = exePath.parent_path().wstring();
     }
     
-    // 使用ShellExecute启动应用程序
+
     HINSTANCE result = ShellExecuteW(
-        NULL,                       // 父窗口句柄
-        L"open",                    // 操作
-        executablePath.c_str(),     // 文件路径
-        NULL,                       // 参数
-        workDir.empty() ? NULL : workDir.c_str(),  // 工作目录
-        SW_SHOWNORMAL               // 显示方式
+        NULL,
+        L"open",
+        executablePath.c_str(),
+        NULL,
+        workDir.empty() ? NULL : workDir.c_str(),
+        SW_SHOWNORMAL
     );
     
-    // ShellExecute返回值大于32表示成功
+
     return reinterpret_cast<INT_PTR>(result) > 32;
 }
 
@@ -275,34 +278,34 @@ bool GUIHelpers::OpenWebPage(const std::wstring& url) {
         return false;
     }
     
-    // 验证URL格式（简单检查）
+
     if (url.find(L"http://") != 0 && url.find(L"https://") != 0) {
         return false;
     }
     
-    // 使用ShellExecute在默认浏览器中打开URL
+
     HINSTANCE result = ShellExecuteW(
-        NULL,           // 父窗口句柄
-        L"open",        // 操作
+        NULL,
+        L"open",
         url.c_str(),    // URL
-        NULL,           // 参数
-        NULL,           // 工作目录
-        SW_SHOWNORMAL   // 显示方式
+        NULL,
+        NULL,
+        SW_SHOWNORMAL
     );
     
-    // ShellExecute返回值大于32表示成功
+
     return reinterpret_cast<INT_PTR>(result) > 32;
 }
 
 // ============================================================================
-// 8.4 错误处理和对话框
+
 // ============================================================================
 
 void GUIHelpers::ShowErrorDialog(
     HWND hParent,
     const std::wstring& title,
     const std::wstring& message) {
-    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"OK");
+    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"");
     ShowCustomDialogInternal(hParent, title, message, okText, L"", L"",
                              MB_OK | MB_ICONERROR);
 }
@@ -311,7 +314,7 @@ void GUIHelpers::ShowWarningDialog(
     HWND hParent,
     const std::wstring& title,
     const std::wstring& message) {
-    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"OK");
+    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"");
     ShowCustomDialogInternal(hParent, title, message, okText, L"", L"",
                              MB_OK | MB_ICONWARNING);
 }
@@ -320,8 +323,8 @@ bool GUIHelpers::ShowConfirmDialog(
     HWND hParent,
     const std::wstring& title,
     const std::wstring& message) {
-    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"OK");
-    std::wstring cancelText = GetLocalizedText(L"msg.msgbox.cancel", L"Cancel");
+    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"");
+    std::wstring cancelText = GetLocalizedText(L"msg.msgbox.cancel", L"");
     DialogResult result = ShowCustomDialogInternal(hParent, title, message,
                                                    okText, cancelText, L"",
                                                    MB_YESNO | MB_ICONQUESTION);
@@ -332,7 +335,7 @@ void GUIHelpers::ShowInfoDialog(
     HWND hParent,
     const std::wstring& title,
     const std::wstring& message) {
-    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"OK");
+    std::wstring okText = GetLocalizedText(L"msg.msgbox.ok", L"");
     ShowCustomDialogInternal(hParent, title, message, okText, L"", L"",
                              MB_OK | MB_ICONINFORMATION);
 }
@@ -349,13 +352,13 @@ DialogResult GUIHelpers::ShowCustomDialog(
     std::wstring resolvedCancel = cancelText;
     std::wstring resolvedAlt = altText;
     if (resolvedOk.empty()) {
-        resolvedOk = GetLocalizedText(L"msg.msgbox.ok", L"OK");
+        resolvedOk = GetLocalizedText(L"msg.msgbox.ok", L"");
     }
     if (resolvedCancel.empty() && !cancelText.empty()) {
-        resolvedCancel = GetLocalizedText(L"msg.msgbox.cancel", L"Cancel");
+        resolvedCancel = GetLocalizedText(L"msg.msgbox.cancel", L"");
     }
     if (resolvedAlt.empty() && !altText.empty()) {
-        resolvedAlt = GetLocalizedText(L"msg.msgbox.cancel", L"Cancel");
+        resolvedAlt = GetLocalizedText(L"msg.msgbox.cancel", L"");
     }
 
     UINT flags = MB_OK | MB_ICONINFORMATION;
@@ -388,7 +391,7 @@ std::wstring GUIHelpers::GetLocalizedText(const std::wstring& textId,
 }
 
 // ============================================================================
-// 辅助函数
+
 // ============================================================================
 
 bool GUIHelpers::InitializeCOM() {
@@ -396,18 +399,18 @@ bool GUIHelpers::InitializeCOM() {
         return true;
     }
     
-    // 初始化COM库（单线程模式）
+
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     
-    // S_OK表示成功初始化
-    // S_FALSE表示COM已经被初始化（在同一线程中）
-    // RPC_E_CHANGED_MODE表示COM已经以不同模式初始化
+
+
+
     if (hr == S_OK || hr == S_FALSE) {
         g_comInitialized = true;
         return true;
     }
     
-    // 如果COM已经以不同模式初始化，我们仍然可以使用它
+
     if (hr == RPC_E_CHANGED_MODE) {
         return true;
     }
@@ -427,24 +430,24 @@ bool GUIHelpers::ValidatePath(const std::wstring& path) {
         return false;
     }
     
-    // 检查路径格式
-    // 1. 绝对路径（C:\...）
+
+
     if (path.length() >= 3 && path[1] == L':' && (path[2] == L'\\' || path[2] == L'/')) {
-        // 检查驱动器字母是否有效
+
         wchar_t drive = path[0];
         if ((drive >= L'A' && drive <= L'Z') || (drive >= L'a' && drive <= L'z')) {
             return true;
         }
     }
     
-    // 2. UNC路径（\\server\share\...）
+
     if (path.length() >= 2 && path[0] == L'\\' && path[1] == L'\\') {
         return true;
     }
     
-    // 3. 检查是否包含非法字符
+
     const wchar_t* invalidChars = L"<>:\"|?*";
-    // 跳过驱动器字母后的冒号
+
     size_t startPos = (path.length() >= 2 && path[1] == L':') ? 2 : 0;
     if (path.find_first_of(invalidChars, startPos) != std::wstring::npos) {
         return false;
@@ -458,7 +461,7 @@ std::wstring GUIHelpers::ExtractRootPath(const std::wstring& path) {
         return L"";
     }
     
-    // 1. 处理绝对路径（C:\...）
+
     if (path.length() >= 2 && path[1] == L':') {
         wchar_t drive = path[0];
         if ((drive >= L'A' && drive <= L'Z') || (drive >= L'a' && drive <= L'z')) {
@@ -466,23 +469,23 @@ std::wstring GUIHelpers::ExtractRootPath(const std::wstring& path) {
         }
     }
     
-    // 2. 处理UNC路径（\\server\share\...）
+
     if (path.length() >= 2 && path[0] == L'\\' && path[1] == L'\\') {
-        // 查找服务器名称后的第一个反斜杠
+
         size_t pos = path.find(L'\\', 2);
         if (pos != std::wstring::npos) {
-            // 查找共享名称后的第一个反斜杠
+
             pos = path.find(L'\\', pos + 1);
             if (pos != std::wstring::npos) {
                 return path.substr(0, pos + 1);
             } else {
-                // 如果没有更多的反斜杠，返回整个路径加上反斜杠
+
                 return path + L"\\";
             }
         }
     }
     
-    // 3. 默认返回C盘
+
     return L"C:\\";
 }
 

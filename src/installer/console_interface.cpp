@@ -1,4 +1,4 @@
-﻿#include "installer/console_interface.h"
+#include "installer/console_interface.h"
 #include <iostream>
 #include <sstream>
 #include "common/utf8_utils.h"

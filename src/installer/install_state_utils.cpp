@@ -1,4 +1,4 @@
-﻿#include "installer/install_state_utils.h"
+#include "installer/install_state_utils.h"
 #include "installer/file_system_operator.h"
 #include "installer/installer_helpers.h"
 #include "installer/registry_utils.h"
@@ -106,7 +106,7 @@ HANDLE acquireInstallMutex(const InstallStateConfig& config) {
     if (config.mutexName.empty()) {
         return nullptr;
     }
-    std::wstring name = toWideUtf8(config.mutexName);
+    std::wstring name = Utf8ToWide(config.mutexName);
     if (name.empty()) {
         return nullptr;
     }

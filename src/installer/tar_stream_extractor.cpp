@@ -1,4 +1,4 @@
-﻿#include "installer/tar_stream_extractor.h"
+#include "installer/tar_stream_extractor.h"
 #include "installer/file_system_operator.h"
 #include "common/utf8_utils.h"
 #include <filesystem>

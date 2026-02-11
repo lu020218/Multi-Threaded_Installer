@@ -1,4 +1,4 @@
-﻿#ifdef GUI_ENABLED
+#ifdef GUI_ENABLED
 
 #include "../../include/installer/embedded_resources.h"
 #include "common/utf8_utils.h"
@@ -23,7 +23,7 @@ std::string EmbeddedResourceManager::extractResources() {
         return m_resourcePath;
     }
     
-    // 创建临时目录
+
     m_resourcePath = createTempDirectory();
     if (m_resourcePath.empty()) {
         std::cerr << "Failed to create temporary directory for resources" << std::endl;
@@ -33,14 +33,14 @@ std::string EmbeddedResourceManager::extractResources() {
     std::cout << "Extracting embedded resources to: " << m_resourcePath << std::endl;
 
     std::filesystem::path basePath = PathFromUtf8(m_resourcePath);
-    // 创建子目录
+
     std::filesystem::create_directories(basePath / "skins");
     std::filesystem::create_directories(basePath / "images");
     std::filesystem::create_directories(basePath / "lang");
     
     bool anyExtracted = false;
     
-    // 提取 DuiLib.dll
+
     auto duilib = getEmbeddedResource("DUILIB_DLL");
     if (!duilib.empty()) {
         if (extractFile("DuiLib.dll", duilib)) {
@@ -59,7 +59,7 @@ std::string EmbeddedResourceManager::extractResources() {
         }
     }
     
-    // 提取 XML 资源
+
     const char* xmlFiles[] = {
         "main.xml",
         "uninstall_main.xml",
@@ -75,7 +75,7 @@ std::string EmbeddedResourceManager::extractResources() {
     for (const char* xmlFile : xmlFiles) {
         std::string resourceName = "XML_";
         resourceName += xmlFile;
-        // 转换为大写
+
         for (char& c : resourceName) {
             if (c == '.') c = '_';
             c = toupper(c);
@@ -92,7 +92,7 @@ std::string EmbeddedResourceManager::extractResources() {
         }
     }
     
-    // 提取 license.txt
+
     auto imageList = getEmbeddedResource("IMAGES_LIST");
     if (!imageList.empty()) {
         std::string listText(reinterpret_cast<const char*>(imageList.data()), imageList.size());
@@ -169,7 +169,7 @@ std::string EmbeddedResourceManager::extractResources() {
         }
     }
     
-    // 如果没有提取任何资源，清理并返回空字符串
+
     if (!anyExtracted) {
         std::cout << "No embedded resources found, will use external resources" << std::endl;
         cleanup();
@@ -199,7 +199,7 @@ std::string EmbeddedResourceManager::createTempDirectory() {
         return "";
     }
     
-    // 创建唯一的临时目录名
+
     std::wstring tempDir = tempPath;
     tempDir += L"MTInstaller_";
     tempDir += std::to_wstring(GetCurrentProcessId());
@@ -207,7 +207,7 @@ std::string EmbeddedResourceManager::createTempDirectory() {
     tempDir += std::to_wstring(GetTickCount64());
     
     std::filesystem::path tempDirPath(tempDir);
-    // 创建目录
+
     if (!std::filesystem::create_directories(tempDirPath)) {
         return "";
     }
@@ -241,7 +241,7 @@ bool EmbeddedResourceManager::extractFile(const std::string& relativePath,
 }
 
 std::vector<uint8_t> EmbeddedResourceManager::getEmbeddedResource(const std::string& name) {
-    // 首先尝试从 Windows 资源加载（如果使用 .rc 文件）
+
     HMODULE hModule = GetModuleHandle(NULL);
     HRSRC hResource = FindResourceA(hModule, name.c_str(), "BINARY");
     
@@ -260,8 +260,8 @@ std::vector<uint8_t> EmbeddedResourceManager::getEmbeddedResource(const std::str
         }
     }
     
-    // 如果 Windows 资源不存在，尝试从文件末尾读取嵌入的资源
-    // 这是通过 embed_resources.ps1 脚本添加的
+
+
     return readEmbeddedResourceFromFile(name);
 }
 

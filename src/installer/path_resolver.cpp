@@ -13,20 +13,20 @@ std::string InstallerPathResolver::resolveFinalPath(
     
     std::string basePath;
     
-    // 根据目标目录类型确定基础路径
+
     if (targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
         basePath = userSelectedPath;
     } else {
         basePath = getSpecialDirectoryPath(targetDirType);
     }
     
-    // 展开环境变量
+
     basePath = expandEnvironmentVariables(basePath);
     
-    // 规范化路径
+
     basePath = normalizePath(basePath);
     
-    // 智能补齐应用程序名
+
     return appendAppNameIfNeeded(basePath, applicationName);
 }
 
@@ -67,7 +67,7 @@ bool InstallerPathResolver::pathContainsAppName(
     
     std::string lastDir = getLastDirectoryName(path);
     
-    // 不区分大小写比较
+
     std::string lastDirLower = lastDir;
     std::string appNameLower = appName;
     
@@ -87,15 +87,15 @@ std::string InstallerPathResolver::appendAppNameIfNeeded(
         return basePath;
     }
     
-    // 检查是否已包含应用程序名
+
     if (pathContainsAppName(basePath, appName)) {
         return basePath;
     }
     
-    // 追加应用程序名
+
     std::string result = normalizePath(basePath);
     
-    // 确保路径以反斜杠结尾
+
     if (!result.empty() && result.back() != '\\' && result.back() != '/') {
         result += '\\';
     }
@@ -128,7 +128,7 @@ std::string InstallerPathResolver::normalizePath(const std::string& path) {
     
     std::string result = path;
     
-    // 移除尾部的斜杠
+
     while (!result.empty() && (result.back() == '\\' || result.back() == '/')) {
         result.pop_back();
     }
@@ -143,15 +143,15 @@ std::string InstallerPathResolver::getLastDirectoryName(const std::string& path)
     
     std::string normalized = normalizePath(path);
     
-    // 查找最后一个路径分隔符
+
     size_t lastSlash = normalized.find_last_of("\\/");
     
     if (lastSlash == std::string::npos) {
-        // 没有路径分隔符，整个字符串就是目录名
+
         return normalized;
     }
     
-    // 返回最后一个分隔符之后的部分
+
     return normalized.substr(lastSlash + 1);
 }
 

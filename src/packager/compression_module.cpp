@@ -1,4 +1,4 @@
-﻿#include "packager/compression_module.h"
+#include "packager/compression_module.h"
 #include "common/utf8_utils.h"
 #include <fstream>
 #include <iostream>
@@ -66,7 +66,7 @@ CompressionResult CompressionModule::compressFolder(const FolderInfo& folder) {
         double compressionRatio = static_cast<double>(result.compressedSize) / result.originalSize;
         double savedSpace = (1.0 - compressionRatio) * 100.0;
     
-        // 记录性能指标
+
         // Performance tracking disabled
     } else {
         // Logging disabled
@@ -105,7 +105,7 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
         return result;
     }
     
-    // 创建tar格式的数据
+
     // Logging disabled
     auto tarTimer = START_TIMER("CreateTarData");
     std::vector<FileIndexEntry> fileIndex;
@@ -118,7 +118,7 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
     result.originalSize = tarData.size();
     result.fileIndex = std::move(fileIndex);
     
-    // 块级压缩
+
     // Logging disabled
     auto compressionTimer = START_TIMER("LzmaCompression");
     
@@ -131,7 +131,7 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
     
     result.compressedSize = result.compressedData.size();
     
-    // 解析块索引
+
     if (result.compressedData.size() >= sizeof(uint32_t)) {
         uint32_t blockCount = *reinterpret_cast<const uint32_t*>(result.compressedData.data());
         size_t metaOffset = sizeof(uint32_t);
@@ -151,7 +151,7 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
         }
     }
     
-    // 计算原始数据的CRC32校验和
+
     result.checksum = calculateChecksum(tarData);
 #else
     // Stub implementation - just copy data with minimal "compression"
@@ -177,7 +177,7 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
 }
 
 uint32_t CompressionModule::calculateChecksum(const std::vector<uint8_t>& data) {
-    // 简单的CRC32实现
+
     uint32_t crc = 0xFFFFFFFF;
     
     for (uint8_t byte : data) {
@@ -219,23 +219,23 @@ std::vector<uint8_t> CompressionModule::readFileContent(const std::string& fileP
 
 std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder,
                                                       std::vector<FileIndexEntry>& fileIndex) {
-    // 简化的tar格式实现
-    // 实际实现中应该使用标准的tar格式
+
+
     std::vector<uint8_t> tarData;
     size_t processedFiles = 0;
     size_t totalSize = 0;
     
-    auto progressId = START_PROGRESS("创建TAR数据", folder.files.size());
+    auto progressId = START_PROGRESS("Building TAR payload", folder.files.size());
     
     for (const auto& filePath : folder.files) {
-        // 读取文件内容
+
         std::vector<uint8_t> fileContent = readFileContent(filePath);
         if (fileContent.empty()) {
-            LOG_WARNINGF("CompressionModule", "跳过空文件: %s", filePath.c_str());
+            LOG_WARNINGF("CompressionModule", "Skipping empty file: %s", filePath.c_str());
             continue;
         }
         
-        // 计算相对路径
+
         std::string relativePath = filePath;
         if (relativePath.find(folder.sourcePath) == 0) {
             relativePath = relativePath.substr(folder.sourcePath.length());
@@ -244,11 +244,11 @@ std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder,
             }
         }
         
-        // 添加文件头信息（简化格式）
+
         uint32_t pathLength = static_cast<uint32_t>(relativePath.length());
         uint32_t fileSize = static_cast<uint32_t>(fileContent.size());
         
-        // 记录文件索引（内容起始偏移）
+
         FileIndexEntry entry;
         entry.relativePath = relativePath;
         entry.offset = static_cast<uint64_t>(
@@ -256,20 +256,20 @@ std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder,
         entry.size = static_cast<uint64_t>(fileContent.size());
         fileIndex.push_back(std::move(entry));
         
-        // 写入路径长度
+
         tarData.insert(tarData.end(), 
                       reinterpret_cast<const uint8_t*>(&pathLength), 
                       reinterpret_cast<const uint8_t*>(&pathLength) + sizeof(pathLength));
         
-        // 写入文件大小
+
         tarData.insert(tarData.end(), 
                       reinterpret_cast<const uint8_t*>(&fileSize), 
                       reinterpret_cast<const uint8_t*>(&fileSize) + sizeof(fileSize));
         
-        // 写入路径
+
         tarData.insert(tarData.end(), relativePath.begin(), relativePath.end());
         
-        // 写入文件内容
+
         tarData.insert(tarData.end(), fileContent.begin(), fileContent.end());
         
         totalSize += fileContent.size();
@@ -277,7 +277,7 @@ std::vector<uint8_t> CompressionModule::createTarData(const FolderInfo& folder,
         
         UPDATE_PROGRESS(progressId, processedFiles, relativePath);
         
-        // 每处理50个文件记录一次进度
+
         if (processedFiles % 50 == 0) {
             // Logging disabled
         }
@@ -294,7 +294,7 @@ std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector
 #ifdef LibLZMA_FOUND
     std::vector<uint8_t> result;
     
-    // 块头信息：块数量 (4字节)
+
     size_t totalBlocks = (data.size() + blockSize - 1) / blockSize;
     uint32_t blockCount = static_cast<uint32_t>(totalBlocks);
     
@@ -302,19 +302,19 @@ std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector
                   reinterpret_cast<const uint8_t*>(&blockCount),
                   reinterpret_cast<const uint8_t*>(&blockCount) + sizeof(blockCount));
     
-    // 为每个块的元数据预留空间 (偏移量4字节 + 压缩大小4字节 + 原始大小4字节 + 校验和4字节)
+
     size_t metadataOffset = result.size();
-    result.resize(result.size() + totalBlocks * 16); // 16字节每个块的元数据
+    result.resize(result.size() + totalBlocks * 16);
     
     std::cout << "Compressing " << totalBlocks << " blocks with LZMA..." << std::endl;
     
-    // 压缩每个块
+
     size_t currentOffset = result.size();
     for (size_t i = 0; i < totalBlocks; ++i) {
         size_t blockStart = i * blockSize;
         size_t currentBlockSize = (blockSize < (data.size() - blockStart)) ? blockSize : (data.size() - blockStart);
         
-        // 为每个块创建独立的 LZMA 流
+
         lzma_stream stream = LZMA_STREAM_INIT;
         lzma_ret ret = LZMA_OK;
         
@@ -339,17 +339,17 @@ std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector
             return {};
         }
         
-        // 估算压缩后大小
+
         size_t compressedBound = currentBlockSize + (currentBlockSize / 10) + 1024;
         std::vector<uint8_t> compressedBlock(compressedBound);
         
-        // 设置输入和输出
+
         stream.next_in = data.data() + blockStart;
         stream.avail_in = currentBlockSize;
         stream.next_out = compressedBlock.data();
         stream.avail_out = compressedBlock.size();
         
-        // 压缩当前块
+
         ret = lzma_code(&stream, LZMA_FINISH);
         
         if (ret != LZMA_STREAM_END) {
@@ -361,13 +361,13 @@ std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector
         size_t compressedSize = compressedBlock.size() - stream.avail_out;
         compressedBlock.resize(compressedSize);
         
-        // 清理流
+
         lzma_end(&stream);
         
-        // 计算块校验和
+
         uint32_t blockChecksum = calculateChecksum(compressedBlock);
         
-        // 写入块元数据
+
         size_t metadataPos = metadataOffset + i * 16;
         uint32_t offset = static_cast<uint32_t>(currentOffset);
         uint32_t compSize = static_cast<uint32_t>(compressedSize);
@@ -378,11 +378,11 @@ std::vector<uint8_t> CompressionModule::compressWithBlocksLzma(const std::vector
         std::memcpy(result.data() + metadataPos + 8, &origSize, sizeof(origSize));
         std::memcpy(result.data() + metadataPos + 12, &blockChecksum, sizeof(blockChecksum));
         
-        // 添加压缩块数据
+
         result.insert(result.end(), compressedBlock.begin(), compressedBlock.end());
         currentOffset += compressedSize;
         
-        // 进度输出
+
         if ((i + 1) % 10 == 0 || i == totalBlocks - 1) {
             std::cout << "  Compressed " << (i + 1) << "/" << totalBlocks << " blocks" << std::endl;
         }

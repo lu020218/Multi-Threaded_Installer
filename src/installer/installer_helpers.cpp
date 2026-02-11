@@ -155,9 +155,6 @@ std::wstring buildRelaunchArguments() {
     return args;
 }
 
-std::string wstringToUtf8(const std::wstring& value) {
-    return WideToUtf8(value);
-}
 
 } // namespace
 
@@ -247,9 +244,6 @@ bool openFileForWrite(const std::filesystem::path& path, std::fstream& stream) {
     return static_cast<bool>(stream);
 }
 
-std::wstring toWideUtf8(const std::string& text) {
-    return Utf8ToWide(text);
-}
 
 std::filesystem::path findPrimaryExecutable(const std::filesystem::path& installRoot,
                                             const std::string& appName) {
@@ -329,7 +323,7 @@ bool createDesktopShortcut(const std::string& appName, const std::filesystem::pa
         return false;
     }
     
-    std::wstring linkPath = std::wstring(desktopPath) + L"\\" + toWideUtf8(appName) + L".lnk";
+    std::wstring linkPath = std::wstring(desktopPath) + L"\\" + Utf8ToWide(appName) + L".lnk";
     CoTaskMemFree(desktopPath);
     
     hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -388,7 +382,7 @@ bool deleteDesktopShortcut(const std::string& appName) {
     if (FAILED(hr) || !desktopPath) {
         return false;
     }
-    std::wstring linkPath = std::wstring(desktopPath) + L"\\" + toWideUtf8(appName) + L".lnk";
+    std::wstring linkPath = std::wstring(desktopPath) + L"\\" + Utf8ToWide(appName) + L".lnk";
     CoTaskMemFree(desktopPath);
     return DeleteFileW(linkPath.c_str()) != 0;
 #else
@@ -564,7 +558,7 @@ bool relaunchSelfAsAdmin() {
     }
     SetEnvironmentVariableW(L"MTINSTALLER_ELEVATED", L"1");
 
-    std::wstring exePath = toWideUtf8(getCurrentExecutablePath());
+    std::wstring exePath = Utf8ToWide(getCurrentExecutablePath());
     if (exePath.empty()) {
         return false;
     }
@@ -697,7 +691,7 @@ bool isProcessRunningByName(const std::string& exeName) {
                 continue;
             }
             std::wstring exeWide(entry.szExeFile);
-            std::string exe = wstringToUtf8(exeWide);
+            std::string exe = WideToUtf8(exeWide);
             std::transform(exe.begin(), exe.end(), exe.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (exe == target) {
@@ -740,7 +734,7 @@ bool terminateProcessByName(const std::string& exeName) {
                 continue;
             }
             std::wstring exeWide(entry.szExeFile);
-            std::string exe = wstringToUtf8(exeWide);
+            std::string exe = WideToUtf8(exeWide);
             std::transform(exe.begin(), exe.end(), exe.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (exe != target) {

@@ -3,4 +3,8 @@
 /.kiro
 /third_party/DuiLib_Ultimate
 /test_output
-/tests
+/tests/*
+!/tests/README.md
+!/tests/stage5_install_uninstall_regression.ps1
+!/tests/test_manifest_roundtrip.cpp
+!/tests/test_utf8_utils.cpp

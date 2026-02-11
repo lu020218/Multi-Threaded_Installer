@@ -30,7 +30,7 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.folderCount = static_cast<uint32_t>(results.size());
     metadata.totalCompressedSize = calculateTotalCompressedSize(results);
     
-    // ����������Ϣ
+
     metadata.applicationName = config.applicationName;
     metadata.configVersion = config.version;
     metadata.defaultInstallDir = config.defaultInstallDir;
@@ -49,11 +49,11 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     
     uint64_t currentOffset = 0;
     for (size_t i = 0; i < results.size() && i < folderInfos.size(); ++i) {
-        // ������չ�ļ���ӳ��
+
         ExtendedFolderMapping extMapping = createExtendedFolderMapping(results[i], folderInfos[i], currentOffset, config);
         metadata.extendedMappings.push_back(extMapping);
         
-        // ͬʱ�������folderMappings�Ա���������
+
         FolderMapping baseMapping = createFolderMapping(results[i], folderInfos[i], currentOffset);
         metadata.folderMappings.push_back(baseMapping);
         
@@ -66,14 +66,14 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
 std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMetadata& metadata) {
     std::vector<uint8_t> serialized;
     
-    // �����ַ������ݵ��ܴ�С
+
     size_t stringDataSize = 0;
     for (const auto& mapping : metadata.folderMappings) {
         stringDataSize += mapping.folderName.length() + 1; // +1 for null terminator
         stringDataSize += mapping.targetPath.length() + 1; // +1 for null terminator
     }
     
-    // ����������ͷ
+
     BinaryMetadata header;
     header.magic = Constants::MAGIC_NUMBER;
     header.version = metadata.version;
@@ -83,13 +83,13 @@ std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMeta
                          stringDataSize;
     header.dataOffset = header.metadataSize;
     
-    // ���л�ͷ��
+
     const uint8_t* headerBytes = reinterpret_cast<const uint8_t*>(&header);
     serialized.insert(serialized.end(), headerBytes, headerBytes + sizeof(BinaryMetadata));
     
-    // ���л��ļ���ӳ��
+
     for (const auto& mapping : metadata.folderMappings) {
-        // ���л���ֵ�ֶ�
+
         const uint8_t* offsetBytes = reinterpret_cast<const uint8_t*>(&mapping.offset);
         serialized.insert(serialized.end(), offsetBytes, offsetBytes + sizeof(uint64_t));
         
@@ -105,7 +105,7 @@ std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMeta
         const uint8_t* algorithmBytes = reinterpret_cast<const uint8_t*>(&mapping.algorithm);
         serialized.insert(serialized.end(), algorithmBytes, algorithmBytes + sizeof(CompressionAlgorithm));
         
-        // ���л��ַ������Ⱥ�����
+
         uint32_t folderNameLen = static_cast<uint32_t>(mapping.folderName.length());
         const uint8_t* folderNameLenBytes = reinterpret_cast<const uint8_t*>(&folderNameLen);
         serialized.insert(serialized.end(), folderNameLenBytes, folderNameLenBytes + sizeof(uint32_t));
@@ -328,7 +328,7 @@ FolderMapping MetadataGenerator::createFolderMapping(const CompressionResult& re
                                                    uint64_t offset) {
     FolderMapping mapping;
     
-    // ��sourcePath��ȡ�ļ������ƣ����һ��·�������
+
     std::filesystem::path sourcePath = PathFromUtf8(folderInfo.sourcePath);
     std::string folderName = Utf8FromPath(sourcePath.filename());
     
@@ -349,11 +349,11 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
                                                                     const PackagerConfiguration& config) {
     ExtendedFolderMapping mapping;
     
-    // ��sourcePath��ȡ�ļ������ƣ����һ��·�������
+
     std::filesystem::path sourcePath = PathFromUtf8(folderInfo.sourcePath);
     std::string folderName = Utf8FromPath(sourcePath.filename());
     
-    // �������ֶ�
+
     mapping.folderName = folderName;
     mapping.targetPath = folderInfo.targetPath;
     mapping.offset = offset;
@@ -364,8 +364,8 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
     mapping.fileIndex = result.fileIndex;
     mapping.blockIndex = result.blockIndex;
     
-    // ���Ҹ��ļ��е�Ŀ������
-    mapping.targetDirType = SpecialDirectoryType::INSTALL_DIRECTORY; // Ĭ��ֵ
+
+    mapping.targetDirType = SpecialDirectoryType::INSTALL_DIRECTORY;
     mapping.customTargetPath = "";
     
     for (const auto& folderTarget : config.folderTargets) {

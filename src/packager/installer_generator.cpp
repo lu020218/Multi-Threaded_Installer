@@ -1,4 +1,4 @@
-﻿#include "packager/installer_generator.h"
+#include "packager/installer_generator.h"
 #include "common/utf8_utils.h"
 #include <fstream>
 #include <iostream>
@@ -297,7 +297,7 @@ bool InstallerGenerator::generateDataPackage(const std::string& outputPath,
 }
 
 bool InstallerGenerator::embedInstallerTemplate(const std::string& templatePath) {
-    // 验证模板文件是否存在
+
     if (!std::filesystem::exists(PathFromUtf8(templatePath))) {
         std::cerr << "Installer template not found: " << templatePath << std::endl;
         return false;
@@ -334,7 +334,7 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
                                                       const std::vector<uint8_t>& metadata,
                                                       const std::vector<std::vector<uint8_t>>& compressedData) {
     try {
-        // 获取安装程序模板
+
         std::vector<uint8_t> installerTemplate = getDefaultInstallerTemplate();
         if (installerTemplate.empty()) {
             std::cerr << "Failed to get installer template" << std::endl;
@@ -347,64 +347,64 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
             resourcesEmbedded = appendEmbeddedResources(installerTemplate, templateDir / "resources");
         }
         
-        // 创建输出目录（如果不存在）
+
         std::filesystem::path outputDir = PathFromUtf8(outputPath).parent_path();
         if (!outputDir.empty() && !std::filesystem::exists(outputDir)) {
             std::filesystem::create_directories(outputDir);
         }
         
-        // 创建输出文件
+
         std::ofstream outFile(PathFromUtf8(outputPath), std::ios::binary);
         if (!outFile) {
             std::cerr << "Failed to create output file: " << outputPath << std::endl;
             return false;
         }
         
-        // 计算数据偏移量
+
         uint64_t executableSize = installerTemplate.size();
         uint64_t metadataOffset = executableSize;
         uint64_t dataOffset = metadataOffset + metadata.size();
         
-        // 创建数据定位结构
+
         DataLocator locator;
         locator.magic = Constants::MAGIC_NUMBER;
         locator.metadataOffset = metadataOffset;
         locator.metadataSize = metadata.size();
         locator.dataOffset = dataOffset;
         
-        // 计算总数据大小
+
         uint64_t totalDataSize = 0;
         for (const auto& data : compressedData) {
             totalDataSize += data.size();
         }
         locator.dataSize = totalDataSize;
         
-        // 写入安装程序可执行文件
+
         outFile.write(reinterpret_cast<const char*>(installerTemplate.data()), installerTemplate.size());
         
-        // 写入元数据
+
         outFile.write(reinterpret_cast<const char*>(metadata.data()), metadata.size());
         
-        // 写入压缩数据
+
         for (const auto& data : compressedData) {
             outFile.write(reinterpret_cast<const char*>(data.data()), data.size());
         }
         
-        // 写入数据定位器（在文件末尾）
+
         outFile.write(reinterpret_cast<const char*>(&locator), sizeof(DataLocator));
         
-        // 写入定位器魔数（用于从文件末尾查找）
+
         uint32_t endMagic = Constants::MAGIC_NUMBER;
         outFile.write(reinterpret_cast<const char*>(&endMagic), sizeof(uint32_t));
         
         outFile.close();
         
-        // 设置可执行权限
+
         if (!setExecutablePermissions(outputPath)) {
             std::cerr << "Warning: Failed to set executable permissions" << std::endl;
         }
         
-        // 复制必需的运行时文件（DLL和resources）
+
         if (!copyRuntimeDependencies(outputPath, resourcesEmbedded)) {
             std::cerr << "Warning: Failed to copy some runtime dependencies" << std::endl;
         }
@@ -423,7 +423,7 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
 }
 
 std::vector<uint8_t> InstallerGenerator::getDefaultInstallerTemplate() {
-    // 如果指定了模板路径，使用该模板
+
     if (!installerTemplatePath.empty()) {
         return loadInstallerTemplate(installerTemplatePath);
     }
@@ -434,7 +434,7 @@ std::vector<uint8_t> InstallerGenerator::getDefaultInstallerTemplate() {
         return loadInstallerTemplate(defaultPath);
     }
     
-    // 如果找不到预编译的安装程序，创建一个最小的占位符
+
     std::cerr << "Warning: No installer template found, creating placeholder" << std::endl;
     return createPlaceholderTemplate();
 }
@@ -465,8 +465,8 @@ std::vector<uint8_t> InstallerGenerator::loadInstallerTemplate(const std::string
 }
 
 std::vector<uint8_t> InstallerGenerator::createPlaceholderTemplate() {
-    // 创建一个最小的可执行文件占位符
-    // 这在实际使用中应该被真正的安装程序可执行文件替换
+
+
     std::string placeholder = 
         "#!/bin/bash\n"
         "# Multi-threaded Installer Placeholder\n"
@@ -842,7 +842,7 @@ bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPat
         std::filesystem::path installerFile = PathFromUtf8(installerPath);
         std::filesystem::path outputDir = installerFile.parent_path();
         
-        // 如果输出目录为空，使用当前目录
+
         if (outputDir.empty()) {
             outputDir = ".";
         }
@@ -858,8 +858,8 @@ bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPat
         
         std::cout << "Copying runtime dependencies from: " << templateDir << std::endl;
         
-        // 复制 DuiLib.dll（仅在使用动态库时）
-        // 注意：如果使用静态库编译，则不需要复制DuiLib.dll
+
+
         std::filesystem::path duilib = templateDir / "DuiLib.dll";
         if (std::filesystem::exists(duilib)) {
             std::filesystem::path dest = outputDir / "DuiLib.dll";
@@ -868,7 +868,7 @@ bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPat
                 std::cout << "  Copied: DuiLib.dll" << std::endl;
             } catch (const std::exception& e) {
                 std::cerr << "  Failed to copy DuiLib.dll: " << e.what() << std::endl;
-                // 不设置allSuccess=false，因为可能使用静态库
+
                 std::cout << "  Note: If using static DuiLib, this is expected" << std::endl;
             }
         } else {
@@ -876,17 +876,17 @@ bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPat
         }
         
         if (!resourcesEmbedded) {
-            // 复制 resources 目录
+
             std::filesystem::path resourcesDir = templateDir / "resources";
             if (std::filesystem::exists(resourcesDir) && std::filesystem::is_directory(resourcesDir)) {
                 std::filesystem::path destResources = outputDir / "resources";
                 try {
-                    // 如果目标目录存在，先删除
+
                     if (std::filesystem::exists(destResources)) {
                         std::filesystem::remove_all(destResources);
                     }
                     
-                    // 递归复制整个 resources 目录
+
                     std::filesystem::copy(resourcesDir, destResources, 
                                          std::filesystem::copy_options::recursive);
                     std::cout << "  Copied: resources/ directory" << std::endl;

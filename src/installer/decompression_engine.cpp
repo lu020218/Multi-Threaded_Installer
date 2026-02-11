@@ -1,4 +1,4 @@
-﻿#include "installer/decompression_engine.h"
+#include "installer/decompression_engine.h"
 #include "installer/tar_stream_extractor.h"
 #ifdef LibLZMA_FOUND
 #include <lzma.h>

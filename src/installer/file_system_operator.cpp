@@ -1,4 +1,4 @@
-﻿#include "installer/file_system_operator.h"
+#include "installer/file_system_operator.h"
 #include "common/utf8_utils.h"
 #include <filesystem>
 #include <fstream>
@@ -21,7 +21,7 @@ bool FileSystemOperator::createDirectoryRecursive(const std::string& path) {
 
 bool FileSystemOperator::writeFile(const std::string& filePath, const std::vector<uint8_t>& data) {
     try {
-        // 处理文件冲突（直接覆盖）
+
         if (fileExists(filePath)) {
             if (!handleFileConflict(filePath)) {
                 return false;
@@ -53,7 +53,7 @@ bool FileSystemOperator::verifyFileIntegrity(const std::string& filePath, uint32
 }
 
 bool FileSystemOperator::handleFileConflict(const std::string& filePath) {
-    // 直接覆盖策略 - 删除现有文件
+
     try {
         if (fileExists(filePath)) {
             std::filesystem::remove(PathFromUtf8(filePath));
@@ -126,7 +126,7 @@ std::string FileSystemOperator::normalizePath(const std::string& path) {
 }
 
 uint32_t FileSystemOperator::calculateChecksum(const std::vector<uint8_t>& data) {
-    // 简单的CRC32实现
+
     uint32_t crc = 0xFFFFFFFF;
     
     for (uint8_t byte : data) {

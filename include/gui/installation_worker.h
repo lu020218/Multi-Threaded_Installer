@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #ifdef GUI_ENABLED
 
@@ -19,32 +19,32 @@ class FileSystemOperator;
 class InstallerPathResolver;
 
 /**
- * InstallationWorker类 - 在后台线程执行安装操作
- * 负责管理工作线程、进度回调和与UI线程的通信
+ *
+ *
  */
 class InstallationWorker {
 public:
     InstallationWorker(HWND hNotifyWindow);
     ~InstallationWorker();
     
-    // 启动安装（在新线程中）
+
     void StartInstallation(const std::wstring& installPath,
                            bool autoRun,
                            bool desktopIcons,
                            const std::wstring& languageCode,
                            bool cleanupOldInstall);
     
-    // 请求取消安装
+
     void RequestCancellation();
     
-    // 检查是否正在运行
+
     bool IsRunning() const;
     
 private:
-    HWND m_hNotifyWindow;                      // UI窗口句柄
-    std::thread m_workerThread;                 // 工作线程
-    std::atomic<bool> m_running;                // 运行状态标志
-    std::atomic<bool> m_cancellationRequested;  // 取消请求标志
+    HWND m_hNotifyWindow;
+    std::thread m_workerThread;
+    std::atomic<bool> m_running;
+    std::atomic<bool> m_cancellationRequested;
     bool m_autoRun;
     bool m_desktopIcons;
     bool m_cleanupOldInstallRequested;
@@ -54,21 +54,19 @@ private:
     std::atomic<uint64_t> m_currentFolderBytes;
     std::atomic<uint64_t> m_currentBaseBytes;
     
-    // 工作线程函数
+
     void WorkerThreadFunc(const std::wstring& installPath);
     
-    // 进度回调（从DecompressionEngine调用）
+
     static void ProgressCallback(const std::string& folder, const std::string& currentFile, float progress, void* userData);
     
-    // 发送进度消息到UI线程
+
     void PostProgressMessage(const std::wstring& folder, float progress);
     
-    // 发送完成消息到UI线程
+
     void PostCompletionMessage(bool success, const std::wstring& errorMsg);
     
-    // 辅助函数：字符串转换
-    std::wstring StringToWString(const std::string& str);
-    std::string WStringToString(const std::wstring& wstr);
+
 };
 
 } // namespace MultiThreadedInstaller

@@ -1,0 +1,198 @@
+schemaVersion: 1
+
+package:
+  appName: MyDesktopApp
+  version: 1.2.3
+  icon: app.ico
+  productName: MyDesktopApp
+  fileVersion: 1.2.3.4
+  productVersion: 1.2.3.4
+  companyName: MyCompany
+  fileDescription: MyDesktopApp Installer
+  copyright: Copyright (c) 2026 MyCompany
+  webPageUrl: https://example.com/intro
+
+install:
+  defaultInstallDir: "%ProgramFiles%"
+  autoStartup: false
+  desktopIcons: true
+  autoCleanOldInstall: false
+  requireAdmin: true
+  minWindowsVersion: 10.0.19041
+  sparseFileThresholdBytes: 4194304
+  allowScriptInstallers: true
+  killProcesses:
+    - MyDesktopApp.exe
+    - MyDesktopAppHelper.exe
+    - MyDesktopAppTray.exe
+  installState:
+    mode: Registry
+    registryPath: HKEY_CURRENT_USER\\Software\\MyDesktopApp
+    registryKey: InstallState
+    filePath: "%ProgramData%\\MyDesktopApp\\install.state"
+    useMutex: true
+    mutexName: Global\\MyDesktopApp_Install
+
+folders:
+  - name: bin
+    target: installDirectory
+  - name: plugins
+    target: "%AppData%\\Roaming"
+
+components:
+  - id: core
+    name: Core Files
+    description: Main application runtime and required binaries.
+    required: true
+    defaultSelected: true
+    sizeHintMB: 120
+    folders:
+      - bin
+    source:
+      type: embedded
+
+  - id: plugins
+    name: Optional Plugins
+    description: Install optional plugins from local installer script.
+    required: false
+    defaultSelected: true
+    dependsOn:
+      - core
+    sizeHintMB: 60
+    source:
+      type: local
+      local:
+        base: "%InstallDir%\\components"
+        installer: "plugins\\install_plugins.bat"
+        args: "/silent"
+        wait: true
+        timeoutSec: 900
+        uninstall: "%InstallDir%\\components\\plugins\\uninstall_plugins.bat /silent"
+
+  - id: cloud_sync
+    name: Cloud Sync Module
+    description: Download cloud sync component installer and execute silently.
+    required: false
+    defaultSelected: false
+    dependsOn:
+      - core
+    sizeHintMB: 35
+    source:
+      type: download
+      download:
+        url: "https://cdn.example.com/components/cloud_sync_setup.exe"
+        sha256: "9f1cc0af6a19d52af45eb7c8f88b0d2b0d8d8f4c9f95ad3ef6a0a2f4f4bb0f11"
+        saveAs: "%InstallDir%\\downloads\\cloud_sync_setup.exe"
+        args: "/S"
+        wait: true
+        timeoutSec: 1200
+        uninstall: "%ProgramFiles%\\CloudSync\\uninstall.exe /S"
+
+ui:
+  componentSelection:
+    mode: embeddedInExistingPages
+    binding:
+      strategy: xml_userdata
+      tokenPrefix: "component:"
+      pages:
+        - skin: welcome_page.xml
+          controls:
+            - chk_component_core
+            - chk_component_plugins
+            - chk_component_cloud
+
+flow:
+  install:
+    - id: precheck
+      action: Precheck
+      enabled: true
+      weight: 10
+      onError: fail
+
+    - id: collect_component_selection
+      action: CollectComponentSelection
+      enabled: true
+      weight: 5
+      onError: fail
+
+    - id: resolve_components
+      action: ResolveComponents
+      enabled: true
+      weight: 5
+      onError: fail
+
+    - id: kill_processes
+      action: KillProcesses
+      enabled: true
+      weight: 10
+      onError: fail
+      params:
+        source: install.killProcesses
+
+    - id: cleanup_old
+      action: CleanupPreviousInstall
+      enabled: true
+      weight: 15
+      onError: continue
+      when: pathChanged == true
+
+    - id: extract_files
+      action: ExtractFiles
+      enabled: true
+      weight: 25
+      onError: fail
+      params:
+        componentSource: embedded
+
+    - id: install_selected_components
+      action: InstallSelectedComponents
+      enabled: true
+      weight: 20
+      onError: fail
+      params:
+        includeSources:
+          - local
+          - download
+
+    - id: write_registry
+      action: WriteRegistry
+      enabled: true
+      weight: 5
+      onError: continue
+
+    - id: create_shortcuts
+      action: CreateShortcuts
+      enabled: true
+      weight: 3
+      onError: continue
+
+    - id: write_manifest
+      action: WriteManifest
+      enabled: true
+      weight: 2
+      onError: fail
+
+  uninstall:
+    - id: kill_processes
+      action: KillProcesses
+      enabled: true
+      weight: 10
+      onError: continue
+
+    - id: uninstall_selected_components
+      action: UninstallSelectedComponents
+      enabled: true
+      weight: 25
+      onError: continue
+
+    - id: cleanup_old
+      action: CleanupPreviousInstall
+      enabled: true
+      weight: 55
+      onError: continue
+
+    - id: cleanup_registry
+      action: WriteRegistry
+      enabled: true
+      weight: 10
+      onError: continue

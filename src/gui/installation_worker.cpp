@@ -229,75 +229,21 @@ if (m_cancellationRequested) {
         }
         
         // NOTE: Comment text normalized to avoid encoding mojibake.
-        uint64_t totalBytes = 0;
-        std::unordered_map<std::string, uint64_t> folderSizes;
-        std::unordered_map<std::string, float> folderProgress;
-        for (const auto& mapping : metadata.extendedMappings) {
-            totalBytes += mapping.originalSize;
-            folderSizes[mapping.folderName] = mapping.originalSize;
-            folderProgress[mapping.folderName] = 0.0f;
-        }
-        std::cout << "Total bytes to install: " << totalBytes << std::endl;
-        m_totalBytes = totalBytes;
-
-        std::mutex progressMutex;
-        uint64_t lastCompletedBytes = 0;
-        uint64_t progressUpdateCount = 0;
-        auto lastProgressLog = std::chrono::steady_clock::now();
-        auto progressCallback = [this, &folderSizes, &folderProgress, &progressMutex, totalBytes,
-                                 &lastCompletedBytes, &progressUpdateCount, &lastProgressLog]
-            (const std::string& folder, const std::string& currentFile, float progress) {
-            if (m_cancellationRequested.load()) {
-                return;
-            }
-            std::lock_guard<std::mutex> lock(progressMutex);
-            folderProgress[folder] = progress;
-            if (totalBytes == 0) {
-                if (!currentFile.empty()) {
-                    PostProgressMessage(Utf8ToWide(currentFile), progress * 100.0f);
-                } else {
-                    PostProgressMessage(Utf8ToWide(folder), progress * 100.0f);
-                }
-                return;
-            }
-            double completed = 0.0;
-            for (const auto& entry : folderProgress) {
-                auto sizeIt = folderSizes.find(entry.first);
-                if (sizeIt != folderSizes.end()) {
-                    double clamped = std::max(0.0f, std::min(1.0f, entry.second));
-                    completed += static_cast<double>(sizeIt->second) * clamped;
-                }
-            }
-            double overall = completed / static_cast<double>(totalBytes);
-            if (!currentFile.empty()) {
-                PostProgressMessage(Utf8ToWide(currentFile), static_cast<float>(overall * 100.0));
-            } else {
-                PostProgressMessage(Utf8ToWide(folder), static_cast<float>(overall * 100.0));
-            }
-
-            ++progressUpdateCount;
-            auto now = std::chrono::steady_clock::now();
-            auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastProgressLog).count();
-            if (elapsedMs >= 1000) {
-                uint64_t completedBytes = static_cast<uint64_t>(completed);
-                uint64_t deltaBytes = completedBytes - lastCompletedBytes;
-                double elapsedSec = static_cast<double>(elapsedMs) / 1000.0;
-                double updatesPerSec = progressUpdateCount / elapsedSec;
-                std::cout << "[progress] rate=" << updatesPerSec
-                          << " updates/s, delta_bytes=" << deltaBytes
-                          << ", percent=" << (overall * 100.0) << std::endl;
-                lastCompletedBytes = completedBytes;
-                lastProgressLog = now;
-                progressUpdateCount = 0;
-            }
-        };
-
         InstallServiceCallbacks serviceCallbacks;
-        serviceCallbacks.onEvent = [this, &progressCallback](const InstallServiceEvent& event) {
+        serviceCallbacks.onEvent = [this](const InstallServiceEvent& event) {
             switch (event.type) {
-                case InstallServiceEventType::Progress:
-                    progressCallback(event.folder, event.currentFile, event.progress);
+                case InstallServiceEventType::Progress: {
+                    std::string detail = !event.currentFile.empty() ? event.currentFile : event.folder;
+                    if (detail.empty()) {
+                        detail = event.message;
+                    }
+                    if (detail.empty()) {
+                        detail = "Installing";
+                    }
+                    const float progress = std::max(0.0f, std::min(100.0f, event.overallProgress * 100.0f));
+                    PostProgressMessage(Utf8ToWide(detail), progress);
                     break;
+                }
                 case InstallServiceEventType::Info:
                     std::cout << "INFO: " << event.message << std::endl;
                     break;
@@ -316,7 +262,6 @@ if (m_cancellationRequested) {
                     break;
             }
         };
-
         InstallServiceOptions serviceOptions;
         serviceOptions.installPath = installPathStr;
         serviceOptions.languageCode = WideToUtf8(m_languageCode);
@@ -415,6 +360,7 @@ PostCompletionMessage(success, errorMessage);
 } // namespace MultiThreadedInstaller
 
 #endif // GUI_ENABLED
+
 
 
 

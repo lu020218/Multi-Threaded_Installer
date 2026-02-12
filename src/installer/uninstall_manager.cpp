@@ -424,13 +424,62 @@ bool cleanupEmptyDirectoriesCmd(const std::string& root) {
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
                            ConsoleInterface& console) {
+    return uninstallFromManifest(manifestPath, resolver, console, {}, {});
+}
+
+bool uninstallFromManifest(const std::string& manifestPath,
+                           InstallerPathResolver& resolver,
+                           ConsoleInterface& console,
+                           const UninstallProgressCallback& progressCallback,
+                           const std::function<bool()>& cancellationCallback) {
+    auto isCancelled = [&]() {
+        return cancellationCallback && cancellationCallback();
+    };
+
+    size_t totalUnits = 0;
+    size_t completedUnits = 0;
+    float reportedProgress = 0.0f;
+
+    auto emitProgress = [&](const std::string& item) {
+        if (!progressCallback) {
+            return;
+        }
+        float progress = 1.0f;
+        if (totalUnits > 0) {
+            progress = static_cast<float>(completedUnits) / static_cast<float>(totalUnits);
+        }
+        if (progress < reportedProgress) {
+            progress = reportedProgress;
+        }
+        if (progress > 1.0f) {
+            progress = 1.0f;
+        }
+        reportedProgress = progress;
+
+        UninstallProgressInfo info;
+        info.progress = progress;
+        info.currentItem = item;
+        progressCallback(info);
+    };
+
+    auto addWorkUnits = [&](size_t units) {
+        totalUnits += units;
+    };
+
+    auto completeWorkUnit = [&](const std::string& item) {
+        if (completedUnits < totalUnits) {
+            ++completedUnits;
+        }
+        emitProgress(item);
+    };
+
     json manifest;
     if (!readManifest(manifestPath, manifest)) {
         console.showError("Failed to read manifest: " + manifestPath);
         return false;
     }
     console.showInfo("Loaded manifest: " + manifestPath);
-    
+
     std::string appName = manifest.value("appName", "");
     std::string installDir = manifest.value("installDir", "");
     bool autoStartup = manifest.value("autoStartup", false);
@@ -461,60 +510,17 @@ bool uninstallFromManifest(const std::string& manifestPath,
         installState.useMutex = state.value("useMutex", true);
         installState.mutexName = state.value("mutexName", "");
     }
-    
-    std::vector<std::string> killTargets = buildKillProcessList(appName, installKillProcesses);
-    if (!killTargets.empty()) {
-        std::vector<std::string> running = getRunningProcessesByName(killTargets);
-        if (!running.empty()) {
-            auto joinNames = [](const std::vector<std::string>& names) {
-                std::string joined;
-                for (size_t i = 0; i < names.size(); ++i) {
-                    if (i > 0) {
-                        joined += ", ";
-                    }
-                    joined += names[i];
-                }
-                return joined;
-            };
-            console.showInfo("Terminating processes: " + joinNames(running));
-            terminateProcessesByName(running);
-#ifdef _WIN32
-            Sleep(500);
-#endif
-            std::vector<std::string> remaining = getRunningProcessesByName(killTargets);
-            if (!remaining.empty()) {
-                console.showWarning("Some processes are still running: " + joinNames(remaining));
-            }
-        }
-    }
-    applyInstallState(installState, "uninstalling", resolver);
-    
-    if (autoStartup && !appName.empty()) {
-        removeAutoStartup(appName);
-    }
-    if (desktopIcons && !appName.empty()) {
-        deleteDesktopShortcut(appName);
-    }
-    
+
+    std::vector<RegistryEntry> manifestRegistryEntries;
     if (manifest.contains("registry") && manifest["registry"].is_array()) {
         for (const auto& reg : manifest["registry"]) {
             RegistryEntry entry;
             entry.path = reg.value("path", "");
             entry.key = reg.value("key", "");
-            deleteRegistryValue(entry);
+            manifestRegistryEntries.push_back(entry);
         }
     }
 
-#ifdef _WIN32
-    if (!appName.empty()) {
-        bool perMachine = isRunningAsAdmin();
-        removedUninstall = deleteUninstallRegistryEntry(appName, perMachine);
-        if (!removedUninstall) {
-            deleteUninstallRegistryEntry(appName, !perMachine);
-        }
-    }
-#endif
-    
     std::vector<std::string> files;
     if (manifest.contains("files") && manifest["files"].is_array()) {
         for (const auto& item : manifest["files"]) {
@@ -524,7 +530,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
         }
     }
     console.showInfo("Manifest files: " + std::to_string(files.size()));
-    
+
     std::vector<std::string> cleanupRoots;
     if (!appName.empty()) {
         std::string appLower = appName;
@@ -558,7 +564,109 @@ bool uninstallFromManifest(const std::string& manifestPath,
     for (const auto& root : cleanupRoots) {
         console.showInfo("Cleanup root: " + root);
     }
-    
+
+    std::vector<std::string> killTargets = buildKillProcessList(appName, installKillProcesses);
+
+    addWorkUnits(2); // install state: uninstalling + uninstalled
+    if (!killTargets.empty()) {
+        addWorkUnits(1);
+    }
+    if (autoStartup && !appName.empty()) {
+        addWorkUnits(1);
+    }
+    if (desktopIcons && !appName.empty()) {
+        addWorkUnits(1);
+    }
+    addWorkUnits(manifestRegistryEntries.size());
+#ifdef _WIN32
+    if (!appName.empty()) {
+        addWorkUnits(1);
+    }
+#endif
+    if (!uninstallPath.empty()) {
+        addWorkUnits(1);
+    }
+    addWorkUnits(files.size());
+    addWorkUnits(cleanupRoots.size() * 2); // scan root + remove root
+    if (!manifestPath.empty()) {
+        addWorkUnits(1);
+    }
+    if (!appName.empty()) {
+        addWorkUnits(1);
+    }
+
+    emitProgress("Preparing old installation cleanup");
+
+    if (isCancelled()) {
+        console.showWarning("Uninstall cancelled before cleanup started");
+        return false;
+    }
+
+    std::vector<std::string> running;
+    if (!killTargets.empty()) {
+        running = getRunningProcessesByName(killTargets);
+        if (!running.empty()) {
+            auto joinNames = [](const std::vector<std::string>& names) {
+                std::string joined;
+                for (size_t i = 0; i < names.size(); ++i) {
+                    if (i > 0) {
+                        joined += ", ";
+                    }
+                    joined += names[i];
+                }
+                return joined;
+            };
+            console.showInfo("Terminating processes: " + joinNames(running));
+            terminateProcessesByName(running);
+#ifdef _WIN32
+            Sleep(500);
+#endif
+            std::vector<std::string> remaining = getRunningProcessesByName(killTargets);
+            if (!remaining.empty()) {
+                console.showWarning("Some processes are still running: " + joinNames(remaining));
+            }
+        }
+        completeWorkUnit("Terminating running processes");
+    }
+
+    if (isCancelled()) {
+        console.showWarning("Uninstall cancelled");
+        return false;
+    }
+
+    applyInstallState(installState, "uninstalling", resolver);
+    completeWorkUnit("Marking uninstalling state");
+
+    if (autoStartup && !appName.empty()) {
+        removeAutoStartup(appName);
+        completeWorkUnit("Removing auto startup entry");
+    }
+    if (desktopIcons && !appName.empty()) {
+        deleteDesktopShortcut(appName);
+        completeWorkUnit("Removing desktop shortcut");
+    }
+
+    for (const auto& entry : manifestRegistryEntries) {
+        if (isCancelled()) {
+            console.showWarning("Uninstall cancelled while removing registry values");
+            return false;
+        }
+        deleteRegistryValue(entry);
+        std::string keyName = entry.key.empty() ? entry.path : (entry.path + "\\" + entry.key);
+        completeWorkUnit("Removing registry value: " + keyName);
+    }
+
+#ifdef _WIN32
+    if (!appName.empty()) {
+        bool perMachine = isRunningAsAdmin();
+        removedUninstall = deleteUninstallRegistryEntry(appName, perMachine);
+        if (!removedUninstall) {
+            deleteUninstallRegistryEntry(appName, !perMachine);
+        }
+        completeWorkUnit("Removing uninstall registry entry");
+    }
+#endif
+
     std::string currentExe = getCurrentExecutablePath();
     std::string currentExeNorm = normalizePathForCompare(currentExe);
     std::string uninstallPathNorm = normalizePathForCompare(uninstallPath);
@@ -575,12 +683,18 @@ bool uninstallFromManifest(const std::string& manifestPath,
                 console.showInfo("Removed uninstall.exe: " + uninstallPath);
             }
         }
+        completeWorkUnit("Removing uninstall executable");
     }
 
     for (const auto& file : files) {
+        if (isCancelled()) {
+            console.showWarning("Uninstall cancelled while deleting files");
+            return false;
+        }
         std::string fileNorm = normalizePathForCompare(file);
         if (!currentExe.empty() && fileNorm == currentExeNorm) {
             console.showInfo("Skipping file removal (current exe): " + file);
+            completeWorkUnit("Skipping current running executable");
             continue;
         }
         std::filesystem::path path = PathFromUtf8(file);
@@ -589,8 +703,9 @@ bool uninstallFromManifest(const std::string& manifestPath,
         if (removeEc && std::filesystem::exists(path)) {
             console.showWarning("Failed to remove file: " + file);
         }
+        completeWorkUnit("Removing old file: " + file);
     }
-    
+
     auto hasNonIgnoredFiles = [](const std::filesystem::path& rootPath) -> bool {
         if (!std::filesystem::exists(rootPath)) {
             return false;
@@ -609,13 +724,23 @@ bool uninstallFromManifest(const std::string& manifestPath,
         }
         return false;
     };
-    
+
     for (const auto& root : cleanupRoots) {
-        std::vector<std::filesystem::path> emptyDirs;
+        if (isCancelled()) {
+            console.showWarning("Uninstall cancelled while cleaning directories");
+            return false;
+        }
+
         std::filesystem::path rootPath = PathFromUtf8(root);
+        completeWorkUnit("Scanning old directory: " + root);
+
         if (!std::filesystem::exists(rootPath)) {
+            completeWorkUnit("Directory already removed: " + root);
             continue;
         }
+
+        std::vector<std::filesystem::path> emptyDirs;
+        std::vector<std::filesystem::path> ignoredFiles;
         auto cleanupStart = std::chrono::steady_clock::now();
         console.showInfo("Cleanup dirs start: " + root);
         std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
@@ -624,33 +749,52 @@ bool uninstallFromManifest(const std::string& manifestPath,
                 std::string name = Utf8FromPath(entry.path().filename());
                 std::transform(name.begin(), name.end(), name.begin(), ::tolower);
                 if (name == "desktop.ini" || name == "thumbs.db") {
-                    std::error_code ec;
-                    std::filesystem::remove(toLongPath(entry.path()), ec);
+                    ignoredFiles.push_back(entry.path());
+                    addWorkUnits(1);
                 }
             }
             if (entry.is_directory()) {
                 emptyDirs.push_back(entry.path());
+                addWorkUnits(1);
+            }
+            if (isCancelled()) {
+                console.showWarning("Uninstall cancelled during directory scan");
+                return false;
             }
         }
+
+        for (const auto& ignored : ignoredFiles) {
+            std::error_code ec;
+            std::filesystem::remove(toLongPath(ignored), ec);
+            completeWorkUnit("Removing ignored file: " + Utf8FromPath(ignored));
+        }
+
         std::sort(emptyDirs.begin(), emptyDirs.end(), [](const auto& a, const auto& b) {
             return a.native().size() > b.native().size();
         });
         for (const auto& dir : emptyDirs) {
+            if (isCancelled()) {
+                console.showWarning("Uninstall cancelled during directory removal");
+                return false;
+            }
             std::error_code ec;
             std::filesystem::remove(toLongPath(dir), ec);
             if (ec && std::filesystem::exists(dir)) {
                 console.showWarning("Failed to remove empty directory: " + Utf8FromPath(dir));
             }
+            completeWorkUnit("Removing old directory: " + Utf8FromPath(dir));
         }
-        std::error_code ec;
-        std::filesystem::remove(toLongPath(rootPath), ec);
-        if (ec && std::filesystem::exists(rootPath)) {
+
+        std::error_code rootEc;
+        std::filesystem::remove(toLongPath(rootPath), rootEc);
+        if (rootEc && std::filesystem::exists(rootPath)) {
             console.showWarning("Failed to remove root directory: " + Utf8FromPath(rootPath));
         }
+
         auto cleanupEnd = std::chrono::steady_clock::now();
         auto cleanupMs = std::chrono::duration_cast<std::chrono::milliseconds>(cleanupEnd - cleanupStart).count();
         console.showInfo("Cleanup dirs done: " + root + " (" + std::to_string(cleanupMs) + " ms)");
-        
+
         if (!hasNonIgnoredFiles(rootPath)) {
             std::error_code removeEc;
             std::filesystem::remove_all(toLongPath(rootPath), removeEc);
@@ -662,26 +806,38 @@ bool uninstallFromManifest(const std::string& manifestPath,
         } else {
             console.showWarning("Root not empty after cleanup: " + Utf8FromPath(rootPath));
         }
+
+        completeWorkUnit("Removing install root: " + root);
     }
-    
+
     removeInstallStateArtifacts(installState, resolver);
+    completeWorkUnit("Removing install state artifacts");
+
     applyInstallState(installState, "uninstalled", resolver);
-    if (!std::filesystem::remove(toLongPath(PathFromUtf8(manifestPath)))) {
-        if (std::filesystem::exists(PathFromUtf8(manifestPath))) {
-            console.showWarning("Failed to remove manifest: " + manifestPath);
+    completeWorkUnit("Marking uninstalled state");
+
+    if (!manifestPath.empty()) {
+        if (!std::filesystem::remove(toLongPath(PathFromUtf8(manifestPath)))) {
+            if (std::filesystem::exists(PathFromUtf8(manifestPath))) {
+                console.showWarning("Failed to remove manifest: " + manifestPath);
+            }
         }
+        completeWorkUnit("Removing uninstall manifest");
     }
+
     if (!appName.empty()) {
         std::string defaultPath = getDefaultManifestPath(appName, resolver);
         if (!defaultPath.empty() && defaultPath != manifestPath) {
             std::filesystem::remove(toLongPath(PathFromUtf8(defaultPath)));
         }
+        completeWorkUnit("Removing default manifest pointer");
     }
-    
+
     std::filesystem::path exePath = PathFromUtf8(getCurrentExecutablePath());
     std::string exeName = Utf8FromPath(exePath.filename());
     std::transform(exeName.begin(), exeName.end(), exeName.begin(), ::tolower);
     if (exeName == "uninstall.exe") {
+        addWorkUnits(1);
         if (!scheduleSelfDeleteImmediate(cleanupRoots, manifestPath)) {
             if (!scheduleSelfDelete()) {
                 console.showWarning("Failed to schedule uninstall.exe removal");
@@ -689,7 +845,14 @@ bool uninstallFromManifest(const std::string& manifestPath,
         } else {
             console.showInfo("Scheduled immediate uninstall.exe removal");
         }
+        completeWorkUnit("Scheduling self cleanup");
     }
+
+    if (completedUnits < totalUnits) {
+        completedUnits = totalUnits;
+    }
+    emitProgress("Old installation cleanup completed");
+
     console.showInfo("Uninstall completed");
     return true;
 }

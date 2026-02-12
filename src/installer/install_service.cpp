@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <mutex>
+#include <unordered_map>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -22,6 +24,42 @@ namespace MultiThreadedInstaller {
 
 namespace {
 
+constexpr float kPrecheckStart = 0.00f;
+constexpr float kPrecheckEnd = 0.15f;
+constexpr float kCleanupStart = 0.15f;
+constexpr float kCleanupEnd = 0.35f;
+constexpr float kInstallStart = 0.35f;
+constexpr float kInstallEnd = 0.92f;
+constexpr float kFinalizeStart = 0.92f;
+constexpr float kFinalizeEnd = 1.00f;
+
+float Clamp01(float value) {
+    if (value < 0.0f) {
+        return 0.0f;
+    }
+    if (value > 1.0f) {
+        return 1.0f;
+    }
+    return value;
+}
+
+float ToOverallProgress(InstallServicePhase phase, float phaseProgress) {
+    const float clamped = Clamp01(phaseProgress);
+    switch (phase) {
+        case InstallServicePhase::Precheck:
+            return kPrecheckStart + (kPrecheckEnd - kPrecheckStart) * clamped;
+        case InstallServicePhase::CleanupOldInstall:
+            return kCleanupStart + (kCleanupEnd - kCleanupStart) * clamped;
+        case InstallServicePhase::Installing:
+            return kInstallStart + (kInstallEnd - kInstallStart) * clamped;
+        case InstallServicePhase::Finalizing:
+            return kFinalizeStart + (kFinalizeEnd - kFinalizeStart) * clamped;
+        case InstallServicePhase::None:
+        default:
+            return 0.0f;
+    }
+}
+
 void EmitEvent(const InstallServiceCallbacks& callbacks, const InstallServiceEvent& event) {
     if (callbacks.onEvent) {
         callbacks.onEvent(event);
@@ -30,10 +68,17 @@ void EmitEvent(const InstallServiceCallbacks& callbacks, const InstallServiceEve
 
 void EmitStatus(const InstallServiceCallbacks& callbacks,
                 InstallServiceStatus status,
+                InstallServicePhase phase,
+                float phaseProgress,
+                float overallProgress,
                 const std::string& message = std::string()) {
     InstallServiceEvent event;
     event.type = InstallServiceEventType::Status;
     event.status = status;
+    event.phase = phase;
+    event.phaseProgress = Clamp01(phaseProgress);
+    event.overallProgress = Clamp01(overallProgress);
+    event.progress = event.overallProgress;
     event.message = message;
     EmitEvent(callbacks, event);
 }
@@ -41,6 +86,9 @@ void EmitStatus(const InstallServiceCallbacks& callbacks,
 void EmitMessage(const InstallServiceCallbacks& callbacks,
                  InstallServiceEventType type,
                  InstallServiceStatus status,
+                 InstallServicePhase phase,
+                 float phaseProgress,
+                 float overallProgress,
                  const std::string& message) {
     if (message.empty()) {
         return;
@@ -48,21 +96,30 @@ void EmitMessage(const InstallServiceCallbacks& callbacks,
     InstallServiceEvent event;
     event.type = type;
     event.status = status;
+    event.phase = phase;
+    event.phaseProgress = Clamp01(phaseProgress);
+    event.overallProgress = Clamp01(overallProgress);
+    event.progress = event.overallProgress;
     event.message = message;
     EmitEvent(callbacks, event);
 }
 
 void EmitProgress(const InstallServiceCallbacks& callbacks,
                   InstallServiceStatus status,
+                  InstallServicePhase phase,
                   const std::string& folder,
                   const std::string& currentFile,
-                  float progress) {
+                  float phaseProgress,
+                  float overallProgress) {
     InstallServiceEvent event;
     event.type = InstallServiceEventType::Progress;
     event.status = status;
+    event.phase = phase;
     event.folder = folder;
     event.currentFile = currentFile;
-    event.progress = progress;
+    event.phaseProgress = Clamp01(phaseProgress);
+    event.overallProgress = Clamp01(overallProgress);
+    event.progress = event.overallProgress;
     EmitEvent(callbacks, event);
 }
 
@@ -140,6 +197,57 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
     HANDLE installMutex = nullptr;
     bool installStateApplied = false;
     InstallServiceStatus currentStatus = InstallServiceStatus::Preparing;
+    InstallServicePhase currentPhase = InstallServicePhase::None;
+    float currentPhaseProgress = 0.0f;
+    float lastOverallProgress = 0.0f;
+
+    auto calcOverall = [&](InstallServicePhase phase, float phaseProgress) {
+        float overall = ToOverallProgress(phase, phaseProgress);
+        if (overall < lastOverallProgress) {
+            overall = lastOverallProgress;
+        }
+        overall = Clamp01(overall);
+        lastOverallProgress = overall;
+        return overall;
+    };
+
+    auto emitStatus = [&](InstallServiceStatus status,
+                          InstallServicePhase phase,
+                          float phaseProgress,
+                          const std::string& message) {
+        currentStatus = status;
+        currentPhase = phase;
+        currentPhaseProgress = Clamp01(phaseProgress);
+        EmitStatus(callbacks,
+                   currentStatus,
+                   currentPhase,
+                   currentPhaseProgress,
+                   calcOverall(currentPhase, currentPhaseProgress),
+                   message);
+    };
+
+    auto emitMessage = [&](InstallServiceEventType type, const std::string& message) {
+        EmitMessage(callbacks,
+                    type,
+                    currentStatus,
+                    currentPhase,
+                    currentPhaseProgress,
+                    calcOverall(currentPhase, currentPhaseProgress),
+                    message);
+    };
+
+    auto emitProgress = [&](const std::string& folder,
+                            const std::string& currentFile,
+                            float phaseProgress) {
+        currentPhaseProgress = std::max(currentPhaseProgress, Clamp01(phaseProgress));
+        EmitProgress(callbacks,
+                     currentStatus,
+                     currentPhase,
+                     folder,
+                     currentFile,
+                     currentPhaseProgress,
+                     calcOverall(currentPhase, currentPhaseProgress));
+    };
 
     auto releaseResources = [&]() {
         if (installMutex) {
@@ -156,9 +264,13 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         }
         currentStatus = cancelled ? InstallServiceStatus::Cancelled : InstallServiceStatus::Failed;
         if (!message.empty()) {
-            EmitMessage(callbacks, InstallServiceEventType::Error, currentStatus, message);
+            emitMessage(InstallServiceEventType::Error, message);
         }
-        EmitStatus(callbacks, currentStatus,
+        EmitStatus(callbacks,
+                   currentStatus,
+                   currentPhase,
+                   currentPhaseProgress,
+                   calcOverall(currentPhase, currentPhaseProgress),
                    cancelled ? "Installation cancelled." : "Installation failed.");
         if (installStateApplied) {
             applyInstallState(metadata.installState, "failed", pathResolver);
@@ -168,7 +280,10 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
     };
 
     try {
-        EmitStatus(callbacks, InstallServiceStatus::Preparing, "Preparing installation...");
+        emitStatus(InstallServiceStatus::Preparing,
+                   InstallServicePhase::None,
+                   0.0f,
+                   "Preparing installation...");
 
         if (IsCancellationRequested(options)) {
             markFailed("Installation cancelled.", true, true);
@@ -176,7 +291,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         }
 
         currentStatus = InstallServiceStatus::Precheck;
-        EmitStatus(callbacks, currentStatus, "Running installation prechecks...");
+        currentPhase = InstallServicePhase::Precheck;
+        currentPhaseProgress = 0.0f;
+        emitStatus(currentStatus, currentPhase, 0.0f, "Running installation prechecks...");
 
         std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
             options.installPath,
@@ -184,19 +301,20 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             metadata.applicationName);
         std::string diskCheckPath = resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot;
 
-        uint64_t requiredBytes = 0;
+        uint64_t totalInstallBytes = 0;
         for (const auto& mapping : metadata.extendedMappings) {
-            requiredBytes += mapping.originalSize;
+            totalInstallBytes += mapping.originalSize;
         }
         uint64_t availableBytes = 0;
-        if (!checkDiskSpaceForInstall(diskCheckPath, requiredBytes, availableBytes)) {
+        if (!checkDiskSpaceForInstall(diskCheckPath, totalInstallBytes, availableBytes)) {
             markFailed("Insufficient disk space for installation. required=" +
-                           std::to_string(requiredBytes) + " available=" +
+                           std::to_string(totalInstallBytes) + " available=" +
                            std::to_string(availableBytes),
                        false,
                        true);
             return result;
         }
+        emitProgress("", "Disk space precheck", 0.25f);
 
 #ifdef _WIN32
         uint16_t currentMajor = 0;
@@ -212,6 +330,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             return result;
         }
 #endif
+        emitProgress("", "OS version precheck", 0.40f);
 
 #ifdef _WIN32
         std::vector<std::string> processNames = buildKillProcessList(
@@ -227,8 +346,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                     }
                     joined += running[i];
                 }
-                EmitMessage(callbacks, InstallServiceEventType::Info, currentStatus,
-                            "Terminating processes: " + joined);
+                emitMessage(InstallServiceEventType::Info, "Terminating processes: " + joined);
                 terminateProcessesByName(running);
                 Sleep(500);
                 std::vector<std::string> remaining = getRunningProcessesByName(processNames);
@@ -246,6 +364,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             }
         }
 #endif
+        emitProgress("", "Process precheck", 0.60f);
 
         if (IsCancellationRequested(options)) {
             markFailed("Installation cancelled.", true, true);
@@ -262,47 +381,98 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             std::string normalizedNew = NormalizePathForCompare(
                 resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot);
             if (!normalizedOld.empty() && !normalizedNew.empty() && normalizedOld != normalizedNew) {
-                EmitMessage(callbacks, InstallServiceEventType::Info, currentStatus,
+                emitMessage(InstallServiceEventType::Info,
                             "Detected previous install at: " + previousInstallDir);
                 if (previousManifest.empty()) {
-                    EmitMessage(callbacks, InstallServiceEventType::Warning, currentStatus,
+                    emitMessage(InstallServiceEventType::Warning,
                                 "Old install manifest not found; skipping cleanup.");
                 } else if (metadata.autoCleanOldInstall || options.cleanupOldInstallRequested) {
+                    currentPhase = InstallServicePhase::CleanupOldInstall;
+                    currentPhaseProgress = 0.0f;
+                    emitStatus(InstallServiceStatus::Precheck,
+                               currentPhase,
+                               0.0f,
+                               "Cleaning previous installation...");
+
                     ConsoleInterface console;
-                    console.showInfo("Cleaning previous installation...");
-                    if (!uninstallFromManifest(previousManifest, pathResolver, console)) {
-                        EmitMessage(callbacks, InstallServiceEventType::Warning, currentStatus,
+                    auto cleanupProgress = [&](const UninstallProgressInfo& info) {
+                        const std::string detail = info.currentItem.empty()
+                                                       ? std::string("Cleaning previous installation")
+                                                       : info.currentItem;
+                        emitProgress("cleanup", detail, info.progress);
+                    };
+
+                    if (!uninstallFromManifest(previousManifest,
+                                               pathResolver,
+                                               console,
+                                               cleanupProgress,
+                                               options.cancellationCallback)) {
+                        if (IsCancellationRequested(options)) {
+                            markFailed("Installation cancelled.", true, true);
+                            return result;
+                        }
+                        emitMessage(InstallServiceEventType::Warning,
                                     "Previous install cleanup reported failure.");
                     }
+                    emitProgress("cleanup", "Previous installation cleanup finished", 1.0f);
                 } else {
-                    EmitMessage(callbacks, InstallServiceEventType::Info, currentStatus,
+                    emitMessage(InstallServiceEventType::Info,
                                 "Skipping cleanup of previous installation.");
                 }
             }
         }
 
+        currentPhase = InstallServicePhase::Precheck;
+        currentPhaseProgress = 0.85f;
+
         if (metadata.installState.useMutex) {
-            EmitMessage(callbacks, InstallServiceEventType::Info, currentStatus,
-                        "Acquiring install mutex...");
+            emitMessage(InstallServiceEventType::Info, "Acquiring install mutex...");
             installMutex = acquireInstallMutex(metadata.installState);
         }
+        emitProgress("", "Precheck completed", 1.0f);
 
         applyInstallState(metadata.installState, "installing", pathResolver);
         installStateApplied = true;
 
         currentStatus = InstallServiceStatus::Installing;
-        EmitStatus(callbacks, currentStatus, "Installing files...");
+        currentPhase = InstallServicePhase::Installing;
+        currentPhaseProgress = 0.0f;
+        emitStatus(currentStatus, currentPhase, 0.0f, "Installing files...");
+
+        std::unordered_map<std::string, uint64_t> folderSizes;
+        std::unordered_map<std::string, float> folderProgress;
+        folderSizes.reserve(metadata.extendedMappings.size());
+        folderProgress.reserve(metadata.extendedMappings.size());
+        for (const auto& mapping : metadata.extendedMappings) {
+            folderSizes[mapping.folderName] = mapping.originalSize;
+            folderProgress[mapping.folderName] = 0.0f;
+        }
+        std::mutex installProgressMutex;
 
         ProgressCallback progressCallback = [&](const std::string& folder,
                                                 const std::string& currentFile,
                                                 float progress) {
-            EmitProgress(callbacks, currentStatus, folder, currentFile, progress);
+            float phaseProgress = Clamp01(progress);
+            if (totalInstallBytes > 0) {
+                std::lock_guard<std::mutex> lock(installProgressMutex);
+                folderProgress[folder] = Clamp01(progress);
+                double completed = 0.0;
+                for (const auto& entry : folderProgress) {
+                    auto sizeIt = folderSizes.find(entry.first);
+                    if (sizeIt != folderSizes.end()) {
+                        completed += static_cast<double>(sizeIt->second) * static_cast<double>(entry.second);
+                    }
+                }
+                phaseProgress = static_cast<float>(completed / static_cast<double>(totalInstallBytes));
+            }
+            emitProgress(folder, currentFile, phaseProgress);
         };
+
         LogCallback infoCallback = [&](const std::string& message) {
-            EmitMessage(callbacks, InstallServiceEventType::Info, currentStatus, message);
+            emitMessage(InstallServiceEventType::Info, message);
         };
         LogCallback errorCallback = [&](const std::string& message) {
-            EmitMessage(callbacks, InstallServiceEventType::Error, currentStatus, message);
+            emitMessage(InstallServiceEventType::Error, message);
         };
 
         ParallelInstallResult parallelResult = RunParallelInstall(
@@ -331,14 +501,22 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                 result.errors.push_back("Installation failed.");
             }
             for (const auto& error : result.errors) {
-                EmitMessage(callbacks, InstallServiceEventType::Error, currentStatus, error);
+                emitMessage(InstallServiceEventType::Error, error);
             }
             markFailed(std::string(), result.cancelled, false);
             return result;
         }
 
+        emitProgress("", "File installation completed", 1.0f);
+
         currentStatus = InstallServiceStatus::Finalizing;
-        EmitStatus(callbacks, currentStatus, "Finalizing installation...");
+        currentPhase = InstallServicePhase::Finalizing;
+        currentPhaseProgress = 0.0f;
+        emitStatus(currentStatus, currentPhase, 0.0f, "Finalizing installation...");
+
+        auto advanceFinalize = [&](float progress, const std::string& detail) {
+            emitProgress("finalize", detail, progress);
+        };
 
         if (options.applyRegistryBeforeFinalize && !metadata.registry.empty()) {
             std::string prePath = options.preRegistryInstallPath.empty()
@@ -349,9 +527,10 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                  metadata.configVersion,
                                  metadata.applicationName);
         }
+        advanceFinalize(0.15f, "Applying registry entries");
 
         if ((metadata.autoStartup || metadata.desktopIcons) && result.installRootPath.empty()) {
-            EmitMessage(callbacks, InstallServiceEventType::Warning, currentStatus,
+            emitMessage(InstallServiceEventType::Warning,
                         "Install root not detected; AutoStartup/DesktopIcons skipped");
         }
 
@@ -359,29 +538,28 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             std::filesystem::path exePath = findPrimaryExecutable(PathFromUtf8(result.installRootPath),
                                                                   metadata.applicationName);
             if ((metadata.autoStartup || metadata.desktopIcons) && exePath.empty()) {
-                EmitMessage(callbacks, InstallServiceEventType::Warning, currentStatus,
+                emitMessage(InstallServiceEventType::Warning,
                             "No executable found for AutoStartup/DesktopIcons");
             } else {
                 if (metadata.autoStartup) {
                     if (setAutoStartup(metadata.applicationName, exePath)) {
-                        EmitMessage(callbacks, InstallServiceEventType::Info, currentStatus,
-                                    "AutoStartup enabled");
+                        emitMessage(InstallServiceEventType::Info, "AutoStartup enabled");
                     } else {
-                        EmitMessage(callbacks, InstallServiceEventType::Warning, currentStatus,
+                        emitMessage(InstallServiceEventType::Warning,
                                     "Failed to enable AutoStartup");
                     }
                 }
                 if (metadata.desktopIcons) {
                     if (createDesktopShortcut(metadata.applicationName, exePath)) {
-                        EmitMessage(callbacks, InstallServiceEventType::Info, currentStatus,
-                                    "Desktop icon created");
+                        emitMessage(InstallServiceEventType::Info, "Desktop icon created");
                     } else {
-                        EmitMessage(callbacks, InstallServiceEventType::Warning, currentStatus,
+                        emitMessage(InstallServiceEventType::Warning,
                                     "Failed to create desktop icon");
                     }
                 }
             }
         }
+        advanceFinalize(0.35f, "Creating startup and shortcut entries");
 
         result.installedFiles = CollectFilesRecursive(result.installedRoots);
 
@@ -398,7 +576,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                     std::filesystem::copy_file(currentExePath, target,
                                                std::filesystem::copy_options::overwrite_existing, ec);
                     if (ec) {
-                        EmitMessage(callbacks, InstallServiceEventType::Warning, currentStatus,
+                        emitMessage(InstallServiceEventType::Warning,
                                     "Failed to create uninstall.exe");
                     } else {
                         result.uninstallPath = targetUtf8;
@@ -406,6 +584,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                 }
             }
         }
+        advanceFinalize(0.50f, "Preparing uninstall entry point");
 
         if (!result.uninstallPath.empty()) {
             result.installedFiles.erase(
@@ -427,7 +606,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                            metadata.installState,
                            result.uninstallPath,
                            languageCode)) {
-            EmitMessage(callbacks, InstallServiceEventType::Warning, currentStatus,
+            emitMessage(InstallServiceEventType::Warning,
                         "Failed to write install manifest");
         }
 
@@ -445,10 +624,11 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                metadata.installState,
                                result.uninstallPath,
                                languageCode)) {
-                EmitMessage(callbacks, InstallServiceEventType::Warning, currentStatus,
+                emitMessage(InstallServiceEventType::Warning,
                             "Failed to write local install manifest");
             }
         }
+        advanceFinalize(0.75f, "Writing install manifest");
 
         if (options.applyRegistryAfterInstall && !metadata.registry.empty()) {
             applyRegistryEntries(metadata.registry,
@@ -465,19 +645,27 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                              result.installRootPath,
                                              result.uninstallPath,
                                              perMachine)) {
-                EmitMessage(callbacks, InstallServiceEventType::Warning, currentStatus,
+                emitMessage(InstallServiceEventType::Warning,
                             "Failed to write uninstall registry entry");
             }
         }
 #endif
+        advanceFinalize(0.90f, "Writing uninstall registry");
 
         applyInstallState(metadata.installState, "installed", pathResolver);
         installStateApplied = false;
         releaseResources();
 
+        advanceFinalize(1.0f, "Finalization complete");
+
         result.success = true;
         currentStatus = InstallServiceStatus::Completed;
-        EmitStatus(callbacks, currentStatus, "Installation completed.");
+        EmitStatus(callbacks,
+                   currentStatus,
+                   InstallServicePhase::Finalizing,
+                   1.0f,
+                   calcOverall(InstallServicePhase::Finalizing, 1.0f),
+                   "Installation completed.");
         return result;
     } catch (const std::exception& ex) {
         markFailed(ex.what(), IsCancellationRequested(options), true);

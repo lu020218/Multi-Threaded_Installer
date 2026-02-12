@@ -31,13 +31,24 @@ enum class InstallServiceStatus {
     Cancelled,
 };
 
+enum class InstallServicePhase {
+    None,
+    Precheck,
+    CleanupOldInstall,
+    Installing,
+    Finalizing,
+};
+
 struct InstallServiceEvent {
     InstallServiceEventType type = InstallServiceEventType::Status;
     InstallServiceStatus status = InstallServiceStatus::Preparing;
+    InstallServicePhase phase = InstallServicePhase::None;
     std::string message;
     std::string folder;
     std::string currentFile;
     float progress = 0.0f;
+    float phaseProgress = 0.0f;
+    float overallProgress = 0.0f;
 };
 
 using InstallServiceEventCallback = std::function<void(const InstallServiceEvent&)>;

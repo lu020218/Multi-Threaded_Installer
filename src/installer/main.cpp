@@ -652,7 +652,8 @@ int runConsoleInstaller(int argc, char* argv[]) {
         switch (event.type) {
             case InstallServiceEventType::Progress: {
                 const std::string& display = event.currentFile.empty() ? event.folder : event.currentFile;
-                console.showInstallationProgress(display, event.progress);
+                float progress = std::max(0.0f, std::min(1.0f, event.overallProgress));
+                console.showInstallationProgress(display, progress);
                 break;
             }
             case InstallServiceEventType::Info:
@@ -1225,3 +1226,4 @@ int main(int argc, char* argv[]) {
     // NOTE: Comment text normalized to avoid encoding mojibake.
     return runConsoleInstaller(argc, argv);
 }
+

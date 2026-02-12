@@ -3,11 +3,20 @@
 #include "common/types.h"
 #include "installer/console_interface.h"
 #include "installer/path_resolver.h"
+
+#include <functional>
 #include <json.hpp>
 #include <string>
 #include <vector>
 
 namespace MultiThreadedInstaller {
+
+struct UninstallProgressInfo {
+    float progress = 0.0f;
+    std::string currentItem;
+};
+
+using UninstallProgressCallback = std::function<void(const UninstallProgressInfo&)>;
 
 bool writeManifest(const std::string& manifestPath,
                    const std::string& appName,
@@ -29,6 +38,11 @@ bool resolveExistingInstallInfo(const std::string& appName,
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
                            ConsoleInterface& console);
+bool uninstallFromManifest(const std::string& manifestPath,
+                           InstallerPathResolver& resolver,
+                           ConsoleInterface& console,
+                           const UninstallProgressCallback& progressCallback,
+                           const std::function<bool()>& cancellationCallback = {});
 bool scheduleSelfDelete();
 bool scheduleSelfDeleteImmediate(const std::vector<std::string>& cleanupRoots,
                                  const std::string& manifestPath);

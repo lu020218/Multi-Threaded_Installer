@@ -1,0 +1,32 @@
+version: 1
+vars: {}
+install_flow:
+  steps:
+    - id: check_disk
+      type: check_disk
+      params: {}
+      on_fail: abort
+    - id: extract
+      type: extract_package
+      params: {}
+      on_fail: rollback
+    - id: shortcut
+      type: create_shortcut
+      params: {}
+      when: "${options.create_shortcuts == true && metadata.desktop_icons == true}"
+      on_fail: continue
+    - id: registry
+      type: write_registry
+      params: {}
+      when: "${options.configure_registry == true}"
+      on_fail: continue
+    - id: autostart
+      type: configure_autostart
+      params: {}
+      when: "${options.auto_startup == true && metadata.auto_startup == true}"
+      on_fail: continue
+  rollback:
+    - id: rollback_files
+      type: rollback_files
+      params: {}
+      on_fail: continue

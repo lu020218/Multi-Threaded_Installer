@@ -15,33 +15,30 @@
 //! - 8.5, 8.6, 8.7: Rollback on failure
 //! - 11.1, 11.2: Create uninstaller
 
-use crate::components::{
-    download_component_to_cache, find_component, load_component_manifest, verify_component_sha256,
-    verify_component_signature, ComponentDownloadPolicy, ComponentManifest,
-    ComponentSignaturePolicy,
-};
+use crate::components::installer as component_installer;
+use crate::components::runtime::ComponentRuntimeState;
+use crate::components::{ComponentDownloadPolicy, ComponentSignaturePolicy};
 use crate::compression::{decompress, verify_crc32};
 use crate::filesystem::{
     check_disk_space, create_dir_all, delete_file, set_file_permissions_public, write_file,
 };
 use crate::flow_executor::{FlowContext, FlowExecutor, FlowRuntime};
+use crate::flow_steps::{BuiltinStepRuntime, StepRegistry};
 use crate::package::{footer_size, read_footer, read_header, read_metadata, read_toc, Toc};
 use crate::platform::{create_platform, Platform, UninstallInfo};
+use crate::script_executor::{ScriptExecutor, ScriptPolicy};
 use crate::ui_resources::UIResources;
 use installer_shared::{
-    FlowDefinition, FlowStep, InstallFlow, InstallOptions, InstallerError, OnFailPolicy,
-    PackageMetadata, Phase, ProgressEvent, Result,
+    FlowDefinition, FlowStep, InstallOptions, InstallerError, PackageMetadata, Phase,
+    ProgressEvent, Result,
 };
-use serde_yaml;
 use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
@@ -179,104 +176,6 @@ pub struct Installer {
     component_signature_policy: ComponentSignaturePolicy,
 }
 
-/// Script execution safety policy.
-#[derive(Debug, Clone, Default)]
-pub struct ScriptPolicy {
-    /// Whether script nodes are enabled.
-    pub enabled: bool,
-    /// Canonicalized roots allowed for script loading.
-    pub allow_roots: Vec<PathBuf>,
-}
-
-impl ScriptPolicy {
-    /// Build policy from environment variables.
-    ///
-    /// - `MTI_ENABLE_SCRIPTS=1|true|yes` enables script execution.
-    /// - `MTI_SCRIPT_ALLOWLIST` is a semicolon-separated root list.
-    pub fn from_env() -> Self {
-        let enabled = std::env::var("MTI_ENABLE_SCRIPTS")
-            .ok()
-            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
-            .unwrap_or(false);
-
-        let allow_roots = std::env::var("MTI_SCRIPT_ALLOWLIST")
-            .ok()
-            .map(|v| {
-                v.split(';')
-                    .filter_map(|entry| {
-                        let trimmed = entry.trim();
-                        if trimmed.is_empty() {
-                            return None;
-                        }
-                        let path = PathBuf::from(trimmed);
-                        canonicalize_fallible(&path)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Self {
-            enabled,
-            allow_roots,
-        }
-    }
-
-    /// Create an enabled policy with explicit allow roots.
-    pub fn enabled_with_roots(roots: Vec<PathBuf>) -> Self {
-        let allow_roots = roots
-            .into_iter()
-            .filter_map(|p| canonicalize_fallible(&p))
-            .collect();
-        Self {
-            enabled: true,
-            allow_roots,
-        }
-    }
-
-    fn ensure_allowed(&self, script_path: &Path) -> Result<()> {
-        if !self.enabled {
-            return Err(InstallerError::PermissionDenied(
-                "Script execution is disabled. Set MTI_ENABLE_SCRIPTS=1 and allowlist roots."
-                    .to_string(),
-            ));
-        }
-        if self.allow_roots.is_empty() {
-            return Err(InstallerError::PermissionDenied(
-                "Script allowlist is empty. Set MTI_SCRIPT_ALLOWLIST.".to_string(),
-            ));
-        }
-
-        let canonical = canonicalize_fallible(script_path).ok_or_else(|| {
-            InstallerError::Config(format!(
-                "Script path '{}' does not exist or cannot be canonicalized",
-                script_path.display()
-            ))
-        })?;
-
-        if self
-            .allow_roots
-            .iter()
-            .any(|root| canonical.starts_with(root))
-        {
-            Ok(())
-        } else {
-            Err(InstallerError::PermissionDenied(format!(
-                "Script path '{}' is not under allowlisted roots",
-                canonical.display()
-            )))
-        }
-    }
-}
-
-fn canonicalize_fallible(path: &Path) -> Option<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir().ok()?.join(path)
-    };
-    absolute.canonicalize().ok()
-}
-
 struct InstallFlowRuntime<'a, F>
 where
     F: Fn(ProgressEvent) + Send + Sync,
@@ -287,24 +186,6 @@ where
     progress: &'a F,
     installed_files: Vec<PathBuf>,
     component_state: ComponentRuntimeState,
-}
-
-#[derive(Debug, Default)]
-struct ComponentRuntimeState {
-    manifest: Option<ComponentManifest>,
-    downloaded_files: std::collections::HashMap<String, PathBuf>,
-    selected_components: Vec<String>,
-    cache_root: Option<PathBuf>,
-    install_root: PathBuf,
-    installed_components: Vec<InstalledComponentRecord>,
-}
-
-#[derive(Debug, Clone)]
-struct InstalledComponentRecord {
-    component_id: String,
-    created_paths: Vec<PathBuf>,
-    rollback_paths: Vec<PathBuf>,
-    uninstall_product_code: Option<String>,
 }
 
 impl<'a, F> InstallFlowRuntime<'a, F>
@@ -323,10 +204,7 @@ where
             options,
             progress,
             installed_files: Vec::new(),
-            component_state: ComponentRuntimeState {
-                install_root: options.install_dir.clone(),
-                ..Default::default()
-            },
+            component_state: ComponentRuntimeState::new(options.install_dir.clone()),
         }
     }
 }
@@ -335,60 +213,10 @@ impl<F> FlowRuntime for InstallFlowRuntime<'_, F>
 where
     F: Fn(ProgressEvent) + Send + Sync,
 {
-    fn execute_builtin(&mut self, step: &FlowStep, _context: &mut FlowContext) -> Result<()> {
-        match step.step_type.as_str() {
-            "check_disk" => self
-                .installer
-                .check_disk_space_for_parsed(self.parsed, &self.options.install_dir),
-            "extract_package" => self.installer.extract_payload(
-                self.parsed,
-                self.options,
-                self.progress,
-                &mut self.installed_files,
-            ),
-            "create_shortcut" => self
-                .installer
-                .create_shortcut_if_needed(self.parsed, self.options),
-            "write_registry" => self
-                .installer
-                .configure_registry_if_needed(self.parsed, self.options),
-            "configure_autostart" => self
-                .installer
-                .configure_autostart_if_needed(self.parsed, self.options),
-            "load_component_manifest" => self
-                .installer
-                .load_component_manifest_step(step, &mut self.component_state),
-            "resolve_selected_components" => self.installer.resolve_selected_components_step(
-                step,
-                &mut self.component_state,
-                _context,
-            ),
-            "process_selected_components" => self.installer.process_selected_components_step(
-                step,
-                &mut self.component_state,
-                _context,
-            ),
-            "download_component" => {
-                self.installer
-                    .download_component_step(step, &mut self.component_state, _context)
-            }
-            "verify_component" => {
-                self.installer
-                    .verify_component_step(step, &mut self.component_state, _context)
-            }
-            "install_component" => {
-                self.installer
-                    .install_component_step(step, &mut self.component_state, _context)
-            }
-            "rollback_component" => self
-                .installer
-                .rollback_component_step(&mut self.component_state),
-            "rollback_files" => self.installer.rollback(&self.installed_files),
-            other => Err(InstallerError::Config(format!(
-                "Unsupported built-in flow step type '{}'",
-                other
-            ))),
-        }
+    fn execute_builtin(&mut self, step: &FlowStep, context: &mut FlowContext) -> Result<()> {
+        static STEP_REGISTRY: OnceLock<StepRegistry> = OnceLock::new();
+        let registry = STEP_REGISTRY.get_or_init(StepRegistry::new);
+        registry.execute(self, step, context)
     }
 
     fn execute_script(&mut self, step: &FlowStep, context: &mut FlowContext) -> Result<()> {
@@ -396,71 +224,102 @@ where
     }
 }
 
+impl<F> BuiltinStepRuntime for InstallFlowRuntime<'_, F>
+where
+    F: Fn(ProgressEvent) + Send + Sync,
+{
+    fn check_disk(&mut self) -> Result<()> {
+        self.installer
+            .check_disk_space_for_parsed(self.parsed, &self.options.install_dir)
+    }
+
+    fn extract_package(&mut self) -> Result<()> {
+        self.installer.extract_payload(
+            self.parsed,
+            self.options,
+            self.progress,
+            &mut self.installed_files,
+        )
+    }
+
+    fn create_shortcut(&mut self) -> Result<()> {
+        self.installer
+            .create_shortcut_if_needed(self.parsed, self.options)
+    }
+
+    fn write_registry(&mut self) -> Result<()> {
+        self.installer
+            .configure_registry_if_needed(self.parsed, self.options)
+    }
+
+    fn configure_autostart(&mut self) -> Result<()> {
+        self.installer
+            .configure_autostart_if_needed(self.parsed, self.options)
+    }
+
+    fn load_component_manifest(&mut self, step: &FlowStep) -> Result<()> {
+        self.installer
+            .load_component_manifest_step(step, &mut self.component_state)
+    }
+
+    fn resolve_selected_components(
+        &mut self,
+        step: &FlowStep,
+        context: &mut FlowContext,
+    ) -> Result<()> {
+        self.installer
+            .resolve_selected_components_step(step, &mut self.component_state, context)
+    }
+
+    fn process_selected_components(
+        &mut self,
+        step: &FlowStep,
+        context: &mut FlowContext,
+    ) -> Result<()> {
+        self.installer
+            .process_selected_components_step(step, &mut self.component_state, context)
+    }
+
+    fn download_component(&mut self, step: &FlowStep, context: &mut FlowContext) -> Result<()> {
+        self.installer
+            .download_component_step(step, &mut self.component_state, context)
+    }
+
+    fn verify_component(&mut self, step: &FlowStep, context: &mut FlowContext) -> Result<()> {
+        self.installer
+            .verify_component_step(step, &mut self.component_state, context)
+    }
+
+    fn install_component(&mut self, step: &FlowStep, context: &mut FlowContext) -> Result<()> {
+        self.installer
+            .install_component_step(step, &mut self.component_state, context)
+    }
+
+    fn rollback_component(&mut self) -> Result<()> {
+        self.installer
+            .rollback_component_step(&mut self.component_state)
+    }
+
+    fn rollback_files(&mut self) -> Result<()> {
+        self.installer.rollback(&self.installed_files)
+    }
+}
+
 impl Installer {
+    fn parse_default_install_flow_yaml(yaml: &str) -> Result<FlowDefinition> {
+        FlowDefinition::from_yaml_str(yaml).map_err(|e| {
+            InstallerError::Config(format!(
+                "Failed to parse built-in default install flow YAML: {}",
+                e
+            ))
+        })
+    }
+
     fn build_default_install_flow_definition() -> FlowDefinition {
-        FlowDefinition {
-            version: 1,
-            vars: std::collections::HashMap::new(),
-            ui_flow: None,
-            install_flow: InstallFlow {
-                steps: vec![
-                    FlowStep {
-                        id: "check_disk".to_string(),
-                        step_type: "check_disk".to_string(),
-                        params: json!({}),
-                        when: None,
-                        on_fail: Some(OnFailPolicy::Abort),
-                        engine: None,
-                    },
-                    FlowStep {
-                        id: "extract".to_string(),
-                        step_type: "extract_package".to_string(),
-                        params: json!({}),
-                        when: None,
-                        on_fail: Some(OnFailPolicy::Rollback),
-                        engine: None,
-                    },
-                    FlowStep {
-                        id: "shortcut".to_string(),
-                        step_type: "create_shortcut".to_string(),
-                        params: json!({}),
-                        when: Some(
-                            "${options.create_shortcuts == true && metadata.desktop_icons == true}"
-                                .to_string(),
-                        ),
-                        on_fail: Some(OnFailPolicy::Continue),
-                        engine: None,
-                    },
-                    FlowStep {
-                        id: "registry".to_string(),
-                        step_type: "write_registry".to_string(),
-                        params: json!({}),
-                        when: Some("${options.configure_registry == true}".to_string()),
-                        on_fail: Some(OnFailPolicy::Continue),
-                        engine: None,
-                    },
-                    FlowStep {
-                        id: "autostart".to_string(),
-                        step_type: "configure_autostart".to_string(),
-                        params: json!({}),
-                        when: Some(
-                            "${options.auto_startup == true && metadata.auto_startup == true}"
-                                .to_string(),
-                        ),
-                        on_fail: Some(OnFailPolicy::Continue),
-                        engine: None,
-                    },
-                ],
-                rollback: vec![FlowStep {
-                    id: "rollback_files".to_string(),
-                    step_type: "rollback_files".to_string(),
-                    params: json!({}),
-                    when: None,
-                    on_fail: Some(OnFailPolicy::Continue),
-                    engine: None,
-                }],
-            },
-        }
+        const DEFAULT_FLOW_YAML: &str = include_str!("flows/default_install_flow.yaml");
+        Self::parse_default_install_flow_yaml(DEFAULT_FLOW_YAML).expect(
+            "Failed to parse built-in default install flow YAML; check installer_core/src/flows/default_install_flow.yaml",
+        )
     }
 
     fn build_flow_context(
@@ -721,10 +580,7 @@ impl Installer {
         } else {
             None
         };
-        let window_blocks = options
-            .thread_count
-            .map(|n| n.max(1) * 2)
-            .unwrap_or(8);
+        let window_blocks = options.thread_count.map(|n| n.max(1) * 2).unwrap_or(8);
 
         progress(ProgressEvent::new(
             Phase::Writing,
@@ -790,8 +646,9 @@ impl Installer {
                 decompress_fn(&work_items)
             };
 
-            let mut decompressed_blocks: Vec<DecompressedBlock> =
-                decompressed_blocks.into_iter().collect::<Result<Vec<_>>>()?;
+            let mut decompressed_blocks: Vec<DecompressedBlock> = decompressed_blocks
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
             decompressed_blocks.sort_by_key(|block| block.index);
 
             for decompressed_block in decompressed_blocks {
@@ -1039,48 +896,12 @@ impl Installer {
             .map_err(|e| InstallerError::Platform(e.to_string()))
     }
 
-    fn component_cache_root(state: &mut ComponentRuntimeState) -> Result<PathBuf> {
-        if let Some(root) = &state.cache_root {
-            return Ok(root.clone());
-        }
-        let mut root = std::env::temp_dir();
-        root.push(format!(
-            "mti_component_cache_{}_{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ));
-        create_dir_all(&root)?;
-        state.cache_root = Some(root.clone());
-        Ok(root)
-    }
-
     fn load_component_manifest_step(
         &self,
         step: &FlowStep,
         state: &mut ComponentRuntimeState,
     ) -> Result<()> {
-        let params = step.params_object();
-        let path = params.get("path").and_then(Value::as_str).ok_or_else(|| {
-            InstallerError::Config(format!(
-                "Step '{}' requires params.path for load_component_manifest",
-                step.id
-            ))
-        })?;
-        let manifest = if path == "embedded" {
-            let parsed = self.parse_package()?;
-            let yaml = parsed.metadata.embedded_component_manifest.ok_or_else(|| {
-                InstallerError::Config(
-                    "Embedded component manifest not found in package metadata".to_string(),
-                )
-            })?;
-            serde_yaml::from_str(&yaml).map_err(|e| {
-                InstallerError::Config(format!("Failed to parse embedded component manifest: {}", e))
-            })?
-        } else {
-            load_component_manifest(Path::new(path))?
-        };
-        state.manifest = Some(manifest);
-        Ok(())
+        component_installer::load_component_manifest_step(self, step, state)
     }
 
     fn download_component_step(
@@ -1089,13 +910,12 @@ impl Installer {
         state: &mut ComponentRuntimeState,
         context: &mut FlowContext,
     ) -> Result<()> {
-        let component_ids =
-            self.resolve_component_ids(step, state, context, "download_component")?;
-        let cache_root = Self::component_cache_root(state)?;
-        for component_id in component_ids {
-            self.download_component_by_id(state, &cache_root, &component_id)?;
-        }
-        Ok(())
+        component_installer::download_component_step(
+            step,
+            state,
+            context,
+            &self.component_download_policy,
+        )
     }
 
     fn resolve_selected_components_step(
@@ -1104,50 +924,7 @@ impl Installer {
         state: &mut ComponentRuntimeState,
         context: &mut FlowContext,
     ) -> Result<()> {
-        let params = step.params_object();
-        let include_required = params
-            .get("include_required")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        let manifest = state.manifest.as_ref().ok_or_else(|| {
-            InstallerError::Config(
-                "resolve_selected_components requires load_component_manifest first".to_string(),
-            )
-        })?;
-
-        let mut selected = Vec::new();
-        if let Some(component_opts) = context.options.get("components").and_then(Value::as_object) {
-            for component in &manifest.components {
-                if component_opts
-                    .get(component.id.as_str())
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    selected.push(component.id.clone());
-                }
-            }
-        }
-
-        if include_required {
-            for component in &manifest.components {
-                if component.required && !selected.iter().any(|id| id == &component.id) {
-                    selected.push(component.id.clone());
-                }
-            }
-        }
-
-        context.set_var(
-            "SelectedComponents",
-            Value::Array(
-                selected
-                    .iter()
-                    .cloned()
-                    .map(Value::String)
-                    .collect::<Vec<_>>(),
-            ),
-        );
-        state.selected_components = selected;
-        Ok(())
+        component_installer::resolve_selected_components_step(step, state, context)
     }
 
     fn process_selected_components_step(
@@ -1156,43 +933,14 @@ impl Installer {
         state: &mut ComponentRuntimeState,
         context: &mut FlowContext,
     ) -> Result<()> {
-        let params = step.params_object();
-        let action = params
-            .get("action")
-            .and_then(Value::as_str)
-            .map(|v| v.to_ascii_lowercase())
-            .ok_or_else(|| {
-                InstallerError::Config(format!(
-                    "Step '{}' requires params.action for process_selected_components",
-                    step.id
-                ))
-            })?;
-        let component_ids =
-            self.resolve_component_ids(step, state, context, "process_selected_components")?;
-        let cache_root = if action == "download" {
-            Some(Self::component_cache_root(state)?)
-        } else {
-            None
-        };
-
-        for component_id in component_ids {
-            match action.as_str() {
-                "download" => self.download_component_by_id(
-                    state,
-                    cache_root.as_ref().expect("cache root must be initialized"),
-                    &component_id,
-                )?,
-                "verify" => self.verify_component_by_id(state, &component_id)?,
-                "install" => self.install_component_by_id(step, state, &component_id)?,
-                other => {
-                    return Err(InstallerError::Config(format!(
-                        "Unsupported action '{}' for process_selected_components, expected download/verify/install",
-                        other
-                    )))
-                }
-            }
-        }
-        Ok(())
+        component_installer::process_selected_components_step(
+            step,
+            state,
+            context,
+            &self.component_download_policy,
+            &self.component_signature_policy,
+            Self::validate_embedded_script_path,
+        )
     }
 
     fn verify_component_step(
@@ -1201,12 +949,12 @@ impl Installer {
         state: &mut ComponentRuntimeState,
         context: &mut FlowContext,
     ) -> Result<()> {
-        let component_ids = self.resolve_component_ids(step, state, context, "verify_component")?;
-        for component_id in component_ids {
-            self.verify_component_by_id(state, &component_id)?;
-        }
-
-        Ok(())
+        component_installer::verify_component_step(
+            step,
+            state,
+            context,
+            &self.component_signature_policy,
+        )
     }
 
     fn install_component_step(
@@ -1215,532 +963,20 @@ impl Installer {
         state: &mut ComponentRuntimeState,
         context: &mut FlowContext,
     ) -> Result<()> {
-        let component_ids =
-            self.resolve_component_ids(step, state, context, "install_component")?;
-        for component_id in component_ids {
-            self.install_component_by_id(step, state, &component_id)?;
-        }
-
-        Ok(())
-    }
-
-    fn download_component_by_id(
-        &self,
-        state: &mut ComponentRuntimeState,
-        cache_root: &Path,
-        component_id: &str,
-    ) -> Result<()> {
-        let component = {
-            let manifest = state.manifest.as_ref().ok_or_else(|| {
-                InstallerError::Config(
-                    "download_component requires load_component_manifest first".to_string(),
-                )
-            })?;
-            find_component(manifest, component_id)?.clone()
-        };
-        let downloaded =
-            download_component_to_cache(&component, cache_root, &self.component_download_policy)?;
-        state
-            .downloaded_files
-            .insert(component_id.to_string(), downloaded);
-        Ok(())
-    }
-
-    fn verify_component_by_id(
-        &self,
-        state: &ComponentRuntimeState,
-        component_id: &str,
-    ) -> Result<()> {
-        let manifest = state.manifest.as_ref().ok_or_else(|| {
-            InstallerError::Config(
-                "verify_component requires load_component_manifest first".to_string(),
-            )
-        })?;
-        let component = find_component(manifest, component_id)?;
-        let downloaded = state.downloaded_files.get(component_id).ok_or_else(|| {
-            InstallerError::Config(format!(
-                "verify_component requires download_component first for '{}'",
-                component_id
-            ))
-        })?;
-        verify_component_sha256(downloaded, &component.package.sha256)?;
-        verify_component_signature(manifest, component, &self.component_signature_policy)?;
-        Ok(())
-    }
-
-    fn install_component_by_id(
-        &self,
-        step: &FlowStep,
-        state: &mut ComponentRuntimeState,
-        component_id: &str,
-    ) -> Result<()> {
-        let component = {
-            let manifest = state.manifest.as_ref().ok_or_else(|| {
-                InstallerError::Config(
-                    "install_component requires load_component_manifest first".to_string(),
-                )
-            })?;
-            find_component(manifest, component_id)?.clone()
-        };
-        let downloaded = state
-            .downloaded_files
-            .get(component_id)
-            .cloned()
-            .ok_or_else(|| {
-                InstallerError::Config(format!(
-                    "install_component requires download_component first for '{}'",
-                    component_id
-                ))
-            })?;
-        self.install_single_component(
+        component_installer::install_component_step(
             step,
             state,
-            component_id.to_string(),
-            &component,
-            &downloaded,
+            context,
+            Self::validate_embedded_script_path,
         )
     }
 
-    fn install_single_component(
-        &self,
-        step: &FlowStep,
-        state: &mut ComponentRuntimeState,
-        component_id: String,
-        component: &crate::components::ComponentEntry,
-        downloaded: &Path,
-    ) -> Result<()> {
-        let install_spec = component.install.as_ref().ok_or_else(|| {
-            InstallerError::Config(format!(
-                "Component '{}' missing install specification",
-                component_id
-            ))
-        })?;
-        let mut created_paths = Vec::new();
-        let mut rollback_paths = Vec::new();
-
-        if let Some(rollback) = component.rollback.as_ref() {
-            for raw in &rollback.remove_paths {
-                let relative = Self::validate_embedded_script_path(raw)?;
-                rollback_paths.push(state.install_root.join(relative));
-            }
-        }
-
-        match install_spec.kind.to_ascii_lowercase().as_str() {
-            "archive" => {
-                let target_subdir = install_spec
-                    .target_subdir
-                    .as_deref()
-                    .map(Self::validate_embedded_script_path)
-                    .transpose()?
-                    .unwrap_or_else(|| PathBuf::from(format!("components/{}", component_id)));
-                let target_dir = state.install_root.join(target_subdir);
-                create_dir_all(&target_dir)?;
-
-                let lower_name = downloaded
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                if lower_name.ends_with(".tar.gz")
-                    || lower_name.ends_with(".tgz")
-                    || lower_name.ends_with(".tar")
-                {
-                    Self::extract_component_archive(downloaded, &target_dir)?;
-                    created_paths.push(target_dir.clone());
-                } else {
-                    let file_name = downloaded
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("component.bin");
-                    let target_file = target_dir.join(file_name);
-                    std::fs::copy(downloaded, &target_file)?;
-                    created_paths.push(target_file);
-                    created_paths.push(target_dir.clone());
-                }
-                if !rollback_paths.iter().any(|p| p == &target_dir) {
-                    rollback_paths.push(target_dir);
-                }
-            }
-            "msi" => {
-                let mut args = vec![
-                    "/i".to_string(),
-                    downloaded.to_string_lossy().to_string(),
-                    "/qn".to_string(),
-                    "/norestart".to_string(),
-                ];
-                if let Some(extra) = install_spec.args.as_deref() {
-                    args.extend(Self::split_command_args(extra));
-                }
-                Self::run_program("msiexec", &args, &step.id)?;
-            }
-            "exe" => {
-                let mut args = Vec::new();
-                if let Some(extra) = install_spec.args.as_deref() {
-                    args.extend(Self::split_command_args(extra));
-                }
-                let program = downloaded.to_string_lossy().to_string();
-                Self::run_program(&program, &args, &step.id)?;
-            }
-            other => {
-                return Err(InstallerError::Config(format!(
-                    "Unsupported install_component kind '{}', expected archive/msi/exe",
-                    other
-                )))
-            }
-        }
-
-        state.installed_components.push(InstalledComponentRecord {
-            component_id,
-            created_paths,
-            rollback_paths,
-            uninstall_product_code: component
-                .rollback
-                .as_ref()
-                .and_then(|r| r.uninstall_product_code.clone()),
-        });
-        Ok(())
-    }
-
     fn rollback_component_step(&self, state: &mut ComponentRuntimeState) -> Result<()> {
-        for record in state.installed_components.iter().rev() {
-            debug!("Rolling back component '{}'", record.component_id);
-            if let Some(product_code) = record.uninstall_product_code.as_deref() {
-                let args = vec![
-                    "/x".to_string(),
-                    product_code.to_string(),
-                    "/qn".to_string(),
-                    "/norestart".to_string(),
-                ];
-                Self::run_program("msiexec", &args, "rollback_component")?;
-            }
-
-            for path in record.rollback_paths.iter().rev() {
-                if !path.exists() {
-                    continue;
-                }
-                Self::remove_component_path(path).map_err(|e| {
-                    InstallerError::Rollback(format!(
-                        "Failed to remove component rollback path '{}': {}",
-                        path.display(),
-                        e
-                    ))
-                })?;
-            }
-
-            for path in record.created_paths.iter().rev() {
-                if !path.exists() {
-                    continue;
-                }
-                Self::remove_component_path(path).map_err(|e| {
-                    InstallerError::Rollback(format!(
-                        "Failed to remove component path '{}': {}",
-                        path.display(),
-                        e
-                    ))
-                })?;
-            }
-        }
-        state.installed_components.clear();
-        Ok(())
-    }
-
-    fn extract_component_archive(archive_path: &Path, target_dir: &Path) -> Result<()> {
-        use flate2::read::GzDecoder;
-        use tar::Archive;
-
-        let file = File::open(archive_path)?;
-        let lower_name = archive_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-
-        if lower_name.ends_with(".tar.gz") || lower_name.ends_with(".tgz") {
-            let decoder = GzDecoder::new(file);
-            let mut archive = Archive::new(decoder);
-            for entry in archive.entries()? {
-                let mut entry = entry?;
-                entry.unpack_in(target_dir)?;
-            }
-            return Ok(());
-        }
-
-        if lower_name.ends_with(".tar") {
-            let mut archive = Archive::new(file);
-            for entry in archive.entries()? {
-                let mut entry = entry?;
-                entry.unpack_in(target_dir)?;
-            }
-            return Ok(());
-        }
-
-        Err(InstallerError::Config(format!(
-            "Unsupported archive format '{}'",
-            archive_path.display()
-        )))
-    }
-
-    fn remove_component_path(path: &Path) -> std::io::Result<()> {
-        if path.is_file() {
-            std::fs::remove_file(path)
-        } else if path.is_dir() {
-            std::fs::remove_dir_all(path)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn split_command_args(raw: &str) -> Vec<String> {
-        let mut args = Vec::new();
-        let mut current = String::new();
-        let mut in_quotes = false;
-        let mut quote_char = '\0';
-        let mut escape = false;
-
-        for ch in raw.chars() {
-            if escape {
-                current.push(ch);
-                escape = false;
-                continue;
-            }
-            if ch == '\\' {
-                escape = true;
-                continue;
-            }
-            if in_quotes {
-                if ch == quote_char {
-                    in_quotes = false;
-                } else {
-                    current.push(ch);
-                }
-                continue;
-            }
-            if ch == '"' || ch == '\'' {
-                in_quotes = true;
-                quote_char = ch;
-                continue;
-            }
-            if ch.is_whitespace() {
-                if !current.is_empty() {
-                    args.push(current.clone());
-                    current.clear();
-                }
-                continue;
-            }
-            current.push(ch);
-        }
-        if !current.is_empty() {
-            args.push(current);
-        }
-        args
-    }
-
-    fn run_program(program: &str, args: &[String], step_id: &str) -> Result<()> {
-        let mut command = std::process::Command::new(program);
-        command.args(args);
-        #[cfg(windows)]
-        {
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-
-        let output = command.output().map_err(|e| {
-            InstallerError::Config(format!(
-                "Step '{}' failed to start '{}': {}",
-                step_id, program, e
-            ))
-        })?;
-        if output.status.success() {
-            return Ok(());
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(InstallerError::Config(format!(
-            "Step '{}' command '{}' failed (exit {}): {}",
-            step_id,
-            program,
-            output
-                .status
-                .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            stderr.trim()
-        )))
-    }
-
-    fn resolve_component_ids(
-        &self,
-        step: &FlowStep,
-        state: &ComponentRuntimeState,
-        context: &FlowContext,
-        step_type: &str,
-    ) -> Result<Vec<String>> {
-        let params = step.params_object();
-        if let Some(ids) = params.get("component_ids").and_then(Value::as_array) {
-            let collected: Vec<String> = ids
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect();
-            if !collected.is_empty() {
-                return Ok(collected);
-            }
-        }
-
-        if let Some(component_id) = params.get("component_id").and_then(Value::as_str) {
-            return Ok(vec![component_id.to_string()]);
-        }
-
-        let from_selected = params
-            .get("from_selected")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        if from_selected {
-            if let Some(ids) = context
-                .vars
-                .get("SelectedComponents")
-                .and_then(Value::as_array)
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
-            {
-                if !ids.is_empty() {
-                    return Ok(ids);
-                }
-            }
-            if !state.selected_components.is_empty() {
-                return Ok(state.selected_components.clone());
-            }
-        }
-
-        if let Some(ids) = context
-            .vars
-            .get("SelectedComponents")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-        {
-            if !ids.is_empty() {
-                return Ok(ids);
-            }
-        }
-
-        if !state.selected_components.is_empty() {
-            return Ok(state.selected_components.clone());
-        }
-
-        Err(InstallerError::Config(format!(
-            "Step '{}' requires params.component_id/component_ids for {} (or resolved selected components)",
-            step.id, step_type
-        )))
+        component_installer::rollback_component_step(state)
     }
 
     fn execute_script_step(&self, step: &FlowStep, context: &mut FlowContext) -> Result<()> {
-        let params = step.params_object();
-        let path = params.get("path").and_then(Value::as_str).ok_or_else(|| {
-            InstallerError::Config(format!("Script step '{}' missing params.path", step.id))
-        })?;
-
-        let mut script_path = PathBuf::from(path);
-        let mut is_embedded_script = false;
-        if !script_path.is_absolute() && !script_path.exists() {
-            if let Some(root) = context
-                .vars
-                .get("__embedded_scripts_root")
-                .and_then(Value::as_str)
-            {
-                let candidate = PathBuf::from(root).join(path);
-                if candidate.exists() {
-                    script_path = candidate;
-                    is_embedded_script = true;
-                }
-            }
-        }
-
-        // Embedded scripts materialized from package metadata are treated as trusted package assets.
-        // External scripts still require explicit opt-in + allowlist.
-        if !is_embedded_script && !self.script_policy.enabled {
-            return Err(InstallerError::PermissionDenied(
-                "Script execution is disabled. Set MTI_ENABLE_SCRIPTS=1 and allowlist roots."
-                    .to_string(),
-            ));
-        }
-        if !is_embedded_script {
-            self.script_policy.ensure_allowed(&script_path)?;
-        }
-
-        let engine = step.engine.ok_or_else(|| {
-            InstallerError::Config(format!("Script step '{}' missing engine", step.id))
-        })?;
-        match engine {
-            installer_shared::ScriptEngine::Js => {}
-            _ => {
-                return Err(InstallerError::Config(format!(
-                    "Script engine '{:?}' is not implemented yet",
-                    engine
-                )))
-            }
-        }
-
-        let absolute_script = canonicalize_fallible(&script_path).ok_or_else(|| {
-            InstallerError::Config(format!(
-                "Script path '{}' does not exist",
-                script_path.display()
-            ))
-        })?;
-
-        let args_json = params
-            .get("args")
-            .cloned()
-            .unwrap_or(Value::Null)
-            .to_string();
-        let vars_json = Value::Object(context.vars.clone().into_iter().collect()).to_string();
-        let metadata_json = context.metadata.to_string();
-        let options_json = context.options.to_string();
-
-        let mut command = std::process::Command::new("node");
-        command
-            .arg(&absolute_script)
-            .env("MTI_ARGS_JSON", args_json)
-            .env("MTI_VARS_JSON", vars_json)
-            .env("MTI_METADATA_JSON", metadata_json)
-            .env("MTI_OPTIONS_JSON", options_json);
-
-        #[cfg(windows)]
-        {
-            // Prevent transient console window flashes when launching node.exe from GUI installer.
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-
-        let output = command.output().map_err(|e| {
-            InstallerError::Config(format!(
-                "Script step '{}' failed to start Node.js: {}",
-                step.id, e
-            ))
-        })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(InstallerError::Config(format!(
-                "Script step '{}' failed (exit {}): {}",
-                step.id,
-                output
-                    .status
-                    .code()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                stderr.trim()
-            )));
-        }
-
-        Ok(())
+        ScriptExecutor::execute(step, context, &self.script_policy)
     }
 
     fn embedded_flow_from_package(&self, parsed: &ParsedPackage) -> Result<Option<FlowDefinition>> {
@@ -2252,6 +1488,29 @@ mod tests {
 
         let installer = Installer::new(output_path).unwrap();
         assert!(installer.has_ui_resources().unwrap());
+    }
+
+    #[test]
+    fn test_default_flow_parse_error_has_context() {
+        let invalid_yaml = r#"
+version: 1
+install_flow:
+  steps:
+    - id: broken_script
+      type: script
+      params:
+        path: scripts/broken.js
+"#;
+
+        let err =
+            Installer::parse_default_install_flow_yaml(invalid_yaml).expect_err("should fail");
+        match err {
+            InstallerError::Config(msg) => {
+                assert!(msg.contains("built-in default install flow YAML"));
+                assert!(msg.contains("broken_script"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 }
 

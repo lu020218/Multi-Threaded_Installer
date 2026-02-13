@@ -618,6 +618,7 @@ mod tests {
             window: None,
             embedded_flow_yaml: None,
             embedded_scripts: Vec::new(),
+            embedded_component_manifest: None,
         };
 
         let mut buffer = Vec::new();
@@ -881,6 +882,7 @@ mod property_tests {
                         window: None,
                         embedded_flow_yaml: None,
                         embedded_scripts: Vec::new(),
+                        embedded_component_manifest: None,
                     }
                 },
             )

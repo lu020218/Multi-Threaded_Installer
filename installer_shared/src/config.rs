@@ -454,6 +454,7 @@ mod property_tests {
                         ui_resources_dir: None, // PathBuf doesn't implement Arbitrary
                         flow_file: None,
                         script_files: Vec::new(),
+                        component_manifest_file: None,
                         thread_count,
                     }
                 },

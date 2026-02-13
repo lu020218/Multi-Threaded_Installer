@@ -53,7 +53,7 @@ impl From<ProgressEvent> for ProgressPayload {
     fn from(event: ProgressEvent) -> Self {
         let percentage = event.percentage();
         let speed_display = event.speed_bps.map(format_speed);
-        
+
         Self {
             phase: event.phase.to_string(),
             current: event.current,
@@ -257,9 +257,9 @@ mod tests {
         let event = ProgressEvent::new(Phase::Decompressing, 50, 100)
             .with_file("test.txt")
             .with_speed(1_000_000);
-        
+
         let payload: ProgressPayload = event.into();
-        
+
         assert_eq!(payload.phase, "Decompressing");
         assert_eq!(payload.current, 50);
         assert_eq!(payload.total, 100);
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn test_install_complete_payload() {
         let payload = InstallCompletePayload::new(100, 1_500_000, 5_000);
-        
+
         assert_eq!(payload.files, 100);
         assert_eq!(payload.size, 1_500_000);
         assert_eq!(payload.size_display, "1.50 MB");
@@ -286,14 +286,13 @@ mod tests {
             .with_code("E001")
             .recoverable()
             .with_suggestion("Try again");
-        
+
         assert_eq!(payload.message, "Test error");
         assert_eq!(payload.code, Some("E001".to_string()));
         assert!(payload.recoverable);
         assert_eq!(payload.suggestion, Some("Try again".to_string()));
     }
 }
-
 
 // ============================================================================
 // Property-Based Tests
@@ -359,14 +358,14 @@ mod property_tests {
         fn prop_progress_event_conversion_preserves_data(event in arb_progress_event()) {
             // Convert to payload
             let payload: ProgressPayload = event.clone().into();
-            
+
             // Property: Phase should be preserved as string
             prop_assert_eq!(payload.phase, event.phase.to_string());
-            
+
             // Property: Current and total should be preserved
             prop_assert_eq!(payload.current, event.current);
             prop_assert_eq!(payload.total, event.total);
-            
+
             // Property: Percentage should be calculated correctly
             let expected_percentage = if event.total == 0 {
                 0.0
@@ -375,13 +374,13 @@ mod property_tests {
             };
             prop_assert!((payload.percentage - expected_percentage).abs() < 0.001,
                 "Percentage mismatch: {} vs {}", payload.percentage, expected_percentage);
-            
+
             // Property: Current file should be preserved
             prop_assert_eq!(payload.current_file, event.current_file);
-            
+
             // Property: Speed should be preserved
             prop_assert_eq!(payload.speed_bps, event.speed_bps);
-            
+
             // Property: Message should be preserved
             prop_assert_eq!(payload.message, event.message);
         }
@@ -394,7 +393,7 @@ mod property_tests {
         ) {
             let event = ProgressEvent::new(Phase::Writing, current.min(total), total);
             let payload: ProgressPayload = event.into();
-            
+
             prop_assert!(payload.percentage >= 0.0, "Percentage should be >= 0");
             prop_assert!(payload.percentage <= 100.0, "Percentage should be <= 100");
         }
@@ -405,17 +404,17 @@ mod property_tests {
             let event = ProgressEvent::new(Phase::Writing, 50, 100)
                 .with_speed(speed_bps);
             let payload: ProgressPayload = event.into();
-            
+
             // Speed display should be present
             prop_assert!(payload.speed_display.is_some());
-            
+
             let display = payload.speed_display.unwrap();
-            
+
             // Should contain a unit
             prop_assert!(
-                display.contains("B/s") || 
-                display.contains("KB/s") || 
-                display.contains("MB/s") || 
+                display.contains("B/s") ||
+                display.contains("KB/s") ||
+                display.contains("MB/s") ||
                 display.contains("GB/s"),
                 "Speed display should contain a unit: {}", display
             );
@@ -429,15 +428,15 @@ mod property_tests {
             time_ms in 0u128..3_600_000u128,
         ) {
             let payload = InstallCompletePayload::new(files, size, time_ms);
-            
+
             // Property: Fields should be preserved
             prop_assert_eq!(payload.files, files);
             prop_assert_eq!(payload.size, size);
             prop_assert_eq!(payload.time_ms, time_ms);
-            
+
             // Property: Size display should be non-empty
             prop_assert!(!payload.size_display.is_empty());
-            
+
             // Property: Time display should be non-empty
             prop_assert!(!payload.time_display.is_empty());
         }
@@ -451,7 +450,7 @@ mod property_tests {
             recoverable in any::<bool>(),
         ) {
             let mut payload = InstallErrorPayload::new(message.clone());
-            
+
             if let Some(ref c) = code {
                 payload = payload.with_code(c.clone());
             }
@@ -461,16 +460,16 @@ mod property_tests {
             if recoverable {
                 payload = payload.recoverable();
             }
-            
+
             // Property: Message should be preserved
             prop_assert_eq!(payload.message, message);
-            
+
             // Property: Code should be preserved
             prop_assert_eq!(payload.code, code);
-            
+
             // Property: Suggestion should be preserved
             prop_assert_eq!(payload.suggestion, suggestion);
-            
+
             // Property: Recoverable flag should be preserved
             prop_assert_eq!(payload.recoverable, recoverable);
         }
@@ -479,16 +478,16 @@ mod property_tests {
         #[test]
         fn prop_progress_event_serializable(event in arb_progress_event()) {
             let payload: ProgressPayload = event.into();
-            
+
             // Should serialize without error
             let json_result = serde_json::to_string(&payload);
             prop_assert!(json_result.is_ok(), "Serialization failed: {:?}", json_result.err());
-            
+
             // Should deserialize back
             let json = json_result.unwrap();
             let deserialized: Result<ProgressPayload, _> = serde_json::from_str(&json);
             prop_assert!(deserialized.is_ok(), "Deserialization failed: {:?}", deserialized.err());
-            
+
             // Should match original
             let restored = deserialized.unwrap();
             prop_assert_eq!(restored.phase, payload.phase);

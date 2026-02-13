@@ -15,12 +15,11 @@
 use tracing::{debug, info, warn};
 
 /// WebView2 download URL
-pub const WEBVIEW2_DOWNLOAD_URL: &str = 
+pub const WEBVIEW2_DOWNLOAD_URL: &str =
     "https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section";
 
 /// WebView2 bootstrapper download URL (direct)
-pub const WEBVIEW2_BOOTSTRAPPER_URL: &str = 
-    "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
+pub const WEBVIEW2_BOOTSTRAPPER_URL: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
 
 /// Result of WebView2 detection
 #[derive(Debug, Clone)]
@@ -78,7 +77,7 @@ pub fn check_webview2() -> WebView2Status {
     {
         check_webview2_windows()
     }
-    
+
     #[cfg(not(windows))]
     {
         // On non-Windows platforms, assume WebView is available
@@ -98,28 +97,35 @@ fn check_webview2_windows() -> WebView2Status {
     // Check multiple registry locations where WebView2 might be registered
     let registry_paths = [
         // Per-machine installation (64-bit)
-        (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+        (
+            HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+        ),
         // Per-machine installation (32-bit)
-        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+        (
+            HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+        ),
         // Per-user installation
-        (HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+        (
+            HKEY_CURRENT_USER,
+            r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+        ),
     ];
 
     for (hkey, path) in registry_paths {
         match RegKey::predef(hkey).open_subkey(path) {
-            Ok(key) => {
-                match key.get_value::<String, _>("pv") {
-                    Ok(version) => {
-                        if !version.is_empty() && version != "0.0.0.0" {
-                            info!("WebView2 found: version {}", version);
-                            return WebView2Status::installed(version);
-                        }
-                    }
-                    Err(e) => {
-                        debug!("Could not read version from {}: {}", path, e);
+            Ok(key) => match key.get_value::<String, _>("pv") {
+                Ok(version) => {
+                    if !version.is_empty() && version != "0.0.0.0" {
+                        info!("WebView2 found: version {}", version);
+                        return WebView2Status::installed(version);
                     }
                 }
-            }
+                Err(e) => {
+                    debug!("Could not read version from {}: {}", path, e);
+                }
+            },
             Err(e) => {
                 debug!("Registry path not found {}: {}", path, e);
             }
@@ -141,7 +147,12 @@ fn check_webview2_windows() -> WebView2Status {
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
                     // Version folders look like "120.0.2210.91"
-                    if name_str.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                    if name_str
+                        .chars()
+                        .next()
+                        .map(|c| c.is_ascii_digit())
+                        .unwrap_or(false)
+                    {
                         info!("WebView2 found in Program Files: version {}", name_str);
                         return WebView2Status::installed(name_str.to_string());
                     }
@@ -172,16 +183,16 @@ pub fn open_download_page() -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::process::Command;
-        
+
         Command::new("cmd")
             .args(["/C", "start", "", WEBVIEW2_DOWNLOAD_URL])
             .spawn()
             .map_err(|e| format!("Failed to open browser: {}", e))?;
-        
+
         info!("Opened WebView2 download page in browser");
         Ok(())
     }
-    
+
     #[cfg(not(windows))]
     {
         Err("WebView2 is only available on Windows".to_string())

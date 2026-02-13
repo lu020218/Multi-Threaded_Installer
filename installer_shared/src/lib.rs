@@ -71,16 +71,20 @@
 //! }
 //! ```
 
-pub mod error;
-pub mod format;
+pub mod cli_format;
+pub mod cli_progress;
 pub mod config;
+pub mod error;
+pub mod flow;
+pub mod format;
 pub mod logging;
 pub mod progress;
-pub mod flow;
 
+pub use cli_format::*;
+pub use cli_progress::*;
+pub use config::*;
 pub use error::{InstallerError, Result};
 pub use flow::*;
 pub use format::*;
-pub use config::*;
 pub use logging::*;
 pub use progress::*;

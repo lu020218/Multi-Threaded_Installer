@@ -1018,7 +1018,9 @@ mod tests {
             ..Default::default()
         };
         let packager = Packager::new(config).unwrap();
-        let metadata = packager.generate_metadata(None, None, Vec::new()).unwrap();
+        let metadata = packager
+            .generate_metadata(None, None, Vec::new(), None)
+            .unwrap();
 
         assert_eq!(metadata.app_name, "TestApp");
         assert_eq!(metadata.version, "1.0.0");
@@ -1034,7 +1036,7 @@ mod tests {
         };
         let packager = Packager::new(config).unwrap();
         let metadata = packager
-            .generate_metadata(Some(0xDEADBEEF), None, Vec::new())
+            .generate_metadata(Some(0xDEADBEEF), None, Vec::new(), None)
             .unwrap();
 
         assert_eq!(metadata.app_name, "TestApp");

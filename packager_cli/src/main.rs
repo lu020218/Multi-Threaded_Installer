@@ -6,8 +6,11 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use installer_core::{init_cli_logging, Packager};
-use installer_shared::{PackagerConfig, Phase, ProgressEvent};
+use installer_shared::{
+    format_size_with_options, CliProgressPrinter, CliProgressStyle, PackagerConfig, Phase,
+};
 use std::path::PathBuf;
+use std::process::ExitCode;
 use tracing::{info, warn};
 
 /// Command-line arguments for the packager.
@@ -53,7 +56,17 @@ struct Args {
     package_only: bool,
 }
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {:#}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<()> {
     let args = Args::parse();
 
     // Initialize logging
@@ -85,12 +98,10 @@ Found config: {}, payload: {}",
             );
         }
     }
-    let mut config = load_config(&config_path, &args)?;
+    let config = load_config(&config_path, &args)?;
 
     // Resolve config-relative paths against config file directory.
-    let config_base = config_path
-        .parent()
-        .unwrap_or_else(|| args.input.as_path());
+    let config_base = config_path.parent().unwrap_or_else(|| args.input.as_path());
 
     let payload_root = resolve_payload_root(&args.input, &config_path)?;
 
@@ -104,19 +115,32 @@ Found config: {}, payload: {}",
 
     // Determine UI resources directory
     let ui_resources_dir_resolved = args.ui_resources.clone().or_else(|| {
-        packager
-            .config()
-            .ui_resources_dir
-            .as_ref()
-            .map(|path| if path.is_relative() { config_base.join(path) } else { path.clone() })
+        packager.config().ui_resources_dir.as_ref().map(|path| {
+            if path.is_relative() {
+                config_base.join(path)
+            } else {
+                path.clone()
+            }
+        })
     });
     let ui_resources_dir = ui_resources_dir_resolved.as_deref();
+
+    let progress_printer = CliProgressPrinter::new(
+        false,
+        CliProgressStyle {
+            phase_label: packager_phase_label,
+            show_speed: false,
+            bar_width: 40,
+            file_max_len: 30,
+            message_max_len: 40,
+        },
+    );
 
     let stats = if args.package_only {
         // Legacy mode: generate package data file only
         warn!("Using legacy package-only mode. The output file cannot be run directly.");
         packager.build_package(&payload_root, &args.output, ui_resources_dir, |event| {
-            print_progress(&event)
+            progress_printer.print(&event)
         })?
     } else {
         // Normal mode: generate self-contained installer executable
@@ -128,12 +152,12 @@ Found config: {}, payload: {}",
             &template_exe,
             &args.output,
             ui_resources_dir,
-            |event| print_progress(&event),
+            |event| progress_printer.print(&event),
         )?
     };
 
     // Print summary
-    println!();
+    progress_printer.finish_line();
     if args.package_only {
         println!("Package data created successfully!");
     } else {
@@ -279,55 +303,16 @@ fn resolve_payload_root(input_dir: &PathBuf, config_path: &PathBuf) -> Result<Pa
     Ok(input_dir.clone())
 }
 
-/// Print progress to console.
-fn print_progress(event: &ProgressEvent) {
-    let phase_str = match event.phase {
+fn packager_phase_label(phase: Phase) -> &'static str {
+    match phase {
         Phase::Scanning => "Scanning",
         Phase::Compressing => "Compressing",
         Phase::Decompressing => "Decompressing",
         Phase::Writing => "Writing",
         Phase::Completing => "Completing",
-    };
-
-    let percentage = event.percentage();
-    let bar_width = 40;
-    let filled = (percentage / 100.0 * bar_width as f64) as usize;
-    let empty = bar_width - filled;
-
-    print!(
-        "\r{:12} [{}{}] {:5.1}%",
-        phase_str,
-        "=".repeat(filled),
-        " ".repeat(empty),
-        percentage
-    );
-
-    if let Some(ref file) = event.current_file {
-        print!(" {}", truncate_path(file, 30));
-    }
-
-    use std::io::Write;
-    std::io::stdout().flush().ok();
-}
-
-/// Truncate a path string for display.
-fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
-        path.to_string()
-    } else {
-        format!("...{}", &path[path.len() - max_len + 3..])
     }
 }
 
-/// Format file size for display.
 fn format_size(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{}", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
+    format_size_with_options(bytes, 1, false)
 }

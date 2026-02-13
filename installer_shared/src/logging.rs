@@ -464,7 +464,6 @@ mod tests {
     }
 }
 
-
 /// Structured log field for key-value pairs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogField {
@@ -632,7 +631,6 @@ mod structured_tests {
     }
 }
 
-
 #[cfg(test)]
 mod property_tests {
     use super::*;
@@ -652,7 +650,14 @@ mod property_tests {
     /// Strategy for generating valid timestamps.
     fn timestamp_strategy() -> impl Strategy<Value = String> {
         // Generate timestamps in ISO 8601 format
-        (2020u32..2030, 1u32..13, 1u32..29, 0u32..24, 0u32..60, 0u32..60)
+        (
+            2020u32..2030,
+            1u32..13,
+            1u32..29,
+            0u32..24,
+            0u32..60,
+            0u32..60,
+        )
             .prop_map(|(year, month, day, hour, min, sec)| {
                 format!(
                     "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
@@ -663,8 +668,7 @@ mod property_tests {
 
     /// Strategy for generating valid module paths (targets).
     fn target_strategy() -> impl Strategy<Value = String> {
-        prop::collection::vec("[a-z_][a-z0-9_]*", 1..4)
-            .prop_map(|parts| parts.join("::"))
+        prop::collection::vec("[a-z_][a-z0-9_]*", 1..4).prop_map(|parts| parts.join("::"))
     }
 
     /// Strategy for generating valid log messages.

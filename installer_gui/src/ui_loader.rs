@@ -48,28 +48,30 @@ pub struct ExtractedUIResources {
 /// - 5.4: Extract UI resources to temporary directory
 pub fn extract_ui_resources(package_path: &Path) -> Result<Option<ExtractedUIResources>, String> {
     info!("Checking for embedded UI resources in: {:?}", package_path);
-    
+
     // Create installer to parse package
     let installer = Installer::new(package_path.to_path_buf())
         .map_err(|e| format!("Failed to open package: {}", e))?;
-    
+
     // Check if package has UI resources
-    let has_ui = installer.has_ui_resources()
+    let has_ui = installer
+        .has_ui_resources()
         .map_err(|e| format!("Failed to check UI resources: {}", e))?;
-    
+
     if !has_ui {
         info!("Package does not contain embedded UI resources");
         return Ok(None);
     }
-    
+
     // Create temporary directory
     let temp_dir = create_temp_dir()?;
     info!("Extracting UI resources to: {:?}", temp_dir);
-    
+
     // Extract UI resources
-    let ui_resources = installer.extract_ui_resources(&temp_dir)
+    let ui_resources = installer
+        .extract_ui_resources(&temp_dir)
         .map_err(|e| format!("Failed to extract UI resources: {}", e))?;
-    
+
     let ui_resources = match ui_resources {
         Some(r) => r,
         None => {
@@ -78,7 +80,7 @@ pub fn extract_ui_resources(package_path: &Path) -> Result<Option<ExtractedUIRes
             return Ok(None);
         }
     };
-    
+
     // Verify index.html exists
     let index_path = temp_dir.join("index.html");
     if !index_path.exists() {
@@ -86,12 +88,12 @@ pub fn extract_ui_resources(package_path: &Path) -> Result<Option<ExtractedUIRes
         cleanup_temp_dir(&temp_dir);
         return Err("UI resources missing index.html".to_string());
     }
-    
+
     // Store temp dir for cleanup
     if let Ok(mut guard) = UI_TEMP_DIR.lock() {
         *guard = Some(temp_dir.clone());
     }
-    
+
     Ok(Some(ExtractedUIResources {
         temp_dir,
         index_path,
@@ -104,10 +106,10 @@ fn create_temp_dir() -> Result<PathBuf, String> {
     let temp_base = std::env::temp_dir();
     let temp_name = format!("installer_ui_{}", std::process::id());
     let temp_dir = temp_base.join(temp_name);
-    
+
     std::fs::create_dir_all(&temp_dir)
         .map_err(|e| format!("Failed to create temp directory: {}", e))?;
-    
+
     Ok(temp_dir)
 }
 
@@ -145,7 +147,11 @@ pub fn get_ui_temp_dir() -> Option<PathBuf> {
 
 /// Check if custom UI resources are loaded.
 pub fn has_custom_ui() -> bool {
-    UI_TEMP_DIR.lock().ok().map(|guard| guard.is_some()).unwrap_or(false)
+    UI_TEMP_DIR
+        .lock()
+        .ok()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false)
 }
 
 /// RAII guard for automatic cleanup of UI resources.
@@ -174,10 +180,10 @@ mod tests {
     fn test_create_temp_dir() {
         let result = create_temp_dir();
         assert!(result.is_ok());
-        
+
         let temp_dir = result.unwrap();
         assert!(temp_dir.exists());
-        
+
         // Cleanup
         cleanup_temp_dir(&temp_dir);
         assert!(!temp_dir.exists());
@@ -196,14 +202,14 @@ mod tests {
         if let Ok(mut guard) = UI_TEMP_DIR.lock() {
             *guard = Some(temp_dir.clone());
         }
-        
+
         assert!(temp_dir.exists());
-        
+
         // Create guard and drop it
         {
             let _guard = UIResourcesGuard::new();
         }
-        
+
         // Temp dir should be cleaned up
         assert!(!temp_dir.exists());
     }

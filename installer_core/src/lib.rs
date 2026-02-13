@@ -98,12 +98,16 @@ pub mod compression;
 pub mod exe_builder;
 pub mod filesystem;
 pub mod flow_executor;
+pub mod flow_steps;
 pub mod installer;
 pub mod localization;
 pub mod logging;
 pub mod package;
 pub mod packager;
 pub mod platform;
+pub mod process;
+pub mod script_executor;
+pub mod step_params;
 pub mod ui_resources;
 pub mod uninstall;
 
@@ -134,8 +138,9 @@ pub use package::{
 pub use platform::{create_platform, Platform, UninstallInfo, WindowsPlatform};
 
 // Re-export packager and installer
-pub use installer::{Installer, ScriptPolicy};
+pub use installer::Installer;
 pub use packager::{CompressedBlock, PackageStats, Packager};
+pub use script_executor::ScriptPolicy;
 
 // Re-export uninstaller
 pub use uninstall::{InstallManifest, UninstallStats, Uninstaller};

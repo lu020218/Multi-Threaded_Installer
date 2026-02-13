@@ -21,7 +21,10 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use installer_core::{init_cli_logging, Installer, ScriptPolicy, Uninstaller};
-use installer_shared::{FlowDefinition, InstallOptions, Phase, ProgressEvent};
+use installer_shared::{
+    format_size_with_options, truncate_tail, CliProgressPrinter, CliProgressStyle, FlowDefinition,
+    InstallOptions, Phase, ProgressEvent,
+};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -413,7 +416,16 @@ fn run_install(args: InstallArgs) -> Result<()> {
     };
 
     // Run installation with progress reporting
-    let progress_printer = ProgressPrinter::new(args.silent);
+    let progress_printer = CliProgressPrinter::new(
+        args.silent,
+        CliProgressStyle {
+            phase_label: installer_phase_label,
+            show_speed: true,
+            bar_width: 40,
+            file_max_len: 30,
+            message_max_len: 40,
+        },
+    );
     let stats = if let Some(flow_path) = args.flow.as_ref() {
         info!("Using custom flow definition: {}", flow_path.display());
         let flow = FlowDefinition::from_yaml_file(flow_path)
@@ -428,9 +440,7 @@ fn run_install(args: InstallArgs) -> Result<()> {
     };
 
     // Ensure we print a newline after progress bar
-    if !args.silent {
-        println!();
-    }
+    progress_printer.finish_line();
 
     // Create uninstaller
     info!("Creating uninstaller...");
@@ -491,15 +501,22 @@ fn run_uninstall(install_dir: &PathBuf, silent: bool, _verbose: bool) -> Result<
     }
 
     // Run uninstallation with progress reporting
-    let progress_printer = ProgressPrinter::new(silent);
+    let progress_printer = CliProgressPrinter::new(
+        silent,
+        CliProgressStyle {
+            phase_label: installer_phase_label,
+            show_speed: true,
+            bar_width: 40,
+            file_max_len: 30,
+            message_max_len: 40,
+        },
+    );
     let stats = uninstaller.uninstall(|event| {
         progress_printer.print(&event);
     })?;
 
     // Ensure we print a newline after progress
-    if !silent {
-        println!();
-    }
+    progress_printer.finish_line();
 
     // Print completion message
     if !silent {
@@ -562,124 +579,16 @@ fn prompt_continue(message: &str) -> Result<bool> {
 
 /// Format a size in bytes to a human-readable string.
 fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} bytes", bytes)
-    }
+    format_size_with_options(bytes, 2, true)
 }
 
-/// Progress printer for console output.
-///
-/// Handles printing progress events to the console with a progress bar.
-/// In silent mode, no output is printed.
-///
-/// # Requirements
-/// - 7.8: Print progress to console
-/// - 12.9: Print progress messages to stdout
-struct ProgressPrinter {
-    silent: bool,
-    last_phase: std::sync::Mutex<Option<Phase>>,
-}
-
-impl ProgressPrinter {
-    fn new(silent: bool) -> Self {
-        Self {
-            silent,
-            last_phase: std::sync::Mutex::new(None),
-        }
-    }
-
-    fn print(&self, event: &ProgressEvent) {
-        if self.silent {
-            return;
-        }
-
-        // Check if phase changed
-        let mut last_phase = self.last_phase.lock().unwrap();
-        let phase_changed = *last_phase != Some(event.phase);
-        if phase_changed {
-            // Print newline before new phase (except for first phase)
-            if last_phase.is_some() {
-                println!();
-            }
-            *last_phase = Some(event.phase);
-        }
-        drop(last_phase); // Release lock before printing
-
-        let phase_str = match event.phase {
-            Phase::Scanning => "Scanning",
-            Phase::Compressing => "Compressing",
-            Phase::Decompressing => "Extracting",
-            Phase::Writing => "Writing",
-            Phase::Completing => "Finishing",
-        };
-
-        let percentage = event.percentage();
-        let bar_width: usize = 40;
-        let filled = (percentage / 100.0 * bar_width as f64) as usize;
-        let empty = bar_width.saturating_sub(filled);
-
-        // Build progress line
-        let mut line = format!(
-            "\r{:12} [{}{}] {:5.1}%",
-            phase_str,
-            "=".repeat(filled),
-            " ".repeat(empty),
-            percentage
-        );
-
-        // Add current file if available
-        if let Some(ref file) = event.current_file {
-            line.push_str(&format!(" {}", truncate_path(file, 30)));
-        }
-
-        // Add speed if available
-        if let Some(speed) = event.speed_bps {
-            line.push_str(&format!(" ({})", format_speed(speed)));
-        }
-
-        // Add message if available and no file
-        if event.current_file.is_none() {
-            if let Some(ref message) = event.message {
-                line.push_str(&format!(" {}", truncate_path(message, 40)));
-            }
-        }
-
-        // Clear rest of line and print
-        print!("{}\x1b[K", line);
-        io::stdout().flush().ok();
-    }
-}
-
-/// Truncate a path string for display.
-fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
-        path.to_string()
-    } else {
-        format!("...{}", &path[path.len() - max_len + 3..])
-    }
-}
-
-/// Format speed in bytes per second to a human-readable string.
-fn format_speed(bps: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-
-    if bps >= MB {
-        format!("{:.1} MB/s", bps as f64 / MB as f64)
-    } else if bps >= KB {
-        format!("{:.1} KB/s", bps as f64 / KB as f64)
-    } else {
-        format!("{} B/s", bps)
+fn installer_phase_label(phase: Phase) -> &'static str {
+    match phase {
+        Phase::Scanning => "Scanning",
+        Phase::Compressing => "Compressing",
+        Phase::Decompressing => "Extracting",
+        Phase::Writing => "Writing",
+        Phase::Completing => "Finishing",
     }
 }
 
@@ -712,23 +621,32 @@ mod tests {
 
     #[test]
     fn test_format_speed() {
-        assert_eq!(format_speed(512), "512 B/s");
-        assert_eq!(format_speed(1024), "1.0 KB/s");
-        assert_eq!(format_speed(1048576), "1.0 MB/s");
+        assert_eq!(installer_shared::format_speed_bps(512), "512 B/s");
+        assert_eq!(installer_shared::format_speed_bps(1024), "1.0 KB/s");
+        assert_eq!(installer_shared::format_speed_bps(1048576), "1.0 MB/s");
     }
 
     #[test]
     fn test_truncate_path() {
-        assert_eq!(truncate_path("short", 10), "short");
+        assert_eq!(truncate_tail("short", 10), "short");
         assert_eq!(
-            truncate_path("this/is/a/very/long/path", 15),
+            truncate_tail("this/is/a/very/long/path", 15),
             "...ry/long/path"
         );
     }
 
     #[test]
     fn test_progress_printer_silent() {
-        let printer = ProgressPrinter::new(true);
+        let printer = CliProgressPrinter::new(
+            true,
+            CliProgressStyle {
+                phase_label: installer_phase_label,
+                show_speed: true,
+                bar_width: 40,
+                file_max_len: 30,
+                message_max_len: 40,
+            },
+        );
         // Should not panic or print anything
         printer.print(&ProgressEvent::new(Phase::Scanning, 0, 100));
     }
@@ -774,7 +692,7 @@ mod property_tests {
         /// **Validates: Requirements 12.7**
         ///
         /// This test verifies that:
-        /// 1. ProgressPrinter in silent mode produces no output
+        /// 1. CliProgressPrinter in silent mode produces no output
         /// 2. Silent mode flag is properly propagated through the system
         /// 3. No prompts are shown during silent installation
         #[test]
@@ -802,12 +720,21 @@ mod property_tests {
                 .expect("Failed to build package");
 
             // Create a silent progress printer and verify it doesn't output
-            let printer = ProgressPrinter::new(true); // silent = true
+            let printer = CliProgressPrinter::new(
+                true,
+                CliProgressStyle {
+                    phase_label: installer_phase_label,
+                    show_speed: true,
+                    bar_width: 40,
+                    file_max_len: 30,
+                    message_max_len: 40,
+                },
+            );
 
             // In silent mode, the printer should not produce any output
             // We verify this by checking that the print method returns immediately
             // without modifying any state when silent is true
-            prop_assert!(printer.silent, "Printer should be in silent mode");
+            prop_assert!(printer.is_silent(), "Printer should be in silent mode");
 
             // Verify that printing in silent mode doesn't panic and doesn't
             // modify the last_phase state (since it returns early)
@@ -815,7 +742,7 @@ mod property_tests {
             printer.print(&event);
 
             // The last_phase should still be None because silent mode returns early
-            let last_phase = printer.last_phase.lock().unwrap();
+            let last_phase = printer.last_phase();
             prop_assert!(last_phase.is_none(),
                 "Silent mode should not update internal state");
         }

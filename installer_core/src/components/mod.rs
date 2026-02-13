@@ -1,5 +1,8 @@
 //! Component manifest loading/downloading/verifying helpers.
 
+pub mod installer;
+pub mod runtime;
+
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};

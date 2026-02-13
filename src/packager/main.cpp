@@ -231,6 +231,9 @@ int main(int argc, char* argv[]) {
     
     if (!installerGen.generateInstaller(outputPath, serializedMetadata, compressedDataList)) {
         console.showError("Failed to generate installer");
+        if (!installerGen.getLastError().empty()) {
+            console.showError("Details: " + installerGen.getLastError());
+        }
         return 1;
     }
 

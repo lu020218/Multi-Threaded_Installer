@@ -334,17 +334,33 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
                                                       const std::vector<uint8_t>& metadata,
                                                       const std::vector<std::vector<uint8_t>>& compressedData) {
     try {
+        lastError_.clear();
 
         std::vector<uint8_t> installerTemplate = getDefaultInstallerTemplate();
         if (installerTemplate.empty()) {
+            lastError_ = "Failed to load installer template executable";
             std::cerr << "Failed to get installer template" << std::endl;
             return false;
         }
 
         std::filesystem::path templateDir = resolveTemplateDirectory();
-        bool resourcesEmbedded = false;
-        if (!templateDir.empty()) {
-            resourcesEmbedded = appendEmbeddedResources(installerTemplate, templateDir / "resources");
+        if (templateDir.empty()) {
+            lastError_ = "Cannot resolve installer template directory for UI resource embedding";
+            std::cerr << "ERROR: " << lastError_ << std::endl;
+            return false;
+        }
+        std::filesystem::path resourceDir = templateDir / "resources";
+        if (!std::filesystem::exists(resourceDir) || !std::filesystem::is_directory(resourceDir)) {
+            lastError_ = "UI resources directory not found: " + Utf8FromPath(resourceDir) +
+                         ". Packaging requires embedded UI resources and external resources are disabled.";
+            std::cerr << "ERROR: " << lastError_ << std::endl;
+            return false;
+        }
+        if (!appendEmbeddedResources(installerTemplate, resourceDir)) {
+            lastError_ = "Failed to embed UI resources from: " + Utf8FromPath(resourceDir) +
+                         ". Packaging aborted because embedded UI resources are required.";
+            std::cerr << "ERROR: " << lastError_ << std::endl;
+            return false;
         }
         
 
@@ -405,7 +421,7 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
         }
         
 
-        if (!copyRuntimeDependencies(outputPath, resourcesEmbedded)) {
+        if (!copyRuntimeDependencies(outputPath)) {
             std::cerr << "Warning: Failed to copy some runtime dependencies" << std::endl;
         }
         
@@ -417,6 +433,7 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
         return true;
         
     } catch (const std::exception& e) {
+        lastError_ = std::string("Error creating installer: ") + e.what();
         std::cerr << "Error creating installer: " << e.what() << std::endl;
         return false;
     }
@@ -837,7 +854,7 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
     }
 }
 
-bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPath, bool resourcesEmbedded) {
+bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPath) {
     try {
         std::filesystem::path installerFile = PathFromUtf8(installerPath);
         std::filesystem::path outputDir = installerFile.parent_path();
@@ -875,32 +892,7 @@ bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPat
             std::cout << "  DuiLib.dll not found - assuming static linking" << std::endl;
         }
         
-        if (!resourcesEmbedded) {
-
-            std::filesystem::path resourcesDir = templateDir / "resources";
-            if (std::filesystem::exists(resourcesDir) && std::filesystem::is_directory(resourcesDir)) {
-                std::filesystem::path destResources = outputDir / "resources";
-                try {
-
-                    if (std::filesystem::exists(destResources)) {
-                        std::filesystem::remove_all(destResources);
-                    }
-                    
-
-                    std::filesystem::copy(resourcesDir, destResources, 
-                                         std::filesystem::copy_options::recursive);
-                    std::cout << "  Copied: resources/ directory" << std::endl;
-                } catch (const std::exception& e) {
-                    std::cerr << "  Failed to copy resources directory: " << e.what() << std::endl;
-                    allSuccess = false;
-                }
-            } else {
-                std::cerr << "  Warning: resources directory not found at " << resourcesDir << std::endl;
-                allSuccess = false;
-            }
-        } else {
-            std::cout << "  Skipped resources copy (embedded)" << std::endl;
-        }
+        std::cout << "  Skipped resources copy (embedded-only mode)" << std::endl;
         
         return allSuccess;
         

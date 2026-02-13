@@ -16,6 +16,8 @@ public:
     bool generateInstaller(const std::string& outputPath,
                           const std::vector<uint8_t>& metadata,
                           const std::vector<std::vector<uint8_t>>& compressedData);
+
+    const std::string& getLastError() const { return lastError_; }
     
 
     bool generateDataPackage(const std::string& outputPath,
@@ -48,6 +50,7 @@ private:
     
     std::string installerTemplatePath;
     std::filesystem::path templateResourceDirOverride;
+    std::string lastError_;
     
 
     bool createSelfExtractingExecutable(const std::string& outputPath,
@@ -71,7 +74,7 @@ private:
                                const std::vector<uint8_t>& data);
     
 
-    bool copyRuntimeDependencies(const std::string& installerPath, bool resourcesEmbedded);
+    bool copyRuntimeDependencies(const std::string& installerPath);
 
     std::filesystem::path resolveTemplateDirectory() const;
     bool appendEmbeddedResources(std::vector<uint8_t>& installerTemplate,

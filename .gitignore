@@ -10,3 +10,4 @@
 !/tests/test_utf8_utils.cpp
 /target
 Cargo.lock
+.DS_Store

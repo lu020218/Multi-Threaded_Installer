@@ -532,11 +532,26 @@ bool InstallerGenerator::appendDataToExecutable(const std::string& executablePat
 
 std::filesystem::path InstallerGenerator::resolveTemplateDirectory() const {
     if (!templateResourceDirOverride.empty()) {
-        return templateResourceDirOverride;
+        // Honor explicit override only when it is a valid directory.
+        if (std::filesystem::exists(templateResourceDirOverride) &&
+            std::filesystem::is_directory(templateResourceDirOverride)) {
+            return templateResourceDirOverride;
+        }
     }
 
     if (!installerTemplatePath.empty()) {
-        return PathFromUtf8(installerTemplatePath).parent_path();
+        // When icon/version patching is enabled, installerTemplatePath may point to a
+        // temporary template under output/. Avoid treating output/ as template resources root.
+        std::filesystem::path templateParent = PathFromUtf8(installerTemplatePath).parent_path();
+        if (!templateParent.empty() &&
+            std::filesystem::exists(templateParent) &&
+            std::filesystem::is_directory(templateParent)) {
+            if (std::filesystem::exists(templateParent / "resources") ||
+                std::filesystem::exists(templateParent / "installer.exe") ||
+                std::filesystem::exists(templateParent / "installer")) {
+                return templateParent;
+            }
+        }
     }
 
     std::vector<std::string> possibleDirs = {

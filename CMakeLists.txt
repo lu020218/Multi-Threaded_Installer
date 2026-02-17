@@ -9,6 +9,8 @@ option(BUILD_GUI "Build with GUI support using DuiLib" ON)
 option(BUILD_TESTS "Build test executables" OFF)
 option(VERIFY_THIRD_PARTY_HASHES "Validate prebuilt third-party library hashes" ON)
 option(YAML_CPP_FETCH_FALLBACK "Allow FetchContent fallback for yaml-cpp when submodule/system package is unavailable" OFF)
+option(ENABLE_ZSTD "Enable ZSTD compression support for packager" ON)
+option(ZSTD_FORCE_THIRD_PARTY_BINARY "Force using third_party zstd prebuilt binary on MSVC toolchains" OFF)
 
 # Static linking option for Windows
 if(WIN32)
@@ -88,6 +90,87 @@ endif()
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/third_party")
 set(EXPECTED_LIBLZMA_SHA256 "229209de2a901b987543e1496a02d4874260c3b6f2f2f459bcd6fa2e7bc6f746")
 set(EXPECTED_DUILIB_SHA256 "6f7a28965d57daee3a213bd134ba2112f9f2cfdd842bef4b71ec028f8eb7bc54")
+
+# Try to find zstd (local installation first, then system)
+if(ENABLE_ZSTD)
+    unset(ZSTD_INCLUDE_DIR CACHE)
+    unset(ZSTD_LIBRARIES CACHE)
+    set(ZSTD_FOUND FALSE)
+    set(ZSTD_LIBRARIES "")
+    set(ZSTD_INCLUDE_DIRS "")
+
+    # Header lookup: prefer repository-provided zstd include path.
+    find_path(ZSTD_INCLUDE_DIR
+        NAMES zstd.h
+        PATHS
+            "${THIRD_PARTY_DIR}/zstd/include"
+            "${THIRD_PARTY_DIR}/zstd/lib"
+        NO_DEFAULT_PATH
+    )
+    if(NOT ZSTD_INCLUDE_DIR)
+        find_path(ZSTD_INCLUDE_DIR NAMES zstd.h)
+    endif()
+
+    # Library lookup:
+    # 1) On MSVC, first try manually built library under third_party/zstd/build-msvc.
+    # 2) Then try system package.
+    # 3) Finally optional legacy third_party static backup when explicitly requested.
+    if(WIN32 AND MSVC)
+        set(ZSTD_MSVC_LOCAL_CANDIDATES
+            "${THIRD_PARTY_DIR}/zstd/lib_static/zstd_static.lib"
+        )
+
+        foreach(ZSTD_CANDIDATE ${ZSTD_MSVC_LOCAL_CANDIDATES})
+            if(EXISTS "${ZSTD_CANDIDATE}")
+                set(ZSTD_LIBRARIES "${ZSTD_CANDIDATE}")
+                message(STATUS "Using MSVC-built zstd static library: ${ZSTD_LIBRARIES}")
+                break()
+            endif()
+        endforeach()
+
+        if(NOT ZSTD_LIBRARIES)
+            find_library(ZSTD_LIBRARIES NAMES zstd libzstd_static zstd_static)
+            if(ZSTD_LIBRARIES)
+                message(STATUS "Using system zstd library: ${ZSTD_LIBRARIES}")
+            endif()
+        endif()
+
+        if(NOT ZSTD_LIBRARIES AND ZSTD_FORCE_THIRD_PARTY_BINARY)
+            set(ZSTD_STATIC_LIB "${THIRD_PARTY_DIR}/zstd/static_backup/libzstd_static.lib")
+            if(EXISTS "${ZSTD_STATIC_LIB}")
+                set(ZSTD_LIBRARIES "${ZSTD_STATIC_LIB}")
+                message(WARNING
+                    "Using legacy third_party zstd static backup on MSVC: ${ZSTD_LIBRARIES}. "
+                    "If link errors occur, build zstd with MSVC under third_party/zstd/build-msvc.")
+            endif()
+        endif()
+    else()
+        if(WIN32)
+            set(ZSTD_STATIC_LIB "${THIRD_PARTY_DIR}/zstd/static_backup/libzstd_static.lib")
+            if(EXISTS "${ZSTD_STATIC_LIB}")
+                set(ZSTD_LIBRARIES "${ZSTD_STATIC_LIB}")
+                message(STATUS "Using zstd static library: ${ZSTD_LIBRARIES}")
+            endif()
+        endif()
+        if(NOT ZSTD_LIBRARIES)
+            find_library(ZSTD_LIBRARIES NAMES zstd libzstd_static zstd_static)
+            if(ZSTD_LIBRARIES)
+                message(STATUS "Using system zstd library: ${ZSTD_LIBRARIES}")
+            endif()
+        endif()
+    endif()
+
+    if(ZSTD_INCLUDE_DIR AND ZSTD_LIBRARIES)
+        set(ZSTD_FOUND TRUE)
+        set(ZSTD_INCLUDE_DIRS "${ZSTD_INCLUDE_DIR}")
+        add_definitions(-DZSTD_FOUND)
+        message(STATUS "Found zstd headers: ${ZSTD_INCLUDE_DIRS}")
+    else()
+        message(WARNING
+            "zstd not found or incomplete (headers/library). "
+            "ZSTD support will be disabled.")
+    endif()
+endif()
 
 # Try to find liblzma (local installation first, then system)
 find_path(LIBLZMA_INCLUDE_DIR 
@@ -308,8 +391,8 @@ set(COMMON_SOURCES
 
 # Create packager executable
 add_executable(packager ${PACKAGER_SOURCES} ${COMMON_SOURCES})
-target_link_libraries(packager ${LIBLZMA_LIBRARIES} Threads::Threads ${YAML_CPP_TARGET})
-target_include_directories(packager PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+target_link_libraries(packager ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads ${YAML_CPP_TARGET})
+target_include_directories(packager PRIVATE ${LIBLZMA_INCLUDE_DIRS} ${ZSTD_INCLUDE_DIRS})
 if(LIBLZMA_STATIC)
     target_compile_definitions(packager PRIVATE LZMA_API_STATIC)
 endif()
@@ -322,11 +405,11 @@ if(WIN32 AND BUILD_GUI)
 else()
     add_executable(installer ${INSTALLER_SOURCES} ${COMMON_SOURCES})
 endif()
-target_link_libraries(installer ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_link_libraries(installer ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads)
 if(WIN32)
     target_link_libraries(installer ole32 shell32 bcrypt urlmon)
 endif()
-target_include_directories(installer PRIVATE ${LIBLZMA_INCLUDE_DIRS})
+target_include_directories(installer PRIVATE ${LIBLZMA_INCLUDE_DIRS} ${ZSTD_INCLUDE_DIRS})
 if(LIBLZMA_STATIC)
     target_compile_definitions(installer PRIVATE LZMA_API_STATIC)
 endif()
@@ -470,4 +553,42 @@ if(BUILD_TESTS)
 
     target_link_libraries(test_configuration_validator_components Threads::Threads)
     add_test(NAME configuration_validator_components COMMAND test_configuration_validator_components)
+
+    add_executable(test_config_compression_options
+        tests/test_config_compression_options.cpp
+        src/packager/configuration_loader.cpp
+        src/packager/configuration_validator.cpp
+        src/common/utf8_utils.cpp
+        src/common/types.cpp
+    )
+
+    target_link_libraries(test_config_compression_options Threads::Threads ${YAML_CPP_TARGET})
+    add_test(NAME config_compression_options COMMAND test_config_compression_options)
+
+    add_executable(test_compression_decompression_roundtrip
+        tests/test_compression_decompression_roundtrip.cpp
+        src/packager/compression_module.cpp
+        src/installer/decompression_engine.cpp
+        src/installer/thread_pool_manager.cpp
+        src/installer/tar_stream_extractor.cpp
+        src/installer/file_system_operator.cpp
+        src/common/utf8_utils.cpp
+        src/common/types.cpp
+    )
+
+    target_link_libraries(test_compression_decompression_roundtrip
+        Threads::Threads
+        ${LIBLZMA_LIBRARIES}
+        ${ZSTD_LIBRARIES}
+    )
+    target_include_directories(test_compression_decompression_roundtrip
+        PRIVATE
+            ${LIBLZMA_INCLUDE_DIRS}
+            ${ZSTD_INCLUDE_DIRS}
+    )
+    if(LIBLZMA_STATIC)
+        target_compile_definitions(test_compression_decompression_roundtrip PRIVATE LZMA_API_STATIC)
+    endif()
+    apply_msvc_liblzma_link_fixes(test_compression_decompression_roundtrip)
+    add_test(NAME compression_decompression_roundtrip COMMAND test_compression_decompression_roundtrip)
 endif()

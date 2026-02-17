@@ -3,6 +3,9 @@
 #ifdef LibLZMA_FOUND
 #include <lzma.h>
 #endif
+#ifdef ZSTD_FOUND
+#include <zstd.h>
+#endif
 #include <iostream>
 #include <vector>
 #include <future>
@@ -100,12 +103,14 @@ void DecompressionEngine::registerProgressCallback(ProgressCallback callback) {
 
 bool DecompressionEngine::decompressToStream(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
                                              LegacyStageTiming* timing) {
-    if (task.algorithm != CompressionAlgorithm::LZMA_HIGH) {
-        std::cerr << "Unsupported compression algorithm for " << task.targetPath << std::endl;
-        return false;
+    if (task.algorithm == CompressionAlgorithm::LZMA_HIGH) {
+        return decompressLzma(task, sink, checksum, timing);
     }
-    
-    return decompressLzma(task, sink, checksum, timing);
+    if (task.algorithm == CompressionAlgorithm::ZSTD) {
+        return decompressZstd(task, sink, checksum, timing);
+    }
+    std::cerr << "Unsupported compression algorithm for " << task.targetPath << std::endl;
+    return false;
 }
 
 bool DecompressionEngine::decompressLzmaBlockData(const std::vector<uint8_t>& compressedData,
@@ -383,6 +388,93 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
     (void)sink;
     (void)checksum;
     std::cerr << "LZMA support not compiled in" << std::endl;
+    return false;
+#endif
+}
+
+bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
+                                         LegacyStageTiming* timing) {
+#ifdef ZSTD_FOUND
+    if (task.compressedData.empty()) {
+        std::cerr << "No compressed data provided for ZSTD decompression" << std::endl;
+        return false;
+    }
+
+    reportProgress(task.targetPath, std::string(), 0.0f);
+
+    ZSTD_DStream* stream = ZSTD_createDStream();
+    if (!stream) {
+        std::cerr << "ZSTD stream allocation failed" << std::endl;
+        return false;
+    }
+
+    size_t ret = ZSTD_initDStream(stream);
+    if (ZSTD_isError(ret)) {
+        std::cerr << "ZSTD decoder init failed: " << ZSTD_getErrorName(ret) << std::endl;
+        ZSTD_freeDStream(stream);
+        return false;
+    }
+
+    ZSTD_inBuffer input{task.compressedData.data(), task.compressedData.size(), 0};
+    std::vector<uint8_t> outBuffer(64 * 1024);
+    size_t totalOut = 0;
+
+    while (input.pos < input.size) {
+        ZSTD_outBuffer output{outBuffer.data(), outBuffer.size(), 0};
+
+        auto decompressStart = std::chrono::steady_clock::now();
+        ret = ZSTD_decompressStream(stream, &output, &input);
+        auto decompressEnd = std::chrono::steady_clock::now();
+        if (timing) {
+            timing->decompressNs +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count();
+        }
+
+        if (ZSTD_isError(ret)) {
+            std::cerr << "ZSTD decompression failed: " << ZSTD_getErrorName(ret) << std::endl;
+            ZSTD_freeDStream(stream);
+            return false;
+        }
+
+        if (output.pos > 0) {
+            auto writeStart = std::chrono::steady_clock::now();
+            if (!sink.write(outBuffer.data(), output.pos)) {
+                ZSTD_freeDStream(stream);
+                return false;
+            }
+            auto writeEnd = std::chrono::steady_clock::now();
+            if (timing) {
+                timing->writeNs += std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count();
+            }
+
+            if (checksum) {
+                checksum->update(outBuffer.data(), output.pos);
+            }
+
+            totalOut += output.pos;
+            if (task.originalSize > 0) {
+                float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
+                reportProgress(task.targetPath, std::string(), progress);
+            }
+        }
+    }
+
+    ZSTD_freeDStream(stream);
+    sink.flush();
+
+    if (checksum && checksum->finalize() != task.expectedChecksum) {
+        std::cerr << "Checksum verification failed for: " << task.targetPath << std::endl;
+        return false;
+    }
+
+    reportProgress(task.targetPath, std::string(), 1.0f);
+    return true;
+#else
+    (void)task;
+    (void)sink;
+    (void)checksum;
+    (void)timing;
+    std::cerr << "ZSTD support not compiled in" << std::endl;
     return false;
 #endif
 }

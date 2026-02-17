@@ -52,6 +52,17 @@ bool IsHexSha256(const std::string& value) {
     });
 }
 
+const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
+    switch (algorithm) {
+        case CompressionAlgorithm::LZMA_HIGH:
+            return "lzma";
+        case CompressionAlgorithm::ZSTD:
+            return "zstd";
+        default:
+            return "unknown";
+    }
+}
+
 } // namespace
 
 ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
@@ -71,6 +82,24 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
 
     if (!validateApplicationName(config.applicationName, result.errors)) {
         result.isValid = false;
+    }
+
+    if (config.compressionLevel != -1) {
+        bool levelValid = false;
+        if (config.compressionAlgorithm == CompressionAlgorithm::LZMA_HIGH) {
+            levelValid = config.compressionLevel >= 0 && config.compressionLevel <= 9;
+        } else if (config.compressionAlgorithm == CompressionAlgorithm::ZSTD) {
+            levelValid = config.compressionLevel >= 1 && config.compressionLevel <= 22;
+        }
+
+        if (!levelValid) {
+            result.errors.push_back(
+                "ERROR: Invalid compressionLevel for algorithm '" +
+                std::string(CompressionAlgorithmName(config.compressionAlgorithm)) + "'\n"
+                "  Reason: compressionLevel is out of supported range\n"
+                "  Suggestion: use 0-9 for lzma, 1-22 for zstd, or -1 for default");
+            result.isValid = false;
+        }
     }
     
 

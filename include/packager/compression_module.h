@@ -5,6 +5,9 @@
 #ifdef LibLZMA_FOUND
 #include <lzma.h>
 #endif
+#ifdef ZSTD_FOUND
+#include <zstd.h>
+#endif
 
 namespace MultiThreadedInstaller {
 
@@ -28,6 +31,7 @@ public:
 private:
     CompressionAlgorithm currentAlgorithm;
     int compressionLevel;
+    bool compressionLevelExplicitlySet;
     size_t blockSize;
     
 
@@ -42,6 +46,8 @@ private:
     
 
     CompressionResult compressWithLzma(const FolderInfo& folder);
+
+    CompressionResult compressWithZstd(const FolderInfo& folder);
     
 
     uint32_t calculateChecksum(const std::vector<uint8_t>& data);

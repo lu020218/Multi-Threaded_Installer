@@ -14,6 +14,8 @@ This document provides a complete reference for all available configuration opti
   "Version": "1.0",
   "AppName": "MyDesktopApp",
   "InstallDir": "%ProgramFiles%",
+  "compressionAlgorithm": "zstd",
+  "compressionLevel": 3,
   "Folder": {
     "InstallDir": "bin",
     "Roaming": "plugins",
@@ -53,6 +55,8 @@ This document provides a complete reference for all available configuration opti
 Version: "1.0"
 AppName: "MyDesktopApp"
 InstallDir: "%ProgramFiles%"
+compressionAlgorithm: "zstd"
+compressionLevel: 3
 Folder:
   InstallDir: "bin"
   Roaming: "plugins"
@@ -99,6 +103,8 @@ Configuration files must be UTF-8 encoded JSON or YAML.
 | `Version` | string | No | "1.0" | Configuration file version |
 | `AppName` | string | **Yes** | - | Application name (used for directory naming) |
 | `InstallDir` | string | No | "%ProgramFiles%" | Suggested default installation directory (without app name) |
+| `compressionAlgorithm` | string | No | `"lzma"` | Compression algorithm: `lzma` or `zstd` |
+| `compressionLevel` | number | No | `-1` | Compression level (`-1` = use algorithm default) |
 | `Folder` | object | No | {} | Folder-level target directory configurations |
 | `Registry` | array | No | [] | Registry entries to write after install |
 | `AutoStartup` | bool | No | false | Default auto-start behavior |
@@ -211,11 +217,25 @@ The installer intelligently handles application name appending:
 
 ## Compression Algorithms
 
-### LZMA (Default)
+### `lzma` (Default)
 
 - **Value**: `"lzma"`
+- **Level range**: `0-9`
+- **Default level**: `9` (when `compressionLevel = -1`)
 - **Characteristics**: Higher compression ratio, slower compression/decompression
-- **Best for**: Applications where download size is critical
+
+### `zstd`
+
+- **Value**: `"zstd"`
+- **Level range**: `1-22`
+- **Default level**: `3` (when `compressionLevel = -1`)
+- **Characteristics**: Faster compression/decompression with good ratio
+
+### Notes
+
+- `compressionLevel = -1` means "not explicitly set", runtime chooses per-algorithm default.
+- CLI level (if passed) overrides config level.
+- CLI algorithm (if passed) overrides config algorithm.
 
 ## Complete Configuration Example
 
@@ -224,6 +244,8 @@ The installer intelligently handles application name appending:
   "Version": "1.0",
   "AppName": "MyApplication",
   "InstallDir": "%ProgramFiles%",
+  "compressionAlgorithm": "zstd",
+  "compressionLevel": 3,
   "Folder": {
     "InstallDir": "bin",
     "Roaming": "plugins",
@@ -260,7 +282,9 @@ The installer intelligently handles application name appending:
 
 ```json
 {
-  "AppName": "SimpleApp"
+  "AppName": "SimpleApp",
+  "compressionAlgorithm": "lzma",
+  "compressionLevel": -1
 }
 ```
 
@@ -332,13 +356,15 @@ This minimal configuration:
   "Version": "1.0",
   "AppName": "LargeApp",
   "InstallDir": "%ProgramFiles%",
+  "compressionAlgorithm": "zstd",
+  "compressionLevel": 3,
   "Folder": {
     "InstallDir": "application"
   }
 }
 ```
 
-Uses LZMA compression for smaller download size at the cost of slower installation.
+Uses ZSTD compression for a faster install path with good compression ratio.
 
 ## Validation Rules
 
@@ -354,6 +380,8 @@ The packager validates configuration files and reports errors for:
    - Folder names must exist in the input directory
    - Target directory paths must be valid
    - InstallState fields must be valid when provided
+   - `compressionAlgorithm` must be `lzma` or `zstd`
+   - `compressionLevel` must match algorithm range (`lzma: 0-9`, `zstd: 1-22`, or `-1`)
 
 4. **Invalid Characters in Application Name**
    - Application name cannot contain: `\ / : * ? " < > |`
@@ -433,7 +461,9 @@ WARNING: Multiple configuration files found, using highest priority: packager.ya
 
 4. **Test with different user selections**: Verify your application works when users choose custom installation directories
 
-5. **Use LZMA for most cases**: Unless download size is critical, LZMA provides the best balance
+5. **Choose algorithm by target**:
+   - Prefer `zstd` for faster compression/decompression
+   - Prefer `lzma` when maximum compression ratio is the priority
 
 6. **Keep configuration simple**: Only configure folders that need special locations
 

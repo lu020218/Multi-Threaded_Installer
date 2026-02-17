@@ -16,9 +16,35 @@
 
 namespace MultiThreadedInstaller {
 
+namespace {
+
+const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
+    switch (algorithm) {
+        case CompressionAlgorithm::LZMA_HIGH:
+            return "LZMA";
+        case CompressionAlgorithm::ZSTD:
+            return "ZSTD";
+        default:
+            return "Unknown";
+    }
+}
+
+int GetDefaultCompressionLevel(CompressionAlgorithm algorithm) {
+    switch (algorithm) {
+        case CompressionAlgorithm::ZSTD:
+            return Constants::DEFAULT_ZSTD_LEVEL;
+        case CompressionAlgorithm::LZMA_HIGH:
+        default:
+            return Constants::DEFAULT_LZMA_LEVEL;
+    }
+}
+
+} // namespace
+
 CompressionModule::CompressionModule() 
     : currentAlgorithm(CompressionAlgorithm::LZMA_HIGH)
     , compressionLevel(Constants::DEFAULT_LZMA_LEVEL)
+    , compressionLevelExplicitlySet(false)
     , blockSize(Constants::DEFAULT_BLOCK_SIZE)
     , lzmaInitialized(false)
     , lzmaSupportsMt(false) {
@@ -52,12 +78,16 @@ CompressionModule::~CompressionModule() {
 
 CompressionResult CompressionModule::compressFolder(const FolderInfo& folder) {
     // Performance tracking disabled
-    const char* algorithmName = "LZMA";
+    const char* algorithmName = CompressionAlgorithmName(currentAlgorithm);
     
     auto startTime = std::chrono::steady_clock::now();
     CompressionResult result;
-    
-    result = compressWithLzma(folder);
+
+    if (currentAlgorithm == CompressionAlgorithm::ZSTD) {
+        result = compressWithZstd(folder);
+    } else {
+        result = compressWithLzma(folder);
+    }
     
     auto endTime = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
@@ -76,17 +106,43 @@ CompressionResult CompressionModule::compressFolder(const FolderInfo& folder) {
 }
 
 bool CompressionModule::setCompressionAlgorithm(CompressionAlgorithm algorithm) {
-    const char* oldAlgorithm = "LZMA";
-    const char* newAlgorithm = "LZMA";
+    const char* oldAlgorithm = CompressionAlgorithmName(currentAlgorithm);
+    const char* newAlgorithm = CompressionAlgorithmName(algorithm);
     
     // Logging disabled
-    
-    currentAlgorithm = CompressionAlgorithm::LZMA_HIGH;
-    return algorithm == CompressionAlgorithm::LZMA_HIGH;
+
+    if (algorithm == CompressionAlgorithm::ZSTD) {
+#ifdef ZSTD_FOUND
+        currentAlgorithm = CompressionAlgorithm::ZSTD;
+#else
+        std::cerr << "ZSTD support not compiled in; requested algorithm ignored" << std::endl;
+        return false;
+#endif
+    } else if (algorithm == CompressionAlgorithm::LZMA_HIGH) {
+        currentAlgorithm = CompressionAlgorithm::LZMA_HIGH;
+    } else {
+        return false;
+    }
+
+    if (!compressionLevelExplicitlySet) {
+        compressionLevel = GetDefaultCompressionLevel(currentAlgorithm);
+    }
+    return true;
 }
 
 bool CompressionModule::setCompressionLevel(int level) {
+    if (currentAlgorithm == CompressionAlgorithm::LZMA_HIGH) {
+        if (level < 0 || level > 9) {
+            return false;
+        }
+    } else if (currentAlgorithm == CompressionAlgorithm::ZSTD) {
+        if (level < 1 || level > 22) {
+            return false;
+        }
+    }
+
     compressionLevel = level;
+    compressionLevelExplicitlySet = true;
     return true;
 }
 
@@ -174,6 +230,62 @@ CompressionResult CompressionModule::compressWithLzma(const FolderInfo& folder) 
 #endif
     
     return result;
+}
+
+CompressionResult CompressionModule::compressWithZstd(const FolderInfo& folder) {
+    CompressionResult result;
+    result.algorithm = CompressionAlgorithm::ZSTD;
+
+#ifdef ZSTD_FOUND
+    std::vector<FileIndexEntry> fileIndex;
+    std::vector<uint8_t> tarData = createTarData(folder, fileIndex);
+    if (tarData.empty()) {
+        std::cerr << "Failed to create tar data for folder: " << folder.sourcePath << std::endl;
+        return result;
+    }
+
+    result.originalSize = tarData.size();
+    result.fileIndex = std::move(fileIndex);
+
+    const size_t bound = ZSTD_compressBound(tarData.size());
+    if (bound == 0) {
+        std::cerr << "ZSTD failed to calculate compression bound" << std::endl;
+        return result;
+    }
+
+    result.compressedData.resize(bound);
+    ZSTD_CCtx* cctx = ZSTD_createCCtx();
+    if (cctx == nullptr) {
+        std::cerr << "ZSTD context allocation failed" << std::endl;
+        result.compressedData.clear();
+        return result;
+    }
+
+    const size_t compressedSize = ZSTD_compressCCtx(
+        cctx,
+        result.compressedData.data(),
+        result.compressedData.size(),
+        tarData.data(),
+        tarData.size(),
+        compressionLevel);
+
+    ZSTD_freeCCtx(cctx);
+
+    if (ZSTD_isError(compressedSize)) {
+        std::cerr << "ZSTD compression failed: " << ZSTD_getErrorName(compressedSize) << std::endl;
+        result.compressedData.clear();
+        return result;
+    }
+
+    result.compressedData.resize(compressedSize);
+    result.compressedSize = compressedSize;
+    result.checksum = calculateChecksum(tarData);
+    result.blockIndex.clear();
+    return result;
+#else
+    std::cerr << "ZSTD support not compiled in" << std::endl;
+    return result;
+#endif
 }
 
 uint32_t CompressionModule::calculateChecksum(const std::vector<uint8_t>& data) {

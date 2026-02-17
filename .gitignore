@@ -8,6 +8,8 @@
 !/tests/stage5_install_uninstall_regression.ps1
 !/tests/test_manifest_roundtrip.cpp
 !/tests/test_utf8_utils.cpp
+!/tests/test_config_compression_options.cpp
+!/tests/test_compression_decompression_roundtrip.cpp
 /target
 Cargo.lock
 .DS_Store
@@ -16,3 +18,8 @@ Cargo.lock
 /.idea
 /.idea
 /.idea
+/build-phase3-final
+/build-phase5
+/build-stage3-verify
+/build-zstd-stage2
+/third_party/zstd

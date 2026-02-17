@@ -29,7 +29,7 @@ bool ConsoleInterface::getPackagerInput(std::string& inputPath, std::string& out
         return false;
     }
     
-    std::string algorithmStr = getUserInput("Choose compression algorithm (lzma) [lzma]: ");
+    std::string algorithmStr = getUserInput("Choose compression algorithm (lzma|zstd) [lzma]: ");
     if (algorithmStr.empty()) {
         algorithmStr = "lzma";
     }
@@ -131,6 +131,7 @@ ConsoleInterface::PackagerArgs ConsoleInterface::parsePackagerArgs(int argc, cha
             args.dataPackagePath = argv[++i];
         } else if ((arg == "-a" || arg == "--algorithm") && i + 1 < argc) {
             args.algorithm = parseCompressionAlgorithm(argv[++i]);
+            args.algorithmExplicitlySet = true;
         } else if ((arg == "-l" || arg == "--level") && i + 1 < argc) {
             args.compressionLevel = std::stoi(argv[++i]);
         } else if ((arg == "-t" || arg == "--threads") && i + 1 < argc) {
@@ -221,8 +222,8 @@ void ConsoleInterface::showPackagerHelp() {
     std::cout << "Usage: packager [options] <input_directory> <output_file>" << std::endl;
     std::cout << std::endl;
     std::cout << "Options:" << std::endl;
-    std::cout << "  -a, --algorithm <lzma>         Choose compression algorithm (default: lzma)" << std::endl;
-    std::cout << "  -l, --level <level>            Compression level (lzma: 0-9)" << std::endl;
+    std::cout << "  -a, --algorithm <lzma|zstd>    Choose compression algorithm (default: lzma)" << std::endl;
+    std::cout << "  -l, --level <level>            Compression level (lzma: 0-9, zstd: 1-22)" << std::endl;
     std::cout << "  -p, --data-out <file>          Write external data package" << std::endl;
     std::cout << "  -t, --threads <count>          Number of compression threads (default: CPU cores)" << std::endl;
     std::cout << "  -v, --verbose                  Show detailed information" << std::endl;
@@ -230,6 +231,7 @@ void ConsoleInterface::showPackagerHelp() {
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  packager -a lzma -l 5 ./input ./output/installer.exe" << std::endl;
+    std::cout << "  packager -a zstd -l 3 ./input ./output/installer.exe" << std::endl;
 }
 
 void ConsoleInterface::showInstallerHelp() {
@@ -315,6 +317,9 @@ CompressionAlgorithm ConsoleInterface::parseCompressionAlgorithm(const std::stri
     if (lower == "lzma" || lower == "7z") {
         return CompressionAlgorithm::LZMA_HIGH;
     }
+    if (lower == "zstd") {
+        return CompressionAlgorithm::ZSTD;
+    }
     
     return CompressionAlgorithm::LZMA_HIGH;
 }
@@ -323,6 +328,8 @@ std::string ConsoleInterface::compressionAlgorithmToString(CompressionAlgorithm 
     switch (algorithm) {
         case CompressionAlgorithm::LZMA_HIGH:
             return "LZMA";
+        case CompressionAlgorithm::ZSTD:
+            return "ZSTD";
         default:
             return "Unknown";
     }

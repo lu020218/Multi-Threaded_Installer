@@ -21,6 +21,21 @@
 using namespace MultiThreadedInstaller;
 namespace fs = std::filesystem;
 
+namespace {
+
+const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
+    switch (algorithm) {
+        case CompressionAlgorithm::LZMA_HIGH:
+            return "LZMA";
+        case CompressionAlgorithm::ZSTD:
+            return "ZSTD";
+        default:
+            return "Unknown";
+    }
+}
+
+}
+
 void showUsage(const std::string& programName) {
     std::cout << "Usage: " << programName << " <input_directory> <output_file>\n";
     std::cout << "\n";
@@ -106,7 +121,12 @@ int main(int argc, char* argv[]) {
     
     console.showInfo("Application name: " + config.applicationName);
     console.showInfo("Default install directory: " + config.defaultInstallDir);
-    console.showInfo(std::string("Compression algorithm: LZMA"));
+
+    CompressionAlgorithm effectiveAlgorithm = config.compressionAlgorithm;
+    if (args.algorithmExplicitlySet) {
+        effectiveAlgorithm = args.algorithm;
+    }
+    console.showInfo(std::string("Compression algorithm: ") + CompressionAlgorithmName(effectiveAlgorithm));
     
 
     FolderScanner scanner;
@@ -131,9 +151,23 @@ int main(int argc, char* argv[]) {
     
 
     CompressionModule compressor;
-    compressor.setCompressionAlgorithm(config.compressionAlgorithm);
+    if (!compressor.setCompressionAlgorithm(effectiveAlgorithm)) {
+        console.showError("Failed to set compression algorithm");
+        return 1;
+    }
+
+    int effectiveCompressionLevel = -1;
     if (args.compressionLevel >= 0) {
-        compressor.setCompressionLevel(args.compressionLevel);
+        effectiveCompressionLevel = args.compressionLevel;
+    } else if (config.compressionLevel >= 0) {
+        effectiveCompressionLevel = config.compressionLevel;
+    }
+    if (effectiveCompressionLevel >= 0) {
+        if (!compressor.setCompressionLevel(effectiveCompressionLevel)) {
+            console.showError("Invalid compression level for selected algorithm: " +
+                              std::to_string(effectiveCompressionLevel));
+            return 1;
+        }
     }
     
     std::vector<CompressionResult> compressionResults;

@@ -44,6 +44,9 @@ private:
 
     bool decompressLzma(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
                         LegacyStageTiming* timing);
+
+    bool decompressZstd(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
+                        LegacyStageTiming* timing);
     
 
     bool decompressLzmaBlocks(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,

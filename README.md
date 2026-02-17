@@ -1,213 +1,137 @@
 # Multi-Threaded Installer
 
-一个基于 C++17 的打包与安装系统，包含两个核心程序：
+涓€涓熀浜?C++17 鐨勬墦鍖呬笌瀹夎绯荤粺锛屽寘鍚袱涓牳蹇冪▼搴忥細
 
-- `packager`：将输入目录打包为自解压安装程序
-- `installer`：执行安装/静默安装/卸载，支持组件选择与多线程解压
+- `packager`锛氬皢杈撳叆鐩綍鎵撳寘涓哄畨瑁呭寘锛堟敮鎸?`lzma` / `zstd`锛?- `installer`锛氭墽琛屽畨瑁?闈欓粯瀹夎/鍗歌浇锛屾敮鎸佸绾跨▼瑙ｅ帇涓庣粍浠堕€夋嫨
 
-当前仓库的主线构建与 CI 面向 Windows（含 GUI）。
-
-## 主要能力
-
-- LZMA 压缩与解压（当前仅支持 LZMA）
-- 生成单文件安装包（可选额外导出 `.dat` 数据包）
-- 安装器支持 GUI 与 CLI/静默模式
-- 支持组件化安装（`--component` / `--components` / `--all-components`）
-- 支持卸载（`--uninstall` 或 `uninstall.exe` 自动识别）
-- 支持 JSON/YAML 配置文件
-
-## 仓库结构
+## 褰撳墠鍘嬬缉绠楁硶鏀寔鐘舵€?
+- 宸叉敮鎸侊細`LZMA`锛堝師鏈変富璺緞锛?- 宸叉敮鎸侊細`ZSTD`锛堟墦鍖呯鍘嬬缉 + 瀹夎绔В鍘嬶級
+- 閰嶇疆鏂瑰紡锛氬彲鍦?`packager.yaml` 鎴?`packager.json` 涓寚瀹?  - `compressionAlgorithm`: `lzma` 鎴?`zstd`
+  - `compressionLevel`: 绾у埆鍙厤缃?
+绾у埆鑼冨洿锛?- `lzma`: `0-9`锛堥粯璁?`9`锛?- `zstd`: `1-22`锛堥粯璁?`3`锛?- `-1` 琛ㄧず鈥滄湭鏄惧紡璁剧疆鈥濓紝杩愯鏃舵寜绠楁硶榛樿鍊煎鐞?
+## 浠撳簱缁撴瀯
 
 ```text
 .
-├─ include/                  # 头文件
-├─ src/
-│  ├─ packager/              # 打包器实现
-│  ├─ installer/             # 安装器实现
-│  ├─ gui/                   # GUI 实现（BUILD_GUI=ON）
-│  └─ common/                # 公共模块
-├─ resources/                # GUI 资源（XML/图片/语言/license）
-├─ docs/                     # 详细文档
-├─ tests/                    # 测试
-├─ third_party/              # 第三方依赖（含预编译库与子模块）
-└─ CMakeLists.txt
+鈹溾攢 include/
+鈹溾攢 src/
+鈹? 鈹溾攢 packager/
+鈹? 鈹溾攢 installer/
+鈹? 鈹溾攢 gui/
+鈹? 鈹斺攢 common/
+鈹溾攢 resources/
+鈹溾攢 docs/
+鈹溾攢 tests/
+鈹溾攢 third_party/
+鈹斺攢 CMakeLists.txt
 ```
 
-## 构建前准备
-
-### 1) 同步子模块
-
-`yaml-cpp` 通过子模块提供：
-
+## 鏋勫缓鍓嶅噯澶?
+### 1) 鍚屾瀛愭ā鍧?
 ```powershell
 git submodule update --init --recursive
 ```
 
-### 2) 准备第三方库
-
-默认配置会使用仓库内预置依赖并校验哈希：
-
-- `third_party/xz/include` 与 `third_party/xz/lib_static/lzma.lib`
-- `third_party/DuiLib_Ultimate/DuiLib`
-- `third_party/DuiLib_Ultimate/lib_static/DuiLib.lib`（`BUILD_GUI=ON` 时必需）
-
-说明：
-- `BUILD_GUI=ON` 时，`STATIC_LINK_RUNTIME` 必须为 `ON`（CMake 中有强约束）。
-- 若哈希不匹配且 `VERIFY_THIRD_PARTY_HASHES=ON`，配置会失败。
-
-## 构建
-
-推荐 Windows + Visual Studio 生成器：
-
+### 2) 绗笁鏂逛緷璧?
+榛樿浣跨敤浠撳簱鍐呬緷璧栵細
+- `third_party/xz`锛圠ZMA锛?- `third_party/yaml-cpp`锛堥厤缃В鏋愶級
+- `third_party/DuiLib_Ultimate`锛圙UI 妯″紡锛?- `third_party/zstd`锛堝彲閫夛紝鍚敤 ZSTD锛?
+## 鏋勫缓锛圵indows / MSVC锛?
 ```powershell
-cmake -S . -B build `
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
   -DBUILD_GUI=ON `
   -DSTATIC_LINK_RUNTIME=ON `
-  -DVERIFY_THIRD_PARTY_HASHES=ON
+  -DENABLE_ZSTD=ON
 
 cmake --build build --config Release
 ```
 
-产物通常位于：
-
-- `build/Release/packager.exe`
+浜х墿锛?- `build/Release/packager.exe`
 - `build/Release/installer.exe`
 
-## 快速使用
+## ZSTD锛圡SVC 闈欐€佸簱锛夎鏄?
+椤圭洰浼氫紭鍏堣嚜鍔ㄦ娴嬫湰鍦伴潤鎬佸簱锛?- `third_party/zstd/lib_static/zstd_static.lib`
 
-### 1) 准备输入目录
+骞惰嚜鍔ㄦ煡鎵惧ご鏂囦欢鐩綍锛堜紭鍏堬級锛?- `third_party/zstd/include`
+- `third_party/zstd/lib`
 
-`packager` 会扫描输入目录下的一级子目录作为“安装文件夹单元”。  
-请把待安装内容放在这些子目录中，并在输入目录放置配置文件（可选）：
+濡傛灉妫€娴嬫垚鍔燂紝浼氳嚜鍔ㄥ惎鐢?`ZSTD_FOUND`锛屼笉闇€瑕佸啀鎵嬪姩鎸囧畾 `ZSTD_FORCE_THIRD_PARTY_BINARY=ON`銆?
+## 浣跨敤鏂瑰紡
 
-- `packager.yaml`
-- `packager.yml`
-- `packager.json`
-- `.packager.json`
-
-也可通过环境变量指定：
-
-```powershell
-$env:PACKAGER_CONFIG="E:\path\to\packager.yaml"
-```
-
-### 2) 生成安装包
-
+### 1) 鐢熸垚瀹夎鍖?
 ```powershell
 .\build\Release\packager.exe <input_directory> <output_installer.exe>
 ```
 
-示例：
+绀轰緥锛?
+```powershell
+# 浣跨敤 LZMA
+.\build\Release\packager.exe -a lzma -l 9 .\test_input .\dist\MyAppSetup.exe
+
+# 浣跨敤 ZSTD
+.\build\Release\packager.exe -a zstd -l 3 .\test_input .\dist\MyAppSetup.exe
+```
+
+### 2) 杩愯瀹夎
 
 ```powershell
-.\build\Release\packager.exe .\test_input .\dist\TestAppSetup.exe
+.\dist\MyAppSetup.exe
 ```
 
-注意：
-- 输出目录必须已存在（否则参数校验会报错）。
-- `packager` 会使用已构建的 `installer.exe` 作为模板拼装自解压包。
-
-### 3) 运行安装
-
+闈欓粯瀹夎锛?
 ```powershell
-.\dist\TestAppSetup.exe
+.\dist\MyAppSetup.exe -s
 ```
 
-静默安装：
-
+鍗歌浇锛?
 ```powershell
-.\dist\TestAppSetup.exe -s
+.\dist\MyAppSetup.exe --uninstall
 ```
 
-卸载：
-
-```powershell
-.\dist\TestAppSetup.exe --uninstall
-```
-
-或将卸载程序命名为 `uninstall.exe` 执行（会自动进入卸载模式）。
-
-## 命令行参数
-
-### packager
-
-```text
-Usage: packager [options] <input_directory> <output_file>
-
-  -a, --algorithm <lzma>   压缩算法（当前仅 lzma）
-  -l, --level <level>      压缩级别（0-9）
-  -p, --data-out <file>    额外导出外部数据包
-  -t, --threads <count>    压缩线程数
-  -v, --verbose            详细日志
-  -h, --help               帮助
-```
-
-### installer
-
-```text
-Usage: installer [options] [folder_mappings...]
-
-  -d, --destination <dir>     默认安装目录
-  -p, --data-package <file>   使用外部数据包
-  -t, --threads <count>       解压线程数
-  -f, --force                 强制覆盖
-  -s, --silent                静默安装
-  --debug                     GUI 模式下显示控制台
-  --uninstall                 卸载模式
-  --component <id>            选择单个组件（可重复）
-  --components <a,b,c>        批量选择组件
-  --all-components            安装全部可选组件
-  -v, --verbose               详细日志
-  -h, --help                  帮助
-
-  folder_mappings 格式:
-  <folder_name>=<target_path>
-```
-
-## 配置文件示例（YAML）
-
+## 閰嶇疆鏂囦欢绀轰緥锛圷AML锛?
 ```yaml
 Version: "1.0"
 AppName: "MyDesktopApp"
 InstallDir: "%ProgramFiles%"
+compressionAlgorithm: "zstd"
+compressionLevel: 3
+
 Folder:
   InstallDir: "bin"
   Roaming: "plugins"
   Local: "userdata"
+
 AutoStartup: false
 DesktopIcons: true
 RequireAdmin: true
-MinWindowsVersion: "10.0.19041"
-
-components:
-  - id: core
-    name: Core Files
-    required: true
-    defaultSelected: true
-    folders: ["bin"]
-    source:
-      type: embedded
-
-  - id: plugins
-    name: Optional Plugins
-    required: false
-    defaultSelected: true
-    dependsOn: ["core"]
-    source:
-      type: local
-      local:
-        base: "%InstallDir%\\components"
-        installer: "plugins\\install_plugins.bat"
-        args: "/silent"
-        wait: true
-        timeoutSec: 900
 ```
 
-完整字段说明见：`docs/configuration_reference.md`
+瀹屾暣瀛楁鍙傝€冿細`docs/configuration_reference.md`
 
-## 测试
+## 鍛戒护琛屽弬鏁帮紙鎽樿锛?
+### packager
 
-默认不构建测试，开启方式：
+- `-a, --algorithm <lzma|zstd>`
+- `-l, --level <level>`锛坄lzma: 0-9`, `zstd: 1-22`锛?- `-p, --data-out <file>`
+- `-t, --threads <count>`
+- `-v, --verbose`
+- `-h, --help`
+
+鍙傛暟涓庨厤缃枃浠跺叧绯伙細
+- 鎺ㄨ崘鎶?`compressionAlgorithm` / `compressionLevel` 鍥哄寲鍦?`packager.yaml/json`锛堜富閰嶇疆婧愶級銆?- `--algorithm` / `--level` 鐢ㄤ簬涓€娆℃€ц鐩栵紙渚嬪 CI 涓存椂鍒囨崲鎴栧仛鍘嬬缉瀵规瘮锛夈€?- 浼樺厛绾э細`CLI 鍙傛暟` > `閰嶇疆鏂囦欢` > `鍐呯疆榛樿鍊糮銆?
+### installer
+
+- `-d, --destination <dir>`
+- `-p, --data-package <file>`
+- `-t, --threads <count>`
+- `-f, --force`
+- `-s, --silent`
+- `--uninstall`
+- `--component <id>` / `--components <a,b,c>` / `--all-components`
+- `-v, --verbose`
+- `-h, --help`
+
+## 娴嬭瘯
 
 ```powershell
 cmake -S . -B build-tests -DBUILD_TESTS=ON
@@ -215,7 +139,7 @@ cmake --build build-tests --config Release
 ctest --test-dir build-tests -C Release --output-on-failure
 ```
 
-## 相关文档
+## 鐩稿叧鏂囨。
 
 - `docs/configuration_reference.md`
 - `docs/COMMAND_LINE_REFERENCE.md`

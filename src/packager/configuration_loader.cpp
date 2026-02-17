@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -112,6 +113,48 @@ bool JsonValueToUInt64(const json& value, uint64_t& out) {
     return false;
 }
 
+bool JsonValueToInt(const json& value, int& out) {
+    if (value.is_number_integer()) {
+        const int64_t signedValue = value.get<int64_t>();
+        if (signedValue < static_cast<int64_t>(std::numeric_limits<int>::min()) ||
+            signedValue > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+            return false;
+        }
+        out = static_cast<int>(signedValue);
+        return true;
+    }
+    if (value.is_number_unsigned()) {
+        const uint64_t unsignedValue = value.get<uint64_t>();
+        if (unsignedValue > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+            return false;
+        }
+        out = static_cast<int>(unsignedValue);
+        return true;
+    }
+    if (value.is_string()) {
+        const std::string text = value.get<std::string>();
+        if (text.empty()) {
+            return false;
+        }
+        size_t pos = 0;
+        try {
+            const long long parsed = std::stoll(text, &pos, 10);
+            if (pos != text.size()) {
+                return false;
+            }
+            if (parsed < static_cast<long long>(std::numeric_limits<int>::min()) ||
+                parsed > static_cast<long long>(std::numeric_limits<int>::max())) {
+                return false;
+            }
+            out = static_cast<int>(parsed);
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+    return false;
+}
+
 bool JsonArrayToStringList(const json& arrayValue, std::vector<std::string>& outList) {
     if (!arrayValue.is_array()) {
         return false;
@@ -159,6 +202,8 @@ json NormalizeStructuredConfigSchema(const json& root) {
         SetNormalizedFieldIfMissing(normalized, "CompanyName", package, "companyName");
         SetNormalizedFieldIfMissing(normalized, "FileDescription", package, "fileDescription");
         SetNormalizedFieldIfMissing(normalized, "Copyright", package, "copyright");
+        SetNormalizedFieldIfMissing(normalized, "compressionAlgorithm", package, "compressionAlgorithm");
+        SetNormalizedFieldIfMissing(normalized, "compressionLevel", package, "compressionLevel");
     }
 
     if (root.contains("install") && root["install"].is_object()) {
@@ -509,6 +554,18 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
         return true;
     };
 
+    auto getOptionalInt = [&](const char* key, int& out) -> bool {
+        if (!configObject.contains(key)) {
+            return true;
+        }
+        if (!JsonValueToInt(configObject[key], out)) {
+            lastError_ = "Invalid field '" + std::string(key) + "' in " + formatLabel +
+                         " config: expected integer";
+            return false;
+        }
+        return true;
+    };
+
     PackagerConfiguration config;
     if (!getRequiredString("Version", config.version) ||
         !getRequiredString("AppName", config.applicationName) ||
@@ -537,11 +594,17 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
         algo = ToLowerCopy(algo);
         if (algo == "lzma") {
             config.compressionAlgorithm = CompressionAlgorithm::LZMA_HIGH;
+        } else if (algo == "zstd") {
+            config.compressionAlgorithm = CompressionAlgorithm::ZSTD;
         } else {
             lastError_ = "Invalid compressionAlgorithm: '" + algo +
-                         "' (expected: lzma)";
+                         "' (expected: lzma or zstd)";
             return std::nullopt;
         }
+    }
+
+    if (!getOptionalInt("compressionLevel", config.compressionLevel)) {
+        return std::nullopt;
     }
 
     if (configObject.contains("Folder")) {

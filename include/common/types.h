@@ -10,7 +10,8 @@ namespace MultiThreadedInstaller {
 
 
 enum class CompressionAlgorithm {
-    LZMA_HIGH
+    LZMA_HIGH,
+    ZSTD
 };
 
 
@@ -186,6 +187,7 @@ struct PackagerConfiguration {
     std::string fileDescription;
     std::string copyright;
     CompressionAlgorithm compressionAlgorithm;
+    int compressionLevel;
     std::vector<FolderTargetConfig> folderTargets;
     std::vector<RegistryEntry> registry;
     std::vector<std::string> installKillProcesses;
@@ -207,6 +209,7 @@ struct PackagerConfiguration {
           applicationName("MyApplication"),
           defaultInstallDir("%ProgramFiles%"),
           compressionAlgorithm(CompressionAlgorithm::LZMA_HIGH),
+          compressionLevel(-1),
           autoStartup(false),
           desktopIcons(false),
           autoCleanOldInstall(false),
@@ -359,6 +362,7 @@ namespace Constants {
     constexpr size_t MAX_BLOCK_SIZE = 128 * 1024 * 1024;      // 8MB
     
     constexpr int DEFAULT_LZMA_LEVEL = 9;
+    constexpr int DEFAULT_ZSTD_LEVEL = 3;
 }
 
 

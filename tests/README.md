@@ -70,3 +70,34 @@ cmake -S . -B build -DBUILD_TESTS=ON
 cmake --build build --config Release --target test_configuration_validator_components
 ctest --test-dir build -C Release -R configuration_validator_components -V
 ```
+
+## Compression Option Parsing/Validation Test
+
+`tests/test_config_compression_options.cpp` validates:
+- `compressionAlgorithm`/`compressionLevel` parse path for JSON/YAML
+- unknown algorithm rejection
+- non-integer level rejection
+- out-of-range level rejection by validator
+
+### Build And Run
+
+```powershell
+cmake -S . -B build -DBUILD_TESTS=ON
+cmake --build build --config Release --target test_config_compression_options
+ctest --test-dir build -C Release -R config_compression_options -V
+```
+
+## Compression/Decompression Roundtrip Test
+
+`tests/test_compression_decompression_roundtrip.cpp` validates:
+- packager compression and installer decompression loop
+- LZMA roundtrip
+- ZSTD roundtrip (when `ZSTD_FOUND` is enabled in build)
+
+### Build And Run
+
+```powershell
+cmake -S . -B build -DBUILD_TESTS=ON -DENABLE_ZSTD=ON
+cmake --build build --config Release --target test_compression_decompression_roundtrip
+ctest --test-dir build -C Release -R compression_decompression_roundtrip -V
+```

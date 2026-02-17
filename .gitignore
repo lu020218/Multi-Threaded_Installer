@@ -11,3 +11,8 @@
 /target
 Cargo.lock
 .DS_Store
+/build-tests
+/.idea
+/.idea
+/.idea
+/.idea

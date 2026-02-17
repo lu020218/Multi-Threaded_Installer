@@ -56,6 +56,8 @@ using InstallServiceEventCallback = std::function<void(const InstallServiceEvent
 struct InstallServiceOptions {
     std::string installPath;
     std::vector<std::pair<std::string, std::string>> folderMappings;
+    std::vector<std::string> selectedComponentIds;
+    bool installAllComponents = false;
     int threadCount = 0;
     std::string languageCode;
     bool applyRegistryBeforeFinalize = false;

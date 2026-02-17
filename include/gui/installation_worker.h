@@ -7,6 +7,7 @@
 #include <thread>
 #include <atomic>
 #include <memory>
+#include <vector>
 #include "../common/types.h"
 
 namespace MultiThreadedInstaller {
@@ -32,7 +33,8 @@ public:
                            bool autoRun,
                            bool desktopIcons,
                            const std::wstring& languageCode,
-                           bool cleanupOldInstall);
+                           bool cleanupOldInstall,
+                           const std::vector<std::string>& selectedComponents);
     
 
     void RequestCancellation();
@@ -49,6 +51,7 @@ private:
     bool m_desktopIcons;
     bool m_cleanupOldInstallRequested;
     std::wstring m_languageCode;
+    std::vector<std::string> m_selectedComponents;
     std::atomic<uint64_t> m_totalBytes;
     std::atomic<uint64_t> m_completedBytes;
     std::atomic<uint64_t> m_currentFolderBytes;

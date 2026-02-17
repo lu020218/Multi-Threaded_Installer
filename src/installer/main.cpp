@@ -678,6 +678,8 @@ int runConsoleInstaller(int argc, char* argv[]) {
     InstallServiceOptions serviceOptions;
     serviceOptions.installPath = userSelectedPath;
     serviceOptions.folderMappings = args.folderMappings;
+    serviceOptions.selectedComponentIds = args.selectedComponents;
+    serviceOptions.installAllComponents = args.installAllComponents;
     serviceOptions.threadCount = args.threadCount;
     serviceOptions.writeUninstallRegistry = true;
 

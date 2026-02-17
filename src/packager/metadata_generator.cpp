@@ -4,6 +4,41 @@
 #include <filesystem>
 
 namespace MultiThreadedInstaller {
+namespace {
+
+template <typename T>
+void AppendPod(std::vector<uint8_t>& out, const T& value) {
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&value);
+    out.insert(out.end(), bytes, bytes + sizeof(T));
+}
+
+void AppendString(std::vector<uint8_t>& out, const std::string& value) {
+    uint32_t len = static_cast<uint32_t>(value.size());
+    AppendPod(out, len);
+    out.insert(out.end(), value.begin(), value.end());
+}
+
+void AppendStringList(std::vector<uint8_t>& out, const std::vector<std::string>& values) {
+    uint32_t count = static_cast<uint32_t>(values.size());
+    AppendPod(out, count);
+    for (const auto& value : values) {
+        AppendString(out, value);
+    }
+}
+
+void AppendRegistryList(std::vector<uint8_t>& out, const std::vector<RegistryEntry>& values) {
+    uint32_t count = static_cast<uint32_t>(values.size());
+    AppendPod(out, count);
+    for (const auto& reg : values) {
+        AppendString(out, reg.path);
+        AppendString(out, reg.key);
+        uint8_t valueType = static_cast<uint8_t>(reg.type);
+        out.push_back(valueType);
+        AppendString(out, reg.value);
+    }
+}
+
+} // namespace
 
 InstallationMetadata MetadataGenerator::generateMetadata(const std::vector<CompressionResult>& results,
                                                        const std::vector<FolderInfo>& folderInfos) {
@@ -46,6 +81,8 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.installState = config.installState;
     metadata.registry = config.registry;
     metadata.installKillProcesses = config.installKillProcesses;
+    metadata.components = config.components;
+    metadata.componentUi = config.componentUi;
     
     uint64_t currentOffset = 0;
     for (size_t i = 0; i < results.size() && i < folderInfos.size(); ++i) {
@@ -134,28 +171,15 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     serialized.insert(serialized.end(), headerBytes, headerBytes + sizeof(BinaryMetadata));
     
     uint32_t extendedMarker = 0x45585444;
-    const uint8_t* markerBytes = reinterpret_cast<const uint8_t*>(&extendedMarker);
-    serialized.insert(serialized.end(), markerBytes, markerBytes + sizeof(uint32_t));
+    AppendPod(serialized, extendedMarker);
     
-    uint32_t appNameLen = static_cast<uint32_t>(metadata.applicationName.length());
-    const uint8_t* appNameLenBytes = reinterpret_cast<const uint8_t*>(&appNameLen);
-    serialized.insert(serialized.end(), appNameLenBytes, appNameLenBytes + sizeof(uint32_t));
-    serialized.insert(serialized.end(), metadata.applicationName.begin(), metadata.applicationName.end());
+    AppendString(serialized, metadata.applicationName);
     
-    uint32_t defaultInstallDirLen = static_cast<uint32_t>(metadata.defaultInstallDir.length());
-    const uint8_t* defaultInstallDirLenBytes = reinterpret_cast<const uint8_t*>(&defaultInstallDirLen);
-    serialized.insert(serialized.end(), defaultInstallDirLenBytes, defaultInstallDirLenBytes + sizeof(uint32_t));
-    serialized.insert(serialized.end(), metadata.defaultInstallDir.begin(), metadata.defaultInstallDir.end());
+    AppendString(serialized, metadata.defaultInstallDir);
 
-    uint32_t configVersionLen = static_cast<uint32_t>(metadata.configVersion.length());
-    const uint8_t* configVersionLenBytes = reinterpret_cast<const uint8_t*>(&configVersionLen);
-    serialized.insert(serialized.end(), configVersionLenBytes, configVersionLenBytes + sizeof(uint32_t));
-    serialized.insert(serialized.end(), metadata.configVersion.begin(), metadata.configVersion.end());
+    AppendString(serialized, metadata.configVersion);
 
-    uint32_t webUrlLen = static_cast<uint32_t>(metadata.webPageUrl.length());
-    const uint8_t* webUrlLenBytes = reinterpret_cast<const uint8_t*>(&webUrlLen);
-    serialized.insert(serialized.end(), webUrlLenBytes, webUrlLenBytes + sizeof(uint32_t));
-    serialized.insert(serialized.end(), metadata.webPageUrl.begin(), metadata.webPageUrl.end());
+    AppendString(serialized, metadata.webPageUrl);
 
     uint8_t autoStartupFlag = metadata.autoStartup ? 1 : 0;
     uint8_t desktopIconsFlag = metadata.desktopIcons ? 1 : 0;
@@ -166,81 +190,75 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     serialized.push_back(requireAdminFlag);
     serialized.push_back(autoCleanFlag);
 
-    const uint8_t* minWinMajorBytes =
-        reinterpret_cast<const uint8_t*>(&metadata.minWindowsMajor);
-    serialized.insert(serialized.end(), minWinMajorBytes,
-                      minWinMajorBytes + sizeof(uint16_t));
-    const uint8_t* minWinMinorBytes =
-        reinterpret_cast<const uint8_t*>(&metadata.minWindowsMinor);
-    serialized.insert(serialized.end(), minWinMinorBytes,
-                      minWinMinorBytes + sizeof(uint16_t));
-    const uint8_t* minWinBuildBytes =
-        reinterpret_cast<const uint8_t*>(&metadata.minWindowsBuild);
-    serialized.insert(serialized.end(), minWinBuildBytes,
-                      minWinBuildBytes + sizeof(uint32_t));
+    AppendPod(serialized, metadata.minWindowsMajor);
+    AppendPod(serialized, metadata.minWindowsMinor);
+    AppendPod(serialized, metadata.minWindowsBuild);
 
-    const uint8_t* sparseThresholdBytes =
-        reinterpret_cast<const uint8_t*>(&metadata.sparseFileThresholdBytes);
-    serialized.insert(serialized.end(), sparseThresholdBytes,
-                      sparseThresholdBytes + sizeof(uint64_t));
+    AppendPod(serialized, metadata.sparseFileThresholdBytes);
 
     uint8_t installMode = static_cast<uint8_t>(metadata.installState.mode);
     uint8_t installMutex = metadata.installState.useMutex ? 1 : 0;
     serialized.push_back(installMode);
     serialized.push_back(installMutex);
     
-    uint32_t regPathLen = static_cast<uint32_t>(metadata.installState.registryPath.length());
-    const uint8_t* regPathLenBytes = reinterpret_cast<const uint8_t*>(&regPathLen);
-    serialized.insert(serialized.end(), regPathLenBytes, regPathLenBytes + sizeof(uint32_t));
-    serialized.insert(serialized.end(), metadata.installState.registryPath.begin(), metadata.installState.registryPath.end());
-    
-    uint32_t regKeyLen = static_cast<uint32_t>(metadata.installState.registryKey.length());
-    const uint8_t* regKeyLenBytes = reinterpret_cast<const uint8_t*>(&regKeyLen);
-    serialized.insert(serialized.end(), regKeyLenBytes, regKeyLenBytes + sizeof(uint32_t));
-    serialized.insert(serialized.end(), metadata.installState.registryKey.begin(), metadata.installState.registryKey.end());
-    
-    uint32_t filePathLen = static_cast<uint32_t>(metadata.installState.filePath.length());
-    const uint8_t* filePathLenBytes = reinterpret_cast<const uint8_t*>(&filePathLen);
-    serialized.insert(serialized.end(), filePathLenBytes, filePathLenBytes + sizeof(uint32_t));
-    serialized.insert(serialized.end(), metadata.installState.filePath.begin(), metadata.installState.filePath.end());
-    
-    uint32_t mutexNameLen = static_cast<uint32_t>(metadata.installState.mutexName.length());
-    const uint8_t* mutexNameLenBytes = reinterpret_cast<const uint8_t*>(&mutexNameLen);
-    serialized.insert(serialized.end(), mutexNameLenBytes, mutexNameLenBytes + sizeof(uint32_t));
-    serialized.insert(serialized.end(), metadata.installState.mutexName.begin(), metadata.installState.mutexName.end());
+    AppendString(serialized, metadata.installState.registryPath);
+    AppendString(serialized, metadata.installState.registryKey);
+    AppendString(serialized, metadata.installState.filePath);
+    AppendString(serialized, metadata.installState.mutexName);
 
-    uint32_t registryCount = static_cast<uint32_t>(metadata.registry.size());
-    const uint8_t* registryCountBytes = reinterpret_cast<const uint8_t*>(&registryCount);
-    serialized.insert(serialized.end(), registryCountBytes, registryCountBytes + sizeof(uint32_t));
-    
-    for (const auto& reg : metadata.registry) {
-        uint32_t pathLen = static_cast<uint32_t>(reg.path.length());
-        const uint8_t* pathLenBytes = reinterpret_cast<const uint8_t*>(&pathLen);
-        serialized.insert(serialized.end(), pathLenBytes, pathLenBytes + sizeof(uint32_t));
-        serialized.insert(serialized.end(), reg.path.begin(), reg.path.end());
-        
-        uint32_t keyLen = static_cast<uint32_t>(reg.key.length());
-        const uint8_t* keyLenBytes = reinterpret_cast<const uint8_t*>(&keyLen);
-        serialized.insert(serialized.end(), keyLenBytes, keyLenBytes + sizeof(uint32_t));
-        serialized.insert(serialized.end(), reg.key.begin(), reg.key.end());
-        
-        uint8_t valueType = static_cast<uint8_t>(reg.type);
-        serialized.push_back(valueType);
-        
-        uint32_t valueLen = static_cast<uint32_t>(reg.value.length());
-        const uint8_t* valueLenBytes = reinterpret_cast<const uint8_t*>(&valueLen);
-        serialized.insert(serialized.end(), valueLenBytes, valueLenBytes + sizeof(uint32_t));
-        serialized.insert(serialized.end(), reg.value.begin(), reg.value.end());
+    AppendRegistryList(serialized, metadata.registry);
+    AppendStringList(serialized, metadata.installKillProcesses);
+
+    if (header.version >= 13) {
+        uint32_t componentCount = static_cast<uint32_t>(metadata.components.size());
+        AppendPod(serialized, componentCount);
+        for (const auto& component : metadata.components) {
+            AppendString(serialized, component.id);
+            AppendString(serialized, component.name);
+            AppendString(serialized, component.description);
+
+            serialized.push_back(component.required ? 1 : 0);
+            serialized.push_back(component.defaultSelected ? 1 : 0);
+            AppendPod(serialized, component.sizeHintMB);
+
+            AppendStringList(serialized, component.dependsOn);
+            AppendStringList(serialized, component.folders);
+
+            serialized.push_back(static_cast<uint8_t>(component.source.type));
+
+            AppendString(serialized, component.source.local.base);
+            AppendString(serialized, component.source.local.installer);
+            AppendString(serialized, component.source.local.args);
+            serialized.push_back(component.source.local.wait ? 1 : 0);
+            AppendPod(serialized, component.source.local.timeoutSec);
+            AppendString(serialized, component.source.local.uninstall);
+
+            AppendString(serialized, component.source.download.url);
+            AppendString(serialized, component.source.download.sha256);
+            AppendString(serialized, component.source.download.saveAs);
+            AppendString(serialized, component.source.download.args);
+            serialized.push_back(component.source.download.wait ? 1 : 0);
+            AppendPod(serialized, component.source.download.timeoutSec);
+            AppendString(serialized, component.source.download.uninstall);
+
+            AppendRegistryList(serialized, component.registry);
+            AppendStringList(serialized, component.killProcesses);
+
+            serialized.push_back(component.createDesktopShortcut ? 1 : 0);
+            serialized.push_back(component.autoStartup ? 1 : 0);
+        }
+
+        AppendString(serialized, metadata.componentUi.mode);
+        AppendString(serialized, metadata.componentUi.strategy);
+        AppendString(serialized, metadata.componentUi.tokenPrefix);
+        uint32_t pageCount = static_cast<uint32_t>(metadata.componentUi.pages.size());
+        AppendPod(serialized, pageCount);
+        for (const auto& page : metadata.componentUi.pages) {
+            AppendString(serialized, page.skin);
+            AppendStringList(serialized, page.controls);
+        }
     }
-    uint32_t installKillCount = static_cast<uint32_t>(metadata.installKillProcesses.size());
-    const uint8_t* installKillCountBytes = reinterpret_cast<const uint8_t*>(&installKillCount);
-    serialized.insert(serialized.end(), installKillCountBytes, installKillCountBytes + sizeof(uint32_t));
-    for (const auto& name : metadata.installKillProcesses) {
-        uint32_t nameLen = static_cast<uint32_t>(name.length());
-        const uint8_t* nameLenBytes = reinterpret_cast<const uint8_t*>(&nameLen);
-        serialized.insert(serialized.end(), nameLenBytes, nameLenBytes + sizeof(uint32_t));
-        serialized.insert(serialized.end(), name.begin(), name.end());
-    }    
+
     for (size_t i = 0; i < metadata.extendedMappings.size(); ++i) {
         const auto& extMapping = metadata.extendedMappings[i];
         

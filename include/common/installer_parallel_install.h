@@ -47,6 +47,8 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                                          InstallerPathResolver& pathResolver,
                                          const std::string& userSelectedPath,
                                          const std::vector<std::pair<std::string, std::string>>& folderMappings,
+                                         const std::vector<std::string>& includedFolders,
+                                         bool filterFolders,
                                          int threadCount,
                                          const ProgressCallback& progressCallback,
                                          const LogCallback& infoCallback,

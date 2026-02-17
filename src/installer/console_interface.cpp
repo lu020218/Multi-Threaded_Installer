@@ -3,6 +3,7 @@
 #include <sstream>
 #include "common/utf8_utils.h"
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 
 namespace MultiThreadedInstaller {
@@ -146,6 +147,35 @@ ConsoleInterface::PackagerArgs ConsoleInterface::parsePackagerArgs(int argc, cha
 
 ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, char* argv[]) {
     InstallerArgs args;
+
+    auto trim = [](std::string value) {
+        auto isSpace = [](unsigned char c) { return std::isspace(c) != 0; };
+        while (!value.empty() && isSpace(static_cast<unsigned char>(value.front()))) {
+            value.erase(value.begin());
+        }
+        while (!value.empty() && isSpace(static_cast<unsigned char>(value.back()))) {
+            value.pop_back();
+        }
+        return value;
+    };
+
+    auto appendComponents = [&](const std::string& csv) {
+        size_t start = 0;
+        while (start <= csv.size()) {
+            size_t end = csv.find(',', start);
+            if (end == std::string::npos) {
+                end = csv.size();
+            }
+            std::string item = trim(csv.substr(start, end - start));
+            if (!item.empty()) {
+                args.selectedComponents.push_back(item);
+            }
+            if (end == csv.size()) {
+                break;
+            }
+            start = end + 1;
+        }
+    };
     
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -162,6 +192,15 @@ ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, c
             args.force = true;
         } else if (arg == "--uninstall") {
             args.uninstall = true;
+        } else if (arg == "--all-components") {
+            args.installAllComponents = true;
+        } else if (arg == "--component" && i + 1 < argc) {
+            std::string id = trim(argv[++i]);
+            if (!id.empty()) {
+                args.selectedComponents.push_back(id);
+            }
+        } else if (arg == "--components" && i + 1 < argc) {
+            appendComponents(argv[++i]);
         } else if ((arg == "-d" || arg == "--destination") && i + 1 < argc) {
             args.defaultDestination = argv[++i];
         } else if ((arg == "-t" || arg == "--threads") && i + 1 < argc) {
@@ -205,6 +244,9 @@ void ConsoleInterface::showInstallerHelp() {
     std::cout << "  -s, --silent                   Silent installation mode" << std::endl;
     std::cout << "  --debug                        Show console alongside GUI" << std::endl;
     std::cout << "  --uninstall                    Uninstall using saved manifest" << std::endl;
+    std::cout << "  --component <id>               Select one component id (repeatable)" << std::endl;
+    std::cout << "  --components <id1,id2,...>     Select multiple component ids" << std::endl;
+    std::cout << "  --all-components               Install all optional components" << std::endl;
     std::cout << "  -v, --verbose                  Show detailed information" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
     std::cout << std::endl;
@@ -215,6 +257,7 @@ void ConsoleInterface::showInstallerHelp() {
     std::cout << "  installer -d C:\\Program Files\\MyApp" << std::endl;
     std::cout << "  installer folderA=C:\\App\\A folderB=C:\\App\\B" << std::endl;
     std::cout << "  installer -s -f -d C:\\Program Files\\MyApp" << std::endl;
+    std::cout << "  installer -s --components core,plugins" << std::endl;
     std::cout << "  uninstall.exe (runs uninstall automatically)" << std::endl;
 }
 

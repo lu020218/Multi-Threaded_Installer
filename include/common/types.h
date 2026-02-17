@@ -37,6 +37,13 @@ enum class RegistryValueType {
 };
 
 
+enum class ComponentSourceType : uint8_t {
+    EMBEDDED = 0,
+    LOCAL = 1,
+    DOWNLOAD = 2
+};
+
+
 struct InstallStateConfig {
     InstallStateMode mode;
     std::string registryPath;
@@ -86,6 +93,86 @@ struct RegistryEntry {
 };
 
 
+struct LocalInstallerConfig {
+    std::string base;
+    std::string installer;
+    std::string args;
+    bool wait;
+    uint32_t timeoutSec;
+    std::string uninstall;
+
+    LocalInstallerConfig()
+        : wait(true), timeoutSec(900) {}
+};
+
+
+struct DownloadInstallerConfig {
+    std::string url;
+    std::string sha256;
+    std::string saveAs;
+    std::string args;
+    bool wait;
+    uint32_t timeoutSec;
+    std::string uninstall;
+
+    DownloadInstallerConfig()
+        : wait(true), timeoutSec(1800) {}
+};
+
+
+struct ComponentSourceConfig {
+    ComponentSourceType type;
+    LocalInstallerConfig local;
+    DownloadInstallerConfig download;
+
+    ComponentSourceConfig()
+        : type(ComponentSourceType::EMBEDDED) {}
+};
+
+
+struct ComponentConfig {
+    std::string id;
+    std::string name;
+    std::string description;
+    bool required;
+    bool defaultSelected;
+    uint32_t sizeHintMB;
+    std::vector<std::string> dependsOn;
+    std::vector<std::string> folders;
+    ComponentSourceConfig source;
+    std::vector<RegistryEntry> registry;
+    std::vector<std::string> killProcesses;
+    bool createDesktopShortcut;
+    bool autoStartup;
+
+    ComponentConfig()
+        : required(false),
+          defaultSelected(true),
+          sizeHintMB(0),
+          createDesktopShortcut(false),
+          autoStartup(false) {}
+};
+
+
+struct UiComponentBindingPage {
+    std::string skin;
+    std::vector<std::string> controls;
+};
+
+
+struct UiComponentSelectionConfig {
+    std::string mode;        // dedicatedPage | embeddedInExistingPages | hybrid
+    std::string strategy;    // xml_userdata
+    std::string tokenPrefix; // component:
+    std::vector<UiComponentBindingPage> pages;
+
+    UiComponentSelectionConfig()
+        : mode("dedicatedPage"),
+          strategy("xml_userdata"),
+          tokenPrefix("component:") {}
+};
+
+
 struct PackagerConfiguration {
     std::string version;
     std::string applicationName;
@@ -102,6 +189,8 @@ struct PackagerConfiguration {
     std::vector<FolderTargetConfig> folderTargets;
     std::vector<RegistryEntry> registry;
     std::vector<std::string> installKillProcesses;
+    std::vector<ComponentConfig> components;
+    UiComponentSelectionConfig componentUi;
     bool autoStartup;
     bool desktopIcons;
     bool autoCleanOldInstall;
@@ -212,6 +301,8 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::vector<ExtendedFolderMapping> extendedMappings;
     std::vector<RegistryEntry> registry;
     std::vector<std::string> installKillProcesses;
+    std::vector<ComponentConfig> components;
+    UiComponentSelectionConfig componentUi;
     
     ExtendedInstallationMetadata() 
         : InstallationMetadata(),
@@ -260,7 +351,7 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;  // "MTDP"
-    constexpr uint32_t VERSION = 12;
+    constexpr uint32_t VERSION = 13;
     
 
     constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;

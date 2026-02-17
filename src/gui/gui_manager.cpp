@@ -20,6 +20,9 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <cctype>
+#include <unordered_map>
+#include <unordered_set>
 #include <cwctype>
 #ifdef _WIN32
 #include <Windows.h>
@@ -128,6 +131,270 @@ static int GetLanguageIndexForCode(const std::wstring& code);
 static std::wstring GetLanguageFilePath(const std::wstring& code);
 static std::string NormalizePathForCompare(const std::string& path);
 static bool RequestPreviousInstallCleanup(HWND hWnd, const ExtendedInstallationMetadata& metadata, const std::wstring& installPath);
+
+struct ComponentControlBinding {
+    CCheckBoxUI* checkBox = nullptr;
+    std::string componentId;
+    std::string controlName;
+};
+
+struct ComponentPageScope {
+    CControlUI* root = nullptr;
+    std::unordered_set<std::string> allowedControls;
+};
+
+static std::string TrimAsciiCopy(const std::string& text) {
+    size_t start = 0;
+    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start])) != 0) {
+        ++start;
+    }
+    size_t end = text.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
+        --end;
+    }
+    return text.substr(start, end - start);
+}
+
+static std::string ToLowerAsciiCopy(const std::string& text) {
+    std::string lowered = text;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lowered;
+}
+
+static std::string NormalizeSkinName(const std::string& skin) {
+    std::string normalized = ToLowerAsciiCopy(skin);
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+    size_t slashPos = normalized.find_last_of('/');
+    if (slashPos != std::string::npos) {
+        normalized = normalized.substr(slashPos + 1);
+    }
+    return normalized;
+}
+
+static int ResolveInstallPageIndex(const std::string& skin) {
+    const std::string normalized = NormalizeSkinName(skin);
+    if (normalized == "welcome_page.xml") {
+        return kPageWelcome;
+    }
+    if (normalized == "license_page.xml") {
+        return kPageLicense;
+    }
+    if (normalized == "progress_page.xml") {
+        return kPageProgress;
+    }
+    if (normalized == "completion_page.xml") {
+        return kPageCompletion;
+    }
+    return -1;
+}
+
+static void CollectControlsRecursive(CControlUI* root, std::vector<CControlUI*>& controls) {
+    if (!root) {
+        return;
+    }
+    controls.push_back(root);
+    CContainerUI* container = static_cast<CContainerUI*>(root->GetInterface(_T("Container")));
+    if (!container) {
+        return;
+    }
+    const int count = container->GetCount();
+    for (int i = 0; i < count; ++i) {
+        CollectControlsRecursive(container->GetItemAt(i), controls);
+    }
+}
+
+static bool IsEmbeddedSelectionMode(const std::string& mode) {
+    if (mode.empty()) {
+        return false;
+    }
+    const std::string lowered = ToLowerAsciiCopy(mode);
+    return lowered == "embeddedinexistingpages" || lowered == "hybrid";
+}
+
+static std::vector<ComponentControlBinding> CollectComponentBindings(CTabLayoutUI* tabPages,
+                                                                     const ExtendedInstallationMetadata& metadata,
+                                                                     std::vector<std::string>* warnings) {
+    std::vector<ComponentControlBinding> bindings;
+    if (!tabPages || metadata.components.empty()) {
+        return bindings;
+    }
+
+    const UiComponentSelectionConfig& ui = metadata.componentUi;
+    if (!IsEmbeddedSelectionMode(ui.mode)) {
+        return bindings;
+    }
+
+    const std::string strategy = ToLowerAsciiCopy(ui.strategy);
+    if (!strategy.empty() && strategy != "xml_userdata") {
+        if (warnings) {
+            warnings->push_back("Unsupported component selection strategy: " + ui.strategy);
+        }
+        return bindings;
+    }
+
+    std::string tokenPrefix = ui.tokenPrefix;
+    if (tokenPrefix.empty()) {
+        tokenPrefix = "component:";
+    }
+
+    std::vector<ComponentPageScope> scopes;
+    if (!ui.pages.empty()) {
+        for (const auto& page : ui.pages) {
+            const int index = ResolveInstallPageIndex(page.skin);
+            if (index < 0 || index >= tabPages->GetCount()) {
+                if (warnings) {
+                    warnings->push_back("Component binding page not found in installer tabs: " + page.skin);
+                }
+                continue;
+            }
+            CControlUI* root = tabPages->GetItemAt(index);
+            if (!root) {
+                continue;
+            }
+            ComponentPageScope scope;
+            scope.root = root;
+            for (const auto& controlName : page.controls) {
+                if (!controlName.empty()) {
+                    scope.allowedControls.insert(ToLowerAsciiCopy(controlName));
+                }
+            }
+            scopes.push_back(std::move(scope));
+        }
+    } else {
+        const int maxIndex = (std::min)(tabPages->GetCount(), kPageCompletion + 1);
+        for (int i = kPageWelcome; i < maxIndex; ++i) {
+            ComponentPageScope scope;
+            scope.root = tabPages->GetItemAt(i);
+            scopes.push_back(std::move(scope));
+        }
+    }
+
+    std::unordered_set<CCheckBoxUI*> seenControls;
+    for (const auto& scope : scopes) {
+        if (!scope.root) {
+            continue;
+        }
+
+        std::vector<CControlUI*> controls;
+        controls.reserve(64);
+        CollectControlsRecursive(scope.root, controls);
+
+        for (CControlUI* control : controls) {
+            if (!control) {
+                continue;
+            }
+            CCheckBoxUI* checkBox = static_cast<CCheckBoxUI*>(control->GetInterface(_T("CheckBox")));
+            if (!checkBox || !seenControls.insert(checkBox).second) {
+                continue;
+            }
+
+            const std::string controlName =
+                ToLowerAsciiCopy(WideToUtf8(TCharToWide(control->GetName().GetData())));
+            if (!scope.allowedControls.empty() &&
+                scope.allowedControls.find(controlName) == scope.allowedControls.end()) {
+                continue;
+            }
+
+            const std::string userData = WideToUtf8(TCharToWide(checkBox->GetUserData().GetData()));
+            if (userData.size() < tokenPrefix.size() ||
+                userData.compare(0, tokenPrefix.size(), tokenPrefix) != 0) {
+                continue;
+            }
+
+            std::string componentId = TrimAsciiCopy(userData.substr(tokenPrefix.size()));
+            if (componentId.empty()) {
+                if (warnings) {
+                    warnings->push_back("Empty component id in checkbox userdata: " +
+                                        WideToUtf8(TCharToWide(checkBox->GetName().GetData())));
+                }
+                continue;
+            }
+
+            ComponentControlBinding binding;
+            binding.checkBox = checkBox;
+            binding.componentId = componentId;
+            binding.controlName = controlName;
+            bindings.push_back(std::move(binding));
+        }
+    }
+
+    return bindings;
+}
+
+static void ApplyComponentBindingConstraints(const ExtendedInstallationMetadata& metadata,
+                                             const std::vector<ComponentControlBinding>& bindings,
+                                             bool applyDefaults,
+                                             std::vector<std::string>* warnings) {
+    std::unordered_map<std::string, const ComponentConfig*> componentIndex;
+    componentIndex.reserve(metadata.components.size());
+    for (const auto& component : metadata.components) {
+        componentIndex[component.id] = &component;
+    }
+
+    for (const auto& binding : bindings) {
+        auto it = componentIndex.find(binding.componentId);
+        if (it == componentIndex.end()) {
+            if (warnings) {
+                warnings->push_back("UI checkbox references unknown component id: " + binding.componentId);
+            }
+            continue;
+        }
+        const ComponentConfig* component = it->second;
+        if (!component) {
+            continue;
+        }
+        if (component->required) {
+            binding.checkBox->SetCheck(true);
+            binding.checkBox->SetEnabled(false);
+            binding.checkBox->SetMouseEnabled(false);
+            continue;
+        }
+        if (applyDefaults) {
+            binding.checkBox->SetCheck(component->defaultSelected);
+        }
+    }
+}
+
+static std::vector<std::string> CollectSelectedComponentIds(
+    const ExtendedInstallationMetadata& metadata,
+    const std::vector<ComponentControlBinding>& bindings,
+    std::vector<std::string>* warnings) {
+    std::unordered_map<std::string, const ComponentConfig*> componentIndex;
+    componentIndex.reserve(metadata.components.size());
+    for (const auto& component : metadata.components) {
+        componentIndex[component.id] = &component;
+    }
+
+    std::unordered_set<std::string> selected;
+    selected.reserve(metadata.components.size());
+    for (const auto& component : metadata.components) {
+        if (component.required) {
+            selected.insert(component.id);
+        }
+    }
+
+    for (const auto& binding : bindings) {
+        if (componentIndex.find(binding.componentId) == componentIndex.end()) {
+            if (warnings) {
+                warnings->push_back("Skipping unknown component id from UI: " + binding.componentId);
+            }
+            continue;
+        }
+        if (binding.checkBox->GetCheck()) {
+            selected.insert(binding.componentId);
+        }
+    }
+
+    std::vector<std::string> ordered;
+    ordered.reserve(selected.size());
+    for (const auto& component : metadata.components) {
+        if (selected.find(component.id) != selected.end()) {
+            ordered.push_back(component.id);
+        }
+    }
+    return ordered;
+}
 
 static bool HandleRunningApplicationDialog(HWND hWnd, const std::vector<std::string>& processNames) {
     (void)hWnd;
@@ -266,6 +533,7 @@ GUIManager::GUIManager()
         m_baseClientWidth(0),
         m_expandedClientHeight(0),
         m_baseWindowWidth(0),
+        m_installMetadataLoaded(false),
         m_uninstallMode(false),
         m_progressTarget(0.0f),
         m_progressDisplayed(0.0f),
@@ -361,6 +629,10 @@ void GUIManager::InitWindow() {
     
     if (m_pInstallPathEdit) {
         m_pInstallPathEdit->SetFocus();
+    }
+
+    if (!m_uninstallMode) {
+        InitializeComponentSelectionUi();
     }
     
 
@@ -488,6 +760,70 @@ void GUIManager::InitControls() {
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetWelcomePageIndex());
     }
+}
+
+bool GUIManager::EnsureInstallMetadataLoaded() {
+    if (m_uninstallMode) {
+        return false;
+    }
+    if (m_installMetadataLoaded) {
+        return true;
+    }
+
+    try {
+        MetadataParser parser;
+        ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
+        if (!parser.validateMetadata(metadata)) {
+            return false;
+        }
+        m_installMetadata = std::move(metadata);
+        m_installMetadataLoaded = true;
+        return true;
+    } catch (const std::exception& ex) {
+        std::cout << "Failed to load install metadata: " << ex.what() << std::endl;
+        return false;
+    } catch (...) {
+        std::cout << "Failed to load install metadata: unknown error." << std::endl;
+        return false;
+    }
+}
+
+void GUIManager::InitializeComponentSelectionUi() {
+    if (!EnsureInstallMetadataLoaded() || !m_pTabPages) {
+        return;
+    }
+
+    std::vector<std::string> warnings;
+    std::vector<ComponentControlBinding> bindings =
+        CollectComponentBindings(m_pTabPages, m_installMetadata, &warnings);
+    ApplyComponentBindingConstraints(m_installMetadata, bindings, true, &warnings);
+
+    for (const auto& warning : warnings) {
+        if (!warning.empty()) {
+            std::cout << "WARN: " << warning << std::endl;
+        }
+    }
+}
+
+std::vector<std::string> GUIManager::CollectSelectedComponentsFromUi() {
+    std::vector<std::string> selected;
+    if (!EnsureInstallMetadataLoaded() || !m_pTabPages) {
+        return selected;
+    }
+
+    std::vector<std::string> warnings;
+    std::vector<ComponentControlBinding> bindings =
+        CollectComponentBindings(m_pTabPages, m_installMetadata, &warnings);
+    ApplyComponentBindingConstraints(m_installMetadata, bindings, false, &warnings);
+    selected = CollectSelectedComponentIds(m_installMetadata, bindings, &warnings);
+
+    for (const auto& warning : warnings) {
+        if (!warning.empty()) {
+            std::cout << "WARN: " << warning << std::endl;
+        }
+    }
+
+    return selected;
 }
 
 void GUIManager::Notify(TNotifyUI& msg) {
@@ -757,25 +1093,15 @@ void GUIManager::OnInstallButtonClick() {
         languageCode = m_config.languageCode;
     }
 
-    ExtendedInstallationMetadata metadata;
-    try {
-        MetadataParser parser;
-        metadata = parser.parseExtendedEmbeddedMetadata();
-        if (!parser.validateMetadata(metadata)) {
-            GUIHelpers::ShowErrorDialog(
-                m_hWnd,
-                GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L""),
-                GUIHelpers::GetLocalizedText(L"msg.dialog.metadata_invalid", L""));
-            return;
-        }
-    } catch (const std::exception& ex) {
-        std::cout << "Failed to parse installer metadata: " << ex.what() << std::endl;
+    if (!EnsureInstallMetadataLoaded()) {
         GUIHelpers::ShowErrorDialog(
             m_hWnd,
             GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L""),
             GUIHelpers::GetLocalizedText(L"msg.dialog.metadata_read_failed", L""));
         return;
     }
+    const ExtendedInstallationMetadata& metadata = m_installMetadata;
+    std::vector<std::string> selectedComponents = CollectSelectedComponentsFromUi();
 
     bool cleanupOldInstall = RequestPreviousInstallCleanup(m_hWnd, metadata, installPath);
 
@@ -788,7 +1114,7 @@ void GUIManager::OnInstallButtonClick() {
 
 
     m_pPageController->StartInstallation(installPath, autoRun, desktopIcons, languageCode,
-                                         cleanupOldInstall, m_hWnd);
+                                         cleanupOldInstall, selectedComponents, m_hWnd);
 
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetProgressPageIndex());

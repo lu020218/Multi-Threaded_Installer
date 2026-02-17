@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(BUILD_GUI "Build with GUI support using DuiLib" ON)
 option(BUILD_TESTS "Build test executables" OFF)
 option(VERIFY_THIRD_PARTY_HASHES "Validate prebuilt third-party library hashes" ON)
+option(YAML_CPP_FETCH_FALLBACK "Allow FetchContent fallback for yaml-cpp when submodule/system package is unavailable" OFF)
 
 # Static linking option for Windows
 if(WIN32)
@@ -32,6 +33,56 @@ endif()
 
 # Find required packages
 find_package(Threads REQUIRED)
+
+# YAML parser dependency for packager configuration.
+# Prefer repository-pinned submodule at third_party/yaml-cpp.
+set(YAML_CPP_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/third_party/yaml-cpp")
+
+# CMake 4+ rejects subprojects with very old policy baselines unless this is set.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+endif()
+
+if(EXISTS "${YAML_CPP_SUBMODULE_DIR}/CMakeLists.txt")
+    message(STATUS "Using yaml-cpp from submodule: ${YAML_CPP_SUBMODULE_DIR}")
+    add_subdirectory("${YAML_CPP_SUBMODULE_DIR}" "${CMAKE_BINARY_DIR}/third_party/yaml-cpp-build" EXCLUDE_FROM_ALL)
+    if(TARGET yaml-cpp)
+        set(YAML_CPP_TARGET yaml-cpp)
+    elseif(TARGET yaml-cpp::yaml-cpp)
+        set(YAML_CPP_TARGET yaml-cpp::yaml-cpp)
+    endif()
+else()
+    find_package(yaml-cpp QUIET)
+    if(yaml-cpp_FOUND)
+        if(TARGET yaml-cpp)
+            set(YAML_CPP_TARGET yaml-cpp)
+        elseif(TARGET yaml-cpp::yaml-cpp)
+            set(YAML_CPP_TARGET yaml-cpp::yaml-cpp)
+        endif()
+        message(STATUS "Using system yaml-cpp package (submodule missing)")
+    elseif(YAML_CPP_FETCH_FALLBACK)
+        include(FetchContent)
+        set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/_deps")
+        message(STATUS "yaml-cpp submodule/system package missing, using FetchContent fallback")
+        FetchContent_Declare(
+            yaml-cpp
+            GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+            GIT_TAG yaml-cpp-0.9.0
+            GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(yaml-cpp)
+        if(TARGET yaml-cpp)
+            set(YAML_CPP_TARGET yaml-cpp)
+        elseif(TARGET yaml-cpp::yaml-cpp)
+            set(YAML_CPP_TARGET yaml-cpp::yaml-cpp)
+        endif()
+    endif()
+endif()
+
+if(NOT YAML_CPP_TARGET)
+    message(FATAL_ERROR
+        "yaml-cpp target was not resolved. Expected submodule at third_party/yaml-cpp or a system yaml-cpp package.")
+endif()
 
 # Set paths for local third-party libraries
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/third_party")
@@ -257,7 +308,7 @@ set(COMMON_SOURCES
 
 # Create packager executable
 add_executable(packager ${PACKAGER_SOURCES} ${COMMON_SOURCES})
-target_link_libraries(packager ${LIBLZMA_LIBRARIES} Threads::Threads)
+target_link_libraries(packager ${LIBLZMA_LIBRARIES} Threads::Threads ${YAML_CPP_TARGET})
 target_include_directories(packager PRIVATE ${LIBLZMA_INCLUDE_DIRS})
 if(LIBLZMA_STATIC)
     target_compile_definitions(packager PRIVATE LZMA_API_STATIC)
@@ -273,7 +324,7 @@ else()
 endif()
 target_link_libraries(installer ${LIBLZMA_LIBRARIES} Threads::Threads)
 if(WIN32)
-    target_link_libraries(installer ole32 shell32)
+    target_link_libraries(installer ole32 shell32 bcrypt urlmon)
 endif()
 target_include_directories(installer PRIVATE ${LIBLZMA_INCLUDE_DIRS})
 if(LIBLZMA_STATIC)
@@ -371,4 +422,52 @@ if(BUILD_TESTS)
 
     target_link_libraries(test_utf8_utils Threads::Threads)
     add_test(NAME utf8_utils COMMAND test_utf8_utils)
+
+    add_executable(test_console_component_args
+        tests/test_console_component_args.cpp
+        src/installer/console_interface.cpp
+        src/common/utf8_utils.cpp
+    )
+
+    target_link_libraries(test_console_component_args Threads::Threads)
+    add_test(NAME console_component_args COMMAND test_console_component_args)
+
+    add_executable(test_uninstall_component_replay
+        tests/test_uninstall_component_replay.cpp
+        src/installer/uninstall_manager.cpp
+        src/installer/file_system_operator.cpp
+        src/installer/installer_helpers.cpp
+        src/installer/install_state_utils.cpp
+        src/installer/registry_utils.cpp
+        src/installer/path_resolver.cpp
+        src/installer/console_interface.cpp
+        src/common/utf8_utils.cpp
+        src/common/types.cpp
+    )
+
+    target_link_libraries(test_uninstall_component_replay Threads::Threads)
+    if(WIN32)
+        target_link_libraries(test_uninstall_component_replay ole32 shell32 advapi32 user32)
+    endif()
+    add_test(NAME uninstall_component_replay COMMAND test_uninstall_component_replay)
+
+    add_executable(test_config_yaml_json_equivalence
+        tests/test_config_yaml_json_equivalence.cpp
+        src/packager/configuration_loader.cpp
+        src/common/utf8_utils.cpp
+        src/common/types.cpp
+    )
+
+    target_link_libraries(test_config_yaml_json_equivalence Threads::Threads ${YAML_CPP_TARGET})
+    add_test(NAME config_yaml_json_equivalence COMMAND test_config_yaml_json_equivalence)
+
+    add_executable(test_configuration_validator_components
+        tests/test_configuration_validator_components.cpp
+        src/packager/configuration_validator.cpp
+        src/common/utf8_utils.cpp
+        src/common/types.cpp
+    )
+
+    target_link_libraries(test_configuration_validator_components Threads::Threads)
+    add_test(NAME configuration_validator_components COMMAND test_configuration_validator_components)
 endif()

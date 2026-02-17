@@ -11,6 +11,212 @@
 #endif
 
 namespace MultiThreadedInstaller {
+namespace {
+
+bool IsSupportedMetadataVersion(uint32_t version) {
+    return version >= 5 && version <= Constants::VERSION;
+}
+
+template <typename T>
+bool ReadPod(const std::vector<uint8_t>& data, size_t& offset, T& out) {
+    if (offset + sizeof(T) > data.size()) {
+        return false;
+    }
+    out = *reinterpret_cast<const T*>(data.data() + offset);
+    offset += sizeof(T);
+    return true;
+}
+
+bool ReadString(const std::vector<uint8_t>& data,
+                size_t& offset,
+                std::string& out,
+                const char* label) {
+    uint32_t len = 0;
+    if (!ReadPod<uint32_t>(data, offset, len)) {
+        std::cerr << "Missing " << label << " length" << std::endl;
+        return false;
+    }
+    if (offset + len > data.size()) {
+        std::cerr << "Insufficient data for " << label << std::endl;
+        return false;
+    }
+    out.assign(reinterpret_cast<const char*>(data.data() + offset), len);
+    offset += len;
+    return true;
+}
+
+bool ReadStringList(const std::vector<uint8_t>& data,
+                    size_t& offset,
+                    std::vector<std::string>& out,
+                    const char* label) {
+    uint32_t count = 0;
+    if (!ReadPod<uint32_t>(data, offset, count)) {
+        std::cerr << "Missing " << label << " count" << std::endl;
+        return false;
+    }
+    out.clear();
+    out.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        std::string value;
+        if (!ReadString(data, offset, value, label)) {
+            return false;
+        }
+        out.push_back(std::move(value));
+    }
+    return true;
+}
+
+bool ReadRegistryList(const std::vector<uint8_t>& data,
+                      size_t& offset,
+                      std::vector<RegistryEntry>& out,
+                      const char* label) {
+    uint32_t count = 0;
+    if (!ReadPod<uint32_t>(data, offset, count)) {
+        std::cerr << "Missing " << label << " count" << std::endl;
+        return false;
+    }
+    out.clear();
+    out.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        RegistryEntry reg;
+        if (!ReadString(data, offset, reg.path, "registry path") ||
+            !ReadString(data, offset, reg.key, "registry key")) {
+            return false;
+        }
+        uint8_t valueType = 0;
+        if (!ReadPod<uint8_t>(data, offset, valueType)) {
+            std::cerr << "Missing registry value type" << std::endl;
+            return false;
+        }
+        reg.type = static_cast<RegistryValueType>(valueType);
+        if (!ReadString(data, offset, reg.value, "registry value")) {
+            return false;
+        }
+        out.push_back(std::move(reg));
+    }
+    return true;
+}
+
+bool ReadComponentList(const std::vector<uint8_t>& data,
+                       size_t& offset,
+                       std::vector<ComponentConfig>& out) {
+    uint32_t componentCount = 0;
+    if (!ReadPod<uint32_t>(data, offset, componentCount)) {
+        std::cerr << "Missing component count" << std::endl;
+        return false;
+    }
+    out.clear();
+    out.reserve(componentCount);
+    for (uint32_t i = 0; i < componentCount; ++i) {
+        ComponentConfig component;
+        if (!ReadString(data, offset, component.id, "component.id") ||
+            !ReadString(data, offset, component.name, "component.name") ||
+            !ReadString(data, offset, component.description, "component.description")) {
+            return false;
+        }
+
+        uint8_t required = 0;
+        uint8_t defaultSelected = 0;
+        if (!ReadPod<uint8_t>(data, offset, required) ||
+            !ReadPod<uint8_t>(data, offset, defaultSelected)) {
+            std::cerr << "Missing component boolean flags" << std::endl;
+            return false;
+        }
+        component.required = required != 0;
+        component.defaultSelected = defaultSelected != 0;
+
+        if (!ReadPod<uint32_t>(data, offset, component.sizeHintMB)) {
+            std::cerr << "Missing component sizeHintMB" << std::endl;
+            return false;
+        }
+
+        if (!ReadStringList(data, offset, component.dependsOn, "component.dependsOn") ||
+            !ReadStringList(data, offset, component.folders, "component.folders")) {
+            return false;
+        }
+
+        uint8_t sourceType = 0;
+        if (!ReadPod<uint8_t>(data, offset, sourceType)) {
+            std::cerr << "Missing component source type" << std::endl;
+            return false;
+        }
+        component.source.type = static_cast<ComponentSourceType>(sourceType);
+
+        if (!ReadString(data, offset, component.source.local.base, "component.source.local.base") ||
+            !ReadString(data, offset, component.source.local.installer, "component.source.local.installer") ||
+            !ReadString(data, offset, component.source.local.args, "component.source.local.args")) {
+            return false;
+        }
+        uint8_t localWait = 0;
+        if (!ReadPod<uint8_t>(data, offset, localWait) ||
+            !ReadPod<uint32_t>(data, offset, component.source.local.timeoutSec) ||
+            !ReadString(data, offset, component.source.local.uninstall, "component.source.local.uninstall")) {
+            return false;
+        }
+        component.source.local.wait = localWait != 0;
+
+        if (!ReadString(data, offset, component.source.download.url, "component.source.download.url") ||
+            !ReadString(data, offset, component.source.download.sha256, "component.source.download.sha256") ||
+            !ReadString(data, offset, component.source.download.saveAs, "component.source.download.saveAs") ||
+            !ReadString(data, offset, component.source.download.args, "component.source.download.args")) {
+            return false;
+        }
+        uint8_t downloadWait = 0;
+        if (!ReadPod<uint8_t>(data, offset, downloadWait) ||
+            !ReadPod<uint32_t>(data, offset, component.source.download.timeoutSec) ||
+            !ReadString(data, offset, component.source.download.uninstall, "component.source.download.uninstall")) {
+            return false;
+        }
+        component.source.download.wait = downloadWait != 0;
+
+        if (!ReadRegistryList(data, offset, component.registry, "component.registry") ||
+            !ReadStringList(data, offset, component.killProcesses, "component.killProcesses")) {
+            return false;
+        }
+
+        uint8_t createDesktopShortcut = 0;
+        uint8_t autoStartup = 0;
+        if (!ReadPod<uint8_t>(data, offset, createDesktopShortcut) ||
+            !ReadPod<uint8_t>(data, offset, autoStartup)) {
+            std::cerr << "Missing component trailing boolean flags" << std::endl;
+            return false;
+        }
+        component.createDesktopShortcut = createDesktopShortcut != 0;
+        component.autoStartup = autoStartup != 0;
+
+        out.push_back(std::move(component));
+    }
+    return true;
+}
+
+bool ReadComponentUiConfig(const std::vector<uint8_t>& data,
+                           size_t& offset,
+                           UiComponentSelectionConfig& out) {
+    if (!ReadString(data, offset, out.mode, "componentUi.mode") ||
+        !ReadString(data, offset, out.strategy, "componentUi.strategy") ||
+        !ReadString(data, offset, out.tokenPrefix, "componentUi.tokenPrefix")) {
+        return false;
+    }
+
+    uint32_t pageCount = 0;
+    if (!ReadPod<uint32_t>(data, offset, pageCount)) {
+        std::cerr << "Missing componentUi.pages count" << std::endl;
+        return false;
+    }
+    out.pages.clear();
+    out.pages.reserve(pageCount);
+    for (uint32_t i = 0; i < pageCount; ++i) {
+        UiComponentBindingPage page;
+        if (!ReadString(data, offset, page.skin, "componentUi.pages.skin") ||
+            !ReadStringList(data, offset, page.controls, "componentUi.pages.controls")) {
+            return false;
+        }
+        out.pages.push_back(std::move(page));
+    }
+    return true;
+}
+
+} // namespace
 
 InstallationMetadata MetadataParser::parseEmbeddedMetadata() {
     std::vector<uint8_t> embeddedData = dataPackagePath_.empty() ? readEmbeddedData() : readExternalMetadata();
@@ -33,7 +239,7 @@ ExtendedInstallationMetadata MetadataParser::parseExtendedEmbeddedMetadata() {
 }
 
 bool MetadataParser::validateMetadata(const InstallationMetadata& metadata) {
-    if (metadata.version != Constants::VERSION && metadata.version != 5) {
+    if (!IsSupportedMetadataVersion(metadata.version)) {
         std::cerr << "Unsupported metadata version: " << metadata.version << std::endl;
         return false;
     }
@@ -488,6 +694,19 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     } else {
         metadata.installKillProcesses.clear();
     }
+
+    if (header->version >= 13) {
+        if (!ReadComponentList(data, offset, metadata.components)) {
+            return metadata;
+        }
+        if (!ReadComponentUiConfig(data, offset, metadata.componentUi)) {
+            return metadata;
+        }
+    } else {
+        metadata.components.clear();
+        metadata.componentUi = UiComponentSelectionConfig();
+    }
+
     for (uint32_t i = 0; i < header->folderCount; ++i) {
         ExtendedFolderMapping mapping;
         
@@ -757,7 +976,7 @@ bool MetadataParser::validateHeader(const BinaryMetadata& header) {
         return false;
     }
     
-    if (header.version != Constants::VERSION && header.version != 5) {
+    if (!IsSupportedMetadataVersion(header.version)) {
         std::cerr << "Unsupported metadata version: " << header.version << std::endl;
         return false;
     }

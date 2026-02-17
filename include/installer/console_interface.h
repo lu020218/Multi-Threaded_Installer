@@ -46,6 +46,8 @@ public:
         std::string defaultDestination;
         std::string dataPackagePath;
         std::vector<std::pair<std::string, std::string>> folderMappings;
+        std::vector<std::string> selectedComponents;
+        bool installAllComponents = false;
         int threadCount = -1;
         bool force = false;
         bool silent = false;

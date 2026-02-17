@@ -1,6 +1,7 @@
 #include "installer/uninstall_manager.h"
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -12,6 +13,7 @@ using MultiThreadedInstaller::InstallStateConfig;
 using MultiThreadedInstaller::InstallStateMode;
 using MultiThreadedInstaller::RegistryEntry;
 using MultiThreadedInstaller::RegistryValueType;
+using MultiThreadedInstaller::ComponentExecutionRecord;
 using MultiThreadedInstaller::readManifest;
 using MultiThreadedInstaller::writeManifest;
 using json = nlohmann::json;
@@ -49,6 +51,29 @@ InstallStateConfig ParseInstallState(const json& manifest) {
     return state;
 }
 
+std::vector<ComponentExecutionRecord> ParseComponentActions(const json& manifest) {
+    std::vector<ComponentExecutionRecord> actions;
+    if (!manifest.contains("componentActions")) {
+        return actions;
+    }
+    const auto& arr = manifest.at("componentActions");
+    if (!arr.is_array()) {
+        return actions;
+    }
+    actions.reserve(arr.size());
+    for (const auto& item : arr) {
+        ComponentExecutionRecord action;
+        action.componentId = item.at("componentId").get<std::string>();
+        action.sourceType = item.at("sourceType").get<std::string>();
+        action.uninstallCommand = item.at("uninstallCommand").get<std::string>();
+        action.workingDirectory = item.at("workingDirectory").get<std::string>();
+        action.wait = item.at("wait").get<bool>();
+        action.timeoutSec = item.at("timeoutSec").get<uint32_t>();
+        actions.push_back(action);
+    }
+    return actions;
+}
+
 void ValidateManifestFields(const json& manifest,
                             const std::string& appName,
                             const std::string& version,
@@ -58,7 +83,8 @@ void ValidateManifestFields(const json& manifest,
                             const std::vector<std::string>& killProcesses,
                             const InstallStateConfig& installState,
                             const std::string& uninstallPath,
-                            const std::string& language) {
+                            const std::string& language,
+                            const std::vector<ComponentExecutionRecord>& componentActions) {
     AssertTrue(manifest.at("appName").get<std::string>() == appName, "appName mismatch");
     AssertTrue(manifest.at("configVersion").get<std::string>() == version, "configVersion mismatch");
     AssertTrue(manifest.at("installDir").get<std::string>() == installDir, "installDir mismatch");
@@ -96,6 +122,23 @@ void ValidateManifestFields(const json& manifest,
                "installState.useMutex mismatch");
     AssertTrue(parsedState.at("mutexName").get<std::string>() == installState.mutexName,
                "installState.mutexName mismatch");
+
+    const auto parsedActions = ParseComponentActions(manifest);
+    AssertTrue(parsedActions.size() == componentActions.size(), "componentActions size mismatch");
+    for (size_t i = 0; i < componentActions.size(); ++i) {
+        AssertTrue(parsedActions[i].componentId == componentActions[i].componentId,
+                   "componentActions componentId mismatch");
+        AssertTrue(parsedActions[i].sourceType == componentActions[i].sourceType,
+                   "componentActions sourceType mismatch");
+        AssertTrue(parsedActions[i].uninstallCommand == componentActions[i].uninstallCommand,
+                   "componentActions uninstallCommand mismatch");
+        AssertTrue(parsedActions[i].workingDirectory == componentActions[i].workingDirectory,
+                   "componentActions workingDirectory mismatch");
+        AssertTrue(parsedActions[i].wait == componentActions[i].wait,
+                   "componentActions wait mismatch");
+        AssertTrue(parsedActions[i].timeoutSec == componentActions[i].timeoutSec,
+                   "componentActions timeoutSec mismatch");
+    }
 }
 
 } // namespace
@@ -150,6 +193,28 @@ int main() {
 
         const std::string uninstallPath = "C:\\Program Files\\RoundTripApp \\u6D4B\\u8BD5\\uninstall.exe";
         const std::string language = "zh_CN";
+        std::vector<ComponentExecutionRecord> componentActions;
+        {
+            ComponentExecutionRecord localAction;
+            localAction.componentId = "plugins";
+            localAction.sourceType = "local";
+            localAction.uninstallCommand =
+                "\"%InstallDir%\\components\\plugins\\uninstall_plugins.bat\" /silent";
+            localAction.workingDirectory = "C:\\Program Files\\RoundTripApp \\u6D4B\\u8BD5\\components";
+            localAction.wait = true;
+            localAction.timeoutSec = 900;
+            componentActions.push_back(localAction);
+
+            ComponentExecutionRecord downloadAction;
+            downloadAction.componentId = "cloud_sync";
+            downloadAction.sourceType = "download";
+            downloadAction.uninstallCommand =
+                "\"%InstallDir%\\downloads\\cloud_sync_setup.exe\" /uninstall /quiet";
+            downloadAction.workingDirectory = "C:\\Program Files\\RoundTripApp \\u6D4B\\u8BD5\\downloads";
+            downloadAction.wait = true;
+            downloadAction.timeoutSec = 1800;
+            componentActions.push_back(downloadAction);
+        }
 
         const bool writeA = writeManifest(
             manifestPathA.string(),
@@ -163,7 +228,8 @@ int main() {
             true,
             installState,
             uninstallPath,
-            language);
+            language,
+            componentActions);
         AssertTrue(writeA, "writeManifest A failed");
 
         json manifestA;
@@ -179,12 +245,14 @@ int main() {
                                killProcesses,
                                installState,
                                uninstallPath,
-                               language);
+                               language,
+                               componentActions);
 
         const auto filesRt = manifestA.at("files").get<std::vector<std::string>>();
         const auto killRt = manifestA.at("killProcesses").get<std::vector<std::string>>();
         const auto registryRt = ParseRegistry(manifestA);
         const auto installStateRt = ParseInstallState(manifestA);
+        const auto componentActionsRt = ParseComponentActions(manifestA);
 
         const bool writeB = writeManifest(
             manifestPathB.string(),
@@ -198,7 +266,8 @@ int main() {
             manifestA.at("desktopIcons").get<bool>(),
             installStateRt,
             manifestA.at("uninstallPath").get<std::string>(),
-            manifestA.at("language").get<std::string>());
+            manifestA.at("language").get<std::string>(),
+            componentActionsRt);
         AssertTrue(writeB, "writeManifest B failed");
 
         json manifestB;
@@ -206,6 +275,31 @@ int main() {
         AssertTrue(readB, "readManifest B failed");
 
         AssertTrue(manifestA == manifestB, "round-trip manifest JSON mismatch");
+
+        const auto legacyPath = manifestDir / "install_legacy.manifest.json";
+        json legacyManifest;
+        legacyManifest["version"] = "1.0";
+        legacyManifest["appName"] = appName;
+        legacyManifest["configVersion"] = version;
+        legacyManifest["installDir"] = installDir;
+        legacyManifest["uninstallPath"] = uninstallPath;
+        legacyManifest["files"] = files;
+        legacyManifest["autoStartup"] = false;
+        legacyManifest["desktopIcons"] = true;
+        legacyManifest["language"] = language;
+        legacyManifest["registry"] = manifestA.at("registry");
+        legacyManifest["killProcesses"] = killProcesses;
+        legacyManifest["installState"] = manifestA.at("installState");
+        {
+            std::ofstream legacyOut(legacyPath, std::ios::binary | std::ios::trunc);
+            AssertTrue(static_cast<bool>(legacyOut), "failed to write legacy manifest fixture");
+            legacyOut << legacyManifest.dump(2);
+        }
+
+        json loadedLegacy;
+        AssertTrue(readManifest(legacyPath.string(), loadedLegacy), "readManifest legacy failed");
+        const auto legacyActions = ParseComponentActions(loadedLegacy);
+        AssertTrue(legacyActions.empty(), "legacy manifest should have empty componentActions");
 
         std::filesystem::remove_all(tempRoot, ec);
         std::cout << "manifest round-trip test passed" << std::endl;

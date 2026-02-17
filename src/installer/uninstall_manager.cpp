@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <chrono>
+#include <limits>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -89,7 +90,8 @@ bool writeManifest(const std::string& manifestPath,
                    bool desktopIcons,
                    const InstallStateConfig& installState,
                    const std::string& uninstallPath,
-                   const std::string& languageCode) {
+                   const std::string& languageCode,
+                   const std::vector<ComponentExecutionRecord>& componentActions) {
     if (manifestPath.empty()) {
         return false;
     }
@@ -128,6 +130,21 @@ bool writeManifest(const std::string& manifestPath,
             safeInstallKill.push_back(ensureUtf8(name));
         }
         root["killProcesses"] = safeInstallKill;
+        json actions = json::array();
+        for (const auto& action : componentActions) {
+            if (action.uninstallCommand.empty()) {
+                continue;
+            }
+            json item;
+            item["componentId"] = ensureUtf8(action.componentId);
+            item["sourceType"] = ensureUtf8(action.sourceType);
+            item["uninstallCommand"] = ensureUtf8(action.uninstallCommand);
+            item["workingDirectory"] = ensureUtf8(action.workingDirectory);
+            item["wait"] = action.wait;
+            item["timeoutSec"] = action.timeoutSec;
+            actions.push_back(item);
+        }
+        root["componentActions"] = actions;
 
         json state;
         state["mode"] = static_cast<int>(installState.mode);
@@ -421,6 +438,101 @@ bool cleanupEmptyDirectoriesCmd(const std::string& root) {
 #endif
 }
 
+#ifdef _WIN32
+static bool executeShellCommandWithTimeout(const std::string& command,
+                                           const std::string& workingDirectory,
+                                           bool wait,
+                                           uint32_t timeoutSec,
+                                           const std::function<bool()>& cancellationCallback,
+                                           DWORD& exitCode,
+                                           std::string& error) {
+    if (command.empty()) {
+        error = "Component uninstall command is empty.";
+        return false;
+    }
+
+    std::wstring commandLine = L"cmd.exe /c ";
+    commandLine += Utf8ToWide(command);
+    std::vector<wchar_t> commandBuffer(commandLine.begin(), commandLine.end());
+    commandBuffer.push_back(L'\0');
+
+    std::wstring workDirW = Utf8ToWide(workingDirectory);
+    STARTUPINFOW si{};
+    PROCESS_INFORMATION pi{};
+    si.cb = sizeof(si);
+
+    BOOL ok = CreateProcessW(nullptr,
+                             commandBuffer.data(),
+                             nullptr,
+                             nullptr,
+                             FALSE,
+                             CREATE_NO_WINDOW,
+                             nullptr,
+                             workDirW.empty() ? nullptr : workDirW.c_str(),
+                             &si,
+                             &pi);
+    if (!ok) {
+        error = "Failed to start component uninstall command.";
+        return false;
+    }
+
+    CloseHandle(pi.hThread);
+    pi.hThread = nullptr;
+
+    if (!wait) {
+        exitCode = 0;
+        CloseHandle(pi.hProcess);
+        return true;
+    }
+
+    const uint64_t timeoutMs = timeoutSec == 0
+                                   ? std::numeric_limits<uint64_t>::max()
+                                   : static_cast<uint64_t>(timeoutSec) * 1000ULL;
+    uint64_t elapsedMs = 0;
+    while (true) {
+        if (cancellationCallback && cancellationCallback()) {
+            TerminateProcess(pi.hProcess, 1);
+            CloseHandle(pi.hProcess);
+            error = "Component uninstall cancelled.";
+            return false;
+        }
+
+        DWORD slice = 200;
+        if (timeoutMs != std::numeric_limits<uint64_t>::max()) {
+            if (elapsedMs >= timeoutMs) {
+                TerminateProcess(pi.hProcess, 1);
+                CloseHandle(pi.hProcess);
+                error = "Component uninstall timed out.";
+                return false;
+            }
+            uint64_t remaining = timeoutMs - elapsedMs;
+            if (remaining < slice) {
+                slice = static_cast<DWORD>(remaining);
+            }
+        }
+
+        DWORD waitResult = WaitForSingleObject(pi.hProcess, slice);
+        if (waitResult == WAIT_OBJECT_0) {
+            break;
+        }
+        if (waitResult != WAIT_TIMEOUT) {
+            CloseHandle(pi.hProcess);
+            error = "Failed while waiting for component uninstall command.";
+            return false;
+        }
+        elapsedMs += slice;
+    }
+
+    if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
+        CloseHandle(pi.hProcess);
+        error = "Failed to read component uninstall exit code.";
+        return false;
+    }
+    CloseHandle(pi.hProcess);
+    return true;
+}
+#endif
+
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
                            ConsoleInterface& console) {
@@ -511,6 +623,25 @@ bool uninstallFromManifest(const std::string& manifestPath,
         installState.mutexName = state.value("mutexName", "");
     }
 
+    std::vector<ComponentExecutionRecord> componentActions;
+    if (manifest.contains("componentActions") && manifest["componentActions"].is_array()) {
+        for (const auto& item : manifest["componentActions"]) {
+            if (!item.is_object()) {
+                continue;
+            }
+            ComponentExecutionRecord record;
+            record.componentId = item.value("componentId", "");
+            record.sourceType = item.value("sourceType", "");
+            record.uninstallCommand = item.value("uninstallCommand", "");
+            record.workingDirectory = item.value("workingDirectory", "");
+            record.wait = item.value("wait", true);
+            record.timeoutSec = item.value("timeoutSec", static_cast<uint32_t>(900));
+            if (!record.uninstallCommand.empty()) {
+                componentActions.push_back(std::move(record));
+            }
+        }
+    }
+
     std::vector<RegistryEntry> manifestRegistryEntries;
     if (manifest.contains("registry") && manifest["registry"].is_array()) {
         for (const auto& reg : manifest["registry"]) {
@@ -577,6 +708,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
     if (desktopIcons && !appName.empty()) {
         addWorkUnits(1);
     }
+    addWorkUnits(componentActions.size());
     addWorkUnits(manifestRegistryEntries.size());
 #ifdef _WIN32
     if (!appName.empty()) {
@@ -636,6 +768,42 @@ bool uninstallFromManifest(const std::string& manifestPath,
 
     applyInstallState(installState, "uninstalling", resolver);
     completeWorkUnit("Marking uninstalling state");
+
+    for (const auto& action : componentActions) {
+        if (isCancelled()) {
+            console.showWarning("Uninstall cancelled while running component uninstall actions");
+            return false;
+        }
+
+        std::string label = action.componentId.empty() ? action.sourceType : action.componentId;
+        if (label.empty()) {
+            label = "component";
+        }
+
+#ifdef _WIN32
+        DWORD exitCode = 0;
+        std::string commandError;
+        bool ok = executeShellCommandWithTimeout(action.uninstallCommand,
+                                                 action.workingDirectory,
+                                                 action.wait,
+                                                 action.timeoutSec,
+                                                 cancellationCallback,
+                                                 exitCode,
+                                                 commandError);
+        if (!ok) {
+            console.showWarning("Component uninstall command failed (" + label + "): " + commandError);
+        } else if (action.wait && exitCode != 0) {
+            console.showWarning("Component uninstall command returned non-zero exit code (" + label +
+                                "): " + std::to_string(exitCode));
+        } else {
+            console.showInfo("Component uninstall command completed: " + label);
+        }
+#else
+        console.showWarning("Component uninstall actions are supported on Windows only. skipped: " + label);
+#endif
+
+        completeWorkUnit("Replaying component uninstall action: " + label);
+    }
 
     if (autoStartup && !appName.empty()) {
         removeAutoStartup(appName);

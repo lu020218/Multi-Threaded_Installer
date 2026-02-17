@@ -16,6 +16,15 @@ struct UninstallProgressInfo {
     std::string currentItem;
 };
 
+struct ComponentExecutionRecord {
+    std::string componentId;
+    std::string sourceType;
+    std::string uninstallCommand;
+    std::string workingDirectory;
+    bool wait = true;
+    uint32_t timeoutSec = 900;
+};
+
 using UninstallProgressCallback = std::function<void(const UninstallProgressInfo&)>;
 
 bool writeManifest(const std::string& manifestPath,
@@ -29,7 +38,8 @@ bool writeManifest(const std::string& manifestPath,
                    bool desktopIcons,
                    const InstallStateConfig& installState,
                    const std::string& uninstallPath,
-                   const std::string& languageCode);
+                   const std::string& languageCode,
+                   const std::vector<ComponentExecutionRecord>& componentActions = {});
 bool readManifest(const std::string& manifestPath, nlohmann::json& outManifest);
 bool resolveExistingInstallInfo(const std::string& appName,
                                 InstallerPathResolver& resolver,

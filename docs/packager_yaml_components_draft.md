@@ -190,3 +190,96 @@ struct UiComponentSelectionConfig {
 3. 实现现有页面 XML 勾选绑定 + 组件选择透传。
 4. 实现 `InstallSelectedComponents`（embedded/local/download）。
 5. 补卸载链路、哈希校验、回归测试。
+## 2026-02-16 Implementation Progress Snapshot
+
+Implemented in installer runtime:
+
+- Component selection plan resolution (`required/defaultSelected/dependsOn`)
+- Embedded folder extraction filtering by selected components
+- Local installer component execution (`source.type=local`)
+- Downloaded installer component execution with SHA256 verification (`source.type=download`)
+- Effective side-effects merge from selected components:
+  - registry entries
+  - kill process list
+  - auto startup and desktop shortcut flags
+
+Current gap to close next:
+
+- GUI page embedded checkbox binding (`userdata=component:<id>`) and selection pass-through
+- Uninstall replay for local/download component actions
+
+## 2026-02-16 C5 Snapshot
+
+Implemented GUI embedded component binding:
+
+- Reads component checkbox binding from existing pages (`userdata=component:<id>`)
+- Supports page/control scope restriction from `ui.componentSelection.binding.pages`
+- Enforces required components as checked+disabled
+- Passes selected component ids into installation service
+
+This closes C5 baseline for embedded-page selection and runtime pass-through.
+
+## 2026-02-16 C6 Snapshot
+
+Implemented uninstall replay for component actions:
+
+- Installer writes selected local/download component uninstall replay records into manifest.
+- Uninstaller replays component uninstall commands (with timeout/cancel checks) before file cleanup.
+- Old manifests without replay section remain supported.
+
+## 2026-02-16 C7 Snapshot
+
+Testing updates completed for current implementation:
+
+- Added manifest round-trip assertions for `componentActions`
+- Added backward-compatibility assertion for legacy manifests (without `componentActions`)
+- Ran test suite in `BUILD_TESTS=ON` build; all tests passed
+
+## 2026-02-16 C7.1 Snapshot
+
+Added parser-focused test coverage:
+
+- `test_console_component_args` covers component CLI flag parsing
+- Confirms trimming and multi-source argument combination behavior
+- Full current test set passes (`3/3`)
+
+## 2026-02-16 C7.2 Snapshot
+
+Added uninstall replay behavior test coverage:
+
+- `test_uninstall_component_replay` validates manifest-driven replay command execution
+- Confirms replay side-effect and uninstall manifest cleanup behavior
+- Full current test set passes (`4/4`)
+
+## 2026-02-16 C7.3 Snapshot
+
+Added config + validator security regression coverage and troubleshooting guide:
+
+- `test_config_yaml_json_equivalence`
+  - validates JSON legacy config and structured YAML config parse to equivalent runtime config
+  - validates config discovery precedence (`packager.yaml` > `packager.json`)
+- `test_configuration_validator_components`
+  - validates local path boundary checks and parent traversal rejection
+  - validates download security requirements (`https://` + 64-char SHA256)
+  - validates dependency cycle rejection and valid graph acceptance
+- Added `docs/components_troubleshooting_guide.md` and linked from configuration reference
+
+## 2026-02-17 C7.4 Snapshot
+
+Build dependency strategy updated for `yaml-cpp`:
+
+- CMake now prefers pinned repository source at `third_party/yaml-cpp` (`add_subdirectory`)
+- Default behavior no longer auto-fetches into `build/_deps`
+- Added guarded fallback option:
+  - `-DYAML_CPP_FETCH_FALLBACK=ON` only when temporary fallback is explicitly needed
+
+## 2026-02-17 C7.5 Snapshot
+
+`yaml-cpp` source and version alignment update:
+
+- Submodule URL switched back to official source:
+  - `https://github.com/jbeder/yaml-cpp.git`
+- Submodule version updated to:
+  - `yaml-cpp-0.9.0`
+- CMake fallback pin updated to:
+  - `GIT_TAG yaml-cpp-0.9.0`

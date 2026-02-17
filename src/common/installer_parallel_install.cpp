@@ -86,6 +86,8 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                                          InstallerPathResolver& pathResolver,
                                          const std::string& userSelectedPath,
                                          const std::vector<std::pair<std::string, std::string>>& folderMappings,
+                                         const std::vector<std::string>& includedFolders,
+                                         bool filterFolders,
                                          int threadCount,
                                          const ProgressCallback& progressCallback,
                                          const LogCallback& infoCallback,
@@ -160,9 +162,25 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     std::vector<FolderTask> folderTasks;
     folderTasks.reserve(metadata.extendedMappings.size());
 
+    std::unordered_set<std::string> includedFolderSet;
+    if (filterFolders) {
+        includedFolderSet.reserve(includedFolders.size());
+        for (const auto& folder : includedFolders) {
+            if (!folder.empty()) {
+                includedFolderSet.insert(folder);
+            }
+        }
+    }
+
     for (const auto& mapping : metadata.extendedMappings) {
         if (isCancellationRequested()) {
             break;
+        }
+        if (filterFolders) {
+            if (includedFolderSet.empty() ||
+                includedFolderSet.find(mapping.folderName) == includedFolderSet.end()) {
+                continue;
+            }
         }
         std::string targetPath;
         bool foundMapping = false;

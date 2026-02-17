@@ -77,7 +77,8 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
                                            bool autoRun,
                                            bool desktopIcons,
                                            const std::wstring& languageCode,
-                                           bool cleanupOldInstall) {
+                                           bool cleanupOldInstall,
+                                           const std::vector<std::string>& selectedComponents) {
     // NOTE: Comment text normalized to avoid encoding mojibake.
 if (m_running) {
         return;
@@ -90,6 +91,7 @@ if (m_running) {
     m_desktopIcons = desktopIcons;
     m_languageCode = languageCode;
     m_cleanupOldInstallRequested = cleanupOldInstall;
+    m_selectedComponents = selectedComponents;
     
     // NOTE: Comment text normalized to avoid encoding mojibake.
     m_workerThread = std::thread(&InstallationWorker::WorkerThreadFunc, this, installPath);
@@ -264,6 +266,7 @@ if (m_cancellationRequested) {
         };
         InstallServiceOptions serviceOptions;
         serviceOptions.installPath = installPathStr;
+        serviceOptions.selectedComponentIds = m_selectedComponents;
         serviceOptions.languageCode = WideToUtf8(m_languageCode);
         serviceOptions.applyRegistryBeforeFinalize = true;
         serviceOptions.preRegistryInstallPath = installPathStr;

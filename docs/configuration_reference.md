@@ -2,9 +2,12 @@
 
 ## Overview
 
-The packager supports configuration files to specify packaging and installation options. This document provides a complete reference for all available configuration options.
+The packager supports configuration files to specify packaging and installation options.  
+This document provides a complete reference for all available configuration options.
 
-## New Schema (packager.json)
+## Supported Formats
+
+### JSON (legacy-compatible schema)
 
 ```json
 {
@@ -44,20 +47,48 @@ The packager supports configuration files to specify packaging and installation 
 }
 ```
 
+### YAML (same semantics as JSON)
+
+```yaml
+Version: "1.0"
+AppName: "MyDesktopApp"
+InstallDir: "%ProgramFiles%"
+Folder:
+  InstallDir: "bin"
+  Roaming: "plugins"
+  Local: "userdata"
+AutoStartup: false
+DesktopIcons: true
+AutoCleanOldInstall: false
+RequireAdmin: false
+MinWindowsVersion: "10.0.19041"
+SparseFileThresholdBytes: 4194304
+```
+
+The loader also accepts a structured YAML style and maps it to the same runtime fields, for example:
+- `package.appName` -> `AppName`
+- `package.version` -> `Version`
+- `install.defaultInstallDir` -> `InstallDir`
+- `install.installState.*` -> `InstallState.*`
+- `install.killProcesses` -> `KillProcesses`
+- `folders[]` -> `Folder` (`InstallDir` / `Roaming` / `Local`)
+
 ## Configuration File Location
 
 The packager searches for configuration files in the following order:
 
 1. **Environment Variable**: `PACKAGER_CONFIG` - Full path to configuration file
 2. **Input Directory**: 
-   - `packager.json` (highest priority)
-   - `.packager.json` (lower priority)
+   - `packager.yaml` (highest priority)
+   - `packager.yml`
+   - `packager.json`
+   - `.packager.json`
 
 If no configuration file is found, the packager uses default values.
 
 ## File Format
 
-Configuration files must be in JSON format with UTF-8 encoding.
+Configuration files must be UTF-8 encoded JSON or YAML.
 
 ## Configuration Schema
 
@@ -77,6 +108,8 @@ Configuration files must be in JSON format with UTF-8 encoding.
 | `MinWindowsVersion` | string | No | - | Minimum Windows version (format: "major.minor.build") |
 | `SparseFileThresholdBytes` | number | No | 4194304 | Only files at or above this size are created as sparse files |
 | `InstallState` | object | No | { Mode: "Registry", UseMutex: true } | Install state signaling configuration |
+| `components` | array | No | [] | Optional component definitions (embedded/local/download) |
+| `ui.componentSelection` | object | No | defaults applied | Optional component binding metadata for GUI selection |
 
 ### Folder Target Configuration
 
@@ -111,6 +144,40 @@ Each item in `Registry` supports:
 | `FilePath` | string | No | File path for install state |
 | `UseMutex` | bool | No | Whether to create a named mutex during install |
 | `MutexName` | string | No | Named mutex |
+
+### Components (v13 metadata capable)
+
+`components[]` supports:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | No* | Component identifier |
+| `name` | string | No | Display name |
+| `description` | string | No | Display description |
+| `required` | bool | No | Whether component is mandatory |
+| `defaultSelected` | bool | No | Whether component is selected by default |
+| `dependsOn` | array[string] | No | Dependency component IDs |
+| `folders` | array[string] | No | Related embedded folder names |
+| `source` | object | No | Installer source settings (`embedded` / `local` / `download`) |
+| `registry` | array | No | Component-scoped registry entries |
+| `killProcesses` | array[string] | No | Component-scoped process list |
+| `createDesktopShortcut` | bool | No | Component-scoped shortcut preference |
+| `autoStartup` | bool | No | Component-scoped autostart preference |
+
+\* Validation and strict schema enforcement are handled separately.
+
+`source` supports:
+- `type`: `embedded` / `local` / `download`
+- `local`: `base`, `installer`, `args`, `wait`, `timeoutSec`, `uninstall`
+- `download`: `url`, `sha256`, `saveAs`, `args`, `wait`, `timeoutSec`, `uninstall`
+
+### UI Component Binding
+
+`ui.componentSelection` supports:
+- `mode`: `dedicatedPage` / `embeddedInExistingPages` / `hybrid`
+- `binding.strategy`: e.g. `xml_userdata`
+- `binding.tokenPrefix`: e.g. `component:`
+- `binding.pages[]`: each page with `skin` and `controls[]`
 
 ## Target Directory Values
 
@@ -291,13 +358,23 @@ The packager validates configuration files and reports errors for:
 4. **Invalid Characters in Application Name**
    - Application name cannot contain: `\ / : * ? " < > |`
 
+5. **Component Rules (when `components` is provided)**
+   - `components[].id` must be unique
+   - `dependsOn` must reference existing component IDs
+   - dependency graph must be acyclic
+   - `required: true` cannot use `defaultSelected: false`
+   - `source.local.base` must be under `%InstallDir%` / `installDirectory`
+   - `source.local` paths cannot contain parent traversal (`..`)
+   - `source.download.url` must use `https://`
+   - `source.download.sha256` must be a 64-character hex digest
+
 ## Error Messages
 
 ### Missing Application Name
 
 ```
 ERROR: Missing required field in configuration file
-  File: C:\project\packager.json
+  File: C:\project\packager.yaml
   Field: AppName
   Reason: Application name is required
   Suggestion: Add "AppName": "YourAppName" to the configuration file
@@ -307,7 +384,7 @@ ERROR: Missing required field in configuration file
 
 ```
 ERROR: Configuration validation failed
-  File: C:\project\packager.json
+  File: C:\project\packager.yaml
   Field: Folder.InstallDir
   Value: "nonexistent"
   Reason: Folder does not exist in input directory
@@ -321,7 +398,7 @@ The packager logs configuration-related information:
 ### Configuration File Found
 
 ```
-INFO: Configuration file found: C:\project\packager.json
+INFO: Configuration file found: C:\project\packager.yaml
 INFO: Application name: MyApplication
 INFO: Default install directory: %ProgramFiles%
 INFO: Folder targets: 3 configured
@@ -339,7 +416,7 @@ INFO: Default install directory: %ProgramFiles% (default)
 
 ```
 WARNING: Unknown configuration field "customField" will be ignored
-WARNING: Multiple configuration files found, using highest priority: packager.json
+WARNING: Multiple configuration files found, using highest priority: packager.yaml
 ```
 
 ## Best Practices
@@ -369,18 +446,18 @@ WARNING: Multiple configuration files found, using highest priority: packager.js
 **Problem**: Packager reports "No configuration file found"
 
 **Solutions**:
-- Verify file is named `packager.json` or `.packager.json`
+- Verify file is named `packager.yaml`, `packager.yml`, `packager.json`, or `.packager.json`
 - Verify file is in the input directory root
 - Check file permissions
 - Use `PACKAGER_CONFIG` environment variable to specify full path
 
-### JSON parsing error
+### Config parsing error
 
-**Problem**: "Invalid JSON format" error
+**Problem**: "Invalid JSON/YAML format" error
 
 **Solutions**:
-- Validate JSON syntax using a JSON validator
-- Check for missing commas, quotes, or brackets
+- Validate JSON or YAML syntax with a validator
+- Check for missing commas/quotes/brackets (JSON) or indentation errors (YAML)
 - Ensure UTF-8 encoding without BOM
 
 ### Folder not found error
@@ -405,3 +482,4 @@ WARNING: Multiple configuration files found, using highest priority: packager.js
 
 - [Migration Guide](migration_guide.md) - Migrating from command-line arguments
 - [Examples](../examples/configurations/) - Additional configuration examples
+- [Componentized Install Troubleshooting Guide](components_troubleshooting_guide.md) - Debugging component selection/install/uninstall issues

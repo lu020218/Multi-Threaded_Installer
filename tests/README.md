@@ -40,3 +40,33 @@ cmake -S . -B build -DBUILD_TESTS=ON
 cmake --build build --config Release --target test_utf8_utils
 ctest --test-dir build -C Release -R utf8_utils -V
 ```
+
+## Config YAML/JSON Equivalence Test
+
+`tests/test_config_yaml_json_equivalence.cpp` validates:
+- semantic equivalence between JSON legacy config and structured YAML config parsing
+- config discovery precedence (`packager.yaml` over `packager.json`)
+
+### Build And Run
+
+```powershell
+cmake -S . -B build -DBUILD_TESTS=ON
+cmake --build build --config Release --target test_config_yaml_json_equivalence
+ctest --test-dir build -C Release -R config_yaml_json_equivalence -V
+```
+
+## Component Validator Security Rules Test
+
+`tests/test_configuration_validator_components.cpp` validates:
+- local installer path restriction (relative path only)
+- local installer parent traversal rejection (`..`)
+- download source security checks (`https://` + 64-char SHA256)
+- dependency cycle rejection and valid dependency graph acceptance
+
+### Build And Run
+
+```powershell
+cmake -S . -B build -DBUILD_TESTS=ON
+cmake --build build --config Release --target test_configuration_validator_components
+ctest --test-dir build -C Release -R configuration_validator_components -V
+```

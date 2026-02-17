@@ -66,6 +66,15 @@ private:
      */
     bool validateTargetDirectory(const std::string& targetDir,
                                 std::vector<std::string>& errors);
+
+    /**
+     *
+     *
+     *
+     */
+    bool validateComponents(const PackagerConfiguration& config,
+                            const std::string& inputDirectory,
+                            std::vector<std::string>& errors);
 };
 
 } // namespace MultiThreadedInstaller

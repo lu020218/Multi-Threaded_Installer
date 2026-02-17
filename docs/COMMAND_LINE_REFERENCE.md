@@ -422,3 +422,30 @@ For additional help with command-line deployment:
 - Review the User Guide (USER_GUIDE.md)
 - Check the Troubleshooting Guide (TROUBLESHOOTING.md)
 - Contact technical support with deployment logs
+
+## Component Selection (Current)
+
+Installer now supports explicit component selection in CLI mode:
+
+- `--component <id>`: select one component id (repeatable)
+- `--components <id1,id2,...>`: select multiple component ids
+- `--all-components`: install all optional components
+
+Selection behavior:
+
+- No component flags: install `required + defaultSelected`
+- Explicit selected ids: install `required + selected + dependency closure`
+- Invalid component id: installation fails with a clear error message
+
+## Component Uninstall Replay (Current)
+
+When componentized install is used, installer writes component uninstall replay entries to install manifest.
+During uninstall, these replay commands are executed before file cleanup.
+
+Current behavior:
+
+- Replay source: `install.manifest.json` -> `componentActions[]`
+- Execution: `cmd.exe /c <uninstallCommand>`
+- Supports per-action `wait` and `timeoutSec`
+- Replay failures are logged as warnings and uninstall continues
+- Old manifests without `componentActions` remain supported

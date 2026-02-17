@@ -6,6 +6,7 @@
 #include <string>
 #include <memory>
 #include <cstdint>
+#include <vector>
 #include "../common/types.h"
 
 // Use DuiLib namespace
@@ -124,9 +125,14 @@ private:
     int m_baseClientWidth;
     int m_expandedClientHeight;
     int m_baseWindowWidth;
+    ExtendedInstallationMetadata m_installMetadata;
+    bool m_installMetadataLoaded;
     
 
     void InitControls();
+    bool EnsureInstallMetadataLoaded();
+    void InitializeComponentSelectionUi();
+    std::vector<std::string> CollectSelectedComponentsFromUi();
     
 
     void OnInstallButtonClick();

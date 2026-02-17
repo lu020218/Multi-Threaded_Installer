@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types.h"
+#include <json.hpp>
 #include <string>
 #include <optional>
 
@@ -64,6 +65,24 @@ private:
      */
     std::optional<PackagerConfiguration> parseJsonConfig(
         const std::string& filePath);
+
+    /**
+     *
+     *
+     *
+     */
+    std::optional<PackagerConfiguration> parseYamlConfig(
+        const std::string& filePath);
+
+    /**
+     *
+     *
+     *
+     */
+    std::optional<PackagerConfiguration> parseConfigObject(
+        const nlohmann::json& configObject,
+        const std::string& filePath,
+        const std::string& formatLabel);
     
     /**
      *

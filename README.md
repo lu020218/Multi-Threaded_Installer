@@ -1,120 +1,224 @@
 # Multi-Threaded Installer
 
-A C++ packager and installer system that creates self-extracting installers with multi-threaded decompression capabilities.
+一个基于 C++17 的打包与安装系统，包含两个核心程序：
 
-## Project Structure
+- `packager`：将输入目录打包为自解压安装程序
+- `installer`：执行安装/静默安装/卸载，支持组件选择与多线程解压
 
-```
-鈹溾攢鈹€ CMakeLists.txt              # Build configuration
-鈹溾攢鈹€ README.md                   # This file
-鈹溾攢鈹€ include/                    # Header files
-鈹?  鈹溾攢鈹€ common/
-鈹?  鈹?  鈹斺攢鈹€ types.h            # Core data structures and enums
-鈹?  鈹溾攢鈹€ packager/              # Packager component headers
-鈹?  鈹?  鈹溾攢鈹€ folder_scanner.h
-鈹?  鈹?  鈹溾攢鈹€ compression_module.h
-鈹?  鈹?  鈹溾攢鈹€ metadata_generator.h
-鈹?  鈹?  鈹斺攢鈹€ installer_generator.h
-鈹?  鈹斺攢鈹€ installer/             # Installer component headers
-鈹?      鈹溾攢鈹€ metadata_parser.h
-鈹?      鈹溾攢鈹€ thread_pool_manager.h
-鈹?      鈹溾攢鈹€ decompression_engine.h
-鈹?      鈹溾攢鈹€ file_system_operator.h
-鈹?      鈹斺攢鈹€ console_interface.h
-鈹溾攢鈹€ src/                       # Source files
-鈹?  鈹溾攢鈹€ common/
-鈹?  鈹?  鈹斺攢鈹€ types.cpp
-鈹?  鈹溾攢鈹€ packager/              # Packager implementation
-鈹?  鈹?  鈹溾攢鈹€ main.cpp
-鈹?  鈹?  鈹溾攢鈹€ folder_scanner.cpp
-鈹?  鈹?  鈹溾攢鈹€ compression_module.cpp
-鈹?  鈹?  鈹溾攢鈹€ metadata_generator.cpp
-鈹?  鈹?  鈹斺攢鈹€ installer_generator.cpp
-鈹?  鈹斺攢鈹€ installer/             # Installer implementation
-鈹?      鈹溾攢鈹€ main.cpp
-鈹?      鈹溾攢鈹€ metadata_parser.cpp
-鈹?      鈹溾攢鈹€ thread_pool_manager.cpp
-鈹?      鈹溾攢鈹€ decompression_engine.cpp
-鈹?      鈹溾攢鈹€ file_system_operator.cpp
-鈹?      鈹斺攢鈹€ console_interface.cpp
-鈹斺攢鈹€ tests/                     # Test files
-    鈹溾攢鈹€ test_main.cpp          # Unit test runner
-    鈹溾攢鈹€ test_*.cpp             # Unit test files
-    鈹斺攢鈹€ pbt/                   # Property-based tests
-        鈹斺攢鈹€ test_compression_roundtrip.cpp
+当前仓库的主线构建与 CI 面向 Windows（含 GUI）。
+
+## 主要能力
+
+- LZMA 压缩与解压（当前仅支持 LZMA）
+- 生成单文件安装包（可选额外导出 `.dat` 数据包）
+- 安装器支持 GUI 与 CLI/静默模式
+- 支持组件化安装（`--component` / `--components` / `--all-components`）
+- 支持卸载（`--uninstall` 或 `uninstall.exe` 自动识别）
+- 支持 JSON/YAML 配置文件
+
+## 仓库结构
+
+```text
+.
+├─ include/                  # 头文件
+├─ src/
+│  ├─ packager/              # 打包器实现
+│  ├─ installer/             # 安装器实现
+│  ├─ gui/                   # GUI 实现（BUILD_GUI=ON）
+│  └─ common/                # 公共模块
+├─ resources/                # GUI 资源（XML/图片/语言/license）
+├─ docs/                     # 详细文档
+├─ tests/                    # 测试
+├─ third_party/              # 第三方依赖（含预编译库与子模块）
+└─ CMakeLists.txt
 ```
 
-## Dependencies
+## 构建前准备
 
-- **7z SDK / liblzma** (>= 19.00): LZMA compression support
-- **RapidCheck**: Property-based testing framework (for tests)
-- **CMake** (>= 3.16): Build system
-- **C++17** compatible compiler
+### 1) 同步子模块
 
-## Building
+`yaml-cpp` 通过子模块提供：
 
-```bash
-mkdir build
-cd build
-cmake ..
-make
+```powershell
+git submodule update --init --recursive
 ```
 
-## Usage
+### 2) 准备第三方库
 
-### Packager
-```bash
-./packager [options] <input_directory> <output_file>
+默认配置会使用仓库内预置依赖并校验哈希：
 
-Options:
-  -a, --algorithm <lzma>         Choose compression algorithm (default: lzma)
-  -l, --level <level>            Compression level (lzma: 0-9)
-  -p, --data-out <file>          Write external data package
-  -t, --threads <count>          Number of compression threads (default: CPU cores)
-  -v, --verbose                  Show detailed information
-  -h, --help                     Show help message
+- `third_party/xz/include` 与 `third_party/xz/lib_static/lzma.lib`
+- `third_party/DuiLib_Ultimate/DuiLib`
+- `third_party/DuiLib_Ultimate/lib_static/DuiLib.lib`（`BUILD_GUI=ON` 时必需）
+
+说明：
+- `BUILD_GUI=ON` 时，`STATIC_LINK_RUNTIME` 必须为 `ON`（CMake 中有强约束）。
+- 若哈希不匹配且 `VERIFY_THIRD_PARTY_HASHES=ON`，配置会失败。
+
+## 构建
+
+推荐 Windows + Visual Studio 生成器：
+
+```powershell
+cmake -S . -B build `
+  -DBUILD_GUI=ON `
+  -DSTATIC_LINK_RUNTIME=ON `
+  -DVERIFY_THIRD_PARTY_HASHES=ON
+
+cmake --build build --config Release
 ```
 
-### Installer
-```bash
-./installer [options] [folder_mappings...]
+产物通常位于：
 
-Options:
-  -d, --destination <directory>  Default installation directory
-  -p, --data-package <file>      Use external data package
-  -t, --threads <count>          Number of decompression threads (default: CPU cores)
-  -f, --force                    Force overwrite existing files
-  -s, --silent                   Silent installation mode
-  -v, --verbose                  Show detailed information
-  -h, --help                     Show help message
+- `build/Release/packager.exe`
+- `build/Release/installer.exe`
+
+## 快速使用
+
+### 1) 准备输入目录
+
+`packager` 会扫描输入目录下的一级子目录作为“安装文件夹单元”。  
+请把待安装内容放在这些子目录中，并在输入目录放置配置文件（可选）：
+
+- `packager.yaml`
+- `packager.yml`
+- `packager.json`
+- `.packager.json`
+
+也可通过环境变量指定：
+
+```powershell
+$env:PACKAGER_CONFIG="E:\path\to\packager.yaml"
 ```
 
-## Testing
+### 2) 生成安装包
 
-```bash
-# Run unit tests
-./tests
-
-# Run property-based tests (if RapidCheck is available)
-./pbt_tests
+```powershell
+.\build\Release\packager.exe <input_directory> <output_installer.exe>
 ```
 
-## Features
+示例：
 
-- **Multi-threaded compression and decompression**
-- **Single compression algorithm** (LZMA)
-- **Self-extracting installers**
-- **Cross-platform support** (Windows, Linux, macOS)
-- **Command-line and interactive interfaces**
-- **Comprehensive testing** (unit tests + property-based tests)
+```powershell
+.\build\Release\packager.exe .\test_input .\dist\TestAppSetup.exe
+```
 
-## Architecture
+注意：
+- 输出目录必须已存在（否则参数校验会报错）。
+- `packager` 会使用已构建的 `installer.exe` 作为模板拼装自解压包。
 
-The system consists of two main components:
+### 3) 运行安装
 
-1. **Packager**: Scans input directories, compresses folders, generates metadata, and creates self-extracting installers
-2. **Installer**: Parses embedded metadata, decompresses folders using multiple threads, and installs files to target directories
+```powershell
+.\dist\TestAppSetup.exe
+```
 
-Both components share common data structures and use a modular design for maintainability and extensibility.
+静默安装：
 
+```powershell
+.\dist\TestAppSetup.exe -s
+```
 
+卸载：
+
+```powershell
+.\dist\TestAppSetup.exe --uninstall
+```
+
+或将卸载程序命名为 `uninstall.exe` 执行（会自动进入卸载模式）。
+
+## 命令行参数
+
+### packager
+
+```text
+Usage: packager [options] <input_directory> <output_file>
+
+  -a, --algorithm <lzma>   压缩算法（当前仅 lzma）
+  -l, --level <level>      压缩级别（0-9）
+  -p, --data-out <file>    额外导出外部数据包
+  -t, --threads <count>    压缩线程数
+  -v, --verbose            详细日志
+  -h, --help               帮助
+```
+
+### installer
+
+```text
+Usage: installer [options] [folder_mappings...]
+
+  -d, --destination <dir>     默认安装目录
+  -p, --data-package <file>   使用外部数据包
+  -t, --threads <count>       解压线程数
+  -f, --force                 强制覆盖
+  -s, --silent                静默安装
+  --debug                     GUI 模式下显示控制台
+  --uninstall                 卸载模式
+  --component <id>            选择单个组件（可重复）
+  --components <a,b,c>        批量选择组件
+  --all-components            安装全部可选组件
+  -v, --verbose               详细日志
+  -h, --help                  帮助
+
+  folder_mappings 格式:
+  <folder_name>=<target_path>
+```
+
+## 配置文件示例（YAML）
+
+```yaml
+Version: "1.0"
+AppName: "MyDesktopApp"
+InstallDir: "%ProgramFiles%"
+Folder:
+  InstallDir: "bin"
+  Roaming: "plugins"
+  Local: "userdata"
+AutoStartup: false
+DesktopIcons: true
+RequireAdmin: true
+MinWindowsVersion: "10.0.19041"
+
+components:
+  - id: core
+    name: Core Files
+    required: true
+    defaultSelected: true
+    folders: ["bin"]
+    source:
+      type: embedded
+
+  - id: plugins
+    name: Optional Plugins
+    required: false
+    defaultSelected: true
+    dependsOn: ["core"]
+    source:
+      type: local
+      local:
+        base: "%InstallDir%\\components"
+        installer: "plugins\\install_plugins.bat"
+        args: "/silent"
+        wait: true
+        timeoutSec: 900
+```
+
+完整字段说明见：`docs/configuration_reference.md`
+
+## 测试
+
+默认不构建测试，开启方式：
+
+```powershell
+cmake -S . -B build-tests -DBUILD_TESTS=ON
+cmake --build build-tests --config Release
+ctest --test-dir build-tests -C Release --output-on-failure
+```
+
+## 相关文档
+
+- `docs/configuration_reference.md`
+- `docs/COMMAND_LINE_REFERENCE.md`
+- `docs/BUILD_AND_DEPLOYMENT.md`
+- `docs/components_troubleshooting_guide.md`
+- `docs/TROUBLESHOOTING.md`

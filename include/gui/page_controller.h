@@ -4,6 +4,7 @@
 
 #include <UIlib.h>
 #include <string>
+#include <vector>
 
 using namespace DuiLib;
 
@@ -40,6 +41,7 @@ public:
                            bool desktopIcons,
                            const std::wstring& languageCode,
                            bool cleanupOldInstall,
+                           const std::vector<std::string>& selectedComponents,
                            HWND hNotifyWindow);
     
 

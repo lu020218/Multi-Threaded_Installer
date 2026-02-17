@@ -29,7 +29,7 @@ void showUsage(const std::string& programName) {
     std::cout << "  output_file      Path for the generated installer executable\n";
     std::cout << "\n";
     std::cout << "Configuration:\n";
-    std::cout << "  Place a packager.json or .packager.json file in the input directory\n";
+    std::cout << "  Place packager.yaml/packager.yml/packager.json/.packager.json in the input directory\n";
     std::cout << "  to configure packaging options. If no configuration file is found,\n";
     std::cout << "  default settings will be used.\n";
 }

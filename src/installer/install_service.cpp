@@ -9,15 +9,23 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <limits>
 #include <mutex>
+#include <optional>
+#include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <bcrypt.h>
+#include <urlmon.h>
 #endif
 
 namespace MultiThreadedInstaller {
@@ -186,6 +194,499 @@ std::string ResolveLanguageCode(const std::string& preferredLanguage) {
 #endif
 }
 
+struct ComponentSelectionPlan {
+    bool hasComponents = false;
+    std::vector<const ComponentConfig*> ordered;
+    std::vector<std::string> embeddedFolders;
+    std::vector<RegistryEntry> registryEntries;
+    std::vector<std::string> killProcesses;
+    bool autoStartup = false;
+    bool desktopIcons = false;
+};
+
+void AppendUniqueString(std::vector<std::string>& target,
+                        std::unordered_set<std::string>& seen,
+                        const std::string& value) {
+    if (value.empty()) {
+        return;
+    }
+    if (seen.insert(value).second) {
+        target.push_back(value);
+    }
+}
+
+void AppendUniqueRegistry(std::vector<RegistryEntry>& target,
+                          std::unordered_set<std::string>& seen,
+                          const RegistryEntry& entry) {
+    std::string key = entry.path;
+    key.push_back('\n');
+    key += entry.key;
+    key.push_back('\n');
+    key += entry.value;
+    key.push_back('\n');
+    key += std::to_string(static_cast<int>(entry.type));
+    if (seen.insert(key).second) {
+        target.push_back(entry);
+    }
+}
+
+bool BuildComponentSelectionPlan(const ExtendedInstallationMetadata& metadata,
+                                 const InstallServiceOptions& options,
+                                 ComponentSelectionPlan& plan,
+                                 std::string& error) {
+    plan = ComponentSelectionPlan{};
+    if (metadata.components.empty()) {
+        return true;
+    }
+
+    plan.hasComponents = true;
+
+    std::unordered_map<std::string, const ComponentConfig*> index;
+    index.reserve(metadata.components.size());
+    for (const auto& component : metadata.components) {
+        if (!component.id.empty()) {
+            index[component.id] = &component;
+        }
+    }
+
+    std::unordered_set<std::string> initialSelection;
+    initialSelection.reserve(metadata.components.size());
+    for (const auto& component : metadata.components) {
+        if (component.required) {
+            initialSelection.insert(component.id);
+        }
+    }
+
+    if (options.installAllComponents) {
+        for (const auto& component : metadata.components) {
+            initialSelection.insert(component.id);
+        }
+    } else if (!options.selectedComponentIds.empty()) {
+        for (const auto& id : options.selectedComponentIds) {
+            if (index.find(id) == index.end()) {
+                error = "Unknown selected component id: " + id;
+                return false;
+            }
+            initialSelection.insert(id);
+        }
+    } else {
+        for (const auto& component : metadata.components) {
+            if (component.defaultSelected) {
+                initialSelection.insert(component.id);
+            }
+        }
+    }
+
+    std::unordered_set<std::string> selected;
+    selected.reserve(metadata.components.size());
+    std::function<bool(const std::string&)> includeWithDependencies =
+        [&](const std::string& id) -> bool {
+        if (selected.find(id) != selected.end()) {
+            return true;
+        }
+        auto it = index.find(id);
+        if (it == index.end()) {
+            error = "Component dependency not found: " + id;
+            return false;
+        }
+        selected.insert(id);
+        for (const auto& dep : it->second->dependsOn) {
+            if (!includeWithDependencies(dep)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    for (const auto& id : initialSelection) {
+        if (!includeWithDependencies(id)) {
+            return false;
+        }
+    }
+
+    enum class VisitState : uint8_t { Unvisited = 0, Visiting = 1, Visited = 2 };
+    std::unordered_map<std::string, VisitState> visit;
+    visit.reserve(selected.size());
+
+    std::function<bool(const std::string&)> dfs = [&](const std::string& id) -> bool {
+        auto current = visit.find(id);
+        if (current != visit.end()) {
+            if (current->second == VisitState::Visited) {
+                return true;
+            }
+            if (current->second == VisitState::Visiting) {
+                error = "Component dependency cycle detected at: " + id;
+                return false;
+            }
+        }
+        visit[id] = VisitState::Visiting;
+        auto it = index.find(id);
+        if (it == index.end()) {
+            error = "Component not found: " + id;
+            return false;
+        }
+        for (const auto& dep : it->second->dependsOn) {
+            if (selected.find(dep) == selected.end()) {
+                continue;
+            }
+            if (!dfs(dep)) {
+                return false;
+            }
+        }
+        visit[id] = VisitState::Visited;
+        plan.ordered.push_back(it->second);
+        return true;
+    };
+
+    for (const auto& component : metadata.components) {
+        if (selected.find(component.id) == selected.end()) {
+            continue;
+        }
+        if (!dfs(component.id)) {
+            return false;
+        }
+    }
+
+    std::unordered_set<std::string> seenFolders;
+    std::unordered_set<std::string> seenKillProcesses;
+    std::unordered_set<std::string> seenRegistry;
+    seenFolders.reserve(plan.ordered.size() * 2);
+    seenKillProcesses.reserve(plan.ordered.size() * 2);
+    seenRegistry.reserve(plan.ordered.size() * 2);
+
+    for (const auto* component : plan.ordered) {
+        if (!component) {
+            continue;
+        }
+        if (component->source.type == ComponentSourceType::EMBEDDED) {
+            for (const auto& folder : component->folders) {
+                AppendUniqueString(plan.embeddedFolders, seenFolders, folder);
+            }
+        }
+        for (const auto& name : component->killProcesses) {
+            AppendUniqueString(plan.killProcesses, seenKillProcesses, name);
+        }
+        for (const auto& entry : component->registry) {
+            AppendUniqueRegistry(plan.registryEntries, seenRegistry, entry);
+        }
+        plan.autoStartup = plan.autoStartup || component->autoStartup;
+        plan.desktopIcons = plan.desktopIcons || component->createDesktopShortcut;
+    }
+
+    return true;
+}
+
+bool ShouldInstallEmbeddedFolder(const ComponentSelectionPlan& plan,
+                                 const ExtendedFolderMapping& mapping) {
+    if (!plan.hasComponents) {
+        return true;
+    }
+    return std::find(plan.embeddedFolders.begin(),
+                     plan.embeddedFolders.end(),
+                     mapping.folderName) != plan.embeddedFolders.end();
+}
+
+std::string ExpandInstallDirToken(const std::string& text, const std::string& installDir) {
+    if (text.empty()) {
+        return text;
+    }
+    const std::string token = "%InstallDir%";
+    std::string expanded = text;
+    size_t position = 0;
+    while ((position = expanded.find(token, position)) != std::string::npos) {
+        expanded.replace(position, token.size(), installDir);
+        position += installDir.size();
+    }
+    return expanded;
+}
+
+std::string NormalizePathString(const std::filesystem::path& path) {
+    std::string value = Utf8FromPath(path.lexically_normal());
+    std::replace(value.begin(), value.end(), '/', '\\');
+    while (!value.empty() && (value.back() == '\\' || value.back() == '/')) {
+        value.pop_back();
+    }
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+bool IsPathUnderBase(const std::filesystem::path& base, const std::filesystem::path& candidate) {
+    const std::string baseNormalized = NormalizePathString(base);
+    const std::string candidateNormalized = NormalizePathString(candidate);
+    if (baseNormalized.empty() || candidateNormalized.empty()) {
+        return false;
+    }
+    if (candidateNormalized == baseNormalized) {
+        return true;
+    }
+    if (candidateNormalized.size() <= baseNormalized.size()) {
+        return false;
+    }
+    if (candidateNormalized.compare(0, baseNormalized.size(), baseNormalized) != 0) {
+        return false;
+    }
+    return candidateNormalized[baseNormalized.size()] == '\\';
+}
+
+#ifdef _WIN32
+std::wstring QuoteProcessPath(const std::wstring& value) {
+    if (value.empty()) {
+        return L"\"\"";
+    }
+    if (value.front() == L'"' && value.back() == L'"') {
+        return value;
+    }
+    return L"\"" + value + L"\"";
+}
+
+bool WaitForProcessExit(HANDLE processHandle,
+                        uint32_t timeoutSec,
+                        const std::function<bool()>& cancellationCallback,
+                        DWORD& exitCode,
+                        std::string& error) {
+    const uint64_t timeoutMs = timeoutSec == 0
+                                   ? std::numeric_limits<uint64_t>::max()
+                                   : static_cast<uint64_t>(timeoutSec) * 1000ULL;
+    uint64_t waitedMs = 0;
+
+    while (true) {
+        if (cancellationCallback && cancellationCallback()) {
+            TerminateProcess(processHandle, 1);
+            error = "Component execution cancelled.";
+            return false;
+        }
+
+        DWORD sliceMs = 200;
+        if (timeoutMs != std::numeric_limits<uint64_t>::max()) {
+            if (waitedMs >= timeoutMs) {
+                TerminateProcess(processHandle, 1);
+                error = "Component execution timed out.";
+                return false;
+            }
+            const uint64_t remaining = timeoutMs - waitedMs;
+            if (remaining < sliceMs) {
+                sliceMs = static_cast<DWORD>(remaining);
+            }
+        }
+
+        DWORD waitResult = WaitForSingleObject(processHandle, sliceMs);
+        if (waitResult == WAIT_OBJECT_0) {
+            break;
+        }
+        if (waitResult != WAIT_TIMEOUT) {
+            error = "Failed while waiting for component process.";
+            return false;
+        }
+        waitedMs += sliceMs;
+    }
+
+    if (!GetExitCodeProcess(processHandle, &exitCode)) {
+        error = "Failed to read component process exit code.";
+        return false;
+    }
+    return true;
+}
+
+bool ExecuteProcess(const std::filesystem::path& executablePath,
+                    const std::string& args,
+                    bool wait,
+                    uint32_t timeoutSec,
+                    const std::function<bool()>& cancellationCallback,
+                    DWORD& exitCode,
+                    std::string& error) {
+    std::wstring executableW = executablePath.wstring();
+    if (executableW.empty()) {
+        error = "Component executable path is empty.";
+        return false;
+    }
+
+    std::wstring argsW = Utf8ToWide(args);
+    std::wstring commandLine = QuoteProcessPath(executableW);
+    if (!argsW.empty()) {
+        commandLine.append(L" ");
+        commandLine.append(argsW);
+    }
+
+    std::vector<wchar_t> commandLineBuffer(commandLine.begin(), commandLine.end());
+    commandLineBuffer.push_back(L'\0');
+
+    std::wstring workingDirectory;
+    if (executablePath.has_parent_path()) {
+        workingDirectory = executablePath.parent_path().wstring();
+    }
+
+    STARTUPINFOW startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
+    PROCESS_INFORMATION processInfo{};
+
+    BOOL started = CreateProcessW(nullptr,
+                                  commandLineBuffer.data(),
+                                  nullptr,
+                                  nullptr,
+                                  FALSE,
+                                  0,
+                                  nullptr,
+                                  workingDirectory.empty() ? nullptr : workingDirectory.c_str(),
+                                  &startupInfo,
+                                  &processInfo);
+    if (!started) {
+        error = "Failed to start component process.";
+        return false;
+    }
+
+    CloseHandle(processInfo.hThread);
+    processInfo.hThread = nullptr;
+
+    if (!wait) {
+        exitCode = 0;
+        CloseHandle(processInfo.hProcess);
+        return true;
+    }
+
+    bool ok = WaitForProcessExit(processInfo.hProcess,
+                                 timeoutSec,
+                                 cancellationCallback,
+                                 exitCode,
+                                 error);
+    CloseHandle(processInfo.hProcess);
+    return ok;
+}
+
+bool DownloadFile(const std::string& url,
+                  const std::filesystem::path& targetPath,
+                  std::string& error) {
+    std::error_code ec;
+    const auto parent = targetPath.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, ec);
+        if (ec) {
+            error = "Failed to create download directory: " + Utf8FromPath(parent);
+            return false;
+        }
+    }
+
+    std::wstring urlW = Utf8ToWide(url);
+    std::wstring targetW = targetPath.wstring();
+    HRESULT hr = URLDownloadToFileW(nullptr, urlW.c_str(), targetW.c_str(), 0, nullptr);
+    if (FAILED(hr)) {
+        std::ostringstream oss;
+        oss << "Download failed with HRESULT=0x" << std::hex
+            << static_cast<unsigned long>(hr);
+        error = oss.str();
+        return false;
+    }
+    return true;
+}
+
+bool ComputeFileSha256(const std::filesystem::path& path,
+                       std::string& hashHex,
+                       std::string& error) {
+    BCRYPT_ALG_HANDLE algorithmHandle = nullptr;
+    BCRYPT_HASH_HANDLE hashHandle = nullptr;
+    std::vector<unsigned char> hashObject;
+    std::vector<unsigned char> hashValue;
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&algorithmHandle,
+                                                  BCRYPT_SHA256_ALGORITHM,
+                                                  nullptr,
+                                                  0);
+    if (status < 0) {
+        error = "Failed to initialize SHA256 algorithm provider.";
+        return false;
+    }
+
+    DWORD objectLength = 0;
+    DWORD hashLength = 0;
+    DWORD resultLength = 0;
+    status = BCryptGetProperty(algorithmHandle,
+                               BCRYPT_OBJECT_LENGTH,
+                               reinterpret_cast<PUCHAR>(&objectLength),
+                               sizeof(objectLength),
+                               &resultLength,
+                               0);
+    if (status < 0) {
+        error = "Failed to query SHA256 object length.";
+        BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+        return false;
+    }
+
+    status = BCryptGetProperty(algorithmHandle,
+                               BCRYPT_HASH_LENGTH,
+                               reinterpret_cast<PUCHAR>(&hashLength),
+                               sizeof(hashLength),
+                               &resultLength,
+                               0);
+    if (status < 0) {
+        error = "Failed to query SHA256 hash length.";
+        BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+        return false;
+    }
+
+    hashObject.resize(objectLength);
+    hashValue.resize(hashLength);
+    status = BCryptCreateHash(algorithmHandle,
+                              &hashHandle,
+                              hashObject.data(),
+                              static_cast<ULONG>(hashObject.size()),
+                              nullptr,
+                              0,
+                              0);
+    if (status < 0) {
+        error = "Failed to create SHA256 hash object.";
+        BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+        return false;
+    }
+
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        error = "Failed to open downloaded file for hash verification.";
+        BCryptDestroyHash(hashHandle);
+        BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+        return false;
+    }
+
+    std::vector<char> buffer(1024 * 1024);
+    while (input.good()) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        std::streamsize readSize = input.gcount();
+        if (readSize <= 0) {
+            continue;
+        }
+        status = BCryptHashData(hashHandle,
+                                reinterpret_cast<PUCHAR>(buffer.data()),
+                                static_cast<ULONG>(readSize),
+                                0);
+        if (status < 0) {
+            error = "Failed to update SHA256 hash.";
+            BCryptDestroyHash(hashHandle);
+            BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+            return false;
+        }
+    }
+
+    status = BCryptFinishHash(hashHandle,
+                              hashValue.data(),
+                              static_cast<ULONG>(hashValue.size()),
+                              0);
+    BCryptDestroyHash(hashHandle);
+    BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+    if (status < 0) {
+        error = "Failed to finalize SHA256 hash.";
+        return false;
+    }
+
+    static const char* kHex = "0123456789abcdef";
+    hashHex.clear();
+    hashHex.reserve(hashValue.size() * 2);
+    for (unsigned char b : hashValue) {
+        hashHex.push_back(kHex[(b >> 4) & 0x0F]);
+        hashHex.push_back(kHex[b & 0x0F]);
+    }
+    return true;
+}
+#endif
+
 } // namespace
 
 InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& metadata,
@@ -301,10 +802,74 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             metadata.applicationName);
         std::string diskCheckPath = resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot;
 
+        ComponentSelectionPlan componentPlan;
+        std::string componentPlanError;
+        if (!BuildComponentSelectionPlan(metadata, options, componentPlan, componentPlanError)) {
+            markFailed(componentPlanError.empty() ? "Failed to resolve component selection."
+                                                  : componentPlanError,
+                       false,
+                       true);
+            return result;
+        }
+
+        std::vector<RegistryEntry> effectiveRegistry = metadata.registry;
+        std::unordered_set<std::string> registrySeen;
+        registrySeen.reserve(effectiveRegistry.size() + componentPlan.registryEntries.size());
+        for (const auto& entry : effectiveRegistry) {
+            std::string key = entry.path;
+            key.push_back('\n');
+            key += entry.key;
+            key.push_back('\n');
+            key += entry.value;
+            key.push_back('\n');
+            key += std::to_string(static_cast<int>(entry.type));
+            registrySeen.insert(key);
+        }
+        for (const auto& entry : componentPlan.registryEntries) {
+            AppendUniqueRegistry(effectiveRegistry, registrySeen, entry);
+        }
+
+        std::vector<std::string> effectiveKillProcesses = metadata.installKillProcesses;
+        std::unordered_set<std::string> processSeen;
+        processSeen.reserve(effectiveKillProcesses.size() + componentPlan.killProcesses.size());
+        for (const auto& process : effectiveKillProcesses) {
+            processSeen.insert(process);
+        }
+        for (const auto& process : componentPlan.killProcesses) {
+            AppendUniqueString(effectiveKillProcesses, processSeen, process);
+        }
+
+        const bool effectiveAutoStartup = metadata.autoStartup || componentPlan.autoStartup;
+        const bool effectiveDesktopIcons = metadata.desktopIcons || componentPlan.desktopIcons;
+
+        auto shouldInstallMapping = [&](const ExtendedFolderMapping& mapping) {
+            return ShouldInstallEmbeddedFolder(componentPlan, mapping);
+        };
+
+        std::vector<std::string> selectedEmbeddedFolders;
+        selectedEmbeddedFolders.reserve(componentPlan.embeddedFolders.size());
         uint64_t totalInstallBytes = 0;
         for (const auto& mapping : metadata.extendedMappings) {
+            if (!shouldInstallMapping(mapping)) {
+                continue;
+            }
+            selectedEmbeddedFolders.push_back(mapping.folderName);
             totalInstallBytes += mapping.originalSize;
         }
+
+        if (componentPlan.hasComponents) {
+            std::string selectedSummary = "Selected components:";
+            if (componentPlan.ordered.empty()) {
+                selectedSummary += " (none)";
+            } else {
+                for (const auto* component : componentPlan.ordered) {
+                    selectedSummary += " ";
+                    selectedSummary += component->id;
+                }
+            }
+            emitMessage(InstallServiceEventType::Info, selectedSummary);
+        }
+
         uint64_t availableBytes = 0;
         if (!checkDiskSpaceForInstall(diskCheckPath, totalInstallBytes, availableBytes)) {
             markFailed("Insufficient disk space for installation. required=" +
@@ -335,7 +900,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
 #ifdef _WIN32
         std::vector<std::string> processNames = buildKillProcessList(
             metadata.applicationName,
-            metadata.installKillProcesses);
+            effectiveKillProcesses);
         if (!processNames.empty()) {
             std::vector<std::string> running = getRunningProcessesByName(processNames);
             if (!running.empty()) {
@@ -439,11 +1004,26 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         currentPhaseProgress = 0.0f;
         emitStatus(currentStatus, currentPhase, 0.0f, "Installing files...");
 
+        size_t executableComponentCount = 0;
+        for (const auto* component : componentPlan.ordered) {
+            if (!component) {
+                continue;
+            }
+            if (component->source.type == ComponentSourceType::LOCAL ||
+                component->source.type == ComponentSourceType::DOWNLOAD) {
+                ++executableComponentCount;
+            }
+        }
+        const float extractionWeight = executableComponentCount > 0 ? 0.75f : 1.0f;
+
         std::unordered_map<std::string, uint64_t> folderSizes;
         std::unordered_map<std::string, float> folderProgress;
-        folderSizes.reserve(metadata.extendedMappings.size());
-        folderProgress.reserve(metadata.extendedMappings.size());
+        folderSizes.reserve(selectedEmbeddedFolders.size());
+        folderProgress.reserve(selectedEmbeddedFolders.size());
         for (const auto& mapping : metadata.extendedMappings) {
+            if (!shouldInstallMapping(mapping)) {
+                continue;
+            }
             folderSizes[mapping.folderName] = mapping.originalSize;
             folderProgress[mapping.folderName] = 0.0f;
         }
@@ -465,7 +1045,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                 }
                 phaseProgress = static_cast<float>(completed / static_cast<double>(totalInstallBytes));
             }
-            emitProgress(folder, currentFile, phaseProgress);
+            emitProgress(folder, currentFile, phaseProgress * extractionWeight);
         };
 
         LogCallback infoCallback = [&](const std::string& message) {
@@ -475,17 +1055,27 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             emitMessage(InstallServiceEventType::Error, message);
         };
 
-        ParallelInstallResult parallelResult = RunParallelInstall(
-            metadata,
-            parser,
-            pathResolver,
-            options.installPath,
-            options.folderMappings,
-            options.threadCount,
-            progressCallback,
-            infoCallback,
-            errorCallback,
-            options.cancellationCallback);
+        ParallelInstallResult parallelResult;
+        if (selectedEmbeddedFolders.empty() && componentPlan.hasComponents) {
+            parallelResult.success = true;
+            parallelResult.installRootPath = resolvedInstallRoot;
+            emitMessage(InstallServiceEventType::Info,
+                        "No embedded folders selected; skipping package extraction.");
+        } else {
+            parallelResult = RunParallelInstall(
+                metadata,
+                parser,
+                pathResolver,
+                options.installPath,
+                options.folderMappings,
+                selectedEmbeddedFolders,
+                componentPlan.hasComponents,
+                options.threadCount,
+                progressCallback,
+                infoCallback,
+                errorCallback,
+                options.cancellationCallback);
+        }
 
         result.timing = parallelResult.timing;
         result.installRootPath = parallelResult.installRootPath;
@@ -507,7 +1097,175 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             return result;
         }
 
-        emitProgress("", "File installation completed", 1.0f);
+        if (result.installRootPath.empty()) {
+            result.installRootPath = resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot;
+        }
+
+        emitProgress("", "File installation completed", extractionWeight);
+
+        std::vector<ComponentExecutionRecord> componentActions;
+        componentActions.reserve(executableComponentCount);
+
+        if (executableComponentCount > 0) {
+            const std::string installRootForComponents = result.installRootPath.empty()
+                                                             ? diskCheckPath
+                                                             : result.installRootPath;
+            size_t completedComponents = 0;
+
+            auto advanceComponentProgress = [&](const std::string& id, float offset) {
+                float progress = extractionWeight +
+                                 ((static_cast<float>(completedComponents) + offset) /
+                                  static_cast<float>(executableComponentCount)) *
+                                     (1.0f - extractionWeight);
+                emitProgress("component", id, progress);
+            };
+
+            for (const auto* component : componentPlan.ordered) {
+                if (!component) {
+                    continue;
+                }
+                if (component->source.type != ComponentSourceType::LOCAL &&
+                    component->source.type != ComponentSourceType::DOWNLOAD) {
+                    continue;
+                }
+
+                if (IsCancellationRequested(options)) {
+                    markFailed("Installation cancelled.", true, true);
+                    return result;
+                }
+
+                advanceComponentProgress(component->id, 0.0f);
+                emitMessage(InstallServiceEventType::Info,
+                            "Installing component: " + component->id);
+
+                std::string componentError;
+
+                if (component->source.type == ComponentSourceType::LOCAL) {
+#ifdef _WIN32
+                    const std::string baseUtf8 =
+                        ExpandInstallDirToken(component->source.local.base, installRootForComponents);
+                    std::filesystem::path basePath = PathFromUtf8(baseUtf8);
+                    std::filesystem::path installerPath =
+                        basePath / PathFromUtf8(component->source.local.installer);
+                    installerPath = installerPath.lexically_normal();
+
+                    if (!IsPathUnderBase(basePath, installerPath)) {
+                        componentError = "Local installer path escapes component base directory.";
+                    } else if (!std::filesystem::exists(installerPath)) {
+                        componentError = "Local installer not found: " + Utf8FromPath(installerPath);
+                    } else {
+                        DWORD exitCode = 0;
+                        std::string executeError;
+                        if (!ExecuteProcess(installerPath,
+                                            component->source.local.args,
+                                            component->source.local.wait,
+                                            component->source.local.timeoutSec,
+                                            options.cancellationCallback,
+                                            exitCode,
+                                            executeError)) {
+                            componentError = executeError.empty() ? "Failed to execute local component installer."
+                                                                  : executeError;
+                        } else if (component->source.local.wait && exitCode != 0) {
+                            componentError = "Local component installer failed with exit code " +
+                                             std::to_string(exitCode);
+                        } else if (!component->source.local.uninstall.empty()) {
+                            ComponentExecutionRecord record;
+                            record.componentId = component->id;
+                            record.sourceType = "local";
+                            record.uninstallCommand = ExpandInstallDirToken(component->source.local.uninstall,
+                                                                             installRootForComponents);
+                            record.workingDirectory = Utf8FromPath(basePath);
+                            record.wait = component->source.local.wait;
+                            record.timeoutSec = component->source.local.timeoutSec;
+                            componentActions.push_back(std::move(record));
+                        }
+                    }
+#else
+                    componentError = "Local component installers are currently supported on Windows only.";
+#endif
+                } else if (component->source.type == ComponentSourceType::DOWNLOAD) {
+#ifdef _WIN32
+                    std::string saveAs = component->source.download.saveAs;
+                    if (saveAs.empty()) {
+                        saveAs = "%InstallDir%\\downloads\\" + component->id + "_setup.bin";
+                    }
+                    std::string targetUtf8 = ExpandInstallDirToken(saveAs, installRootForComponents);
+                    std::filesystem::path targetPath = PathFromUtf8(targetUtf8);
+                    if (!targetPath.is_absolute()) {
+                        targetPath = PathFromUtf8(installRootForComponents) / targetPath;
+                    }
+                    targetPath = targetPath.lexically_normal();
+
+                    if (!IsPathUnderBase(PathFromUtf8(installRootForComponents), targetPath)) {
+                        componentError = "Downloaded installer target path must stay under install directory.";
+                    } else {
+                        std::string downloadError;
+                        if (!DownloadFile(component->source.download.url, targetPath, downloadError)) {
+                            componentError = downloadError.empty() ? "Failed to download component installer."
+                                                                   : downloadError;
+                        } else {
+                            std::string actualHash;
+                            std::string hashError;
+                            if (!ComputeFileSha256(targetPath, actualHash, hashError)) {
+                                componentError = hashError.empty() ? "Failed to verify downloaded component hash."
+                                                                   : hashError;
+                            } else {
+                                std::string expectedHash = component->source.download.sha256;
+                                std::transform(expectedHash.begin(), expectedHash.end(), expectedHash.begin(),
+                                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                                if (actualHash != expectedHash) {
+                                    componentError = "Downloaded component hash mismatch.";
+                                    std::error_code removeEc;
+                                    std::filesystem::remove(targetPath, removeEc);
+                                } else {
+                                    DWORD exitCode = 0;
+                                    std::string executeError;
+                                    if (!ExecuteProcess(targetPath,
+                                                        component->source.download.args,
+                                                        component->source.download.wait,
+                                                        component->source.download.timeoutSec,
+                                                        options.cancellationCallback,
+                                                        exitCode,
+                                                        executeError)) {
+                                        componentError = executeError.empty()
+                                                             ? "Failed to execute downloaded component installer."
+                                                             : executeError;
+                                    } else if (component->source.download.wait && exitCode != 0) {
+                                        componentError =
+                                            "Downloaded component installer failed with exit code " +
+                                            std::to_string(exitCode);
+                                    } else if (!component->source.download.uninstall.empty()) {
+                                        ComponentExecutionRecord record;
+                                        record.componentId = component->id;
+                                        record.sourceType = "download";
+                                        record.uninstallCommand =
+                                            ExpandInstallDirToken(component->source.download.uninstall,
+                                                                  installRootForComponents);
+                                        record.workingDirectory = Utf8FromPath(targetPath.parent_path());
+                                        record.wait = component->source.download.wait;
+                                        record.timeoutSec = component->source.download.timeoutSec;
+                                        componentActions.push_back(std::move(record));
+                                    }
+                                }
+                            }
+                        }
+                    }
+#else
+                    componentError = "Downloaded component installers are currently supported on Windows only.";
+#endif
+                }
+
+                if (!componentError.empty()) {
+                    markFailed("Component '" + component->id + "' failed: " + componentError,
+                               IsCancellationRequested(options),
+                               true);
+                    return result;
+                }
+
+                ++completedComponents;
+                advanceComponentProgress(component->id, 0.0f);
+            }
+        }
 
         currentStatus = InstallServiceStatus::Finalizing;
         currentPhase = InstallServicePhase::Finalizing;
@@ -518,18 +1276,18 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             emitProgress("finalize", detail, progress);
         };
 
-        if (options.applyRegistryBeforeFinalize && !metadata.registry.empty()) {
+        if (options.applyRegistryBeforeFinalize && !effectiveRegistry.empty()) {
             std::string prePath = options.preRegistryInstallPath.empty()
                                       ? options.installPath
                                       : options.preRegistryInstallPath;
-            applyRegistryEntries(metadata.registry,
+            applyRegistryEntries(effectiveRegistry,
                                  prePath,
                                  metadata.configVersion,
                                  metadata.applicationName);
         }
         advanceFinalize(0.15f, "Applying registry entries");
 
-        if ((metadata.autoStartup || metadata.desktopIcons) && result.installRootPath.empty()) {
+        if ((effectiveAutoStartup || effectiveDesktopIcons) && result.installRootPath.empty()) {
             emitMessage(InstallServiceEventType::Warning,
                         "Install root not detected; AutoStartup/DesktopIcons skipped");
         }
@@ -537,11 +1295,11 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         if (!result.installRootPath.empty()) {
             std::filesystem::path exePath = findPrimaryExecutable(PathFromUtf8(result.installRootPath),
                                                                   metadata.applicationName);
-            if ((metadata.autoStartup || metadata.desktopIcons) && exePath.empty()) {
+            if ((effectiveAutoStartup || effectiveDesktopIcons) && exePath.empty()) {
                 emitMessage(InstallServiceEventType::Warning,
                             "No executable found for AutoStartup/DesktopIcons");
             } else {
-                if (metadata.autoStartup) {
+                if (effectiveAutoStartup) {
                     if (setAutoStartup(metadata.applicationName, exePath)) {
                         emitMessage(InstallServiceEventType::Info, "AutoStartup enabled");
                     } else {
@@ -549,7 +1307,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                     "Failed to enable AutoStartup");
                     }
                 }
-                if (metadata.desktopIcons) {
+                if (effectiveDesktopIcons) {
                     if (createDesktopShortcut(metadata.applicationName, exePath)) {
                         emitMessage(InstallServiceEventType::Info, "Desktop icon created");
                     } else {
@@ -599,13 +1357,14 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                            metadata.configVersion,
                            result.installRootPath,
                            result.installedFiles,
-                           metadata.registry,
-                           metadata.installKillProcesses,
-                           metadata.autoStartup,
-                           metadata.desktopIcons,
+                           effectiveRegistry,
+                           effectiveKillProcesses,
+                           effectiveAutoStartup,
+                           effectiveDesktopIcons,
                            metadata.installState,
                            result.uninstallPath,
-                           languageCode)) {
+                           languageCode,
+                           componentActions)) {
             emitMessage(InstallServiceEventType::Warning,
                         "Failed to write install manifest");
         }
@@ -617,21 +1376,22 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                metadata.configVersion,
                                result.installRootPath,
                                result.installedFiles,
-                               metadata.registry,
-                               metadata.installKillProcesses,
-                               metadata.autoStartup,
-                               metadata.desktopIcons,
+                               effectiveRegistry,
+                               effectiveKillProcesses,
+                               effectiveAutoStartup,
+                               effectiveDesktopIcons,
                                metadata.installState,
                                result.uninstallPath,
-                               languageCode)) {
+                               languageCode,
+                               componentActions)) {
                 emitMessage(InstallServiceEventType::Warning,
                             "Failed to write local install manifest");
             }
         }
         advanceFinalize(0.75f, "Writing install manifest");
 
-        if (options.applyRegistryAfterInstall && !metadata.registry.empty()) {
-            applyRegistryEntries(metadata.registry,
+        if (options.applyRegistryAfterInstall && !effectiveRegistry.empty()) {
+            applyRegistryEntries(effectiveRegistry,
                                  result.installRootPath,
                                  metadata.configVersion,
                                  metadata.applicationName);

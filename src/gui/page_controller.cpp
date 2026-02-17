@@ -87,6 +87,7 @@ void PageController::StartInstallation(const std::wstring& installPath,
                                        bool desktopIcons,
                                        const std::wstring& languageCode,
                                        bool cleanupOldInstall,
+                                       const std::vector<std::string>& selectedComponents,
                                        HWND hNotifyWindow) {
 
     if (m_pWorker) {
@@ -102,7 +103,7 @@ void PageController::StartInstallation(const std::wstring& installPath,
 
     
     m_pWorker->StartInstallation(installPath, autoRun, desktopIcons, languageCode,
-                                 cleanupOldInstall);
+                                 cleanupOldInstall, selectedComponents);
 
 
     NavigateToPage(PageType::Progress);

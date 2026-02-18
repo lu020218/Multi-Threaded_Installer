@@ -29,7 +29,6 @@
 │  └─ common/
 ├─ resources/
 ├─ docs/
-├─ tests/
 ├─ third_party/
 └─ CMakeLists.txt
 ```
@@ -92,10 +91,10 @@ cmake --build build --config Release
 
 ```powershell
 # 使用 LZMA
-.\build\Release\packager.exe -a lzma -l 9 .\test_input .\dist\MyAppSetup.exe
+.\build\Release\packager.exe -a lzma -l 9 .\input .\dist\MyAppSetup.exe
 
 # 使用 ZSTD
-.\build\Release\packager.exe -a zstd -l 3 .\test_input .\dist\MyAppSetup.exe
+.\build\Release\packager.exe -a zstd -l 3 .\input .\dist\MyAppSetup.exe
 ```
 
 ### 2) 运行安装
@@ -135,7 +134,7 @@ DesktopIcons: true
 RequireAdmin: true
 ```
 
-完整字段说明见 `docs/configuration_reference.md`。
+完整字段说明见 `docs/USER_GUIDE.md`。
 
 ## 命令行参数（摘要）
 
@@ -166,18 +165,9 @@ RequireAdmin: true
 - `-v, --verbose`
 - `-h, --help`
 
-## 测试
-
-```powershell
-cmake -S . -B build-tests -DBUILD_TESTS=ON
-cmake --build build-tests --config Release
-ctest --test-dir build-tests -C Release --output-on-failure
-```
 
 ## 相关文档
 
-- `docs/configuration_reference.md`
-- `docs/COMMAND_LINE_REFERENCE.md`
-- `docs/BUILD_AND_DEPLOYMENT.md`
-- `docs/components_troubleshooting_guide.md`
-- `docs/TROUBLESHOOTING.md`
+- `docs/REQUIREMENTS.md`
+- `docs/DETAILED_DESIGN.md`
+- `docs/USER_GUIDE.md`

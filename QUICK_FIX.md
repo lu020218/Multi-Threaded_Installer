@@ -42,7 +42,7 @@
    
    示例:
    ```cmd
-   build\Release\packager.exe test_input build\Release\output\MyApp_Setup.exe
+   build\Release\packager.exe input build\Release\output\MyApp_Setup.exe
    ```
 
 5. **打包器会自动**:
@@ -94,14 +94,14 @@ Path exists: YES
 2. 嵌入 resources/ 目录
 
 参见：
-- `docs/SINGLE_FILE_IMPLEMENTATION.md` - 实现指南
-- `docs/SINGLE_FILE_QUICK_START.md` - 快速入门
+- `docs/DETAILED_DESIGN.md` - 实现指南
+- `docs/USER_GUIDE.md` - 快速入门
 - `scripts/embed_resources.ps1` - 资源嵌入脚本
 
 ## 相关文档
 
-- `docs/DUILIB_STATIC_LINKING.md` - DuiLib静态链接实现详情
-- `docs/PACKAGER_RESOURCE_PATH_FIX.md` - 资源路径修复详情
-- `docs/PACKAGING_WITH_DEPENDENCIES.md` - 打包指南
-- `docs/MANUAL_DEPENDENCY_COPY.md` - 手动复制说明
+- `docs/REQUIREMENTS.md` - DuiLib静态链接实现详情
+- `docs/DETAILED_DESIGN.md` - 资源路径修复详情
+- `docs/USER_GUIDE.md` - 打包指南
+- `docs/REQUIREMENTS.md` - 手动复制说明
 

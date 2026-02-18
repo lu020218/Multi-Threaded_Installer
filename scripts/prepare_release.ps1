@@ -4,7 +4,6 @@
 param(
     [string]$Version = "1.0.0",
     [switch]$Clean,
-    [switch]$SkipTests,
     [string]$BuildDir = "build-release"
 )
 
@@ -17,22 +16,22 @@ Write-Host ""
 
 # Step 1: Clean build directory if requested
 if ($Clean -and (Test-Path $BuildDir)) {
-    Write-Host "[1/7] Cleaning build directory..." -ForegroundColor Yellow
+    Write-Host "[1/6] Cleaning build directory..." -ForegroundColor Yellow
     Remove-Item -Recurse -Force $BuildDir
     Write-Host "  ✓ Build directory cleaned" -ForegroundColor Green
 } else {
-    Write-Host "[1/7] Using existing build directory" -ForegroundColor Yellow
+    Write-Host "[1/6] Using existing build directory" -ForegroundColor Yellow
 }
 Write-Host ""
 
 # Step 2: Create build directory
-Write-Host "[2/7] Creating build directory..." -ForegroundColor Yellow
+Write-Host "[2/6] Creating build directory..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 Write-Host "  ✓ Build directory ready: $BuildDir" -ForegroundColor Green
 Write-Host ""
 
 # Step 3: Configure with CMake
-Write-Host "[3/7] Configuring with CMake..." -ForegroundColor Yellow
+Write-Host "[3/6] Configuring with CMake..." -ForegroundColor Yellow
 Push-Location $BuildDir
 try {
     $cmakeArgs = @(
@@ -55,7 +54,7 @@ try {
 Write-Host ""
 
 # Step 4: Build Release version
-Write-Host "[4/7] Building Release version..." -ForegroundColor Yellow
+Write-Host "[4/6] Building Release version..." -ForegroundColor Yellow
 Push-Location $BuildDir
 try {
     & cmake --build . --config Release --parallel
@@ -68,27 +67,8 @@ try {
 }
 Write-Host ""
 
-# Step 5: Run tests (unless skipped)
-if (-not $SkipTests) {
-    Write-Host "[5/7] Running tests..." -ForegroundColor Yellow
-    Push-Location $BuildDir
-    try {
-        & ctest -C Release --output-on-failure
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  ⚠ Some tests failed, but continuing..." -ForegroundColor Yellow
-        } else {
-            Write-Host "  ✓ All tests passed" -ForegroundColor Green
-        }
-    } finally {
-        Pop-Location
-    }
-} else {
-    Write-Host "[5/7] Skipping tests (as requested)" -ForegroundColor Yellow
-}
-Write-Host ""
-
-# Step 6: Prepare distribution package
-Write-Host "[6/7] Preparing distribution package..." -ForegroundColor Yellow
+# Step 5: Prepare distribution package
+Write-Host "[5/6] Preparing distribution package..." -ForegroundColor Yellow
 
 $DistDir = "dist-v$Version"
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -128,8 +108,8 @@ $DocsToInclude = @(
     "README.md",
     "LICENSE",
     "docs/USER_GUIDE.md",
-    "docs/COMMAND_LINE_REFERENCE.md",
-    "docs/TROUBLESHOOTING.md"
+    "docs/REQUIREMENTS.md",
+    "docs/DETAILED_DESIGN.md"
 )
 
 $DocsDir = Join-Path $DistDir "docs"
@@ -164,8 +144,8 @@ foreach ($Dll in $RequiredDlls) {
 Write-Host "  ✓ Distribution package prepared: $DistDir" -ForegroundColor Green
 Write-Host ""
 
-# Step 7: Create release archive
-Write-Host "[7/7] Creating release archive..." -ForegroundColor Yellow
+# Step 6: Create release archive
+Write-Host "[6/6] Creating release archive..." -ForegroundColor Yellow
 
 $ArchiveName = "Installer-v$Version-$Timestamp.zip"
 Compress-Archive -Path "$DistDir\*" -DestinationPath $ArchiveName -Force

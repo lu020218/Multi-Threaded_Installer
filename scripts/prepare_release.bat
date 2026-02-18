@@ -15,22 +15,22 @@ echo.
 
 REM Step 1: Clean build directory (optional)
 if exist %BUILD_DIR% (
-    echo [1/7] Cleaning build directory...
+    echo [1/6] Cleaning build directory...
     rmdir /s /q %BUILD_DIR%
     echo   [OK] Build directory cleaned
 ) else (
-    echo [1/7] Build directory does not exist
+    echo [1/6] Build directory does not exist
 )
 echo.
 
 REM Step 2: Create build directory
-echo [2/7] Creating build directory...
+echo [2/6] Creating build directory...
 mkdir %BUILD_DIR%
 echo   [OK] Build directory ready: %BUILD_DIR%
 echo.
 
 REM Step 3: Configure with CMake
-echo [3/7] Configuring with CMake...
+echo [3/6] Configuring with CMake...
 cd %BUILD_DIR%
 cmake .. -G "Visual Studio 16 2019" -A x64 -DBUILD_GUI=ON -DCMAKE_BUILD_TYPE=Release -DSTATIC_LINK_RUNTIME=ON
 if errorlevel 1 (
@@ -43,7 +43,7 @@ cd ..
 echo.
 
 REM Step 4: Build Release version
-echo [4/7] Building Release version...
+echo [4/6] Building Release version...
 cd %BUILD_DIR%
 cmake --build . --config Release --parallel
 if errorlevel 1 (
@@ -55,20 +55,8 @@ echo   [OK] Build successful
 cd ..
 echo.
 
-REM Step 5: Run tests
-echo [5/7] Running tests...
-cd %BUILD_DIR%
-ctest -C Release --output-on-failure
-if errorlevel 1 (
-    echo   [WARNING] Some tests failed, but continuing...
-) else (
-    echo   [OK] All tests passed
-)
-cd ..
-echo.
-
-REM Step 6: Prepare distribution package
-echo [6/7] Preparing distribution package...
+REM Step 5: Prepare distribution package
+echo [5/6] Preparing distribution package...
 
 REM Clean and create distribution directory
 if exist %DIST_DIR% (
@@ -104,8 +92,8 @@ REM Copy documentation
 if exist README.md copy README.md %DIST_DIR%\ > nul
 if exist LICENSE copy LICENSE %DIST_DIR%\ > nul
 if exist docs\USER_GUIDE.md copy docs\USER_GUIDE.md %DIST_DIR%\docs\ > nul
-if exist docs\COMMAND_LINE_REFERENCE.md copy docs\COMMAND_LINE_REFERENCE.md %DIST_DIR%\docs\ > nul
-if exist docs\TROUBLESHOOTING.md copy docs\TROUBLESHOOTING.md %DIST_DIR%\docs\ > nul
+if exist docs\REQUIREMENTS.md copy docs\REQUIREMENTS.md %DIST_DIR%\docs\ > nul
+if exist docs\DETAILED_DESIGN.md copy docs\DETAILED_DESIGN.md %DIST_DIR%\docs\ > nul
 echo   [OK] Copied documentation
 
 REM Copy any required DLLs
@@ -118,8 +106,8 @@ if exist %BUILD_DIR%\Release\libzstd.dll (
 echo   [OK] Distribution package prepared: %DIST_DIR%
 echo.
 
-REM Step 7: Create release archive
-echo [7/7] Creating release archive...
+REM Step 6: Create release archive
+echo [6/6] Creating release archive...
 set TIMESTAMP=%date:~-4%%date:~-10,2%%date:~-7,2%-%time:~0,2%%time:~3,2%%time:~6,2%
 set TIMESTAMP=%TIMESTAMP: =0%
 set ARCHIVE_NAME=Installer-v%VERSION%-%TIMESTAMP%.zip

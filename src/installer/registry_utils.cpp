@@ -52,6 +52,37 @@ std::string quoteIfNeeded(const std::string& value) {
     return "\"" + value + "\"";
 }
 
+std::string normalizeRegistrySubkey(const std::string& rawSubkey) {
+    std::string normalized;
+    normalized.reserve(rawSubkey.size());
+
+    bool previousSlash = false;
+    for (char ch : rawSubkey) {
+        char current = (ch == '/') ? '\\' : ch;
+        if (current == '\\') {
+            if (previousSlash) {
+                continue;
+            }
+            previousSlash = true;
+        } else {
+            previousSlash = false;
+        }
+        normalized.push_back(current);
+    }
+
+    size_t start = 0;
+    while (start < normalized.size() && normalized[start] == '\\') {
+        ++start;
+    }
+
+    size_t end = normalized.size();
+    while (end > start && normalized[end - 1] == '\\') {
+        --end;
+    }
+
+    return normalized.substr(start, end - start);
+}
+
 } // namespace
 
 bool deleteRegistryValue(const RegistryEntry& entry) {
@@ -84,6 +115,11 @@ bool deleteRegistryValue(const RegistryEntry& entry) {
         root = HKEY_LOCAL_MACHINE;
         subkey = path.substr(hklmShort.size());
     } else {
+        return false;
+    }
+
+    subkey = normalizeRegistrySubkey(subkey);
+    if (subkey.empty()) {
         return false;
     }
 
@@ -139,6 +175,11 @@ bool writeRegistryValue(const RegistryEntry& entry, const std::string& value, Re
         root = HKEY_LOCAL_MACHINE;
         subkey = path.substr(hklmShort.size());
     } else {
+        return false;
+    }
+
+    subkey = normalizeRegistrySubkey(subkey);
+    if (subkey.empty()) {
         return false;
     }
 
@@ -237,6 +278,11 @@ bool readRegistryStringValue(const std::string& path, const std::string& key, st
         root = HKEY_LOCAL_MACHINE;
         subkey = path.substr(hklmShort.size());
     } else {
+        return false;
+    }
+
+    subkey = normalizeRegistrySubkey(subkey);
+    if (subkey.empty()) {
         return false;
     }
 

@@ -814,7 +814,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
 
         std::vector<RegistryEntry> effectiveRegistry = metadata.registry;
         std::unordered_set<std::string> registrySeen;
-        registrySeen.reserve(effectiveRegistry.size() + componentPlan.registryEntries.size());
+        registrySeen.reserve(effectiveRegistry.size() + metadata.components.size() * 2);
         for (const auto& entry : effectiveRegistry) {
             std::string key = entry.path;
             key.push_back('\n');
@@ -824,9 +824,6 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             key.push_back('\n');
             key += std::to_string(static_cast<int>(entry.type));
             registrySeen.insert(key);
-        }
-        for (const auto& entry : componentPlan.registryEntries) {
-            AppendUniqueRegistry(effectiveRegistry, registrySeen, entry);
         }
 
         std::vector<std::string> effectiveKillProcesses = metadata.installKillProcesses;
@@ -839,8 +836,8 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             AppendUniqueString(effectiveKillProcesses, processSeen, process);
         }
 
-        const bool effectiveAutoStartup = metadata.autoStartup || componentPlan.autoStartup;
-        const bool effectiveDesktopIcons = metadata.desktopIcons || componentPlan.desktopIcons;
+        bool effectiveAutoStartup = metadata.autoStartup;
+        bool effectiveDesktopIcons = metadata.desktopIcons;
 
         auto shouldInstallMapping = [&](const ExtendedFolderMapping& mapping) {
             return ShouldInstallEmbeddedFolder(componentPlan, mapping);
@@ -1105,6 +1102,8 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
 
         std::vector<ComponentExecutionRecord> componentActions;
         componentActions.reserve(executableComponentCount);
+        std::unordered_set<std::string> failedOptionalComponentIds;
+        failedOptionalComponentIds.reserve(executableComponentCount);
 
         if (executableComponentCount > 0) {
             const std::string installRootForComponents = result.installRootPath.empty()
@@ -1256,15 +1255,61 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                 }
 
                 if (!componentError.empty()) {
-                    markFailed("Component '" + component->id + "' failed: " + componentError,
-                               IsCancellationRequested(options),
-                               true);
-                    return result;
+                    std::string failureMessage =
+                        "Component '" + component->id + "' failed: " + componentError;
+                    if (component->required) {
+                        markFailed(failureMessage, IsCancellationRequested(options), true);
+                        return result;
+                    }
+
+                    failedOptionalComponentIds.insert(component->id);
+                    emitMessage(InstallServiceEventType::Warning,
+                                failureMessage + " Continuing because component is optional.");
+                    ++completedComponents;
+                    advanceComponentProgress(component->id, 0.0f);
+                    continue;
                 }
+
+                std::string successMessage;
+                if (component->source.type == ComponentSourceType::LOCAL &&
+                    !component->source.local.wait) {
+                    successMessage = "Component '" + component->id +
+                                     "' installer launched (not waiting for completion).";
+                } else if (component->source.type == ComponentSourceType::DOWNLOAD &&
+                           !component->source.download.wait) {
+                    successMessage = "Component '" + component->id +
+                                     "' installer launched (not waiting for completion).";
+                } else {
+                    successMessage = "Component '" + component->id + "' installed successfully.";
+                }
+                emitMessage(InstallServiceEventType::Info, successMessage);
 
                 ++completedComponents;
                 advanceComponentProgress(component->id, 0.0f);
             }
+        }
+
+        for (const auto* component : componentPlan.ordered) {
+            if (!component) {
+                continue;
+            }
+            if (failedOptionalComponentIds.find(component->id) != failedOptionalComponentIds.end()) {
+                continue;
+            }
+            for (const auto& entry : component->registry) {
+                AppendUniqueRegistry(effectiveRegistry, registrySeen, entry);
+            }
+            effectiveAutoStartup = effectiveAutoStartup || component->autoStartup;
+            effectiveDesktopIcons = effectiveDesktopIcons || component->createDesktopShortcut;
+        }
+
+        if (!failedOptionalComponentIds.empty()) {
+            std::string message = "Optional components failed:";
+            for (const auto& id : failedOptionalComponentIds) {
+                message += " ";
+                message += id;
+            }
+            emitMessage(InstallServiceEventType::Warning, message);
         }
 
         currentStatus = InstallServiceStatus::Finalizing;

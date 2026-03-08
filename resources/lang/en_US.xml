@@ -35,6 +35,10 @@
   <Text id="msg.open" value="Open"/>
   <Text id="msg.launch" value="Launch now"/>
 
+  <Text id="msg.pluginInstall" value="Install"/>
+  <Text id="msg.chromePlugin" value="Chrome Plugin"/>
+  <Text id="msg.pptPlugin" value="PPT Plugin"/>
+
   <Text id="msg.license_title" value="License Agreement"/>
   <Text id="msg.license_agree" value="Agree"/>
   <Text id="msg.license_disagree" value="Disagree"/>

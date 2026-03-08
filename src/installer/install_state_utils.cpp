@@ -10,6 +10,41 @@
 
 namespace MultiThreadedInstaller {
 
+namespace {
+
+std::string normalizeRegistrySubkey(const std::string& rawSubkey) {
+    std::string normalized;
+    normalized.reserve(rawSubkey.size());
+
+    bool previousSlash = false;
+    for (char ch : rawSubkey) {
+        char current = (ch == '/') ? '\\' : ch;
+        if (current == '\\') {
+            if (previousSlash) {
+                continue;
+            }
+            previousSlash = true;
+        } else {
+            previousSlash = false;
+        }
+        normalized.push_back(current);
+    }
+
+    size_t start = 0;
+    while (start < normalized.size() && normalized[start] == '\\') {
+        ++start;
+    }
+
+    size_t end = normalized.size();
+    while (end > start && normalized[end - 1] == '\\') {
+        --end;
+    }
+
+    return normalized.substr(start, end - start);
+}
+
+} // namespace
+
 bool applyInstallStateRegistry(const InstallStateConfig& config, const std::string& stateValue) {
 #ifdef _WIN32
     if (config.registryPath.empty()) {
@@ -42,7 +77,12 @@ bool applyInstallStateRegistry(const InstallStateConfig& config, const std::stri
     } else {
         return false;
     }
-    
+
+    subkey = normalizeRegistrySubkey(subkey);
+    if (subkey.empty()) {
+        return false;
+    }
+
     std::wstring subkeyW = Utf8ToWide(subkey);
     if (subkeyW.empty()) {
         return false;

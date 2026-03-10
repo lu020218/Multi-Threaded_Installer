@@ -1,5 +1,7 @@
 #include "installer/metadata_parser.h"
 #include "common/utf8_utils.h"
+#include <cstddef>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 
@@ -15,6 +17,16 @@ namespace {
 
 bool IsSupportedMetadataVersion(uint32_t version) {
     return version >= 5 && version <= Constants::VERSION;
+}
+
+bool ReadFileBytesAt(std::ifstream& file, uint64_t offset, void* out, size_t size) {
+    file.clear();
+    file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    if (!file) {
+        return false;
+    }
+    file.read(reinterpret_cast<char*>(out), static_cast<std::streamsize>(size));
+    return file.good() && file.gcount() == static_cast<std::streamsize>(size);
 }
 
 template <typename T>
@@ -271,41 +283,11 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
     
 
     file.seekg(0, std::ios::end);
-    std::streampos fileSize = file.tellg();
-    
+    uint64_t fileSize = static_cast<uint64_t>(file.tellg());
 
-
-    size_t locatorSize = sizeof(DataLocator) + sizeof(uint32_t); // DataLocator + end magic
-    
-    if (static_cast<size_t>(fileSize) < locatorSize) {
-        std::cerr << "File too small to contain embedded data" << std::endl;
-        return {};
-    }
-    
-
-    file.seekg(-static_cast<std::streamoff>(sizeof(uint32_t)), std::ios::end);
-    uint32_t endMagic;
-    file.read(reinterpret_cast<char*>(&endMagic), sizeof(uint32_t));
-    
-    if (endMagic != Constants::MAGIC_NUMBER) {
-        std::cerr << "Invalid end magic number, no embedded data found" << std::endl;
-        return {};
-    }
-    
-
-    file.seekg(-static_cast<std::streamoff>(locatorSize), std::ios::end);
+    uint64_t logicalEnd = fileSize;
     DataLocator locator;
-    file.read(reinterpret_cast<char*>(&locator), sizeof(DataLocator));
-    
-    if (locator.magic != Constants::MAGIC_NUMBER) {
-        std::cerr << "Invalid locator magic number" << std::endl;
-        return {};
-    }
-    
-
-    if (locator.metadataOffset >= static_cast<uint64_t>(fileSize) ||
-        locator.metadataOffset + locator.metadataSize > static_cast<uint64_t>(fileSize)) {
-        std::cerr << "Invalid metadata offset or size" << std::endl;
+    if (!readEmbeddedLocator(file, fileSize, logicalEnd, locator)) {
         return {};
     }
     
@@ -869,23 +851,11 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
     
 
     file.seekg(0, std::ios::end);
-    std::streampos fileSize = file.tellg();
-    
+    uint64_t fileSize = static_cast<uint64_t>(file.tellg());
 
-    size_t locatorSize = sizeof(DataLocator) + sizeof(uint32_t);
-    
-    if (static_cast<size_t>(fileSize) < locatorSize) {
-        std::cerr << "File too small to contain embedded data" << std::endl;
-        return {};
-    }
-    
-
-    file.seekg(-static_cast<std::streamoff>(locatorSize), std::ios::end);
+    uint64_t logicalEnd = fileSize;
     DataLocator locator;
-    file.read(reinterpret_cast<char*>(&locator), sizeof(DataLocator));
-    
-    if (locator.magic != Constants::MAGIC_NUMBER) {
-        std::cerr << "Invalid locator magic number" << std::endl;
+    if (!readEmbeddedLocator(file, fileSize, logicalEnd, locator)) {
         return {};
     }
     
@@ -893,8 +863,8 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
     uint64_t absoluteOffset = locator.dataOffset + offset;
     
 
-    if (absoluteOffset >= static_cast<uint64_t>(fileSize) ||
-        absoluteOffset + size > static_cast<uint64_t>(fileSize)) {
+    if (absoluteOffset >= logicalEnd ||
+        absoluteOffset + size > logicalEnd) {
         std::cerr << "Invalid data offset or size" << std::endl;
         return {};
     }
@@ -981,6 +951,140 @@ bool MetadataParser::validateHeader(const BinaryMetadata& header) {
         return false;
     }
     
+    return true;
+}
+
+uint64_t MetadataParser::resolveEmbeddedDataEnd(std::ifstream& file, uint64_t fileSize) {
+#ifdef _WIN32
+    if (fileSize < sizeof(IMAGE_DOS_HEADER)) {
+        return fileSize;
+    }
+
+    IMAGE_DOS_HEADER dosHeader{};
+    if (!ReadFileBytesAt(file, 0, &dosHeader, sizeof(dosHeader)) ||
+        dosHeader.e_magic != IMAGE_DOS_SIGNATURE) {
+        return fileSize;
+    }
+
+    uint64_t ntOffset = static_cast<uint64_t>(dosHeader.e_lfanew);
+    uint32_t peSignature = 0;
+    if (ntOffset + sizeof(peSignature) + sizeof(IMAGE_FILE_HEADER) > fileSize ||
+        !ReadFileBytesAt(file, ntOffset, &peSignature, sizeof(peSignature)) ||
+        peSignature != IMAGE_NT_SIGNATURE) {
+        return fileSize;
+    }
+
+    IMAGE_FILE_HEADER fileHeader{};
+    if (!ReadFileBytesAt(file,
+                         ntOffset + sizeof(peSignature),
+                         &fileHeader,
+                         sizeof(fileHeader))) {
+        return fileSize;
+    }
+
+    uint64_t optionalOffset = ntOffset + sizeof(peSignature) + sizeof(IMAGE_FILE_HEADER);
+    if (optionalOffset + fileHeader.SizeOfOptionalHeader > fileSize ||
+        fileHeader.SizeOfOptionalHeader < sizeof(uint16_t)) {
+        return fileSize;
+    }
+
+    std::vector<uint8_t> optionalHeader(fileHeader.SizeOfOptionalHeader);
+    if (!ReadFileBytesAt(file, optionalOffset, optionalHeader.data(), optionalHeader.size())) {
+        return fileSize;
+    }
+
+    uint16_t optionalMagic = 0;
+    std::memcpy(&optionalMagic, optionalHeader.data(), sizeof(optionalMagic));
+
+    size_t directoryOffset = 0;
+    if (optionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+        directoryOffset = offsetof(IMAGE_OPTIONAL_HEADER32, DataDirectory);
+    } else if (optionalMagic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+        directoryOffset = offsetof(IMAGE_OPTIONAL_HEADER64, DataDirectory);
+    } else {
+        return fileSize;
+    }
+
+    size_t securityDirOffset =
+        directoryOffset + IMAGE_DIRECTORY_ENTRY_SECURITY * sizeof(IMAGE_DATA_DIRECTORY);
+    if (securityDirOffset + sizeof(IMAGE_DATA_DIRECTORY) > optionalHeader.size()) {
+        return fileSize;
+    }
+
+    IMAGE_DATA_DIRECTORY securityDir{};
+    std::memcpy(&securityDir,
+                optionalHeader.data() + securityDirOffset,
+                sizeof(securityDir));
+
+    uint64_t certificateOffset = static_cast<uint64_t>(securityDir.VirtualAddress);
+    uint64_t certificateSize = static_cast<uint64_t>(securityDir.Size);
+    if (certificateOffset == 0 || certificateSize == 0) {
+        return fileSize;
+    }
+
+    if (certificateOffset >= fileSize ||
+        certificateOffset + certificateSize > fileSize) {
+        return fileSize;
+    }
+
+    return certificateOffset;
+#else
+    (void)file;
+    return fileSize;
+#endif
+}
+
+bool MetadataParser::readEmbeddedLocator(std::ifstream& file,
+                                         uint64_t fileSize,
+                                         uint64_t& logicalEnd,
+                                         DataLocator& locator) {
+    logicalEnd = resolveEmbeddedDataEnd(file, fileSize);
+
+    size_t locatorSize = sizeof(DataLocator) + sizeof(uint32_t);
+    if (logicalEnd < locatorSize) {
+        std::cerr << "File too small to contain embedded data" << std::endl;
+        return false;
+    }
+
+    uint32_t endMagic = 0;
+    if (!ReadFileBytesAt(file,
+                         logicalEnd - sizeof(endMagic),
+                         &endMagic,
+                         sizeof(endMagic))) {
+        std::cerr << "Failed to read embedded data end magic" << std::endl;
+        return false;
+    }
+
+    if (endMagic != Constants::MAGIC_NUMBER) {
+        std::cerr << "Invalid end magic number, no embedded data found" << std::endl;
+        return false;
+    }
+
+    if (!ReadFileBytesAt(file,
+                         logicalEnd - locatorSize,
+                         &locator,
+                         sizeof(locator))) {
+        std::cerr << "Failed to read embedded data locator" << std::endl;
+        return false;
+    }
+
+    if (locator.magic != Constants::MAGIC_NUMBER) {
+        std::cerr << "Invalid locator magic number" << std::endl;
+        return false;
+    }
+
+    if (locator.metadataOffset >= logicalEnd ||
+        locator.metadataOffset + locator.metadataSize > logicalEnd) {
+        std::cerr << "Invalid metadata offset or size" << std::endl;
+        return false;
+    }
+
+    if (locator.dataOffset >= logicalEnd ||
+        locator.dataOffset + locator.dataSize > logicalEnd) {
+        std::cerr << "Invalid data offset or size" << std::endl;
+        return false;
+    }
+
     return true;
 }
 

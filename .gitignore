@@ -14,3 +14,4 @@ Cargo.lock
 /build-stage3-verify
 /build-zstd-stage2
 /third_party/zstd
+/.idea

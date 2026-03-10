@@ -2,6 +2,7 @@
 
 #include "common/utf8_utils.h"
 
+#include <json.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>

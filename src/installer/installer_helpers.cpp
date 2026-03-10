@@ -3,6 +3,8 @@
 #include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
+#include <cstring>
 #include <ctime>
 #include <cstdio>
 #include <exception>
@@ -78,6 +80,97 @@ std::string normalizeProcessNameInternal(const std::string& name) {
     }
     return lower;
 }
+
+bool ReadFileBytesAt(std::ifstream& file, uint64_t offset, void* out, size_t size) {
+    file.clear();
+    file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    if (!file) {
+        return false;
+    }
+    file.read(reinterpret_cast<char*>(out), static_cast<std::streamsize>(size));
+    return file.good() && file.gcount() == static_cast<std::streamsize>(size);
+}
+
+uint64_t ResolveLogicalPeEnd(std::ifstream& file, uint64_t fileSize) {
+#ifdef _WIN32
+    if (fileSize < sizeof(IMAGE_DOS_HEADER)) {
+        return fileSize;
+    }
+
+    IMAGE_DOS_HEADER dosHeader{};
+    if (!ReadFileBytesAt(file, 0, &dosHeader, sizeof(dosHeader)) ||
+        dosHeader.e_magic != IMAGE_DOS_SIGNATURE) {
+        return fileSize;
+    }
+
+    uint64_t ntOffset = static_cast<uint64_t>(dosHeader.e_lfanew);
+    uint32_t peSignature = 0;
+    if (ntOffset + sizeof(peSignature) + sizeof(IMAGE_FILE_HEADER) > fileSize ||
+        !ReadFileBytesAt(file, ntOffset, &peSignature, sizeof(peSignature)) ||
+        peSignature != IMAGE_NT_SIGNATURE) {
+        return fileSize;
+    }
+
+    IMAGE_FILE_HEADER fileHeader{};
+    if (!ReadFileBytesAt(file,
+                         ntOffset + sizeof(peSignature),
+                         &fileHeader,
+                         sizeof(fileHeader))) {
+        return fileSize;
+    }
+
+    uint64_t optionalOffset = ntOffset + sizeof(peSignature) + sizeof(IMAGE_FILE_HEADER);
+    if (optionalOffset + fileHeader.SizeOfOptionalHeader > fileSize ||
+        fileHeader.SizeOfOptionalHeader < sizeof(uint16_t)) {
+        return fileSize;
+    }
+
+    std::vector<uint8_t> optionalHeader(fileHeader.SizeOfOptionalHeader);
+    if (!ReadFileBytesAt(file, optionalOffset, optionalHeader.data(), optionalHeader.size())) {
+        return fileSize;
+    }
+
+    uint16_t optionalMagic = 0;
+    std::memcpy(&optionalMagic, optionalHeader.data(), sizeof(optionalMagic));
+
+    size_t directoryOffset = 0;
+    if (optionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+        directoryOffset = offsetof(IMAGE_OPTIONAL_HEADER32, DataDirectory);
+    } else if (optionalMagic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+        directoryOffset = offsetof(IMAGE_OPTIONAL_HEADER64, DataDirectory);
+    } else {
+        return fileSize;
+    }
+
+    size_t securityDirOffset =
+        directoryOffset + IMAGE_DIRECTORY_ENTRY_SECURITY * sizeof(IMAGE_DATA_DIRECTORY);
+    if (securityDirOffset + sizeof(IMAGE_DATA_DIRECTORY) > optionalHeader.size()) {
+        return fileSize;
+    }
+
+    IMAGE_DATA_DIRECTORY securityDir{};
+    std::memcpy(&securityDir,
+                optionalHeader.data() + securityDirOffset,
+                sizeof(securityDir));
+
+    uint64_t certificateOffset = static_cast<uint64_t>(securityDir.VirtualAddress);
+    uint64_t certificateSize = static_cast<uint64_t>(securityDir.Size);
+    if (certificateOffset == 0 || certificateSize == 0) {
+        return fileSize;
+    }
+
+    if (certificateOffset >= fileSize ||
+        certificateOffset + certificateSize > fileSize) {
+        return fileSize;
+    }
+
+    return certificateOffset;
+#else
+    (void)file;
+    return fileSize;
+#endif
+}
+
 bool isPathUnder(const std::string& path, const std::string& base) {
     if (path.empty() || base.empty()) {
         return false;
@@ -449,27 +542,36 @@ bool createUninstallStub(const std::string& sourcePath, const std::string& targe
     }
     
     in.seekg(0, std::ios::end);
-    std::streampos fileSize = in.tellg();
+    uint64_t fileSize = static_cast<uint64_t>(in.tellg());
+    uint64_t logicalEnd = ResolveLogicalPeEnd(in, fileSize);
     size_t locatorSize = sizeof(DataLocator) + sizeof(uint32_t);
-    if (fileSize < static_cast<std::streampos>(locatorSize)) {
+    if (logicalEnd < locatorSize) {
         return false;
     }
     
-    in.seekg(-static_cast<std::streamoff>(sizeof(uint32_t)), std::ios::end);
     uint32_t endMagic = 0;
-    in.read(reinterpret_cast<char*>(&endMagic), sizeof(uint32_t));
+    if (!ReadFileBytesAt(in,
+                         logicalEnd - sizeof(uint32_t),
+                         &endMagic,
+                         sizeof(uint32_t))) {
+        return false;
+    }
     if (endMagic != Constants::MAGIC_NUMBER) {
         return false;
     }
     
-    in.seekg(-static_cast<std::streamoff>(locatorSize), std::ios::end);
     DataLocator locator{};
-    in.read(reinterpret_cast<char*>(&locator), sizeof(DataLocator));
+    if (!ReadFileBytesAt(in,
+                         logicalEnd - locatorSize,
+                         &locator,
+                         sizeof(DataLocator))) {
+        return false;
+    }
     if (locator.magic != Constants::MAGIC_NUMBER || locator.metadataOffset == 0) {
         return false;
     }
     
-    if (locator.metadataOffset >= static_cast<uint64_t>(fileSize)) {
+    if (locator.metadataOffset >= logicalEnd) {
         return false;
     }
     

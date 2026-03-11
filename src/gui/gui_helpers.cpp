@@ -1,5 +1,3 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/gui/gui_helpers.h"
 #include "../../include/gui/message_box_dialog.h"
 #include "common/utf8_utils.h"
@@ -491,4 +489,3 @@ std::wstring GUIHelpers::ExtractRootPath(const std::wstring& path) {
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

@@ -19,14 +19,14 @@
         <VerticalLayout height="42">
             <HorizontalLayout height="16">
                 <Control width="stretch"/>
-                <CheckBox name="chkChrome" width="60" font="0" textcolor="0xFFFFFFFF" resourcetext="true" text="msg.pluginInstall" selectedimage="file='images\check_blue.png' dest='0,0,16,16'" normalimage="file='images\check_darkgray.png' dest='0,0,16,16'"/>
+                <CheckBox name="chkChrome" userdata="component:chrome_plugin" width="60" font="0" textcolor="0xFFFFFFFF" resourcetext="true" text="msg.pluginInstall" selectedimage="file='images\check_blue.png' dest='0,0,16,16'" normalimage="file='images\check_darkgray.png' dest='0,0,16,16'"/>
                 <Button name="btnChrome" cursor="hand" padding="0,0,0,0" resourcetext="true" text="msg.chromePlugin" showhtml="true" textcolor="#FF0091FF" font="0" width="100" align="left" height="16"/>
                 <Control width="stretch"/>
             </HorizontalLayout>
             <control height="10"/>
             <HorizontalLayout height="16">
                 <Control width="stretch"/>
-                <CheckBox name="chkPPt" width="60" font="0" textcolor="0xFFFFFFFF" resourcetext="true" text="msg.pluginInstall" selectedimage="file='images\check_blue.png' dest='0,0,16,16'" normalimage="file='images\check_darkgray.png' dest='0,0,16,16'"/>
+                <CheckBox name="chkPPt" userdata="component:ppt_plugin" width="60" font="0" textcolor="0xFFFFFFFF" resourcetext="true" text="msg.pluginInstall" selectedimage="file='images\check_blue.png' dest='0,0,16,16'" normalimage="file='images\check_darkgray.png' dest='0,0,16,16'"/>
                 <Button name="btnPPt" cursor="hand" padding="0,0,0,0" resourcetext="true" text="msg.pptPlugin" showhtml="true" textcolor="#FF0091FF" font="0" width="100" align="left" height="16"/>
                 <Control width="stretch"/>
             </HorizontalLayout>

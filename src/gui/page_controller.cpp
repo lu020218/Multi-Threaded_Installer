@@ -1,5 +1,3 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/gui/page_controller.h"
 #include "../../include/gui/installation_worker.h"
 #include "../../include/gui/license_dialog.h"
@@ -136,4 +134,3 @@ void PageController::OnProgressUpdate(const std::wstring& currentFolder, float p
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

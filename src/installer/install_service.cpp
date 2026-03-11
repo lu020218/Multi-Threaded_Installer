@@ -156,17 +156,6 @@ std::vector<std::string> CollectFilesRecursive(const std::vector<std::string>& r
     return files;
 }
 
-std::string NormalizePathForCompare(const std::string& path) {
-    std::string normalized = path;
-    std::replace(normalized.begin(), normalized.end(), '/', '\\');
-    while (!normalized.empty() && (normalized.back() == '\\' || normalized.back() == '/')) {
-        normalized.pop_back();
-    }
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return normalized;
-}
-
 std::string ResolveLanguageCode(const std::string& preferredLanguage) {
     if (!preferredLanguage.empty()) {
         return preferredLanguage;
@@ -939,8 +928,8 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                        pathResolver,
                                        previousManifest,
                                        previousInstallDir)) {
-            std::string normalizedOld = NormalizePathForCompare(previousInstallDir);
-            std::string normalizedNew = NormalizePathForCompare(
+            std::string normalizedOld = normalizePathForCompare(previousInstallDir);
+            std::string normalizedNew = normalizePathForCompare(
                 resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot);
             if (!normalizedOld.empty() && !normalizedNew.empty() && normalizedOld != normalizedNew) {
                 emitMessage(InstallServiceEventType::Info,

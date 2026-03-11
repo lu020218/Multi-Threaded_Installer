@@ -4,8 +4,6 @@ project(MultiThreadedInstaller VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# GUI option
-option(BUILD_GUI "Build with GUI support using DuiLib" ON)
 option(VERIFY_THIRD_PARTY_HASHES "Validate prebuilt third-party library hashes" ON)
 option(YAML_CPP_FETCH_FALLBACK "Allow FetchContent fallback for yaml-cpp when submodule/system package is unavailable" OFF)
 option(ENABLE_ZSTD "Enable ZSTD compression support for packager" ON)
@@ -26,10 +24,12 @@ if(WIN32)
         message(STATUS "Using dynamic C/C++ runtime library")
     endif()
 
-    if(BUILD_GUI AND NOT STATIC_LINK_RUNTIME)
+    if(NOT STATIC_LINK_RUNTIME)
         message(FATAL_ERROR
-            "BUILD_GUI=ON requires STATIC_LINK_RUNTIME=ON because third_party DuiLib static archive is built with /MT.")
+            "GUI installer builds require STATIC_LINK_RUNTIME=ON because third_party DuiLib static archive is built with /MT.")
     endif()
+else()
+    message(FATAL_ERROR "The current project phase requires the Windows GUI installer build.")
 endif()
 
 # Find required packages
@@ -224,62 +224,31 @@ include_directories(include)
 include_directories(src)
 include_directories(${THIRD_PARTY_DIR}/nlohmann)
 
-# DuiLib configuration for GUI
-if(BUILD_GUI)
-    message(STATUS "Configuring GUI support with DuiLib...")
-    
-    # Add DuiLib include directory
-    set(DUILIB_INCLUDE_DIR ${THIRD_PARTY_DIR}/DuiLib_Ultimate/DuiLib)
-    include_directories(${DUILIB_INCLUDE_DIR})
-    message(STATUS "DuiLib include directory: ${DUILIB_INCLUDE_DIR}")
-    
-    # Use static library for single-file installer
-    set(USE_DUILIB_STATIC ON CACHE BOOL "Use DuiLib static library" FORCE)
-    
-    if(USE_DUILIB_STATIC)
-        # Use static library
-        set(DUILIB_LIB ${THIRD_PARTY_DIR}/DuiLib_Ultimate/lib_static/DuiLib.lib)
-        if(EXISTS ${DUILIB_LIB})
-            message(STATUS "Using DuiLib static library: ${DUILIB_LIB}")
-            add_definitions(-DUILIB_STATIC)
-            file(SHA256 "${DUILIB_LIB}" DUILIB_SHA256)
-            message(STATUS "DuiLib static SHA256: ${DUILIB_SHA256}")
-            if(VERIFY_THIRD_PARTY_HASHES AND NOT DUILIB_SHA256 STREQUAL EXPECTED_DUILIB_SHA256)
-                message(FATAL_ERROR "Unexpected DuiLib static hash. Expected ${EXPECTED_DUILIB_SHA256}, got ${DUILIB_SHA256}")
-            endif()
-        else()
-            message(FATAL_ERROR "DuiLib static library not found at ${DUILIB_LIB}")
-        endif()
-    else()
-        # Use dynamic library (old behavior)
-        if(CMAKE_BUILD_TYPE MATCHES Debug)
-            set(DUILIB_LIB ${THIRD_PARTY_DIR}/DuiLib_Ultimate/lib/DuiLib_d.lib)
-        else()
-            set(DUILIB_LIB ${THIRD_PARTY_DIR}/DuiLib_Ultimate/lib/DuiLib.lib)
-        endif()
-        
-        # Check if DuiLib library exists
-        if(NOT EXISTS ${DUILIB_LIB})
-            # Try the release version as fallback
-            set(DUILIB_LIB ${THIRD_PARTY_DIR}/DuiLib_Ultimate/lib/DuiLib.lib)
-            if(NOT EXISTS ${DUILIB_LIB})
-                message(WARNING "DuiLib library not found at ${DUILIB_LIB}. GUI support will be disabled.")
-                set(BUILD_GUI OFF)
-            else()
-                message(STATUS "Using DuiLib library (fallback to release): ${DUILIB_LIB}")
-            endif()
-        else()
-            message(STATUS "Using DuiLib library: ${DUILIB_LIB}")
-        endif()
+message(STATUS "Configuring GUI support with DuiLib...")
+
+set(DUILIB_INCLUDE_DIR ${THIRD_PARTY_DIR}/DuiLib_Ultimate/DuiLib)
+include_directories(${DUILIB_INCLUDE_DIR})
+message(STATUS "DuiLib include directory: ${DUILIB_INCLUDE_DIR}")
+
+set(USE_DUILIB_STATIC ON CACHE BOOL "Use DuiLib static library" FORCE)
+set(DUILIB_LIB ${THIRD_PARTY_DIR}/DuiLib_Ultimate/lib_static/DuiLib.lib)
+if(EXISTS ${DUILIB_LIB})
+    message(STATUS "Using DuiLib static library: ${DUILIB_LIB}")
+    add_definitions(-DUILIB_STATIC)
+    file(SHA256 "${DUILIB_LIB}" DUILIB_SHA256)
+    message(STATUS "DuiLib static SHA256: ${DUILIB_SHA256}")
+    if(VERIFY_THIRD_PARTY_HASHES AND NOT DUILIB_SHA256 STREQUAL EXPECTED_DUILIB_SHA256)
+        message(FATAL_ERROR "Unexpected DuiLib static hash. Expected ${EXPECTED_DUILIB_SHA256}, got ${DUILIB_SHA256}")
     endif()
-    
-    # Define required Windows libraries for GUI
-    set(GUI_WINDOWS_LIBS
-        comctl32.lib    # Common Controls
-        GdiPlus.lib     # GDI+ for graphics
-        Imm32.lib       # Input Method Manager
-    )
+else()
+    message(FATAL_ERROR "DuiLib static library not found at ${DUILIB_LIB}")
 endif()
+
+set(GUI_WINDOWS_LIBS
+    comctl32.lib
+    GdiPlus.lib
+    Imm32.lib
+)
 
 # Function to copy DLLs to target directory
 function(copy_dlls_to_target target_name)
@@ -292,20 +261,7 @@ function(copy_dlls_to_target target_name)
         )
     endif()
     
-    # Copy DuiLib DLL only if using dynamic library
-    if(BUILD_GUI AND NOT USE_DUILIB_STATIC)
-        set(DUILIB_DLL_PATH "${THIRD_PARTY_DIR}/DuiLib_Ultimate/bin/DuiLib.dll")
-        if(EXISTS ${DUILIB_DLL_PATH})
-            add_custom_command(TARGET ${target_name} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${DUILIB_DLL_PATH}"
-                $<TARGET_FILE_DIR:${target_name}>
-                COMMENT "Copying DuiLib DLL to output directory"
-            )
-        else()
-            message(WARNING "DuiLib.dll not found at ${DUILIB_DLL_PATH}")
-        endif()
-    elseif(BUILD_GUI AND USE_DUILIB_STATIC)
+    if(USE_DUILIB_STATIC)
         message(STATUS "Using DuiLib static library - no DLL copy needed")
     endif()
 endfunction()
@@ -355,31 +311,22 @@ set(INSTALLER_SOURCES
     src/common/installer_parallel_install.cpp
 )
 
-# GUI source files (only if BUILD_GUI is enabled)
-if(BUILD_GUI)
-    set(GUI_SOURCES
-        # Core GUI management
-        src/gui/gui_manager.cpp
-        src/gui/page_controller.cpp
-        src/gui/installation_worker.cpp
-        src/gui/uninstall_worker.cpp
-        
-        # Page controllers
-        src/gui/welcome_page_controller.cpp
-        src/gui/progress_page_controller.cpp
-        src/gui/completion_page_controller.cpp
-        
-        # Dialogs and helpers
-        src/gui/license_dialog.cpp
-        src/gui/message_box_dialog.cpp
-        src/gui/gui_helpers.cpp
-        
-        # Embedded resources manager
-        src/installer/embedded_resources.cpp
-    )
-    list(APPEND INSTALLER_SOURCES ${GUI_SOURCES})
-    message(STATUS "Added ${CMAKE_CURRENT_LIST_LENGTH} GUI source files to installer")
-endif()
+set(GUI_SOURCES
+    src/gui/gui_manager.cpp
+    src/gui/page_controller.cpp
+    src/gui/installation_worker.cpp
+    src/gui/uninstall_worker.cpp
+    src/gui/welcome_page_controller.cpp
+    src/gui/progress_page_controller.cpp
+    src/gui/completion_page_controller.cpp
+    src/gui/license_dialog.cpp
+    src/gui/license_text_loader.cpp
+    src/gui/message_box_dialog.cpp
+    src/gui/gui_helpers.cpp
+    src/installer/embedded_resources.cpp
+)
+list(APPEND INSTALLER_SOURCES ${GUI_SOURCES})
+message(STATUS "Added GUI source files to installer")
 
 # Common source files
 set(COMMON_SOURCES
@@ -399,11 +346,7 @@ apply_msvc_liblzma_link_fixes(packager)
 copy_dlls_to_target(packager)
 
 # Create installer executable
-if(WIN32 AND BUILD_GUI)
-    add_executable(installer WIN32 ${INSTALLER_SOURCES} ${COMMON_SOURCES})
-else()
-    add_executable(installer ${INSTALLER_SOURCES} ${COMMON_SOURCES})
-endif()
+add_executable(installer WIN32 ${INSTALLER_SOURCES} ${COMMON_SOURCES})
 target_link_libraries(installer ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads)
 if(WIN32)
     target_link_libraries(installer ole32 shell32 bcrypt urlmon)
@@ -415,59 +358,46 @@ endif()
 apply_msvc_liblzma_link_fixes(installer)
 copy_dlls_to_target(installer)
 
-# Add GUI support to installer if enabled
-if(BUILD_GUI)
-    # Add GUI preprocessor definition
-    target_compile_definitions(installer PRIVATE GUI_ENABLED)
-    
-    # Configure character set (Unicode) to match DuiLib build.
-    if(MSVC)
-        target_compile_definitions(installer PRIVATE UNICODE _UNICODE)
-        message(STATUS "Configured installer for Unicode character set")
-    endif()
-    
-    # Link DuiLib and required Windows libraries
-    target_link_libraries(installer 
-        ${DUILIB_LIB}
-        ${GUI_WINDOWS_LIBS}
-    )
-    
-    # Embed application manifest for DPI awareness and common controls (Task 11.3)
-    if(MSVC)
-        # Set the manifest file for the installer executable
-        set_target_properties(installer PROPERTIES
-            LINK_FLAGS "/MANIFEST:EMBED /MANIFESTINPUT:${CMAKE_SOURCE_DIR}/src/installer/installer.exe.manifest"
-        )
-        message(STATUS "Embedding application manifest: ${CMAKE_SOURCE_DIR}/src/installer/installer.exe.manifest")
-    endif()
-    
-    # Copy resources directory to output directory (Task 11.2)
-    # This ensures XML layouts and images are available at runtime
-    add_custom_command(TARGET installer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/resources
-        $<TARGET_FILE_DIR:installer>/resources
-        COMMENT "Copying GUI resources (XML layouts and images) to output directory"
-    )
-    
-    # Verify critical resource files exist
-    set(CRITICAL_RESOURCES
-        resources/skins/main.xml
-        resources/skins/welcome_page.xml
-        resources/skins/progress_page.xml
-        resources/skins/completion_page.xml
-        resources/skins/license_page.xml
-        resources/license.txt
-    )
-    
-    foreach(RESOURCE ${CRITICAL_RESOURCES})
-        if(NOT EXISTS ${CMAKE_SOURCE_DIR}/${RESOURCE})
-            message(WARNING "Critical resource file missing: ${RESOURCE}")
-        endif()
-    endforeach()
-    
-    message(STATUS "GUI support enabled for installer")
-    message(STATUS "  - DuiLib library: ${DUILIB_LIB}")
-    message(STATUS "  - Windows GUI libraries: ${GUI_WINDOWS_LIBS}")
-    message(STATUS "  - Resources will be copied from: ${CMAKE_SOURCE_DIR}/resources")
+if(MSVC)
+    target_compile_definitions(installer PRIVATE UNICODE _UNICODE)
+    message(STATUS "Configured installer for Unicode character set")
 endif()
+
+target_link_libraries(installer 
+    ${DUILIB_LIB}
+    ${GUI_WINDOWS_LIBS}
+)
+
+if(MSVC)
+    set_target_properties(installer PROPERTIES
+        LINK_FLAGS "/MANIFEST:EMBED /MANIFESTINPUT:${CMAKE_SOURCE_DIR}/src/installer/installer.exe.manifest"
+    )
+    message(STATUS "Embedding application manifest: ${CMAKE_SOURCE_DIR}/src/installer/installer.exe.manifest")
+endif()
+
+add_custom_command(TARGET installer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_SOURCE_DIR}/resources
+    $<TARGET_FILE_DIR:installer>/resources
+    COMMENT "Copying GUI resources (XML layouts and images) to output directory"
+)
+
+set(CRITICAL_RESOURCES
+    resources/skins/main.xml
+    resources/skins/welcome_page.xml
+    resources/skins/progress_page.xml
+    resources/skins/completion_page.xml
+    resources/skins/license_page.xml
+    resources/license.txt
+)
+
+foreach(RESOURCE ${CRITICAL_RESOURCES})
+    if(NOT EXISTS ${CMAKE_SOURCE_DIR}/${RESOURCE})
+        message(WARNING "Critical resource file missing: ${RESOURCE}")
+    endif()
+endforeach()
+
+message(STATUS "GUI support enabled for installer")
+message(STATUS "  - DuiLib library: ${DUILIB_LIB}")
+message(STATUS "  - Windows GUI libraries: ${GUI_WINDOWS_LIBS}")
+message(STATUS "  - Resources will be copied from: ${CMAKE_SOURCE_DIR}/resources")

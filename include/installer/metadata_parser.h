@@ -53,8 +53,6 @@ private:
 
     std::vector<uint8_t> readExternalCompressedData(uint64_t offset, uint64_t size);
     
-    uint64_t resolveEmbeddedDataEnd(std::ifstream& file, uint64_t fileSize);
-    
     bool readEmbeddedLocator(std::ifstream& file,
                              uint64_t fileSize,
                              uint64_t& logicalEnd,

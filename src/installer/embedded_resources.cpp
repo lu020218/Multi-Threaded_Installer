@@ -1,5 +1,3 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/installer/embedded_resources.h"
 #include "common/utf8_utils.h"
 #include <Windows.h>
@@ -37,6 +35,7 @@ std::string EmbeddedResourceManager::extractResources() {
     std::filesystem::create_directories(basePath / "skins");
     std::filesystem::create_directories(basePath / "images");
     std::filesystem::create_directories(basePath / "lang");
+    std::filesystem::create_directories(basePath / "license");
     
     bool anyExtracted = false;
     
@@ -147,6 +146,40 @@ std::string EmbeddedResourceManager::extractResources() {
                 auto data = getEmbeddedResource(resourceName);
                 if (!data.empty()) {
                     std::string path = "lang\\";
+                    path += fileName;
+                    if (extractFile(path, data)) {
+                        std::cout << "  Extracted: " << path << std::endl;
+                        anyExtracted = true;
+                    }
+                }
+            }
+            start = listText.find_first_not_of("\r\n", end);
+            if (start == std::string::npos) {
+                break;
+            }
+        }
+    }
+
+    auto licenseList = getEmbeddedResource("LICENSE_LIST");
+    if (!licenseList.empty()) {
+        std::string listText(reinterpret_cast<const char*>(licenseList.data()), licenseList.size());
+        size_t start = 0;
+        while (start < listText.size()) {
+            size_t end = listText.find_first_of("\r\n", start);
+            if (end == std::string::npos) {
+                end = listText.size();
+            }
+            std::string fileName = listText.substr(start, end - start);
+            if (!fileName.empty()) {
+                std::string resourceName = "LICENSE_";
+                resourceName += fileName;
+                for (char& c : resourceName) {
+                    if (c == '.') c = '_';
+                    c = toupper(c);
+                }
+                auto data = getEmbeddedResource(resourceName);
+                if (!data.empty()) {
+                    std::string path = "license\\";
                     path += fileName;
                     if (extractFile(path, data)) {
                         std::cout << "  Extracted: " << path << std::endl;
@@ -438,4 +471,3 @@ std::vector<uint8_t> EmbeddedResourceManager::readEmbeddedResourceFromFile(const
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

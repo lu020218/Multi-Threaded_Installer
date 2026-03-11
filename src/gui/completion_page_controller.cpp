@@ -1,5 +1,3 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/gui/completion_page_controller.h"
 
 namespace MultiThreadedInstaller {
@@ -104,4 +102,3 @@ void CompletionPageController::UpdateCheckboxVisibility() {
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

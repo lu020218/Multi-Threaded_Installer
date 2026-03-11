@@ -19,6 +19,7 @@ void applyRegistryEntries(const std::vector<RegistryEntry>& entries,
                           const std::string& installDir,
                           const std::string& configVersion,
                           const std::string& appName);
+std::string sanitizeRegistryKeyName(const std::string& name);
 bool readRegistryStringValue(const std::string& path, const std::string& key, std::string& value);
 bool writeUninstallRegistryEntry(const std::string& appName,
                                  const std::string& version,

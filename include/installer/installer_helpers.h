@@ -2,6 +2,7 @@
 
 #include "common/types.h"
 #include "installer/path_resolver.h"
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -31,10 +32,35 @@ bool setAutoStartup(const std::string& appName, const std::filesystem::path& exe
 bool removeAutoStartup(const std::string& appName);
 bool createDesktopShortcut(const std::string& appName, const std::filesystem::path& exePath);
 bool deleteDesktopShortcut(const std::string& appName);
+std::string normalizePathForCompare(const std::string& path);
+bool isCancellationText(const std::string& message);
+bool readFileBytesAt(std::ifstream& file, uint64_t offset, void* out, size_t size);
+uint64_t resolveLogicalPeEnd(std::ifstream& file, uint64_t fileSize);
+
+struct EmbeddedDataLocatorRecord {
+    uint32_t magic;
+    uint64_t metadataOffset;
+    uint64_t metadataSize;
+    uint64_t dataOffset;
+    uint64_t dataSize;
+
+    EmbeddedDataLocatorRecord()
+        : magic(0), metadataOffset(0), metadataSize(0), dataOffset(0), dataSize(0) {}
+};
+
+bool findEmbeddedDataLocator(std::ifstream& file,
+                             uint64_t fileSize,
+                             uint64_t& trailerEnd,
+                             EmbeddedDataLocatorRecord& locator);
 
 std::string getCurrentExecutablePath();
 std::string getDefaultManifestPath(const std::string& appName, InstallerPathResolver& resolver);
 std::string getLocalManifestPath(const std::string& exePath);
+std::string findInstalledManifestPath(const std::string& appName,
+                                      InstallerPathResolver& resolver);
+std::string resolveInstalledManifestPath(const std::string& appName,
+                                         const std::string& exePath,
+                                         InstallerPathResolver& resolver);
 bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath);
 
 bool isRunningAsAdmin();

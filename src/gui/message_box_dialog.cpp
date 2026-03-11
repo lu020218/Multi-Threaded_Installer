@@ -1,5 +1,3 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/gui/message_box_dialog.h"
 #include "common/utf8_utils.h"
 #include <vector>
@@ -206,6 +204,5 @@ void MessageBoxDialog::InitWindow() {
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED
 
 

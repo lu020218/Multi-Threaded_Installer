@@ -1,7 +1,5 @@
 #pragma once
 
-#ifdef GUI_ENABLED
-
 #include <UIlib.h>
 #include <string>
 #include <chrono>
@@ -52,4 +50,3 @@ private:
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

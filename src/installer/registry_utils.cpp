@@ -31,20 +31,6 @@ std::string expandRegistryValue(const std::string& value,
     return result;
 }
 
-std::string sanitizeRegistryKeyName(const std::string& name) {
-    std::string result = name;
-    for (char& c : result) {
-        if (c == '\\' || c == '/' || c == ':' || c == '*' ||
-            c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
-            c = '_';
-        }
-    }
-    if (result.empty()) {
-        result = "Application";
-    }
-    return result;
-}
-
 std::string quoteIfNeeded(const std::string& value) {
     if (value.find(' ') == std::string::npos && value.find('\t') == std::string::npos) {
         return value;
@@ -84,6 +70,20 @@ std::string normalizeRegistrySubkey(const std::string& rawSubkey) {
 }
 
 } // namespace
+
+std::string sanitizeRegistryKeyName(const std::string& name) {
+    std::string result = name;
+    for (char& c : result) {
+        if (c == '\\' || c == '/' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+            c = '_';
+        }
+    }
+    if (result.empty()) {
+        result = "Application";
+    }
+    return result;
+}
 
 bool deleteRegistryValue(const RegistryEntry& entry) {
 #ifdef _WIN32

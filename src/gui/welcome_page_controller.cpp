@@ -1,5 +1,3 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/gui/welcome_page_controller.h"
 #include "../../include/gui/gui_helpers.h"
 #include <Windows.h>
@@ -220,4 +218,3 @@ bool WelcomePageController::ValidatePath(const std::wstring& path) {
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

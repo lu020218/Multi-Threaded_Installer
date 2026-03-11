@@ -1,12 +1,11 @@
 #pragma once
 
-#ifdef GUI_ENABLED
-
 #include <UIlib.h>
 #include <string>
 #include <memory>
 #include <cstdint>
 #include <vector>
+#include <unordered_map>
 #include "../common/types.h"
 
 // Use DuiLib namespace
@@ -127,6 +126,7 @@ private:
     int m_baseWindowWidth;
     ExtendedInstallationMetadata m_installMetadata;
     bool m_installMetadataLoaded;
+    std::unordered_map<std::string, std::wstring> m_uiLinks;
     
 
     void InitControls();
@@ -149,6 +149,7 @@ private:
     void ApplyLanguageByCode(const std::wstring& code);
     void ShowLicensePage();
     void SyncLicenseAgreementFromPage();
+    void RefreshLicenseText();
     int GetWelcomePageIndex() const;
     int GetProgressPageIndex() const;
     int GetCompletionPageIndex() const;
@@ -183,4 +184,3 @@ private:
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

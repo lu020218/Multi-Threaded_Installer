@@ -109,6 +109,8 @@ std::string InstallerPathResolver::getSpecialDirectoryPath(SpecialDirectoryType 
     switch (dirType) {
         case SpecialDirectoryType::PROGRAM_FILES:
             return "%ProgramFiles%";
+        case SpecialDirectoryType::PROGRAM_FILES_X86:
+            return "%ProgramFiles(x86)%";
         case SpecialDirectoryType::APPDATA_ROAMING:
             return "%AppData%";
         case SpecialDirectoryType::APPDATA_LOCAL:

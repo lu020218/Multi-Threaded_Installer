@@ -1,5 +1,6 @@
 #include "installer/installer_helpers.h"
 #include "installer/file_system_operator.h"
+#include "installer/registry_utils.h"
 #include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
@@ -36,17 +37,6 @@ bool startsWithNoCase(const std::string& value, const std::string& prefix) {
     return true;
 }
 
-std::string normalizePathForCompare(const std::string& path) {
-    std::string normalized = path;
-    std::replace(normalized.begin(), normalized.end(), '/', '\\');
-    while (!normalized.empty() && (normalized.back() == '\\' || normalized.back() == '/')) {
-        normalized.pop_back();
-    }
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return normalized;
-}
-
 std::string trimAscii(const std::string& value) {
     size_t start = 0;
     while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) {
@@ -79,96 +69,6 @@ std::string normalizeProcessNameInternal(const std::string& name) {
         lower += ".exe";
     }
     return lower;
-}
-
-bool ReadFileBytesAt(std::ifstream& file, uint64_t offset, void* out, size_t size) {
-    file.clear();
-    file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-    if (!file) {
-        return false;
-    }
-    file.read(reinterpret_cast<char*>(out), static_cast<std::streamsize>(size));
-    return file.good() && file.gcount() == static_cast<std::streamsize>(size);
-}
-
-uint64_t ResolveLogicalPeEnd(std::ifstream& file, uint64_t fileSize) {
-#ifdef _WIN32
-    if (fileSize < sizeof(IMAGE_DOS_HEADER)) {
-        return fileSize;
-    }
-
-    IMAGE_DOS_HEADER dosHeader{};
-    if (!ReadFileBytesAt(file, 0, &dosHeader, sizeof(dosHeader)) ||
-        dosHeader.e_magic != IMAGE_DOS_SIGNATURE) {
-        return fileSize;
-    }
-
-    uint64_t ntOffset = static_cast<uint64_t>(dosHeader.e_lfanew);
-    uint32_t peSignature = 0;
-    if (ntOffset + sizeof(peSignature) + sizeof(IMAGE_FILE_HEADER) > fileSize ||
-        !ReadFileBytesAt(file, ntOffset, &peSignature, sizeof(peSignature)) ||
-        peSignature != IMAGE_NT_SIGNATURE) {
-        return fileSize;
-    }
-
-    IMAGE_FILE_HEADER fileHeader{};
-    if (!ReadFileBytesAt(file,
-                         ntOffset + sizeof(peSignature),
-                         &fileHeader,
-                         sizeof(fileHeader))) {
-        return fileSize;
-    }
-
-    uint64_t optionalOffset = ntOffset + sizeof(peSignature) + sizeof(IMAGE_FILE_HEADER);
-    if (optionalOffset + fileHeader.SizeOfOptionalHeader > fileSize ||
-        fileHeader.SizeOfOptionalHeader < sizeof(uint16_t)) {
-        return fileSize;
-    }
-
-    std::vector<uint8_t> optionalHeader(fileHeader.SizeOfOptionalHeader);
-    if (!ReadFileBytesAt(file, optionalOffset, optionalHeader.data(), optionalHeader.size())) {
-        return fileSize;
-    }
-
-    uint16_t optionalMagic = 0;
-    std::memcpy(&optionalMagic, optionalHeader.data(), sizeof(optionalMagic));
-
-    size_t directoryOffset = 0;
-    if (optionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-        directoryOffset = offsetof(IMAGE_OPTIONAL_HEADER32, DataDirectory);
-    } else if (optionalMagic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
-        directoryOffset = offsetof(IMAGE_OPTIONAL_HEADER64, DataDirectory);
-    } else {
-        return fileSize;
-    }
-
-    size_t securityDirOffset =
-        directoryOffset + IMAGE_DIRECTORY_ENTRY_SECURITY * sizeof(IMAGE_DATA_DIRECTORY);
-    if (securityDirOffset + sizeof(IMAGE_DATA_DIRECTORY) > optionalHeader.size()) {
-        return fileSize;
-    }
-
-    IMAGE_DATA_DIRECTORY securityDir{};
-    std::memcpy(&securityDir,
-                optionalHeader.data() + securityDirOffset,
-                sizeof(securityDir));
-
-    uint64_t certificateOffset = static_cast<uint64_t>(securityDir.VirtualAddress);
-    uint64_t certificateSize = static_cast<uint64_t>(securityDir.Size);
-    if (certificateOffset == 0 || certificateSize == 0) {
-        return fileSize;
-    }
-
-    if (certificateOffset >= fileSize ||
-        certificateOffset + certificateSize > fileSize) {
-        return fileSize;
-    }
-
-    return certificateOffset;
-#else
-    (void)file;
-    return fileSize;
-#endif
 }
 
 bool isPathUnder(const std::string& path, const std::string& base) {
@@ -250,6 +150,248 @@ std::wstring buildRelaunchArguments() {
 
 
 } // namespace
+
+std::string normalizePathForCompare(const std::string& path) {
+    std::string normalized = path;
+    std::replace(normalized.begin(), normalized.end(), '/', '\\');
+    while (!normalized.empty() && (normalized.back() == '\\' || normalized.back() == '/')) {
+        normalized.pop_back();
+    }
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return normalized;
+}
+
+bool isCancellationText(const std::string& message) {
+    std::string lowered = message;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lowered.find("cancelled") != std::string::npos ||
+           lowered.find("canceled") != std::string::npos;
+}
+
+bool readFileBytesAt(std::ifstream& file, uint64_t offset, void* out, size_t size) {
+    file.clear();
+    file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    if (!file) {
+        return false;
+    }
+    file.read(reinterpret_cast<char*>(out), static_cast<std::streamsize>(size));
+    return file.good() && file.gcount() == static_cast<std::streamsize>(size);
+}
+
+uint64_t resolveLogicalPeEnd(std::ifstream& file, uint64_t fileSize) {
+#ifdef _WIN32
+    if (fileSize < sizeof(IMAGE_DOS_HEADER)) {
+        return fileSize;
+    }
+
+    IMAGE_DOS_HEADER dosHeader{};
+    if (!readFileBytesAt(file, 0, &dosHeader, sizeof(dosHeader)) ||
+        dosHeader.e_magic != IMAGE_DOS_SIGNATURE) {
+        return fileSize;
+    }
+
+    uint64_t ntOffset = static_cast<uint64_t>(dosHeader.e_lfanew);
+    uint32_t peSignature = 0;
+    if (ntOffset + sizeof(peSignature) + sizeof(IMAGE_FILE_HEADER) > fileSize ||
+        !readFileBytesAt(file, ntOffset, &peSignature, sizeof(peSignature)) ||
+        peSignature != IMAGE_NT_SIGNATURE) {
+        return fileSize;
+    }
+
+    IMAGE_FILE_HEADER fileHeader{};
+    if (!readFileBytesAt(file,
+                         ntOffset + sizeof(peSignature),
+                         &fileHeader,
+                         sizeof(fileHeader))) {
+        return fileSize;
+    }
+
+    uint64_t optionalOffset = ntOffset + sizeof(peSignature) + sizeof(IMAGE_FILE_HEADER);
+    if (optionalOffset + fileHeader.SizeOfOptionalHeader > fileSize ||
+        fileHeader.SizeOfOptionalHeader < sizeof(uint16_t)) {
+        return fileSize;
+    }
+
+    std::vector<uint8_t> optionalHeader(fileHeader.SizeOfOptionalHeader);
+    if (!readFileBytesAt(file, optionalOffset, optionalHeader.data(), optionalHeader.size())) {
+        return fileSize;
+    }
+
+    uint16_t optionalMagic = 0;
+    std::memcpy(&optionalMagic, optionalHeader.data(), sizeof(optionalMagic));
+
+    size_t directoryOffset = 0;
+    if (optionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+        directoryOffset = offsetof(IMAGE_OPTIONAL_HEADER32, DataDirectory);
+    } else if (optionalMagic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+        directoryOffset = offsetof(IMAGE_OPTIONAL_HEADER64, DataDirectory);
+    } else {
+        return fileSize;
+    }
+
+    size_t securityDirOffset =
+        directoryOffset + IMAGE_DIRECTORY_ENTRY_SECURITY * sizeof(IMAGE_DATA_DIRECTORY);
+    if (securityDirOffset + sizeof(IMAGE_DATA_DIRECTORY) > optionalHeader.size()) {
+        return fileSize;
+    }
+
+    IMAGE_DATA_DIRECTORY securityDir{};
+    std::memcpy(&securityDir,
+                optionalHeader.data() + securityDirOffset,
+                sizeof(securityDir));
+
+    uint64_t certificateOffset = static_cast<uint64_t>(securityDir.VirtualAddress);
+    uint64_t certificateSize = static_cast<uint64_t>(securityDir.Size);
+    if (certificateOffset == 0 || certificateSize == 0) {
+        return fileSize;
+    }
+
+    if (certificateOffset >= fileSize ||
+        certificateOffset + certificateSize > fileSize) {
+        return fileSize;
+    }
+
+    if (certificateOffset + certificateSize != fileSize) {
+        return fileSize;
+    }
+
+    return certificateOffset;
+#else
+    (void)file;
+    return fileSize;
+#endif
+}
+
+namespace {
+
+bool isValidEmbeddedDataLocator(const EmbeddedDataLocatorRecord& locator,
+                                uint64_t trailerEnd) {
+    if (locator.magic != Constants::MAGIC_NUMBER) {
+        return false;
+    }
+
+    const uint64_t locatorSize =
+        static_cast<uint64_t>(sizeof(EmbeddedDataLocatorRecord) + sizeof(uint32_t));
+    if (trailerEnd < locatorSize) {
+        return false;
+    }
+
+    const uint64_t locatorOffset = trailerEnd - locatorSize;
+    if (locator.metadataOffset >= locatorOffset ||
+        locator.metadataOffset + locator.metadataSize > locatorOffset) {
+        return false;
+    }
+
+    if (locator.dataOffset > locatorOffset ||
+        locator.dataOffset + locator.dataSize > locatorOffset) {
+        return false;
+    }
+
+    if (locator.dataOffset < locator.metadataOffset + locator.metadataSize) {
+        return false;
+    }
+
+    return true;
+}
+
+bool tryReadEmbeddedDataLocatorAt(std::ifstream& file,
+                                  uint64_t trailerEnd,
+                                  EmbeddedDataLocatorRecord& locator) {
+    const uint64_t locatorSize =
+        static_cast<uint64_t>(sizeof(EmbeddedDataLocatorRecord) + sizeof(uint32_t));
+    if (trailerEnd < locatorSize) {
+        return false;
+    }
+
+    uint32_t endMagic = 0;
+    if (!readFileBytesAt(file,
+                         trailerEnd - sizeof(endMagic),
+                         &endMagic,
+                         sizeof(endMagic)) ||
+        endMagic != Constants::MAGIC_NUMBER) {
+        return false;
+    }
+
+    if (!readFileBytesAt(file,
+                         trailerEnd - locatorSize,
+                         &locator,
+                         sizeof(locator))) {
+        return false;
+    }
+
+    return isValidEmbeddedDataLocator(locator, trailerEnd);
+}
+
+bool scanEmbeddedDataLocatorNearEnd(std::ifstream& file,
+                                    uint64_t candidateEnd,
+                                    uint64_t& trailerEnd,
+                                    EmbeddedDataLocatorRecord& locator) {
+    const uint64_t locatorSize =
+        static_cast<uint64_t>(sizeof(EmbeddedDataLocatorRecord) + sizeof(uint32_t));
+    if (candidateEnd < locatorSize) {
+        return false;
+    }
+
+    if (tryReadEmbeddedDataLocatorAt(file, candidateEnd, locator)) {
+        trailerEnd = candidateEnd;
+        return true;
+    }
+
+    constexpr uint64_t kTrailerScanWindow = 1024 * 1024;
+    const uint64_t scanStart =
+        candidateEnd > kTrailerScanWindow ? (candidateEnd - kTrailerScanWindow) : 0;
+    const uint64_t scanSize = candidateEnd - scanStart;
+    if (scanSize < locatorSize) {
+        return false;
+    }
+
+    std::vector<uint8_t> tail(scanSize);
+    if (!readFileBytesAt(file, scanStart, tail.data(), static_cast<size_t>(scanSize))) {
+        return false;
+    }
+
+    const uint32_t magic = Constants::MAGIC_NUMBER;
+    for (size_t pos = tail.size() - sizeof(uint32_t); ; --pos) {
+        uint32_t candidateMagic = 0;
+        std::memcpy(&candidateMagic, tail.data() + pos, sizeof(candidateMagic));
+        if (candidateMagic == magic) {
+            const uint64_t candidateTrailerEnd =
+                scanStart + static_cast<uint64_t>(pos) + sizeof(uint32_t);
+            if (tryReadEmbeddedDataLocatorAt(file, candidateTrailerEnd, locator)) {
+                trailerEnd = candidateTrailerEnd;
+                return true;
+            }
+        }
+        if (pos == 0) {
+            break;
+        }
+    }
+
+    return false;
+}
+
+} // namespace
+
+bool findEmbeddedDataLocator(std::ifstream& file,
+                             uint64_t fileSize,
+                             uint64_t& trailerEnd,
+                             EmbeddedDataLocatorRecord& locator) {
+    trailerEnd = 0;
+
+    const uint64_t logicalEnd = resolveLogicalPeEnd(file, fileSize);
+    if (scanEmbeddedDataLocatorNearEnd(file, logicalEnd, trailerEnd, locator)) {
+        return true;
+    }
+
+    if (logicalEnd != fileSize &&
+        scanEmbeddedDataLocatorNearEnd(file, fileSize, trailerEnd, locator)) {
+        return true;
+    }
+
+    return false;
+}
 
 std::filesystem::path toLongPath(const std::filesystem::path& path) {
 #ifdef _WIN32
@@ -527,15 +669,66 @@ std::string getLocalManifestPath(const std::string& exePath) {
     return Utf8FromPath(parent);
 }
 
+std::string findInstalledManifestPath(const std::string& appName,
+                                      InstallerPathResolver& resolver) {
+    if (appName.empty()) {
+        return {};
+    }
+
+    std::string keyName = sanitizeRegistryKeyName(appName);
+
+    const std::string hkcuPath =
+        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
+    const std::string hklmPath =
+        "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
+
+    std::string installLocation;
+    if (!readRegistryStringValue(hkcuPath, "InstallLocation", installLocation)) {
+        readRegistryStringValue(hklmPath, "InstallLocation", installLocation);
+    }
+    if (!installLocation.empty()) {
+        std::filesystem::path manifestPath = PathFromUtf8(installLocation) / "install.manifest.json";
+        if (std::filesystem::exists(manifestPath)) {
+            return Utf8FromPath(manifestPath);
+        }
+    }
+
+    std::string uninstallString;
+    if (!readRegistryStringValue(hkcuPath, "UninstallString", uninstallString)) {
+        readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
+    }
+    if (!uninstallString.empty()) {
+        std::filesystem::path uninstallPath = PathFromUtf8(uninstallString);
+        if (std::filesystem::exists(uninstallPath)) {
+            std::filesystem::path baseDir = uninstallPath.parent_path();
+            if (!baseDir.empty()) {
+                std::filesystem::path manifestPath = baseDir / "install.manifest.json";
+                if (std::filesystem::exists(manifestPath)) {
+                    return Utf8FromPath(manifestPath);
+                }
+            }
+        }
+    }
+
+    std::string defaultManifest = getDefaultManifestPath(appName, resolver);
+    if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
+        return defaultManifest;
+    }
+
+    return {};
+}
+
+std::string resolveInstalledManifestPath(const std::string& appName,
+                                         const std::string& exePath,
+                                         InstallerPathResolver& resolver) {
+    std::string localManifest = getLocalManifestPath(exePath);
+    if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
+        return localManifest;
+    }
+    return findInstalledManifestPath(appName, resolver);
+}
+
 bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath) {
-    struct DataLocator {
-        uint32_t magic;
-        uint64_t metadataOffset;
-        uint64_t metadataSize;
-        uint64_t dataOffset;
-        uint64_t dataSize;
-    };
-    
     std::ifstream in(toLongPath(PathFromUtf8(sourcePath)), std::ios::binary);
     if (!in) {
         return false;
@@ -543,35 +736,14 @@ bool createUninstallStub(const std::string& sourcePath, const std::string& targe
     
     in.seekg(0, std::ios::end);
     uint64_t fileSize = static_cast<uint64_t>(in.tellg());
-    uint64_t logicalEnd = ResolveLogicalPeEnd(in, fileSize);
-    size_t locatorSize = sizeof(DataLocator) + sizeof(uint32_t);
-    if (logicalEnd < locatorSize) {
+    uint64_t trailerEnd = 0;
+    EmbeddedDataLocatorRecord locator{};
+    if (!findEmbeddedDataLocator(in, fileSize, trailerEnd, locator) ||
+        locator.metadataOffset == 0) {
         return false;
     }
-    
-    uint32_t endMagic = 0;
-    if (!ReadFileBytesAt(in,
-                         logicalEnd - sizeof(uint32_t),
-                         &endMagic,
-                         sizeof(uint32_t))) {
-        return false;
-    }
-    if (endMagic != Constants::MAGIC_NUMBER) {
-        return false;
-    }
-    
-    DataLocator locator{};
-    if (!ReadFileBytesAt(in,
-                         logicalEnd - locatorSize,
-                         &locator,
-                         sizeof(DataLocator))) {
-        return false;
-    }
-    if (locator.magic != Constants::MAGIC_NUMBER || locator.metadataOffset == 0) {
-        return false;
-    }
-    
-    if (locator.metadataOffset >= logicalEnd) {
+
+    if (locator.metadataOffset >= trailerEnd) {
         return false;
     }
     

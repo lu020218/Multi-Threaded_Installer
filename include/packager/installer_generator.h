@@ -15,14 +15,14 @@ public:
 
     bool generateInstaller(const std::string& outputPath,
                           const std::vector<uint8_t>& metadata,
-                          const std::vector<std::vector<uint8_t>>& compressedData);
+                          const std::vector<CompressionResult>& compressionResults);
 
     const std::string& getLastError() const { return lastError_; }
     
 
     bool generateDataPackage(const std::string& outputPath,
                             const std::vector<uint8_t>& metadata,
-                            const std::vector<std::vector<uint8_t>>& compressedData);
+                            const std::vector<CompressionResult>& compressionResults);
     
 
     bool embedInstallerTemplate(const std::string& templatePath);
@@ -55,7 +55,7 @@ private:
 
     bool createSelfExtractingExecutable(const std::string& outputPath,
                                       const std::vector<uint8_t>& metadata,
-                                      const std::vector<std::vector<uint8_t>>& compressedData);
+                                      const std::vector<CompressionResult>& compressionResults);
     
 
     std::vector<uint8_t> getDefaultInstallerTemplate();

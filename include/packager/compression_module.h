@@ -25,6 +25,8 @@ public:
 
     bool setCompressionLevel(int level);
     
+    bool setThreadCount(int threadCount);
+    
 
     bool setBlockSize(size_t blockSize = Constants::DEFAULT_BLOCK_SIZE);
     
@@ -32,6 +34,7 @@ private:
     CompressionAlgorithm currentAlgorithm;
     int compressionLevel;
     bool compressionLevelExplicitlySet;
+    int threadCount;
     size_t blockSize;
     
 
@@ -51,9 +54,6 @@ private:
     
 
     uint32_t calculateChecksum(const std::vector<uint8_t>& data);
-    
-
-    std::vector<uint8_t> readFileContent(const std::string& filePath);
     
 
     std::vector<uint8_t> createTarData(const FolderInfo& folder,

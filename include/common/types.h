@@ -18,6 +18,7 @@ enum class CompressionAlgorithm {
 enum class SpecialDirectoryType {
     INSTALL_DIRECTORY,
     PROGRAM_FILES,      // %ProgramFiles%
+    PROGRAM_FILES_X86,  // %ProgramFiles(x86)%
     APPDATA_ROAMING,    // %AppData%
     APPDATA_LOCAL,      // %LocalAppData%
     PROGRAM_DATA        // %ProgramData%
@@ -160,6 +161,11 @@ struct UiComponentBindingPage {
     std::vector<std::string> controls;
 };
 
+struct UiLinkBinding {
+    std::string control;
+    std::string url;
+};
+
 
 struct UiComponentSelectionConfig {
     std::string mode;        // dedicatedPage | embeddedInExistingPages | hybrid
@@ -193,6 +199,7 @@ struct PackagerConfiguration {
     std::vector<std::string> installKillProcesses;
     std::vector<ComponentConfig> components;
     UiComponentSelectionConfig componentUi;
+    std::vector<UiLinkBinding> uiLinks;
     bool autoStartup;
     bool desktopIcons;
     bool autoCleanOldInstall;
@@ -306,6 +313,7 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::vector<std::string> installKillProcesses;
     std::vector<ComponentConfig> components;
     UiComponentSelectionConfig componentUi;
+    std::vector<UiLinkBinding> uiLinks;
     
     ExtendedInstallationMetadata() 
         : InstallationMetadata(),
@@ -354,7 +362,7 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;  // "MTDP"
-    constexpr uint32_t VERSION = 13;
+    constexpr uint32_t VERSION = 14;
     
 
     constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;

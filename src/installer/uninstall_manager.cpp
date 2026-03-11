@@ -20,17 +20,6 @@ namespace MultiThreadedInstaller {
 using json = nlohmann::json;
 
 #ifdef _WIN32
-static std::string normalizePathForCompare(const std::string& path) {
-    std::string normalized = path;
-    std::replace(normalized.begin(), normalized.end(), '/', '\\');
-    while (!normalized.empty() && (normalized.back() == '\\' || normalized.back() == '/')) {
-        normalized.pop_back();
-    }
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return normalized;
-}
-
 static bool isValidUtf8(const std::string& text) {
     size_t i = 0;
     const size_t len = text.size();
@@ -203,13 +192,7 @@ bool resolveExistingInstallInfo(const std::string& appName,
         return false;
     }
 
-    std::string keyName = appName;
-    for (char& c : keyName) {
-        if (c == '\\' || c == '/' || c == ':' || c == '*' ||
-            c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
-            c = '_';
-        }
-    }
+    std::string keyName = sanitizeRegistryKeyName(appName);
 
     const std::string hkcuPath =
         "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;

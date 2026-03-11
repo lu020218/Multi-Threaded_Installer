@@ -11,8 +11,16 @@
 #include <filesystem>
 #include <chrono>
 #include <iomanip>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <vector>
+#include <sstream>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <unistd.h>
@@ -31,6 +39,72 @@ const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
             return "ZSTD";
         default:
             return "Unknown";
+    }
+}
+
+size_t ResolveCompressionThreadBudget(int requestedThreadCount) {
+    if (requestedThreadCount > 0) {
+        return static_cast<size_t>(requestedThreadCount);
+    }
+    unsigned int hw = std::thread::hardware_concurrency();
+    return hw == 0 ? 1u : static_cast<size_t>(hw);
+}
+
+double ElapsedSeconds(std::chrono::steady_clock::time_point start,
+                      std::chrono::steady_clock::time_point end) {
+    return std::chrono::duration<double>(end - start).count();
+}
+
+struct PackagerStageTimings {
+    double configLoadSec = 0.0;
+    double scanSec = 0.0;
+    double compressSec = 0.0;
+    double metadataSec = 0.0;
+    double templatePrepSec = 0.0;
+    double installerWriteSec = 0.0;
+    double dataPackageWriteSec = 0.0;
+    double cleanupSec = 0.0;
+};
+
+void PrintTimingSummary(const PackagerStageTimings& timings,
+                        const std::vector<FolderInfo>& folders,
+                        const std::vector<double>& folderCompressionSec,
+                        double totalSec) {
+    std::cout << "\nTiming summary:\n";
+    std::cout << "  Config load:    " << std::fixed << std::setprecision(2)
+              << timings.configLoadSec << "s\n";
+    std::cout << "  Scan input:     " << timings.scanSec << "s\n";
+    std::cout << "  Compress:       " << timings.compressSec << "s\n";
+    std::cout << "  Metadata:       " << timings.metadataSec << "s\n";
+    std::cout << "  Template prep:  " << timings.templatePrepSec << "s\n";
+    std::cout << "  Installer write:" << timings.installerWriteSec << "s\n";
+    if (timings.dataPackageWriteSec > 0.0) {
+        std::cout << "  Data package:   " << timings.dataPackageWriteSec << "s\n";
+    }
+    if (timings.cleanupSec > 0.0) {
+        std::cout << "  Cleanup:        " << timings.cleanupSec << "s\n";
+    }
+    std::cout << "  Total:          " << totalSec << "s\n";
+
+    if (folders.empty() || folderCompressionSec.empty()) {
+        return;
+    }
+
+    std::vector<size_t> indices;
+    indices.reserve(folderCompressionSec.size());
+    for (size_t i = 0; i < folderCompressionSec.size(); ++i) {
+        indices.push_back(i);
+    }
+    std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
+        return folderCompressionSec[a] > folderCompressionSec[b];
+    });
+
+    size_t topCount = std::min<size_t>(5, indices.size());
+    std::cout << "  Slowest folders:\n";
+    for (size_t i = 0; i < topCount; ++i) {
+        size_t index = indices[i];
+        std::cout << "    " << folders[index].sourcePath << ": " << folderCompressionSec[index]
+                  << "s\n";
     }
 }
 
@@ -63,6 +137,7 @@ static fs::path makeTempTemplatePath(const fs::path& outputPath) {
 int main(int argc, char* argv[]) {
     ConsoleInterface console;
     auto startTime = std::chrono::steady_clock::now();
+    PackagerStageTimings timings;
     auto args = console.parsePackagerArgs(argc, argv);
     
     if (args.showHelp) {
@@ -101,6 +176,7 @@ int main(int argc, char* argv[]) {
     
 
     ConfigurationManager configManager;
+    auto configStart = std::chrono::steady_clock::now();
     if (!configManager.initialize(inputPath)) {
         console.showError("Failed to initialize configuration");
         std::string error = configManager.getLastError();
@@ -109,6 +185,7 @@ int main(int argc, char* argv[]) {
         }
         return 1;
     }
+    timings.configLoadSec = ElapsedSeconds(configStart, std::chrono::steady_clock::now());
     
     const auto& config = configManager.getConfiguration();
     
@@ -130,12 +207,14 @@ int main(int argc, char* argv[]) {
     
 
     FolderScanner scanner;
+    auto scanStart = std::chrono::steady_clock::now();
     auto folders = scanner.scanInputDirectory(inputPath);
     
     if (!scanner.validateFolderStructure(folders)) {
         console.showError("Invalid folder structure");
         return 1;
     }
+    timings.scanSec = ElapsedSeconds(scanStart, std::chrono::steady_clock::now());
     
     console.showInfo("Found " + std::to_string(folders.size()) + " folders to package");
     
@@ -169,38 +248,131 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
-    
-    std::vector<CompressionResult> compressionResults;
-    
-    for (size_t i = 0; i < folders.size(); ++i) {
-        const auto& folder = folders[i];
-        console.showPackagingProgress(folder.sourcePath, static_cast<float>(i) / folders.size());
-        
-        auto result = compressor.compressFolder(folder);
-        if (result.compressedData.empty()) {
-            console.showError("Failed to compress folder: " + folder.sourcePath);
+
+    size_t compressionThreadBudget = ResolveCompressionThreadBudget(args.threadCount);
+    size_t folderWorkerCount = std::min(compressionThreadBudget, folders.size());
+    int perCompressorThreadCount = static_cast<int>(compressionThreadBudget);
+    if (folderWorkerCount > 1) {
+        perCompressorThreadCount = static_cast<int>(
+            std::max<size_t>(1, compressionThreadBudget / folderWorkerCount));
+    }
+    if (!compressor.setThreadCount(perCompressorThreadCount)) {
+        console.showError("Invalid compression thread count");
+        return 1;
+    }
+
+    std::vector<CompressionResult> compressionResults(folders.size());
+    std::vector<double> folderCompressionSec(folders.size(), 0.0);
+
+    auto configureCompressor = [&](CompressionModule& instance) -> bool {
+        if (!instance.setCompressionAlgorithm(effectiveAlgorithm)) {
+            return false;
+        }
+        if (effectiveCompressionLevel >= 0 &&
+            !instance.setCompressionLevel(effectiveCompressionLevel)) {
+            return false;
+        }
+        return instance.setThreadCount(perCompressorThreadCount);
+    };
+
+    auto compressStart = std::chrono::steady_clock::now();
+    if (folderWorkerCount <= 1) {
+        for (size_t i = 0; i < folders.size(); ++i) {
+            const auto& folder = folders[i];
+            console.showPackagingProgress(folder.sourcePath, static_cast<float>(i) / folders.size());
+
+            auto folderStart = std::chrono::steady_clock::now();
+            auto result = compressor.compressFolder(folder);
+            if (result.compressedData.empty()) {
+                console.showError("Failed to compress folder: " + folder.sourcePath);
+                return 1;
+            }
+
+            compressionResults[i] = std::move(result);
+            folderCompressionSec[i] =
+                ElapsedSeconds(folderStart, std::chrono::steady_clock::now());
+        }
+    } else {
+        console.showInfo("Compressing folders in parallel with " +
+                         std::to_string(folderWorkerCount) + " workers");
+
+        std::atomic<size_t> nextIndex{0};
+        std::atomic<size_t> completed{0};
+        std::atomic<bool> failed{false};
+        std::mutex failureMutex;
+        std::mutex progressMutex;
+        std::string failedFolder;
+
+        std::vector<std::thread> workers;
+        workers.reserve(folderWorkerCount);
+        for (size_t worker = 0; worker < folderWorkerCount; ++worker) {
+            workers.emplace_back([&, worker]() {
+                CompressionModule workerCompressor;
+                if (!configureCompressor(workerCompressor)) {
+                    failed.store(true, std::memory_order_relaxed);
+                    std::lock_guard<std::mutex> lock(failureMutex);
+                    if (failedFolder.empty()) {
+                        failedFolder = "compression worker initialization";
+                    }
+                    return;
+                }
+
+                while (!failed.load(std::memory_order_relaxed)) {
+                    size_t index = nextIndex.fetch_add(1, std::memory_order_relaxed);
+                    if (index >= folders.size()) {
+                        break;
+                    }
+
+                    auto folderStart = std::chrono::steady_clock::now();
+                    auto result = workerCompressor.compressFolder(folders[index]);
+                    if (result.compressedData.empty()) {
+                        failed.store(true, std::memory_order_relaxed);
+                        std::lock_guard<std::mutex> lock(failureMutex);
+                        if (failedFolder.empty()) {
+                            failedFolder = folders[index].sourcePath;
+                        }
+                        break;
+                    }
+
+                    compressionResults[index] = std::move(result);
+                    folderCompressionSec[index] =
+                        ElapsedSeconds(folderStart, std::chrono::steady_clock::now());
+
+                    size_t done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
+                    std::lock_guard<std::mutex> lock(progressMutex);
+                    console.showPackagingProgress(
+                        folders[index].sourcePath,
+                        static_cast<float>(done) / static_cast<float>(folders.size()));
+                }
+            });
+        }
+
+        for (auto& worker : workers) {
+            worker.join();
+        }
+
+        if (failed.load(std::memory_order_relaxed)) {
+            console.showError("Failed to compress folder: " + failedFolder);
             return 1;
         }
-        
-        compressionResults.push_back(result);
     }
+    timings.compressSec = ElapsedSeconds(compressStart, std::chrono::steady_clock::now());
     
     console.showPackagingProgress("Finalizing", 1.0f);
     
 
     MetadataGenerator metadataGen;
+    auto metadataStart = std::chrono::steady_clock::now();
     auto extendedMetadata = metadataGen.generateExtendedMetadata(compressionResults, folders, config);
     auto serializedMetadata = metadataGen.serializeExtendedMetadata(extendedMetadata);
+    timings.metadataSec = ElapsedSeconds(metadataStart, std::chrono::steady_clock::now());
     
 
     InstallerGenerator installerGen;
-    std::vector<std::vector<uint8_t>> compressedDataList;
-    for (const auto& result : compressionResults) {
-        compressedDataList.push_back(result.compressedData);
-    }
 
     fs::path tempTemplatePath;
     bool usesTempTemplate = false;
+    auto templateStart = std::chrono::steady_clock::now();
     if (!config.iconPath.empty() ||
         !config.productName.empty() ||
         !config.fileDescription.empty() ||
@@ -262,28 +434,39 @@ int main(int argc, char* argv[]) {
             console.showWarning("Failed to apply installer version info: " + versionError);
         }
     }
+    timings.templatePrepSec = ElapsedSeconds(templateStart, std::chrono::steady_clock::now());
     
-    if (!installerGen.generateInstaller(outputPath, serializedMetadata, compressedDataList)) {
+    auto installerWriteStart = std::chrono::steady_clock::now();
+    if (!installerGen.generateInstaller(outputPath, serializedMetadata, compressionResults)) {
         console.showError("Failed to generate installer");
         if (!installerGen.getLastError().empty()) {
             console.showError("Details: " + installerGen.getLastError());
         }
         return 1;
     }
+    timings.installerWriteSec = ElapsedSeconds(
+        installerWriteStart, std::chrono::steady_clock::now());
 
     if (usesTempTemplate) {
+        auto cleanupStart = std::chrono::steady_clock::now();
         std::error_code removeError;
         fs::remove(tempTemplatePath, removeError);
         if (removeError) {
             console.showWarning("Failed to remove temporary template: " + removeError.message());
         }
+        timings.cleanupSec += ElapsedSeconds(cleanupStart, std::chrono::steady_clock::now());
     }
     
     if (!args.dataPackagePath.empty()) {
-        if (!installerGen.generateDataPackage(args.dataPackagePath, serializedMetadata, compressedDataList)) {
+        auto dataPackageStart = std::chrono::steady_clock::now();
+        if (!installerGen.generateDataPackage(args.dataPackagePath,
+                                              serializedMetadata,
+                                              compressionResults)) {
             console.showError("Failed to generate data package");
             return 1;
         }
+        timings.dataPackageWriteSec = ElapsedSeconds(
+            dataPackageStart, std::chrono::steady_clock::now());
         console.showInfo("Data package created: " + args.dataPackagePath);
     }
     
@@ -292,8 +475,7 @@ int main(int argc, char* argv[]) {
     
     auto endTime = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = endTime - startTime;
-    std::cout << "Total time: " << std::fixed << std::setprecision(2) << elapsed.count()
-              << " seconds" << std::endl;
+    PrintTimingSummary(timings, folders, folderCompressionSec, elapsed.count());
     
     return 0;
 }

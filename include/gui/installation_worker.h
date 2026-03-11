@@ -1,7 +1,5 @@
 #pragma once
 
-#ifdef GUI_ENABLED
-
 #include <Windows.h>
 #include <string>
 #include <thread>
@@ -74,4 +72,3 @@ private:
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

@@ -157,6 +157,7 @@ static void collectResourceFiles(const std::filesystem::path& resourceDir,
     }
 
     addDir(resourceDir / "lang", "lang/", {"../lang/"});
+    addDir(resourceDir / "license", "license/", {"../license/"});
 
     std::filesystem::path licensePath = resourceDir / "license.txt";
     if (std::filesystem::exists(licensePath) && std::filesystem::is_regular_file(licensePath)) {
@@ -254,13 +255,13 @@ static bool buildResourceZip(const std::filesystem::path& resourceDir,
 
 bool InstallerGenerator::generateInstaller(const std::string& outputPath,
                                           const std::vector<uint8_t>& metadata,
-                                          const std::vector<std::vector<uint8_t>>& compressedData) {
-    return createSelfExtractingExecutable(outputPath, metadata, compressedData);
+                                          const std::vector<CompressionResult>& compressionResults) {
+    return createSelfExtractingExecutable(outputPath, metadata, compressionResults);
 }
 
 bool InstallerGenerator::generateDataPackage(const std::string& outputPath,
                                              const std::vector<uint8_t>& metadata,
-                                             const std::vector<std::vector<uint8_t>>& compressedData) {
+                                             const std::vector<CompressionResult>& compressionResults) {
     try {
         std::ofstream outFile(PathFromUtf8(outputPath), std::ios::binary);
         if (!outFile) {
@@ -271,8 +272,8 @@ bool InstallerGenerator::generateDataPackage(const std::string& outputPath,
         uint64_t metadataOffset = sizeof(DataPackageHeader);
         uint64_t dataOffset = metadataOffset + metadata.size();
         uint64_t totalDataSize = 0;
-        for (const auto& data : compressedData) {
-            totalDataSize += data.size();
+        for (const auto& result : compressionResults) {
+            totalDataSize += result.compressedData.size();
         }
         
         DataPackageHeader header;
@@ -283,8 +284,9 @@ bool InstallerGenerator::generateDataPackage(const std::string& outputPath,
         
         outFile.write(reinterpret_cast<const char*>(&header), sizeof(DataPackageHeader));
         outFile.write(reinterpret_cast<const char*>(metadata.data()), metadata.size());
-        for (const auto& data : compressedData) {
-            outFile.write(reinterpret_cast<const char*>(data.data()), data.size());
+        for (const auto& result : compressionResults) {
+            outFile.write(reinterpret_cast<const char*>(result.compressedData.data()),
+                          static_cast<std::streamsize>(result.compressedData.size()));
         }
         
         outFile.close();
@@ -332,7 +334,7 @@ std::string InstallerGenerator::findDefaultInstallerTemplatePath() const {
 
 bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outputPath,
                                                       const std::vector<uint8_t>& metadata,
-                                                      const std::vector<std::vector<uint8_t>>& compressedData) {
+                                                      const std::vector<CompressionResult>& compressionResults) {
     try {
         lastError_.clear();
 
@@ -390,8 +392,8 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
         
 
         uint64_t totalDataSize = 0;
-        for (const auto& data : compressedData) {
-            totalDataSize += data.size();
+        for (const auto& result : compressionResults) {
+            totalDataSize += result.compressedData.size();
         }
         locator.dataSize = totalDataSize;
         
@@ -402,8 +404,9 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
         outFile.write(reinterpret_cast<const char*>(metadata.data()), metadata.size());
         
 
-        for (const auto& data : compressedData) {
-            outFile.write(reinterpret_cast<const char*>(data.data()), data.size());
+        for (const auto& result : compressionResults) {
+            outFile.write(reinterpret_cast<const char*>(result.compressedData.data()),
+                          static_cast<std::streamsize>(result.compressedData.size()));
         }
         
 
@@ -762,6 +765,7 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
 
         std::vector<std::string> imageNames;
         std::vector<std::string> langFiles;
+        std::vector<std::string> licenseFiles;
         if (!useZip) {
             std::filesystem::path skinsDir = resourceDir / "skins";
             if (std::filesystem::exists(skinsDir) && std::filesystem::is_directory(skinsDir)) {
@@ -818,6 +822,25 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
                     }
                 }
             }
+
+            std::filesystem::path licenseDir = resourceDir / "license";
+            if (std::filesystem::exists(licenseDir) && std::filesystem::is_directory(licenseDir)) {
+                for (const auto& entry : std::filesystem::directory_iterator(licenseDir)) {
+                    if (!entry.is_regular_file()) {
+                        continue;
+                    }
+                    std::string fileName = Utf8FromPath(entry.path().filename());
+                    if (fileName.empty() || fileName.front() == '.') {
+                        continue;
+                    }
+                    std::string resourceName = toResourceName("LICENSE_", fileName);
+                    if (appendEntry(resourceName, entry.path())) {
+                        std::cout << "  Embedded: license/" << fileName << std::endl;
+                        anyEmbedded = true;
+                        licenseFiles.push_back(fileName);
+                    }
+                }
+            }
         }
 
         if (!useZip && !imageNames.empty()) {
@@ -840,6 +863,18 @@ bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installer
             }
             std::vector<uint8_t> listData(listText.begin(), listText.end());
             if (appendRawEntry("LANG_LIST", listData)) {
+                anyEmbedded = true;
+            }
+        }
+
+        if (!useZip && !licenseFiles.empty()) {
+            std::string listText;
+            for (const auto& name : licenseFiles) {
+                listText += name;
+                listText += "\n";
+            }
+            std::vector<uint8_t> listData(listText.begin(), listText.end());
+            if (appendRawEntry("LICENSE_LIST", listData)) {
                 anyEmbedded = true;
             }
         }

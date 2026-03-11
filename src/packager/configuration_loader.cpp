@@ -653,6 +653,19 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
             ftc.dirType = SpecialDirectoryType::APPDATA_LOCAL;
             config.folderTargets.push_back(std::move(ftc));
         }
+
+        if (folderObj.contains("ProgramFilesX86")) {
+            std::string folderName;
+            if (!JsonValueToString(folderObj["ProgramFilesX86"], folderName)) {
+                lastError_ = "Invalid field 'Folder.ProgramFilesX86': expected string";
+                return std::nullopt;
+            }
+            FolderTargetConfig ftc;
+            ftc.folderName = folderName;
+            ftc.targetDirectory = "%ProgramFiles(x86)%";
+            ftc.dirType = SpecialDirectoryType::PROGRAM_FILES_X86;
+            config.folderTargets.push_back(std::move(ftc));
+        }
     }
 
     if (configObject.contains("Registry")) {
@@ -1138,6 +1151,35 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
                 }
             }
         }
+
+        if (ui.contains("links")) {
+            const auto& links = ui["links"];
+            if (!links.is_array()) {
+                lastError_ = "Invalid field 'ui.links': expected array";
+                return std::nullopt;
+            }
+            config.uiLinks.clear();
+            for (const auto& item : links) {
+                if (!item.is_object()) {
+                    lastError_ = "Invalid field 'ui.links[]': expected object";
+                    return std::nullopt;
+                }
+                UiLinkBinding link;
+                if (!item.contains("control") ||
+                    !JsonValueToString(item["control"], link.control) ||
+                    link.control.empty()) {
+                    lastError_ = "Invalid field 'ui.links[].control': expected non-empty string";
+                    return std::nullopt;
+                }
+                if (!item.contains("url") ||
+                    !JsonValueToString(item["url"], link.url) ||
+                    link.url.empty()) {
+                    lastError_ = "Invalid field 'ui.links[].url': expected non-empty string";
+                    return std::nullopt;
+                }
+                config.uiLinks.push_back(std::move(link));
+            }
+        }
     }
 
     return config;
@@ -1148,6 +1190,10 @@ SpecialDirectoryType ConfigurationLoader::parseDirectoryType(
 
     if (dirStr == "installDirectory") {
         return SpecialDirectoryType::INSTALL_DIRECTORY;
+    }
+
+    if (dirStr.find("%ProgramFiles(x86)%") != std::string::npos) {
+        return SpecialDirectoryType::PROGRAM_FILES_X86;
     }
 
     if (dirStr.find("%ProgramFiles%") != std::string::npos) {

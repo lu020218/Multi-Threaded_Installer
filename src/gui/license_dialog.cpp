@@ -1,16 +1,10 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/gui/license_dialog.h"
 #include "../../include/gui/gui_helpers.h"
+#include "../../include/gui/license_text_loader.h"
 #include "common/utf8_utils.h"
-#include <fstream>
-#include <sstream>
-#include <filesystem>
-#include <vector>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
-#include "Utils/unzip.h"
 
 using namespace DuiLib;
 
@@ -96,45 +90,7 @@ void LicenseDialog::InitWindow() {
 }
 
 std::wstring LicenseDialog::LoadLicenseText() {
-    if (CPaintManagerUI::GetResourceType() == UILIB_ZIP &&
-        !CPaintManagerUI::GetResourceZip().IsEmpty()) {
-        CDuiString basePath = CPaintManagerUI::GetResourcePath();
-        CDuiString zipName = CPaintManagerUI::GetResourceZip();
-        CDuiString zipPath = basePath + zipName;
-
-        HZIP hz = OpenZip(zipPath.GetData(), 0);
-        if (hz != NULL) {
-            ZIPENTRY ze;
-            int index = 0;
-            if (FindZipItem(hz, _T("license.txt"), true, &index, &ze) == 0) {
-                std::vector<char> buffer(static_cast<size_t>(ze.unc_size));
-                if (UnzipItem(hz, index, buffer.data(), ze.unc_size) == 0) {
-                    CloseZip(hz);
-                    std::string text(buffer.begin(), buffer.end());
-                    return Utf8ToWide(text);
-                }
-            }
-            CloseZip(hz);
-        }
-    }
-
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-    CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
-    std::filesystem::path licensePath = PathFromTChar(resourcePath.GetData()) / "license.txt";
-
-    std::ifstream file(licensePath, std::ios::binary);
-    if (!file.is_open()) {
-        std::filesystem::path fallback = PathFromTChar(resourcePath.GetData()) / ".." / "license.txt";
-        file.open(fallback, std::ios::binary);
-    }
-    if (!file.is_open()) {
-        // NOTE: Comment text normalized to avoid encoding mojibake.
-        return GUIHelpers::GetLocalizedText(L"msg.license.text_missing", L"");
-    }
-
-    std::string content((std::istreambuf_iterator<char>(file)),
-                        std::istreambuf_iterator<char>());
-    return Utf8ToWide(content);
+    return LoadLocalizedLicenseText(CResourceManager::GetInstance()->GetLanguage());
 }
 
 void LicenseDialog::OnAgreeButtonClick() {
@@ -151,4 +107,3 @@ void LicenseDialog::OnDisagreeButtonClick() {
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

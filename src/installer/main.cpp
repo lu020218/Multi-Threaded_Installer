@@ -12,7 +12,6 @@
 #include "installer/registry_utils.h"
 #include "installer/uninstall_manager.h"
 
-#ifdef GUI_ENABLED
 #include "gui/gui_manager.h"
 #include "gui/gui_helpers.h"
 #include "installer/embedded_resources.h"
@@ -20,7 +19,6 @@
 #include <Shlwapi.h>
 #include "Utils/unzip.h"
 #pragma comment(lib, "Shlwapi.lib")
-#endif
 
 #include <iostream>
 #include <mutex>
@@ -82,65 +80,6 @@ struct FolderTiming {
     std::string folderName;
 };
 
-std::string findManifestFromRegistry(const std::string& appName, InstallerPathResolver& resolver) {
-    if (appName.empty()) {
-        return {};
-    }
-
-    std::string keyName = appName;
-    std::replace(keyName.begin(), keyName.end(), '\\', '_');
-    std::replace(keyName.begin(), keyName.end(), '/', '_');
-    std::replace(keyName.begin(), keyName.end(), ':', '_');
-    std::replace(keyName.begin(), keyName.end(), '*', '_');
-    std::replace(keyName.begin(), keyName.end(), '?', '_');
-    std::replace(keyName.begin(), keyName.end(), '"', '_');
-    std::replace(keyName.begin(), keyName.end(), '<', '_');
-    std::replace(keyName.begin(), keyName.end(), '>', '_');
-    std::replace(keyName.begin(), keyName.end(), '|', '_');
-
-    const std::string hkcuPath =
-        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
-    const std::string hklmPath =
-        "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
-
-    std::string installLocation;
-    if (!readRegistryStringValue(hkcuPath, "InstallLocation", installLocation)) {
-        readRegistryStringValue(hklmPath, "InstallLocation", installLocation);
-    }
-
-    if (!installLocation.empty()) {
-        std::filesystem::path localManifest = PathFromUtf8(installLocation) / "install.manifest.json";
-        if (std::filesystem::exists(localManifest)) {
-            return Utf8FromPath(localManifest);
-        }
-    }
-
-    std::string uninstallString;
-    if (!readRegistryStringValue(hkcuPath, "UninstallString", uninstallString)) {
-        readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
-    }
-
-    if (!uninstallString.empty()) {
-        std::filesystem::path uninstallPath = PathFromUtf8(uninstallString);
-        if (std::filesystem::exists(uninstallPath)) {
-            std::filesystem::path baseDir = uninstallPath.parent_path();
-            if (!baseDir.empty()) {
-                std::filesystem::path localManifest = baseDir / "install.manifest.json";
-                if (std::filesystem::exists(localManifest)) {
-                    return Utf8FromPath(localManifest);
-                }
-            }
-        }
-    }
-
-    std::string defaultManifest = getDefaultManifestPath(appName, resolver);
-    if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
-        return defaultManifest;
-    }
-
-    return {};
-}
-
 #ifdef _WIN32
 static void ensureConsoleVisible() {
     HWND consoleWnd = GetConsoleWindow();
@@ -163,17 +102,31 @@ static void hideConsoleWindow() {
 }
 #endif
 
-static bool hasFlag(int argc, char* argv[], const std::string& flag) {
-    std::string target = flag;
-    std::transform(target.begin(), target.end(), target.begin(),
+static std::string ToLowerAsciiCopy(const std::string& value) {
+    std::string lowered = value;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lowered;
+}
+
+#ifdef _WIN32
+static std::wstring ToLowerWideCopy(const std::wstring& value) {
+    std::wstring lowered = value;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+    return lowered;
+}
+#endif
+
+template <typename StringT, typename CharT, typename LowerFn>
+static bool hasFlagImpl(int argc, CharT** argv, const StringT& flag, LowerFn lowerFn) {
+    StringT target = lowerFn(flag);
     for (int i = 1; i < argc; ++i) {
         if (!argv[i]) {
             continue;
         }
-        std::string current = argv[i];
-        std::transform(current.begin(), current.end(), current.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        StringT current = argv[i];
+        current = lowerFn(current);
         if (current == target) {
             return true;
         }
@@ -181,41 +134,13 @@ static bool hasFlag(int argc, char* argv[], const std::string& flag) {
     return false;
 }
 
-static bool isCancellationText(const std::string& message) {
-    std::string lowered = message;
-    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return lowered.find("cancelled") != std::string::npos ||
-           lowered.find("canceled") != std::string::npos;
-}
-static std::string normalizePathForCompare(const std::string& path) {
-    std::string result = path;
-    std::replace(result.begin(), result.end(), '/', '\\');
-    while (!result.empty() && (result.back() == '\\' || result.back() == '/')) {
-        result.pop_back();
-    }
-    std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return result;
+static bool hasFlag(int argc, char* argv[], const std::string& flag) {
+    return hasFlagImpl(argc, argv, flag, ToLowerAsciiCopy);
 }
 
 #ifdef _WIN32
 static bool hasFlagWide(int argc, wchar_t** argv, const std::wstring& flag) {
-    std::wstring target = flag;
-    std::transform(target.begin(), target.end(), target.begin(),
-                   [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
-    for (int i = 1; i < argc; ++i) {
-        if (!argv[i]) {
-            continue;
-        }
-        std::wstring current = argv[i];
-        std::transform(current.begin(), current.end(), current.begin(),
-                       [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
-        if (current == target) {
-            return true;
-        }
-    }
-    return false;
+    return hasFlagImpl(argc, argv, flag, ToLowerWideCopy);
 }
 
 static int runConsoleInstallerWithWideArgs() {
@@ -243,7 +168,62 @@ static int runConsoleInstallerWithWideArgs() {
 }
 #endif
 
-#ifdef GUI_ENABLED
+static void EnsureInstallerLoggingInitialized() {
+    static std::once_flag once;
+    std::call_once(once, []() { initializeInstallerLogging(); });
+}
+
+static std::string deriveAppNameFromExePath(const std::string& exePath,
+                                            const std::string& fallback = {}) {
+    if (!exePath.empty()) {
+        std::filesystem::path exeDir = PathFromUtf8(exePath).parent_path();
+        if (!exeDir.empty()) {
+            std::string appName = Utf8FromPath(exeDir.filename());
+            if (!appName.empty()) {
+                return appName;
+            }
+        }
+
+        std::filesystem::path exeName = PathFromUtf8(exePath).filename();
+        std::string stem = Utf8FromPath(exeName.stem());
+        if (!stem.empty()) {
+            return stem;
+        }
+    }
+    return fallback;
+}
+
+static bool hasLocalManifest(const std::string& exePath) {
+    std::string localManifest = getLocalManifestPath(exePath);
+    return !localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest));
+}
+
+#ifdef _WIN32
+static void setInstallerAppNameEnv(const std::string& appName) {
+    if (appName.empty()) {
+        return;
+    }
+    std::wstring appNameWide = Utf8ToWide(appName);
+    if (!appNameWide.empty()) {
+        SetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appNameWide.c_str());
+    }
+}
+
+static void applyDebugMode(bool debugMode) {
+    if (debugMode) {
+        ensureConsoleVisible();
+        SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", L"1");
+    } else {
+        SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr);
+    }
+}
+
+static void hideConsoleWhenNotDebug(bool debugMode) {
+    if (!debugMode) {
+        hideConsoleWindow();
+    }
+}
+#endif
 
 static void EnablePerMonitorDpiAwareness() {
 #ifdef _WIN32
@@ -334,6 +314,15 @@ static void AdjustWindowForDpi(HWND hwnd, int baseWidth, int baseHeight) {
 struct WindowSize {
     int width = 0;
     int height = 0;
+};
+
+struct GuiResourceContext {
+    EmbeddedResourceManager resourceManager;
+    std::string tempResourcePath;
+    CDuiString resourcePath;
+    CDuiString resourceBasePath;
+    CDuiString skinsPath;
+    bool useZip = false;
 };
 
 static std::string ReadFileToString(const std::filesystem::path& path) {
@@ -457,6 +446,200 @@ static WindowSize GetWindowSizeFromResources(bool useZip,
     }
     return ParseWindowSizeFromXml(content, fallback);
 }
+
+static std::vector<CDuiString> BuildResourceZipChecks() {
+    std::vector<CDuiString> checks;
+    checks.emplace_back(_T("images/bg2.png"));
+    checks.emplace_back(_T("../images/bg2.png"));
+    checks.emplace_back(_T("images/bg2@150.png"));
+    checks.emplace_back(_T("../images/bg2@150.png"));
+    checks.emplace_back(_T("images/bg2@200.png"));
+    checks.emplace_back(_T("../images/bg2@200.png"));
+    checks.emplace_back(_T("images/logo3.png"));
+    checks.emplace_back(_T("../images/logo3.png"));
+    checks.emplace_back(_T("skins/msgBox.xml"));
+    checks.emplace_back(_T("skins\\msgBox.xml"));
+    checks.emplace_back(_T("msgBox.xml"));
+    return checks;
+}
+
+static void PrepareGuiResources(HINSTANCE hInstance,
+                                GuiResourceContext& context,
+                                bool verboseLogs) {
+    context.tempResourcePath = context.resourceManager.extractResources();
+    CPaintManagerUI::SetInstance(hInstance);
+
+    if (!context.tempResourcePath.empty()) {
+#if defined(UNICODE) || defined(_UNICODE)
+        std::wstring wpath = Utf8ToWide(context.tempResourcePath);
+        if (!wpath.empty()) {
+            context.resourceBasePath = wpath.c_str();
+        }
+#else
+        context.resourceBasePath = context.tempResourcePath.c_str();
+#endif
+        context.resourcePath = context.resourceBasePath;
+        if (!context.resourcePath.IsEmpty()) {
+            TCHAR lastChar = context.resourcePath.GetAt(context.resourcePath.GetLength() - 1);
+            if (lastChar != _T('\\') && lastChar != _T('/')) {
+                context.resourcePath += _T("\\");
+            }
+        }
+        context.skinsPath = context.resourcePath + _T("skins\\");
+        if (verboseLogs) {
+            std::cout << "Using extracted resources from: " << context.tempResourcePath << std::endl;
+        }
+    }
+
+    if (context.resourcePath.IsEmpty()) {
+        CDuiString instancePath = CPaintManagerUI::GetInstancePath();
+        context.resourceBasePath = instancePath + _T("resources\\");
+        context.resourcePath = context.resourceBasePath;
+        context.skinsPath = context.resourceBasePath + _T("skins\\");
+    }
+
+    context.useZip = false;
+    if (!context.tempResourcePath.empty()) {
+        std::filesystem::path zipPath = PathFromUtf8(context.tempResourcePath) / "resources.zip";
+        context.useZip = std::filesystem::exists(zipPath);
+    }
+    if (!context.useZip && !context.resourceBasePath.IsEmpty()) {
+        std::filesystem::path zipPath = PathFromTChar(context.resourceBasePath.GetData()) / "resources.zip";
+        context.useZip = std::filesystem::exists(zipPath);
+    }
+}
+
+enum class GuiResourceValidationResult {
+    Ok,
+    Abort,
+    RunConsoleFallback,
+};
+
+static GuiResourceValidationResult ValidateInstallGuiResources(const GuiResourceContext& context) {
+    if (!context.tempResourcePath.empty()) {
+        return GuiResourceValidationResult::Ok;
+    }
+
+    CDuiString instancePath = CPaintManagerUI::GetInstancePath();
+    std::wcout << L"Instance path: " << instancePath.GetData() << std::endl;
+    std::wcout << L"Resource path: " << context.resourcePath.GetData() << std::endl;
+    std::wcout << L"Skin path: " << context.skinsPath.GetData() << std::endl;
+    std::wcout << L"Skin path exists: " << (PathFileExists(context.skinsPath) ? L"YES" : L"NO")
+               << std::endl;
+
+    if (PathFileExists(context.skinsPath)) {
+        return GuiResourceValidationResult::Ok;
+    }
+
+    CDuiString mainXmlPath = context.skinsPath + _T("main.xml");
+    std::wcout << L"Checking main.xml at: " << mainXmlPath.GetData() << std::endl;
+    std::wcout << L"main.xml exists: " << (PathFileExists(mainXmlPath) ? L"YES" : L"NO")
+               << std::endl;
+
+    std::wstring resourceMissingSummary =
+        GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.summary", L"");
+    std::wstring debugHeader =
+        GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.debug", L"");
+    std::wstring instanceLabel =
+        GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.instance_path", L"");
+    std::wstring resourceLabel =
+        GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.resource_path", L"");
+    std::wstring errorMessage =
+        resourceMissingSummary + L"\n\n" + debugHeader + L"\n" + instanceLabel + L": " +
+        TCharToWide(instancePath.GetData()) + L"\n" + resourceLabel + L": " +
+        TCharToWide(context.resourceBasePath.GetData());
+
+    GUIHelpers::ShowWarningDialog(
+        nullptr,
+        GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.title", L""),
+        errorMessage);
+
+    bool debugMode = GetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr, 0) > 0;
+    return debugMode ? GuiResourceValidationResult::RunConsoleFallback
+                     : GuiResourceValidationResult::Abort;
+}
+
+static void ApplyGuiResources(const GuiResourceContext& context, bool verboseLogs) {
+    if (context.useZip) {
+        CPaintManagerUI::SetResourcePath(context.resourcePath);
+        CPaintManagerUI::SetResourceZip(_T("resources.zip"), true);
+        CPaintManagerUI::SetResourceType(UILIB_ZIP);
+        if (verboseLogs) {
+            std::wcout << L"Set resource zip to: " << context.resourcePath.GetData()
+                       << L"resources.zip" << std::endl;
+        }
+        std::cout << "Resource zip enabled: true" << std::endl;
+        CDuiString zipPath = context.resourcePath + _T("resources.zip");
+        LogZipEntryCheck(zipPath, BuildResourceZipChecks());
+        return;
+    }
+
+    CPaintManagerUI::SetResourceZip(_T(""));
+    CPaintManagerUI::SetResourcePath(context.resourcePath);
+    CPaintManagerUI::SetResourceType(UILIB_FILE);
+    if (verboseLogs) {
+        std::wcout << L"Set resource path to: " << context.resourcePath.GetData() << std::endl;
+        std::wcout << L"Set resource type to UILIB_FILE" << std::endl;
+    }
+    std::cout << "Resource zip enabled: false" << std::endl;
+}
+
+static int RunGuiWindow(GUIManager& frame,
+                        const std::wstring& title,
+                        const GuiResourceContext& context,
+                        bool uninstallMode,
+                        WindowSize fallbackSize,
+                        bool verboseLogs) {
+    HWND hwnd = NULL;
+    WindowSize baseSize = GetWindowSizeFromResources(
+        context.useZip, context.resourcePath, context.skinsPath, uninstallMode, fallbackSize);
+
+    try {
+        if (verboseLogs) {
+            std::wcout << L"About to call Create()..." << std::endl;
+        }
+        hwnd = frame.Create(
+            NULL, title.c_str(), UI_WNDSTYLE_FRAME, 0L, 0, 0, baseSize.width, baseSize.height);
+    } catch (const std::exception& e) {
+        if (verboseLogs) {
+            std::wcout << L"ERROR: Exception during Create(): " << e.what() << std::endl;
+        }
+        return 1;
+    } catch (...) {
+        if (verboseLogs) {
+            std::wcout << L"ERROR: Unknown exception during Create()" << std::endl;
+        }
+        return 1;
+    }
+
+    if (hwnd == NULL) {
+        if (verboseLogs) {
+            std::wcout << L"ERROR: Create() returned NULL" << std::endl;
+            std::wcout << L"GetLastError() = " << GetLastError() << std::endl;
+        }
+        return 1;
+    }
+
+#ifdef _WIN32
+    AdjustWindowForDpi(hwnd, baseSize.width, baseSize.height);
+#endif
+
+    frame.CenterWindow();
+    if (verboseLogs) {
+        std::wcout << L"Centered window" << std::endl;
+    }
+    frame.ShowWindow(true);
+    if (verboseLogs) {
+        std::wcout << L"Showed window, entering message loop..." << std::endl;
+    }
+    CPaintManagerUI::MessageLoop();
+    if (verboseLogs) {
+        std::wcout << L"Message loop exited" << std::endl;
+    }
+    CPaintManagerUI::SetResourceZip(_T(""), true);
+    return 0;
+}
+
 #endif
 
 // NOTE: Comment text normalized to avoid encoding mojibake.
@@ -489,8 +672,6 @@ InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata
     return config;
 }
 
-#endif
-
 } // namespace
 
 int runConsoleInstaller(int argc, char* argv[]) {
@@ -519,32 +700,20 @@ int runConsoleInstaller(int argc, char* argv[]) {
     if (args.uninstall) {
         console.showInfo("Starting uninstall process...");
         std::string exePath = getCurrentExecutablePath();
-        std::string localManifest = getLocalManifestPath(exePath);
-        if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
+        if (hasLocalManifest(exePath)) {
+            std::string localManifest = getLocalManifestPath(exePath);
             bool ok = uninstallFromManifest(localManifest, pathResolver, console);
             return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
         }
-        std::string fallbackAppName;
-        if (!exePath.empty()) {
-            std::filesystem::path exeDir = PathFromUtf8(exePath).parent_path();
-            if (!exeDir.empty()) {
-                fallbackAppName = Utf8FromPath(exeDir.filename());
-            }
-        }
-        if (fallbackAppName.empty()) {
-            std::filesystem::path exeName = PathFromUtf8(exePath).filename();
-            fallbackAppName = Utf8FromPath(exeName.stem());
-        }
+        std::string fallbackAppName = deriveAppNameFromExePath(exePath);
+#ifdef _WIN32
+        setInstallerAppNameEnv(fallbackAppName);
+#endif
+        EnsureInstallerLoggingInitialized();
         if (!fallbackAppName.empty()) {
-            std::string manifestPath = findManifestFromRegistry(fallbackAppName, pathResolver);
+            std::string manifestPath = resolveInstalledManifestPath(
+                fallbackAppName, exePath, pathResolver);
             if (!manifestPath.empty()) {
-                bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
-                return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
-            }
-        }
-        if (!fallbackAppName.empty()) {
-            std::string manifestPath = getDefaultManifestPath(fallbackAppName, pathResolver);
-            if (!manifestPath.empty() && std::filesystem::exists(PathFromUtf8(manifestPath))) {
                 bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
                 return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
             }
@@ -552,8 +721,9 @@ int runConsoleInstaller(int argc, char* argv[]) {
         MetadataParser parser;
         metadata = parser.parseExtendedEmbeddedMetadata();
         if (parser.validateMetadata(metadata)) {
-            std::string manifestPath = getDefaultManifestPath(metadata.applicationName, pathResolver);
-            if (!manifestPath.empty() && std::filesystem::exists(PathFromUtf8(manifestPath))) {
+            std::string manifestPath = resolveInstalledManifestPath(
+                metadata.applicationName, exePath, pathResolver);
+            if (!manifestPath.empty()) {
                 bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
                 return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
             }
@@ -577,15 +747,10 @@ int runConsoleInstaller(int argc, char* argv[]) {
     }
 
 #ifdef _WIN32
-    if (!metadata.applicationName.empty()) {
-        std::wstring appName = Utf8ToWide(metadata.applicationName);
-        if (!appName.empty()) {
-            SetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appName.c_str());
-        }
-    }
+    setInstallerAppNameEnv(metadata.applicationName);
 #endif
 
-    initializeInstallerLogging();
+    EnsureInstallerLoggingInitialized();
 
 #ifdef _WIN32
     if (metadata.requireAdmin && !isRunningAsAdmin()) {
@@ -736,10 +901,8 @@ int runConsoleInstaller(int argc, char* argv[]) {
         return INSTALLER_EXIT_FAILED;
     }
 }
-#ifdef GUI_ENABLED
 // NOTE: Comment text normalized to avoid encoding mojibake.
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
-    initializeInstallerLogging();
     int argc = 0;
     LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
     bool silentMode = argvW ? (hasFlagWide(argc, argvW, L"-s") ||
@@ -763,25 +926,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         if (exeLower == "uninstall.exe" || exeLower.find("uninstall") != std::string::npos) {
             uninstallMode = true;
         } else {
-            std::string localManifest = getLocalManifestPath(exePathString);
-            if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
+            if (hasLocalManifest(exePathString)) {
                 uninstallMode = true;
             }
         }
     }
 #endif
 
-    if (debugMode) {
-        ensureConsoleVisible();
-        SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", L"1");
-    } else {
-        SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr);
-    }
+    applyDebugMode(debugMode);
 
     if (silentMode) {
-        if (!debugMode) {
-            hideConsoleWindow();
-        }
+        hideConsoleWhenNotDebug(debugMode);
         return runConsoleInstallerWithWideArgs();
     }
 
@@ -796,28 +951,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     }
 
     if (uninstallMode) {
-        std::string appName;
-        if (!exePathString.empty()) {
-            std::filesystem::path exeDir = PathFromUtf8(exePathString).parent_path();
-            if (!exeDir.empty()) {
-                appName = Utf8FromPath(exeDir.filename());
-            }
-            if (appName.empty()) {
-                std::filesystem::path exeName = PathFromUtf8(exePathString).filename();
-                appName = Utf8FromPath(exeName.stem());
-            }
-        }
+        std::string appName = deriveAppNameFromExePath(exePathString);
         if (appName.empty()) {
             appName = "Application";
         }
 
 #ifdef _WIN32
-        std::wstring appNameWide = Utf8ToWide(appName);
-        if (!appNameWide.empty()) {
-            SetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appNameWide.c_str());
-        }
+        setInstallerAppNameEnv(appName);
 #endif
-        initializeInstallerLogging();
+        EnsureInstallerLoggingInitialized();
 
         std::cout << "Uninstall mode active. exe=" << exeNameString << std::endl;
 
@@ -828,25 +970,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         config.languageCode.clear();
 
         InstallerPathResolver pathResolver;
-        std::string manifestPath;
-        if (!exePathString.empty()) {
-            std::string localManifest = getLocalManifestPath(exePathString);
-            if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
-                manifestPath = localManifest;
-            }
-        }
-        if (manifestPath.empty()) {
-            manifestPath = findManifestFromRegistry(appName, pathResolver);
-            if (!manifestPath.empty() && !std::filesystem::exists(PathFromUtf8(manifestPath))) {
-                manifestPath.clear();
-            }
-        }
-        if (manifestPath.empty()) {
-            std::string defaultManifest = getDefaultManifestPath(appName, pathResolver);
-            if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
-                manifestPath = defaultManifest;
-            }
-        }
+        std::string manifestPath = resolveInstalledManifestPath(appName, exePathString, pathResolver);
         if (!manifestPath.empty()) {
             nlohmann::json manifest;
             if (readManifest(manifestPath, manifest)) {
@@ -857,109 +981,22 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             }
         }
 
-        // NOTE: Comment text normalized to avoid encoding mojibake.
-        EmbeddedResourceManager resourceMgr;
-        std::string tempResourcePath = resourceMgr.extractResources();
+        GuiResourceContext resources;
+        PrepareGuiResources(hInstance, resources, false);
+        ApplyGuiResources(resources, false);
 
-        // NOTE: Comment text normalized to avoid encoding mojibake.
-        CPaintManagerUI::SetInstance(hInstance);
-
-        CDuiString resourcePath;
-        CDuiString resourceBasePath;
-        CDuiString skinsPath;
-        if (!tempResourcePath.empty()) {
-#if defined(UNICODE) || defined(_UNICODE)
-            std::wstring wpath = Utf8ToWide(tempResourcePath);
-            if (!wpath.empty()) {
-                resourceBasePath = wpath.c_str();
-            }
-#else
-            resourceBasePath = tempResourcePath.c_str();
-#endif
-            resourcePath = resourceBasePath;
-            if (!resourcePath.IsEmpty()) {
-                TCHAR lastChar = resourcePath.GetAt(resourcePath.GetLength() - 1);
-                if (lastChar != _T('\\') && lastChar != _T('/')) {
-                    resourcePath += _T("\\");
-                }
-            }
-            skinsPath = resourcePath + _T("skins\\");
-        }
-
-        if (resourcePath.IsEmpty()) {
-            CDuiString instancePath = CPaintManagerUI::GetInstancePath();
-            resourceBasePath = instancePath + _T("resources\\");
-            resourcePath = resourceBasePath;
-            skinsPath = resourceBasePath + _T("skins\\");
-        }
-
-        bool useZip = false;
-        if (!tempResourcePath.empty()) {
-            std::filesystem::path zipPath = PathFromUtf8(tempResourcePath) / "resources.zip";
-            useZip = std::filesystem::exists(zipPath);
-        }
-        if (!useZip && !resourceBasePath.IsEmpty()) {
-            std::filesystem::path zipPath = PathFromTChar(resourceBasePath.GetData()) / "resources.zip";
-            useZip = std::filesystem::exists(zipPath);
-        }
-
-        if (useZip) {
-            CPaintManagerUI::SetResourcePath(resourcePath);
-            CPaintManagerUI::SetResourceZip(_T("resources.zip"), true);
-            CPaintManagerUI::SetResourceType(UILIB_ZIP);
-            std::cout << "Resource zip enabled: true" << std::endl;
-            CDuiString zipPath = resourcePath + _T("resources.zip");
-            std::vector<CDuiString> checks;
-            checks.emplace_back(_T("images/bg2.png"));
-            checks.emplace_back(_T("../images/bg2.png"));
-            checks.emplace_back(_T("images/bg2@150.png"));
-            checks.emplace_back(_T("../images/bg2@150.png"));
-            checks.emplace_back(_T("images/bg2@200.png"));
-            checks.emplace_back(_T("../images/bg2@200.png"));
-            checks.emplace_back(_T("images/logo3.png"));
-            checks.emplace_back(_T("../images/logo3.png"));
-            checks.emplace_back(_T("skins/msgBox.xml"));
-            checks.emplace_back(_T("skins\\msgBox.xml"));
-            checks.emplace_back(_T("msgBox.xml"));
-            LogZipEntryCheck(zipPath, checks);
-        } else {
-            CPaintManagerUI::SetResourceZip(_T(""));
-            CPaintManagerUI::SetResourcePath(resourcePath);
-            CPaintManagerUI::SetResourceType(UILIB_FILE);
-            std::cout << "Resource zip enabled: false" << std::endl;
-        }
-
-        GUIManager* pFrame = new GUIManager();
-        if (pFrame == NULL) {
+        auto pFrame = std::make_unique<GUIManager>();
+        if (!pFrame) {
             CoUninitialize();
             return 1;
         }
         pFrame->SetUninstallMode(true);
         pFrame->SetInstallConfig(config);
-
-        WindowSize baseSize = GetWindowSizeFromResources(
-            useZip,
-            resourcePath,
-            skinsPath,
-            true,
-            WindowSize{ 560, 350 });
         std::wstring uninstallTitle = GUIHelpers::GetLocalizedText(L"msg.title.uninstall", L"");
-        HWND hwnd = pFrame->Create(NULL, uninstallTitle.c_str(), UI_WNDSTYLE_FRAME, 0L, 0, 0,
-                                   baseSize.width, baseSize.height);
-        if (hwnd == NULL) {
-            delete pFrame;
-            CoUninitialize();
-            return 1;
-        }
-#ifdef _WIN32
-        AdjustWindowForDpi(hwnd, baseSize.width, baseSize.height);
-#endif
-        pFrame->CenterWindow();
-        pFrame->ShowWindow(true);
-        CPaintManagerUI::MessageLoop();
-        CPaintManagerUI::SetResourceZip(_T(""), true);
+        int exitCode = RunGuiWindow(
+            *pFrame, uninstallTitle, resources, true, WindowSize{ 560, 350 }, false);
         CoUninitialize();
-        return 0;
+        return exitCode;
     }
     
     // NOTE: Comment text normalized to avoid encoding mojibake.
@@ -976,15 +1013,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     }
 
 #ifdef _WIN32
-    if (!metadata.applicationName.empty()) {
-        std::wstring appName = Utf8ToWide(metadata.applicationName);
-        if (!appName.empty()) {
-            SetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appName.c_str());
-        }
-    }
+    setInstallerAppNameEnv(metadata.applicationName);
 #endif
 
-    initializeInstallerLogging();
+    EnsureInstallerLoggingInitialized();
 
     if (metadata.requireAdmin && !isRunningAsAdmin()) {
         if (relaunchSelfAsAdmin()) {
@@ -1002,127 +1034,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     // NOTE: Comment text normalized to avoid encoding mojibake.
     InstallConfig config = createInstallConfigFromMetadata(metadata);
     
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-    EmbeddedResourceManager resourceMgr;
-    std::string tempResourcePath = resourceMgr.extractResources();
-    
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-    CPaintManagerUI::SetInstance(hInstance);
-    
-    CDuiString resourcePath;
-    CDuiString resourceBasePath;
-    CDuiString skinsPath;
-    if (!tempResourcePath.empty()) {
-        // NOTE: Comment text normalized to avoid encoding mojibake.
-        // MBCS build: keep resource path as narrow string
-#if defined(UNICODE) || defined(_UNICODE)
-        std::wstring wpath = Utf8ToWide(tempResourcePath);
-        if (!wpath.empty()) {
-            resourceBasePath = wpath.c_str();
-        }
-#else
-        resourceBasePath = tempResourcePath.c_str();
-#endif
-        resourcePath = resourceBasePath;
-        if (!resourcePath.IsEmpty()) {
-            TCHAR lastChar = resourcePath.GetAt(resourcePath.GetLength() - 1);
-            if (lastChar != _T('\\') && lastChar != _T('/')) {
-                resourcePath += _T("\\");
-            }
-        }
-        skinsPath = resourcePath + _T("skins\\");
-        std::cout << "Using extracted resources from: " << tempResourcePath << std::endl;
+    GuiResourceContext resources;
+    PrepareGuiResources(hInstance, resources, true);
+    GuiResourceValidationResult validation = ValidateInstallGuiResources(resources);
+    if (validation == GuiResourceValidationResult::Abort) {
+        CoUninitialize();
+        return 1;
     }
+    if (validation == GuiResourceValidationResult::RunConsoleFallback) {
+        CoUninitialize();
+        return runConsoleInstallerWithWideArgs();
+    }
+    ApplyGuiResources(resources, true);
     
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-    if (resourcePath.IsEmpty()) {
-        CDuiString instancePath = CPaintManagerUI::GetInstancePath();
-        resourceBasePath = instancePath + _T("resources\\"); // NOTE: Comment text normalized to avoid encoding mojibake.
-        resourcePath = resourceBasePath;
-        skinsPath = resourceBasePath + _T("skins\\");
-        
-        // NOTE: Comment text normalized to avoid encoding mojibake.
-        std::wcout << L"Instance path: " << instancePath.GetData() << std::endl;
-        std::wcout << L"Resource path: " << resourcePath.GetData() << std::endl;
-        std::wcout << L"Skin path: " << skinsPath.GetData() << std::endl;
-        std::wcout << L"Skin path exists: " << (PathFileExists(skinsPath) ? L"YES" : L"NO") << std::endl;
-        
-        if (!PathFileExists(skinsPath)) {
-            // NOTE: Comment text normalized to avoid encoding mojibake.
-            CDuiString mainXmlPath = skinsPath + _T("main.xml");
-            std::wcout << L"Checking main.xml at: " << mainXmlPath.GetData() << std::endl;
-            std::wcout << L"main.xml exists: " << (PathFileExists(mainXmlPath) ? L"YES" : L"NO") << std::endl;
-            
-            // NOTE: Comment text normalized to avoid encoding mojibake.
-            std::wstring resourceMissingSummary = GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.summary", L"");
-            std::wstring debugHeader = GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.debug", L"");
-            std::wstring instanceLabel = GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.instance_path", L"");
-            std::wstring resourceLabel = GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.resource_path", L"");
-            std::wstring errorMessage = resourceMissingSummary + L"\n\n" + debugHeader + L"\n" +
-                                        instanceLabel + L": " + TCharToWide(instancePath.GetData()) +
-                                        L"\n" + resourceLabel + L": " + TCharToWide(resourceBasePath.GetData());
-
-            GUIHelpers::ShowWarningDialog(
-                nullptr,
-                GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.title", L""),
-                errorMessage);
-            
-            bool debugMode = GetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr, 0) > 0;
-            if (!debugMode) {
-                CoUninitialize();
-                return 1;
-            }
-
-            // NOTE: Comment text normalized to avoid encoding mojibake.
-            CoUninitialize();
-
-            // NOTE: Comment text normalized to avoid encoding mojibake.
-            return runConsoleInstallerWithWideArgs();
-        }
-    }
-    
-    bool useZip = false;
-    if (!tempResourcePath.empty()) {
-        std::filesystem::path zipPath = PathFromUtf8(tempResourcePath) / "resources.zip";
-        useZip = std::filesystem::exists(zipPath);
-    }
-    if (!useZip && !resourceBasePath.IsEmpty()) {
-        std::filesystem::path zipPath = PathFromTChar(resourceBasePath.GetData()) / "resources.zip";
-        useZip = std::filesystem::exists(zipPath);
-    }
-
-    if (useZip) {
-        CPaintManagerUI::SetResourcePath(resourcePath);
-        CPaintManagerUI::SetResourceZip(_T("resources.zip"), true);
-        CPaintManagerUI::SetResourceType(UILIB_ZIP);
-        std::wcout << L"Set resource zip to: " << resourcePath.GetData() << L"resources.zip" << std::endl;
-        std::cout << "Resource zip enabled: true" << std::endl;
-        CDuiString zipPath = resourcePath + _T("resources.zip");
-        std::vector<CDuiString> checks;
-        checks.emplace_back(_T("images/bg2.png"));
-        checks.emplace_back(_T("../images/bg2.png"));
-        checks.emplace_back(_T("images/bg2@150.png"));
-        checks.emplace_back(_T("../images/bg2@150.png"));
-        checks.emplace_back(_T("images/bg2@200.png"));
-        checks.emplace_back(_T("../images/bg2@200.png"));
-        checks.emplace_back(_T("images/logo3.png"));
-        checks.emplace_back(_T("../images/logo3.png"));
-        checks.emplace_back(_T("skins/msgBox.xml"));
-        checks.emplace_back(_T("skins\\msgBox.xml"));
-        checks.emplace_back(_T("msgBox.xml"));
-        LogZipEntryCheck(zipPath, checks);
-    } else {
-        CPaintManagerUI::SetResourceZip(_T(""));
-        CPaintManagerUI::SetResourcePath(resourcePath);
-        std::wcout << L"Set resource path to: " << resourcePath.GetData() << std::endl;
-        // NOTE: Comment text normalized to avoid encoding mojibake.
-        CPaintManagerUI::SetResourceType(UILIB_FILE);
-        std::cout << "Resource zip enabled: false" << std::endl;
-    }
-    std::wcout << L"Set resource type to UILIB_FILE" << std::endl;
-    
-    GUIManager* pFrame = new GUIManager();
-    if (pFrame == NULL) {
+    auto pFrame = std::make_unique<GUIManager>();
+    if (!pFrame) {
         std::wcout << L"ERROR: Failed to create GUIManager" << std::endl;
         CoUninitialize();
         return 1;
@@ -1133,97 +1059,29 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
     pFrame->SetInstallConfig(config);
     std::wcout << L"Set install config" << std::endl;
-    
-    std::wcout << L"About to call Create()..." << std::endl;
-    HWND hwnd = NULL;
-    try {
-        WindowSize baseSize = GetWindowSizeFromResources(
-            useZip,
-            resourcePath,
-            skinsPath,
-            false,
-            WindowSize{ 800, 600 });
-        std::wstring installTitle = GUIHelpers::GetLocalizedText(L"msg.title.install", L"");
-        hwnd = pFrame->Create(NULL, installTitle.c_str(), UI_WNDSTYLE_FRAME, 0L, 0, 0,
-                              baseSize.width, baseSize.height);
-    } catch (const std::exception& e) {
-        std::wcout << L"ERROR: Exception during Create(): " << e.what() << std::endl;
-        delete pFrame;
-        CoUninitialize();
-        return 1;
-    } catch (...) {
-        std::wcout << L"ERROR: Unknown exception during Create()" << std::endl;
-        delete pFrame;
-        CoUninitialize();
-        return 1;
-    }
-    
-    if (hwnd == NULL) {
-        std::wcout << L"ERROR: Create() returned NULL" << std::endl;
-        
-        // NOTE: Comment text normalized to avoid encoding mojibake.
-        DWORD error = GetLastError();
-        std::wcout << L"GetLastError() = " << error << std::endl;
-        
-        delete pFrame;
-        CoUninitialize();
-        return 1;
-    }
-    std::wcout << L"Create() succeeded, hwnd = " << hwnd << std::endl;
-
-#ifdef _WIN32
-    {
-        WindowSize baseSize = GetWindowSizeFromResources(
-            useZip,
-            resourcePath,
-            skinsPath,
-            false,
-            WindowSize{ 800, 600 });
-        AdjustWindowForDpi(hwnd, baseSize.width, baseSize.height);
-    }
-#endif
-    
-    pFrame->CenterWindow();
-    std::wcout << L"Centered window" << std::endl;
-    
-    pFrame->ShowWindow(true);
-    std::wcout << L"Showed window, entering message loop..." << std::endl;
-    
-    CPaintManagerUI::MessageLoop();
-
-    std::wcout << L"Message loop exited" << std::endl;
-    CPaintManagerUI::SetResourceZip(_T(""), true);
+    std::wstring installTitle = GUIHelpers::GetLocalizedText(L"msg.title.install", L"");
+    int exitCode = RunGuiWindow(
+        *pFrame, installTitle, resources, false, WindowSize{ 800, 600 }, true);
     CoUninitialize();
-    return 0;
+    return exitCode;
 }
-#endif
 
 // NOTE: Comment text normalized to avoid encoding mojibake.
 int main(int argc, char* argv[]) {
-#ifdef GUI_ENABLED
     bool silentMode = hasFlag(argc, argv, "-s") || hasFlag(argc, argv, "--silent");
     bool debugMode = hasFlag(argc, argv, "--debug");
 
 #ifdef _WIN32
-    if (debugMode) {
-        ensureConsoleVisible();
-        SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", L"1");
-    } else {
-        SetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr);
-    }
+    applyDebugMode(debugMode);
 #endif
 
     if (!silentMode) {
 #ifdef _WIN32
-        if (!debugMode) {
-            hideConsoleWindow();
-        }
+        hideConsoleWhenNotDebug(debugMode);
 #endif
         HINSTANCE hInstance = GetModuleHandle(NULL);
         return wWinMain(hInstance, NULL, GetCommandLineW(), SW_SHOWNORMAL);
     }
-
-#endif
     
     // NOTE: Comment text normalized to avoid encoding mojibake.
     return runConsoleInstaller(argc, argv);

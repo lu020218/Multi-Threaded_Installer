@@ -38,6 +38,15 @@ void AppendRegistryList(std::vector<uint8_t>& out, const std::vector<RegistryEnt
     }
 }
 
+void AppendUiLinks(std::vector<uint8_t>& out, const std::vector<UiLinkBinding>& values) {
+    uint32_t count = static_cast<uint32_t>(values.size());
+    AppendPod(out, count);
+    for (const auto& link : values) {
+        AppendString(out, link.control);
+        AppendString(out, link.url);
+    }
+}
+
 } // namespace
 
 InstallationMetadata MetadataGenerator::generateMetadata(const std::vector<CompressionResult>& results,
@@ -83,6 +92,7 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.installKillProcesses = config.installKillProcesses;
     metadata.components = config.components;
     metadata.componentUi = config.componentUi;
+    metadata.uiLinks = config.uiLinks;
     
     uint64_t currentOffset = 0;
     for (size_t i = 0; i < results.size() && i < folderInfos.size(); ++i) {
@@ -256,6 +266,10 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
         for (const auto& page : metadata.componentUi.pages) {
             AppendString(serialized, page.skin);
             AppendStringList(serialized, page.controls);
+        }
+
+        if (header.version >= 14) {
+            AppendUiLinks(serialized, metadata.uiLinks);
         }
     }
 

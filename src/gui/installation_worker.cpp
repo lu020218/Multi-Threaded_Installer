@@ -1,5 +1,3 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/gui/installation_worker.h"
 #include "../../include/gui/gui_manager.h"
 #include "../../include/gui/gui_helpers.h"
@@ -33,18 +31,6 @@
 #endif
 
 namespace MultiThreadedInstaller {
-
-// ============================================================================
-// NOTE: Comment text normalized to avoid encoding mojibake.
-// ============================================================================
-
-static bool IsCancellationText(const std::string& message) {
-    std::string lowered = message;
-    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return lowered.find("cancelled") != std::string::npos ||
-           lowered.find("canceled") != std::string::npos;
-}
 
 InstallationWorker::InstallationWorker(HWND hNotifyWindow)
     : m_hNotifyWindow(hNotifyWindow)
@@ -333,7 +319,7 @@ if (m_cancellationRequested) {
     } catch (const std::exception& e) {
         // NOTE: Comment text normalized to avoid encoding mojibake.
 success = false;
-        if (m_cancellationRequested.load() || IsCancellationText(e.what())) {
+        if (m_cancellationRequested.load() || isCancellationText(e.what())) {
             errorMessage = GUIHelpers::GetLocalizedText(L"msg.error.cancelled", L"");
         } else {
             errorMessage = Utf8ToWide(e.what());
@@ -362,7 +348,6 @@ PostCompletionMessage(success, errorMessage);
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED
 
 
 

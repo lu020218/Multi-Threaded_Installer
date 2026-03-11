@@ -1,8 +1,7 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/gui/gui_manager.h"
 #include "../../include/gui/page_controller.h"
 #include "../../include/gui/gui_helpers.h"
+#include "../../include/gui/license_text_loader.h"
 #include "../../include/gui/installation_worker.h"
 #include "../../include/gui/uninstall_worker.h"
 #include "../../include/installer/metadata_parser.h"
@@ -129,7 +128,6 @@ static int GetDefaultLanguageComboIndex();
 static std::wstring GetLanguageCodeForIndex(int index);
 static int GetLanguageIndexForCode(const std::wstring& code);
 static std::wstring GetLanguageFilePath(const std::wstring& code);
-static std::string NormalizePathForCompare(const std::string& path);
 static bool RequestPreviousInstallCleanup(HWND hWnd, const ExtendedInstallationMetadata& metadata, const std::wstring& installPath);
 
 struct ComponentControlBinding {
@@ -467,45 +465,6 @@ static std::wstring NormalizeInstallPath(const std::wstring& basePath,
     return childPath.wstring();
 }
 
-static std::wstring LoadLicenseTextFromResources() {
-    if (CPaintManagerUI::GetResourceType() == UILIB_ZIP &&
-        !CPaintManagerUI::GetResourceZip().IsEmpty()) {
-        CDuiString basePath = CPaintManagerUI::GetResourcePath();
-        CDuiString zipName = CPaintManagerUI::GetResourceZip();
-        CDuiString zipPath = basePath + zipName;
-
-        HZIP hz = OpenZip(zipPath.GetData(), 0);
-        if (hz != NULL) {
-            ZIPENTRY ze;
-            int index = 0;
-            if (FindZipItem(hz, _T("license.txt"), true, &index, &ze) == 0) {
-                std::vector<char> buffer(static_cast<size_t>(ze.unc_size));
-                if (UnzipItem(hz, index, buffer.data(), ze.unc_size) == 0) {
-                    CloseZip(hz);
-                    std::string text(buffer.begin(), buffer.end());
-                    return Utf8ToWide(text);
-                }
-            }
-            CloseZip(hz);
-        }
-    }
-
-    CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
-    std::filesystem::path licensePath = PathFromTChar(resourcePath.GetData()) / "license.txt";
-    std::ifstream file(licensePath, std::ios::binary);
-    if (!file.is_open()) {
-        std::filesystem::path fallback = PathFromTChar(resourcePath.GetData()) / ".." / "license.txt";
-        file.open(fallback, std::ios::binary);
-    }
-    if (!file.is_open()) {
-        return GUIHelpers::GetLocalizedText(L"msg.dialog.license_not_impl", L"");
-    }
-
-    std::string content((std::istreambuf_iterator<char>(file)),
-                        std::istreambuf_iterator<char>());
-    return Utf8ToWide(content);
-}
-
 int GUIManager::GetWelcomePageIndex() const {
     return m_uninstallMode ? 0 : kPageWelcome;
 }
@@ -777,6 +736,12 @@ bool GUIManager::EnsureInstallMetadataLoaded() {
             return false;
         }
         m_installMetadata = std::move(metadata);
+        m_uiLinks.clear();
+        for (const auto& link : m_installMetadata.uiLinks) {
+            if (!link.control.empty() && !link.url.empty()) {
+                m_uiLinks[link.control] = Utf8ToWide(link.url);
+            }
+        }
         m_installMetadataLoaded = true;
         return true;
     } catch (const std::exception& ex) {
@@ -877,6 +842,13 @@ void GUIManager::Notify(TNotifyUI& msg) {
         }
         else if (senderName == _T("btnUninstallFinish")) {
             Close();
+        }
+        else {
+            std::string controlName = WideToUtf8(TCharToWide(senderName.GetData()));
+            auto it = m_uiLinks.find(controlName);
+            if (it != m_uiLinks.end() && !it->second.empty()) {
+                GUIHelpers::OpenWebPage(it->second);
+            }
         }
     }
     else if (msg.sType == _T("selectchanged")) {
@@ -1212,13 +1184,7 @@ void GUIManager::ShowLicensePage() {
         return;
     }
 
-    CRichEditUI* pLicenseText = static_cast<CRichEditUI*>(
-        m_pm.FindControl(_T("editLicense")));
-    if (pLicenseText) {
-        std::wstring text = LoadLicenseTextFromResources();
-        pLicenseText->SetText(WStringToTStr(text));
-        pLicenseText->SetReadOnly(true);
-    }
+    RefreshLicenseText();
 
     CCheckBoxUI* pAgreeInline = static_cast<CCheckBoxUI*>(
         m_pm.FindControl(_T("chkAgree1")));
@@ -1233,6 +1199,23 @@ void GUIManager::ShowLicensePage() {
     }
 
     m_pTabPages->SelectItem(kPageLicense);
+}
+
+void GUIManager::RefreshLicenseText() {
+    CRichEditUI* pLicenseText = static_cast<CRichEditUI*>(
+        m_pm.FindControl(_T("editLicense")));
+    if (!pLicenseText) {
+        return;
+    }
+
+    std::wstring languageCode = m_config.languageCode;
+    if (languageCode.empty()) {
+        languageCode = GetLanguageCodeForIndex(GetDefaultLanguageComboIndex());
+    }
+
+    const std::wstring text = LoadLocalizedLicenseText(languageCode);
+    pLicenseText->SetText(WStringToTStr(text));
+    pLicenseText->SetReadOnly(true);
 }
 
 void GUIManager::SyncLicenseAgreementFromPage() {
@@ -1493,17 +1476,6 @@ static std::wstring GetLanguageFilePath(const std::wstring& code) {
     return langPath.wstring();
 }
 
-static std::string NormalizePathForCompare(const std::string& path) {
-    std::string result = path;
-    std::replace(result.begin(), result.end(), '/', '\\');
-    while (!result.empty() && (result.back() == '\\' || result.back() == '/')) {
-        result.pop_back();
-    }
-    std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return result;
-}
-
 static bool RequestPreviousInstallCleanup(HWND hWnd,
                                           const ExtendedInstallationMetadata& metadata,
                                           const std::wstring& installPath) {
@@ -1527,8 +1499,8 @@ static bool RequestPreviousInstallCleanup(HWND hWnd,
     }
 
     std::string newPath = resolvedInstallRoot.empty() ? installPathUtf8 : resolvedInstallRoot;
-    std::string normalizedOld = NormalizePathForCompare(previousInstallDir);
-    std::string normalizedNew = NormalizePathForCompare(newPath);
+    std::string normalizedOld = normalizePathForCompare(previousInstallDir);
+    std::string normalizedNew = normalizePathForCompare(newPath);
     if (normalizedOld.empty() || normalizedNew.empty() || normalizedOld == normalizedNew) {
         return false;
     }
@@ -1812,6 +1784,8 @@ void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
         return;
     }
 
+    std::wstring appliedCode = code;
+
     std::cout << "Language resource path: " << WideToUtf8(TCharToWide(CPaintManagerUI::GetResourcePath().GetData()))
               << " file=" << WideToUtf8(langPath) << std::endl;
 
@@ -1821,6 +1795,7 @@ void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
             if (!fallbackPath.empty() &&
                 CResourceManager::GetInstance()->LoadLanguage(fallbackPath.c_str())) {
                 CResourceManager::GetInstance()->SetLanguage(L"en_US");
+                appliedCode = L"en_US";
                 std::cout << "Language fallback loaded: " << WideToUtf8(fallbackPath) << std::endl;
             } else {
                 std::cout << "Failed to load language file: " << WideToUtf8(langPath) << std::endl;
@@ -1834,10 +1809,12 @@ void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
         CResourceManager::GetInstance()->SetLanguage(code.c_str());
     }
 
+    m_config.languageCode = appliedCode;
     CResourceManager::GetInstance()->ReloadText();
     m_pm.NeedUpdate();
     m_pm.Invalidate();
     RefreshLocalizedText();
+    RefreshLicenseText();
 }
 
 void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) {
@@ -1869,7 +1846,6 @@ void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) 
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED
 
 
 

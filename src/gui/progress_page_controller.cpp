@@ -1,5 +1,3 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/gui/progress_page_controller.h"
 #include "../../include/gui/gui_helpers.h"
 #include <sstream>
@@ -212,4 +210,3 @@ std::wstring ProgressPageController::TruncateFolderName(const std::wstring& fold
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

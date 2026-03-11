@@ -1,5 +1,3 @@
-#ifdef GUI_ENABLED
-
 #include "../../include/gui/uninstall_worker.h"
 #include "../../include/gui/gui_manager.h"
 #include "../../include/installer/installer_helpers.h"
@@ -9,82 +7,7 @@
 #include "../../include/installer/path_resolver.h"
 #include "common/utf8_utils.h"
 
-#include <filesystem>
-#include <algorithm>
-
 namespace MultiThreadedInstaller {
-
-namespace {
-
-std::string sanitizeRegistryKeyName(const std::string& name) {
-    std::string result = name;
-    for (char& c : result) {
-        if (c == '\\' || c == '/' || c == ':' || c == '*' ||
-            c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
-            c = '_';
-        }
-    }
-    if (result.empty()) {
-        result = "Application";
-    }
-    return result;
-}
-
-std::string resolveManifestPath(const std::string& appName,
-                                const std::string& exePath,
-                                InstallerPathResolver& resolver) {
-    std::string localManifest = getLocalManifestPath(exePath);
-    if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
-        return localManifest;
-    }
-
-    if (appName.empty()) {
-        return {};
-    }
-
-    std::string keyName = sanitizeRegistryKeyName(appName);
-    std::string hkcuPath =
-        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
-    std::string hklmPath =
-        "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
-
-    std::string installLocation;
-    if (!readRegistryStringValue(hkcuPath, "InstallLocation", installLocation)) {
-        readRegistryStringValue(hklmPath, "InstallLocation", installLocation);
-    }
-    if (!installLocation.empty()) {
-        std::filesystem::path localPath = PathFromUtf8(installLocation) / "install.manifest.json";
-        if (std::filesystem::exists(localPath)) {
-            return Utf8FromPath(localPath);
-        }
-    }
-
-    std::string uninstallString;
-    if (!readRegistryStringValue(hkcuPath, "UninstallString", uninstallString)) {
-        readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
-    }
-    if (!uninstallString.empty()) {
-        std::filesystem::path uninstallPath = PathFromUtf8(uninstallString);
-        if (std::filesystem::exists(uninstallPath)) {
-            std::filesystem::path baseDir = uninstallPath.parent_path();
-            if (!baseDir.empty()) {
-                std::filesystem::path localPath = baseDir / "install.manifest.json";
-                if (std::filesystem::exists(localPath)) {
-                    return Utf8FromPath(localPath);
-                }
-            }
-        }
-    }
-
-    std::string defaultManifest = getDefaultManifestPath(appName, resolver);
-    if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
-        return defaultManifest;
-    }
-
-    return {};
-}
-
-} // namespace
 
 UninstallWorker::UninstallWorker(HWND hNotifyWindow)
     : m_hNotifyWindow(hNotifyWindow) {}
@@ -110,7 +33,7 @@ void UninstallWorker::WorkerThreadFunc(const std::string& appName) {
         InstallerPathResolver resolver;
         ConsoleInterface console;
         std::string exePath = getCurrentExecutablePath();
-        std::string manifestPath = resolveManifestPath(appName, exePath, resolver);
+        std::string manifestPath = resolveInstalledManifestPath(appName, exePath, resolver);
 
         if (manifestPath.empty()) {
             throw std::runtime_error("Manifest not found for uninstall");
@@ -142,4 +65,3 @@ void UninstallWorker::PostCompletionMessage(bool success, const std::wstring& er
 
 } // namespace MultiThreadedInstaller
 
-#endif // GUI_ENABLED

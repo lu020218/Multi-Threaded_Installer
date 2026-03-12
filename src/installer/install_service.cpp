@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cwctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -429,6 +430,13 @@ std::wstring QuoteProcessPath(const std::wstring& value) {
     return L"\"" + value + L"\"";
 }
 
+bool IsBatchScriptPath(const std::filesystem::path& executablePath) {
+    std::wstring extension = executablePath.extension().wstring();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    return extension == L".bat" || extension == L".cmd";
+}
+
 bool WaitForProcessExit(HANDLE processHandle,
                         uint32_t timeoutSec,
                         const std::function<bool()>& cancellationCallback,
@@ -491,7 +499,9 @@ bool ExecuteProcess(const std::filesystem::path& executablePath,
     }
 
     std::wstring argsW = Utf8ToWide(args);
-    std::wstring commandLine = QuoteProcessPath(executableW);
+    const bool isBatchScript = IsBatchScriptPath(executablePath);
+    std::wstring commandLine = isBatchScript ? (L"cmd.exe /c " + QuoteProcessPath(executableW))
+                                             : QuoteProcessPath(executableW);
     if (!argsW.empty()) {
         commandLine.append(L" ");
         commandLine.append(argsW);
@@ -507,6 +517,12 @@ bool ExecuteProcess(const std::filesystem::path& executablePath,
 
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(startupInfo);
+    DWORD creationFlags = 0;
+    if (isBatchScript) {
+        startupInfo.dwFlags = STARTF_USESHOWWINDOW;
+        startupInfo.wShowWindow = SW_HIDE;
+        creationFlags = CREATE_NO_WINDOW;
+    }
     PROCESS_INFORMATION processInfo{};
 
     BOOL started = CreateProcessW(nullptr,
@@ -514,7 +530,7 @@ bool ExecuteProcess(const std::filesystem::path& executablePath,
                                   nullptr,
                                   nullptr,
                                   FALSE,
-                                  0,
+                                  creationFlags,
                                   nullptr,
                                   workingDirectory.empty() ? nullptr : workingDirectory.c_str(),
                                   &startupInfo,

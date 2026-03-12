@@ -5,7 +5,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(VERIFY_THIRD_PARTY_HASHES "Validate prebuilt third-party library hashes" ON)
-option(YAML_CPP_FETCH_FALLBACK "Allow FetchContent fallback for yaml-cpp when submodule/system package is unavailable" OFF)
 option(ENABLE_ZSTD "Enable ZSTD compression support for packager" ON)
 option(ZSTD_FORCE_THIRD_PARTY_BINARY "Force using third_party zstd prebuilt binary on MSVC toolchains" OFF)
 
@@ -35,60 +34,11 @@ endif()
 # Find required packages
 find_package(Threads REQUIRED)
 
-# YAML parser dependency for packager configuration.
-# Prefer repository-pinned submodule at third_party/yaml-cpp.
-set(YAML_CPP_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/third_party/yaml-cpp")
-
-# CMake 4+ rejects subprojects with very old policy baselines unless this is set.
-if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
-    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-endif()
-
-if(EXISTS "${YAML_CPP_SUBMODULE_DIR}/CMakeLists.txt")
-    message(STATUS "Using yaml-cpp from submodule: ${YAML_CPP_SUBMODULE_DIR}")
-    add_subdirectory("${YAML_CPP_SUBMODULE_DIR}" "${CMAKE_BINARY_DIR}/third_party/yaml-cpp-build" EXCLUDE_FROM_ALL)
-    if(TARGET yaml-cpp)
-        set(YAML_CPP_TARGET yaml-cpp)
-    elseif(TARGET yaml-cpp::yaml-cpp)
-        set(YAML_CPP_TARGET yaml-cpp::yaml-cpp)
-    endif()
-else()
-    find_package(yaml-cpp QUIET)
-    if(yaml-cpp_FOUND)
-        if(TARGET yaml-cpp)
-            set(YAML_CPP_TARGET yaml-cpp)
-        elseif(TARGET yaml-cpp::yaml-cpp)
-            set(YAML_CPP_TARGET yaml-cpp::yaml-cpp)
-        endif()
-        message(STATUS "Using system yaml-cpp package (submodule missing)")
-    elseif(YAML_CPP_FETCH_FALLBACK)
-        include(FetchContent)
-        set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/_deps")
-        message(STATUS "yaml-cpp submodule/system package missing, using FetchContent fallback")
-        FetchContent_Declare(
-            yaml-cpp
-            GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-            GIT_TAG yaml-cpp-0.9.0
-            GIT_SHALLOW TRUE
-        )
-        FetchContent_MakeAvailable(yaml-cpp)
-        if(TARGET yaml-cpp)
-            set(YAML_CPP_TARGET yaml-cpp)
-        elseif(TARGET yaml-cpp::yaml-cpp)
-            set(YAML_CPP_TARGET yaml-cpp::yaml-cpp)
-        endif()
-    endif()
-endif()
-
-if(NOT YAML_CPP_TARGET)
-    message(FATAL_ERROR
-        "yaml-cpp target was not resolved. Expected submodule at third_party/yaml-cpp or a system yaml-cpp package.")
-endif()
-
 # Set paths for local third-party libraries
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/third_party")
 set(EXPECTED_LIBLZMA_SHA256 "229209de2a901b987543e1496a02d4874260c3b6f2f2f459bcd6fa2e7bc6f746")
 set(EXPECTED_DUILIB_SHA256 "6f7a28965d57daee3a213bd134ba2112f9f2cfdd842bef4b71ec028f8eb7bc54")
+set(EXPECTED_YAML_CPP_SHA256 "1cf6fa319e7529afb38e4ab55e3b0cca7a901f3ee3351b7f525fe682a5b5392e")
 
 # Try to find zstd (local installation first, then system)
 if(ENABLE_ZSTD)
@@ -219,10 +169,46 @@ else()
     endif()
 endif()
 
+# Use pinned yaml-cpp headers and static library from third_party.
+find_path(YAML_CPP_INCLUDE_DIR
+    NAMES yaml-cpp/yaml.h
+    PATHS
+        "${THIRD_PARTY_DIR}/yaml-cpp/include"
+    NO_DEFAULT_PATH
+)
+
+if(NOT YAML_CPP_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "Pinned dependency missing: ${THIRD_PARTY_DIR}/yaml-cpp/include. "
+        "This project requires yaml-cpp headers in third_party/yaml-cpp/include.")
+endif()
+
+if(WIN32)
+    set(YAML_CPP_STATIC_LIB "${THIRD_PARTY_DIR}/yaml-cpp/lib_static/yaml-cpp.lib")
+    if(EXISTS "${YAML_CPP_STATIC_LIB}")
+        set(YAML_CPP_LIBRARIES "${YAML_CPP_STATIC_LIB}")
+        message(STATUS "Using yaml-cpp static library: ${YAML_CPP_STATIC_LIB}")
+        file(SHA256 "${YAML_CPP_STATIC_LIB}" YAML_CPP_SHA256)
+        string(TOLOWER "${YAML_CPP_SHA256}" YAML_CPP_SHA256)
+        message(STATUS "yaml-cpp static SHA256: ${YAML_CPP_SHA256}")
+        if(VERIFY_THIRD_PARTY_HASHES AND NOT YAML_CPP_SHA256 STREQUAL EXPECTED_YAML_CPP_SHA256)
+            message(FATAL_ERROR
+                "Unexpected yaml-cpp static hash. Expected ${EXPECTED_YAML_CPP_SHA256}, got ${YAML_CPP_SHA256}")
+        endif()
+    else()
+        message(FATAL_ERROR
+            "Pinned dependency missing: ${YAML_CPP_STATIC_LIB}. "
+            "This project requires the prebuilt yaml-cpp static archive in third_party/yaml-cpp/lib_static.")
+    endif()
+else()
+    message(FATAL_ERROR "The current project phase requires the Windows GUI installer build.")
+endif()
+
 # Include directories
 include_directories(include)
 include_directories(src)
 include_directories(${THIRD_PARTY_DIR}/nlohmann)
+include_directories(${YAML_CPP_INCLUDE_DIR})
 
 message(STATUS "Configuring GUI support with DuiLib...")
 
@@ -337,8 +323,9 @@ set(COMMON_SOURCES
 
 # Create packager executable
 add_executable(packager ${PACKAGER_SOURCES} ${COMMON_SOURCES})
-target_link_libraries(packager ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads ${YAML_CPP_TARGET})
+target_link_libraries(packager ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads ${YAML_CPP_LIBRARIES})
 target_include_directories(packager PRIVATE ${LIBLZMA_INCLUDE_DIRS} ${ZSTD_INCLUDE_DIRS})
+target_compile_definitions(packager PRIVATE YAML_CPP_STATIC_DEFINE)
 if(LIBLZMA_STATIC)
     target_compile_definitions(packager PRIVATE LZMA_API_STATIC)
 endif()

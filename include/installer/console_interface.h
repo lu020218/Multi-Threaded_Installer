@@ -20,7 +20,6 @@ public:
     
 
     void showInstallerMenu();
-    bool getInstallationPaths(std::vector<std::pair<std::string, std::string>>& folderMappings);
     void showInstallationProgress(const std::string& currentFolder, float progress);
     void showInstallationResult(bool success, const std::vector<std::string>& errors);
     
@@ -45,14 +44,9 @@ public:
     
     struct InstallerArgs {
         std::string defaultDestination;
-        std::string dataPackagePath;
-        std::vector<std::pair<std::string, std::string>> folderMappings;
         std::vector<std::string> selectedComponents;
         bool installAllComponents = false;
-        int threadCount = -1;
-        bool force = false;
         bool silent = false;
-        bool verbose = false;
         bool showHelp = false;
         bool uninstall = false;
     };

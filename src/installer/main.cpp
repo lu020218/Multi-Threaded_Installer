@@ -736,9 +736,6 @@ int runConsoleInstaller(int argc, char* argv[]) {
 
     // NOTE: Comment text normalized to avoid encoding mojibake.
     MetadataParser parser;
-    if (!args.dataPackagePath.empty()) {
-        parser.setDataPackagePath(args.dataPackagePath);
-    }
     metadata = parser.parseExtendedEmbeddedMetadata();
 
     if (!parser.validateMetadata(metadata)) {
@@ -767,7 +764,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
     console.showInfo("Application: " + metadata.applicationName);
 
     std::string userSelectedPath;
-    if (args.folderMappings.empty() && args.defaultDestination.empty() && !args.silent) {
+    if (args.defaultDestination.empty() && !args.silent) {
         console.showInstallerMenu();
 
         std::string defaultPath = pathResolver.expandEnvironmentVariables(metadata.defaultInstallDir);
@@ -842,10 +839,8 @@ int runConsoleInstaller(int argc, char* argv[]) {
 
     InstallServiceOptions serviceOptions;
     serviceOptions.installPath = userSelectedPath;
-    serviceOptions.folderMappings = args.folderMappings;
     serviceOptions.selectedComponentIds = args.selectedComponents;
     serviceOptions.installAllComponents = args.installAllComponents;
-    serviceOptions.threadCount = args.threadCount;
     serviceOptions.writeUninstallRegistry = true;
 
     InstallServiceResult serviceResult = ExecuteInstallService(

@@ -52,34 +52,6 @@ void ConsoleInterface::showInstallerMenu() {
     std::cout << std::endl;
 }
 
-bool ConsoleInterface::getInstallationPaths(std::vector<std::pair<std::string, std::string>>& folderMappings) {
-    std::cout << "Enter folder mappings (format: folderName=targetPath)" << std::endl;
-    std::cout << "Press Enter with empty line to finish:" << std::endl;
-    
-    std::string line;
-    while (true) {
-        std::cout << "> ";
-        std::getline(std::cin, line);
-        
-        if (line.empty()) {
-            break;
-        }
-        
-        size_t equalPos = line.find('=');
-        if (equalPos == std::string::npos) {
-            showWarning("Invalid format. Use: folderName=targetPath");
-            continue;
-        }
-        
-        std::string folderName = line.substr(0, equalPos);
-        std::string targetPath = line.substr(equalPos + 1);
-        
-        folderMappings.emplace_back(folderName, targetPath);
-    }
-    
-    return !folderMappings.empty();
-}
-
 void ConsoleInterface::showInstallationProgress(const std::string& currentFolder, float progress) {
     std::cout << "\rInstalling: " << currentFolder << " ";
     showProgressBar(progress);
@@ -183,14 +155,8 @@ ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, c
         
         if (arg == "-h" || arg == "--help") {
             args.showHelp = true;
-        } else if (arg == "-v" || arg == "--verbose") {
-            args.verbose = true;
-        } else if ((arg == "-p" || arg == "--data-package") && i + 1 < argc) {
-            args.dataPackagePath = argv[++i];
         } else if (arg == "-s" || arg == "--silent") {
             args.silent = true;
-        } else if (arg == "-f" || arg == "--force") {
-            args.force = true;
         } else if (arg == "--uninstall") {
             args.uninstall = true;
         } else if (arg == "--all-components") {
@@ -204,13 +170,6 @@ ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, c
             appendComponents(argv[++i]);
         } else if ((arg == "-d" || arg == "--destination") && i + 1 < argc) {
             args.defaultDestination = argv[++i];
-        } else if ((arg == "-t" || arg == "--threads") && i + 1 < argc) {
-            args.threadCount = std::stoi(argv[++i]);
-        } else if (arg.find('=') != std::string::npos) {
-            size_t equalPos = arg.find('=');
-            std::string folderName = arg.substr(0, equalPos);
-            std::string targetPath = arg.substr(equalPos + 1);
-            args.folderMappings.emplace_back(folderName, targetPath);
         }
     }
     
@@ -236,30 +195,22 @@ void ConsoleInterface::showPackagerHelp() {
 
 void ConsoleInterface::showInstallerHelp() {
     std::cout << "Multi-Threaded Installer" << std::endl;
-    std::cout << "Usage: installer [options] [folder_mappings...]" << std::endl;
+    std::cout << "Usage: installer [options]" << std::endl;
     std::cout << std::endl;
     std::cout << "Options:" << std::endl;
     std::cout << "  -d, --destination <directory>  Default installation directory" << std::endl;
-    std::cout << "  -p, --data-package <file>      Use external data package" << std::endl;
-    std::cout << "  -t, --threads <count>          Number of decompression threads (default: CPU cores)" << std::endl;
-    std::cout << "  -f, --force                    Force overwrite existing files" << std::endl;
     std::cout << "  -s, --silent                   Silent installation mode" << std::endl;
     std::cout << "  --debug                        Show console alongside GUI" << std::endl;
     std::cout << "  --uninstall                    Uninstall using saved manifest" << std::endl;
     std::cout << "  --component <id>               Select one component id (repeatable)" << std::endl;
     std::cout << "  --components <id1,id2,...>     Select multiple component ids" << std::endl;
     std::cout << "  --all-components               Install all optional components" << std::endl;
-    std::cout << "  -v, --verbose                  Show detailed information" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
-    std::cout << std::endl;
-    std::cout << "Folder mapping format:" << std::endl;
-    std::cout << "  <folder_name>=<target_path>" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  installer -d C:\\Program Files\\MyApp" << std::endl;
-    std::cout << "  installer folderA=C:\\App\\A folderB=C:\\App\\B" << std::endl;
-    std::cout << "  installer -s -f -d C:\\Program Files\\MyApp" << std::endl;
-    std::cout << "  installer -s --components core,plugins" << std::endl;
+    std::cout << "  installer -s -d C:\\Program Files\\MyApp" << std::endl;
+    std::cout << "  installer -s --components main_app,chrome_plugin" << std::endl;
     std::cout << "  uninstall.exe (runs uninstall automatically)" << std::endl;
 }
 

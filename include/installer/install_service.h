@@ -55,6 +55,7 @@ using InstallServiceEventCallback = std::function<void(const InstallServiceEvent
 
 struct InstallServiceOptions {
     std::string installPath;
+    bool installPathExplicit = false;
     std::vector<std::pair<std::string, std::string>> folderMappings;
     std::vector<std::string> selectedComponentIds;
     bool installAllComponents = false;

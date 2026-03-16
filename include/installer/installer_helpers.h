@@ -54,11 +54,17 @@ bool findEmbeddedDataLocator(std::ifstream& file,
                              EmbeddedDataLocatorRecord& locator);
 
 std::string getCurrentExecutablePath();
-std::string getDefaultManifestPath(const std::string& appName, InstallerPathResolver& resolver);
+std::string resolveEffectiveAppId(const std::string& appId, const std::string& applicationName);
+std::string resolveEffectiveDirectoryName(const std::string& directoryName,
+                                          const std::string& applicationName);
+std::vector<std::string> buildIdentityCandidates(const std::string& appId,
+                                                 const std::vector<std::string>& legacyAppIds,
+                                                 const std::string& applicationName);
+std::string getDefaultManifestPath(const std::string& identityKey, InstallerPathResolver& resolver);
 std::string getLocalManifestPath(const std::string& exePath);
-std::string findInstalledManifestPath(const std::string& appName,
+std::string findInstalledManifestPath(const std::vector<std::string>& identityCandidates,
                                       InstallerPathResolver& resolver);
-std::string resolveInstalledManifestPath(const std::string& appName,
+std::string resolveInstalledManifestPath(const std::vector<std::string>& identityCandidates,
                                          const std::string& exePath,
                                          InstallerPathResolver& resolver);
 bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath);

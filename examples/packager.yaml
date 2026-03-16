@@ -2,6 +2,10 @@ schemaVersion: 1
 
 package:
   appName: MyDesktopApp
+  appId: my_desktop_app
+  directoryName: MyDesktopApp
+  legacyAppIds:
+    - MyDesktopAppLegacy
   version: 1.2.3
   icon: app.ico
   productName: MyDesktopApp
@@ -28,17 +32,20 @@ install:
     - MyDesktopAppTray.exe
   installState:
     mode: Registry
-    registryPath: HKEY_CURRENT_USER\\Software\\MyDesktopApp
+    registryPath: HKEY_CURRENT_USER\\Software\\my_desktop_app
     registryKey: InstallState
-    filePath: "%ProgramData%\\MyDesktopApp\\install.state"
+    filePath: "%ProgramData%\\my_desktop_app\\install.state"
     useMutex: true
-    mutexName: Global\\MyDesktopApp_Install
+    mutexName: Global\\my_desktop_app_Install
 
 folders:
   - name: bin
     target: installDirectory
+    appendDirectoryName: false
+
   - name: plugins
     target: "%AppData%\\Roaming"
+    appendDirectoryName: true
 
 components:
   - id: main_app

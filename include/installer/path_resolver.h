@@ -29,7 +29,8 @@ public:
     std::string resolveFinalPath(
         const std::string& userSelectedPath,
         SpecialDirectoryType targetDirType,
-        const std::string& applicationName);
+        const std::string& directoryName,
+        bool appendDirectoryName = true);
     
     /**
      *

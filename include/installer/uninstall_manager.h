@@ -28,7 +28,9 @@ struct ComponentExecutionRecord {
 using UninstallProgressCallback = std::function<void(const UninstallProgressInfo&)>;
 
 bool writeManifest(const std::string& manifestPath,
-                   const std::string& appName,
+                   const std::string& appId,
+                   const std::string& displayName,
+                   const std::vector<std::string>& legacyAppIds,
                    const std::string& configVersion,
                    const std::string& installDir,
                    const std::vector<std::string>& filePaths,
@@ -41,10 +43,11 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& languageCode,
                    const std::vector<ComponentExecutionRecord>& componentActions = {});
 bool readManifest(const std::string& manifestPath, nlohmann::json& outManifest);
-bool resolveExistingInstallInfo(const std::string& appName,
+bool resolveExistingInstallInfo(const std::vector<std::string>& identityCandidates,
                                 InstallerPathResolver& resolver,
                                 std::string& manifestPath,
-                                std::string& installDir);
+                                std::string& installDir,
+                                std::string* matchedIdentity = nullptr);
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
                            ConsoleInterface& console);

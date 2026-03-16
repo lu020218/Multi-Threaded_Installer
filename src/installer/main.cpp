@@ -193,6 +193,114 @@ static std::string deriveAppNameFromExePath(const std::string& exePath,
     return fallback;
 }
 
+static bool startsWithNoCase(const std::string& value, const std::string& prefix) {
+    if (prefix.size() > value.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < prefix.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(value[i])) !=
+            std::tolower(static_cast<unsigned char>(prefix[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool isPathUnderBase(const std::string& path, const std::string& base) {
+    if (path.empty() || base.empty()) {
+        return false;
+    }
+    std::string normalizedPath = normalizePathForCompare(path);
+    std::string normalizedBase = normalizePathForCompare(base);
+    if (normalizedBase.empty()) {
+        return false;
+    }
+    if (normalizedBase.back() != '\\') {
+        normalizedBase.push_back('\\');
+    }
+    if (normalizedPath == normalizedBase.substr(0, normalizedBase.size() - 1)) {
+        return true;
+    }
+    return startsWithNoCase(normalizedPath, normalizedBase);
+}
+
+static bool registryPathRequiresAdminLocal(const std::string& path) {
+    return startsWithNoCase(path, "HKEY_LOCAL_MACHINE") ||
+           startsWithNoCase(path, "HKLM");
+}
+
+static bool requiresAdminForUninstall(const std::string& manifestPath,
+                                      const std::vector<std::string>& identityCandidates,
+                                      InstallerPathResolver& resolver) {
+#ifdef _WIN32
+    nlohmann::json manifest;
+    if (readManifest(manifestPath, manifest)) {
+        const std::string installDir = manifest.value("installDir", "");
+        const std::string programFiles = resolver.expandEnvironmentVariables("%ProgramFiles%");
+        const std::string programFilesX86 = resolver.expandEnvironmentVariables("%ProgramFiles(x86)%");
+        const std::string programData = resolver.expandEnvironmentVariables("%ProgramData%");
+        if (isPathUnderBase(installDir, programFiles) ||
+            isPathUnderBase(installDir, programFilesX86) ||
+            isPathUnderBase(installDir, programData)) {
+            return true;
+        }
+
+        if (manifest.contains("installState") && manifest["installState"].is_object()) {
+            const auto& installState = manifest["installState"];
+            const std::string registryPath = installState.value("registryPath", "");
+            if (registryPathRequiresAdminLocal(registryPath)) {
+                return true;
+            }
+        }
+
+        if (manifest.contains("registry") && manifest["registry"].is_array()) {
+            for (const auto& entry : manifest["registry"]) {
+                if (entry.is_object() &&
+                    registryPathRequiresAdminLocal(entry.value("path", ""))) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    for (const auto& identity : identityCandidates) {
+        if (identity.empty()) {
+            continue;
+        }
+        const std::string keyName = sanitizeRegistryKeyName(identity);
+        const std::string hklmPath =
+            "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
+        std::string value;
+        if (readRegistryStringValue(hklmPath, "UninstallString", value) ||
+            readRegistryStringValue(hklmPath, "InstallLocation", value)) {
+            return true;
+        }
+    }
+#else
+    (void)manifestPath;
+    (void)identityCandidates;
+    (void)resolver;
+#endif
+    return false;
+}
+
+static bool ensureAdminForUninstallConsole(ConsoleInterface& console) {
+#ifdef _WIN32
+    if (isRunningAsAdmin()) {
+        return true;
+    }
+    console.showInfo("Administrator privileges required for uninstall.");
+    if (relaunchSelfAsAdmin()) {
+        return false;
+    }
+    console.showError("Please run the uninstaller as Administrator.");
+    return false;
+#else
+    (void)console;
+    return true;
+#endif
+}
+
 static bool hasLocalManifest(const std::string& exePath) {
     std::string localManifest = getLocalManifestPath(exePath);
     return !localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest));
@@ -646,6 +754,13 @@ static int RunGuiWindow(GUIManager& frame,
 InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata& metadata) {
     InstallConfig config;
     config.applicationName = Utf8ToWide(metadata.applicationName);
+    config.appId = Utf8ToWide(resolveEffectiveAppId(metadata.appId, metadata.applicationName));
+    config.directoryName =
+        Utf8ToWide(resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName));
+    config.legacyAppIds.reserve(metadata.legacyAppIds.size());
+    for (const auto& legacyId : metadata.legacyAppIds) {
+        config.legacyAppIds.push_back(Utf8ToWide(legacyId));
+    }
     config.version = Utf8ToWide(metadata.configVersion);
     config.defaultInstallPath = Utf8ToWide(metadata.defaultInstallDir);
     for (const auto& entry : metadata.registry) {
@@ -668,6 +783,13 @@ InstallConfig createInstallConfigFromMetadata(const ExtendedInstallationMetadata
         totalSize += mapping.originalSize;
     }
     config.requiredDiskSpace = totalSize;
+    config.installDirectoryAppendName = true;
+    for (const auto& mapping : metadata.extendedMappings) {
+        if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
+            config.installDirectoryAppendName = mapping.appendDirectoryName;
+            break;
+        }
+    }
 
     return config;
 }
@@ -699,6 +821,15 @@ int runConsoleInstaller(int argc, char* argv[]) {
 
     if (args.uninstall) {
         console.showInfo("Starting uninstall process...");
+#ifdef _WIN32
+        if (!isRunningAsAdmin()) {
+            if (relaunchSelfAsAdmin()) {
+                return INSTALLER_EXIT_SUCCESS;
+            }
+            console.showError("Please run the uninstaller as Administrator.");
+            return INSTALLER_EXIT_ADMIN_REQUIRED;
+        }
+#endif
         std::string exePath = getCurrentExecutablePath();
         if (hasLocalManifest(exePath)) {
             std::string localManifest = getLocalManifestPath(exePath);
@@ -711,8 +842,9 @@ int runConsoleInstaller(int argc, char* argv[]) {
 #endif
         EnsureInstallerLoggingInitialized();
         if (!fallbackAppName.empty()) {
+            std::vector<std::string> fallbackCandidates{fallbackAppName};
             std::string manifestPath = resolveInstalledManifestPath(
-                fallbackAppName, exePath, pathResolver);
+                fallbackCandidates, exePath, pathResolver);
             if (!manifestPath.empty()) {
                 bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
                 return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
@@ -721,8 +853,10 @@ int runConsoleInstaller(int argc, char* argv[]) {
         MetadataParser parser;
         metadata = parser.parseExtendedEmbeddedMetadata();
         if (parser.validateMetadata(metadata)) {
+            std::vector<std::string> identityCandidates =
+                buildIdentityCandidates(metadata.appId, metadata.legacyAppIds, metadata.applicationName);
             std::string manifestPath = resolveInstalledManifestPath(
-                metadata.applicationName, exePath, pathResolver);
+                identityCandidates, exePath, pathResolver);
             if (!manifestPath.empty()) {
                 bool ok = uninstallFromManifest(manifestPath, pathResolver, console);
                 return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
@@ -764,6 +898,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
     console.showInfo("Application: " + metadata.applicationName);
 
     std::string userSelectedPath;
+    bool installPathExplicit = false;
     if (args.defaultDestination.empty() && !args.silent) {
         console.showInstallerMenu();
 
@@ -775,11 +910,14 @@ int runConsoleInstaller(int argc, char* argv[]) {
 
         if (userSelectedPath.empty()) {
             userSelectedPath = defaultPath;
+        } else {
+            installPathExplicit = true;
         }
 
         console.showInfo("Installing to: " + userSelectedPath);
     } else if (!args.defaultDestination.empty()) {
         userSelectedPath = args.defaultDestination;
+        installPathExplicit = true;
     }
 
     if (args.silent && userSelectedPath.empty()) {
@@ -794,7 +932,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
     std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
         userSelectedPath,
         SpecialDirectoryType::INSTALL_DIRECTORY,
-        metadata.applicationName
+        resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName)
     );
     std::string adminCheckPath = resolvedInstallRoot.empty() ? userSelectedPath : resolvedInstallRoot;
     if (!adminCheckPath.empty() &&
@@ -839,6 +977,7 @@ int runConsoleInstaller(int argc, char* argv[]) {
 
     InstallServiceOptions serviceOptions;
     serviceOptions.installPath = userSelectedPath;
+    serviceOptions.installPathExplicit = installPathExplicit;
     serviceOptions.selectedComponentIds = args.selectedComponents;
     serviceOptions.installAllComponents = args.installAllComponents;
     serviceOptions.writeUninstallRegistry = true;
@@ -946,6 +1085,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     }
 
     if (uninstallMode) {
+#ifdef _WIN32
+        if (!isRunningAsAdmin()) {
+            if (relaunchSelfAsAdmin()) {
+                CoUninitialize();
+                return 0;
+            }
+            GUIHelpers::ShowWarningDialog(
+                nullptr,
+                GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L""),
+                GUIHelpers::GetLocalizedText(L"msg.error.require_admin", L""));
+            CoUninitialize();
+            return 1;
+        }
+#endif
         std::string appName = deriveAppNameFromExePath(exePathString);
         if (appName.empty()) {
             appName = "Application";
@@ -965,13 +1118,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         config.languageCode.clear();
 
         InstallerPathResolver pathResolver;
-        std::string manifestPath = resolveInstalledManifestPath(appName, exePathString, pathResolver);
+        std::vector<std::string> identityCandidates{appName};
+        std::string manifestPath = resolveInstalledManifestPath(identityCandidates, exePathString, pathResolver);
         if (!manifestPath.empty()) {
             nlohmann::json manifest;
             if (readManifest(manifestPath, manifest)) {
                 std::string lang = manifest.value("language", "");
                 if (!lang.empty()) {
                     config.languageCode = Utf8ToWide(lang);
+                }
+                std::string manifestAppId = manifest.value("appId", manifest.value("appName", ""));
+                if (!manifestAppId.empty()) {
+                    config.appId = Utf8ToWide(manifestAppId);
+                }
+                if (manifest.contains("legacyAppIds") && manifest["legacyAppIds"].is_array()) {
+                    for (const auto& legacyId : manifest["legacyAppIds"]) {
+                        if (legacyId.is_string()) {
+                            config.legacyAppIds.push_back(Utf8ToWide(legacyId.get<std::string>()));
+                        }
+                    }
                 }
             }
         }

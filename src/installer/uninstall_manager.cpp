@@ -68,8 +68,56 @@ static std::string ensureUtf8(const std::string& text) {
 }
 #endif
 
+static std::vector<std::string> EnsureUtf8List(const std::vector<std::string>& values) {
+    std::vector<std::string> safeValues;
+    safeValues.reserve(values.size());
+    for (const auto& value : values) {
+        safeValues.push_back(ensureUtf8(value));
+    }
+    return safeValues;
+}
+
+static std::string GetManifestAppId(const json& manifest) {
+    std::string appId = manifest.value("appId", "");
+    if (!appId.empty()) {
+        return appId;
+    }
+    return manifest.value("appName", "");
+}
+
+static std::string GetManifestDisplayName(const json& manifest) {
+    std::string displayName = manifest.value("displayName", "");
+    if (!displayName.empty()) {
+        return displayName;
+    }
+    return manifest.value("appName", "");
+}
+
+static std::vector<std::string> GetManifestLegacyAppIds(const json& manifest) {
+    std::vector<std::string> legacyAppIds;
+    if (manifest.contains("legacyAppIds") && manifest["legacyAppIds"].is_array()) {
+        for (const auto& item : manifest["legacyAppIds"]) {
+            if (item.is_string()) {
+                legacyAppIds.push_back(item.get<std::string>());
+            }
+        }
+    }
+    return legacyAppIds;
+}
+
+static bool ExistingInstallDirectoryLooksValid(const std::string& path) {
+    if (path.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    return std::filesystem::exists(PathFromUtf8(path), ec) &&
+           std::filesystem::is_directory(PathFromUtf8(path), ec);
+}
+
 bool writeManifest(const std::string& manifestPath,
-                   const std::string& appName,
+                   const std::string& appId,
+                   const std::string& displayName,
+                   const std::vector<std::string>& legacyAppIds,
                    const std::string& configVersion,
                    const std::string& installDir,
                    const std::vector<std::string>& filePaths,
@@ -88,7 +136,10 @@ bool writeManifest(const std::string& manifestPath,
     try {
         json root;
         root["version"] = "1.0";
-        root["appName"] = ensureUtf8(appName);
+        root["appId"] = ensureUtf8(appId);
+        root["displayName"] = ensureUtf8(displayName);
+        root["legacyAppIds"] = EnsureUtf8List(legacyAppIds);
+        root["appName"] = ensureUtf8(displayName);
         root["configVersion"] = ensureUtf8(configVersion);
         root["installDir"] = ensureUtf8(installDir);
         root["uninstallPath"] = ensureUtf8(uninstallPath);
@@ -182,98 +233,122 @@ bool readManifest(const std::string& manifestPath, json& outManifest) {
     return !outManifest.is_discarded();
 }
 
-bool resolveExistingInstallInfo(const std::string& appName,
+bool resolveExistingInstallInfo(const std::vector<std::string>& identityCandidates,
                                 InstallerPathResolver& resolver,
                                 std::string& manifestPath,
-                                std::string& installDir) {
+                                std::string& installDir,
+                                std::string* matchedIdentity) {
     manifestPath.clear();
     installDir.clear();
-    if (appName.empty()) {
+    if (matchedIdentity) {
+        matchedIdentity->clear();
+    }
+    if (identityCandidates.empty()) {
         return false;
     }
 
-    std::string keyName = sanitizeRegistryKeyName(appName);
-
-    const std::string hkcuPath =
-        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
-    const std::string hklmPath =
-        "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
-
-    std::string legacyPath = "HKEY_CURRENT_USER\\Software\\" + appName;
-    std::string legacyInstallDir;
-    if (readRegistryStringValue(legacyPath, "InstallDir", legacyInstallDir)) {
-        installDir = legacyInstallDir;
-        std::filesystem::path localManifest = PathFromUtf8(legacyInstallDir) / "install.manifest.json";
-        if (std::filesystem::exists(localManifest)) {
-            manifestPath = Utf8FromPath(localManifest);
+    for (const auto& identity : identityCandidates) {
+        if (identity.empty()) {
+            continue;
         }
-    } else {
-        std::string legacyPathHklm = "HKEY_LOCAL_MACHINE\\Software\\" + appName;
-        if (readRegistryStringValue(legacyPathHklm, "InstallDir", legacyInstallDir)) {
-            installDir = legacyInstallDir;
+
+        std::string candidateManifest;
+        std::string candidateInstallDir;
+        std::string keyName = sanitizeRegistryKeyName(identity);
+
+        const std::string hkcuPath =
+            "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
+        const std::string hklmPath =
+            "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
+
+        std::string legacyPath = "HKEY_CURRENT_USER\\Software\\" + identity;
+        std::string legacyInstallDir;
+        if (!readRegistryStringValue(legacyPath, "InstallDir", legacyInstallDir)) {
+            std::string legacyPathHklm = "HKEY_LOCAL_MACHINE\\Software\\" + identity;
+            readRegistryStringValue(legacyPathHklm, "InstallDir", legacyInstallDir);
+        }
+        if (!legacyInstallDir.empty()) {
+            if (ExistingInstallDirectoryLooksValid(legacyInstallDir)) {
+                candidateInstallDir = legacyInstallDir;
+            }
             std::filesystem::path localManifest = PathFromUtf8(legacyInstallDir) / "install.manifest.json";
             if (std::filesystem::exists(localManifest)) {
-                manifestPath = Utf8FromPath(localManifest);
+                candidateManifest = Utf8FromPath(localManifest);
+                if (candidateInstallDir.empty()) {
+                    candidateInstallDir = legacyInstallDir;
+                }
             }
         }
-    }
 
-    if (!manifestPath.empty() && !installDir.empty()) {
-        return true;
-    }
-
-    std::string installLocation;
-    if (!readRegistryStringValue(hkcuPath, "InstallLocation", installLocation)) {
-        readRegistryStringValue(hklmPath, "InstallLocation", installLocation);
-    }
-    if (!installLocation.empty()) {
-        installDir = installLocation;
-        std::filesystem::path localManifest = PathFromUtf8(installLocation) / "install.manifest.json";
-        if (std::filesystem::exists(localManifest)) {
-            manifestPath = Utf8FromPath(localManifest);
+        if (candidateManifest.empty()) {
+            std::string installLocation;
+            if (!readRegistryStringValue(hkcuPath, "InstallLocation", installLocation)) {
+                readRegistryStringValue(hklmPath, "InstallLocation", installLocation);
+            }
+            if (!installLocation.empty()) {
+                if (ExistingInstallDirectoryLooksValid(installLocation)) {
+                    candidateInstallDir = installLocation;
+                }
+                std::filesystem::path localManifest = PathFromUtf8(installLocation) / "install.manifest.json";
+                if (std::filesystem::exists(localManifest)) {
+                    candidateManifest = Utf8FromPath(localManifest);
+                    if (candidateInstallDir.empty()) {
+                        candidateInstallDir = installLocation;
+                    }
+                }
+            }
         }
-    }
 
-    if (manifestPath.empty()) {
-        std::string uninstallString;
-        if (!readRegistryStringValue(hkcuPath, "UninstallString", uninstallString)) {
-            readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
-        }
-        if (!uninstallString.empty()) {
-            std::filesystem::path uninstallPath = PathFromUtf8(uninstallString);
-            if (std::filesystem::exists(uninstallPath)) {
-                std::filesystem::path baseDir = uninstallPath.parent_path();
-                if (!baseDir.empty()) {
-                    std::filesystem::path localManifest = baseDir / "install.manifest.json";
-                    if (std::filesystem::exists(localManifest)) {
-                        manifestPath = Utf8FromPath(localManifest);
-                        if (installDir.empty()) {
-                            installDir = Utf8FromPath(baseDir);
+        if (candidateManifest.empty()) {
+            std::string uninstallString;
+            if (!readRegistryStringValue(hkcuPath, "UninstallString", uninstallString)) {
+                readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
+            }
+            if (!uninstallString.empty()) {
+                std::filesystem::path uninstallPath = PathFromUtf8(uninstallString);
+                if (std::filesystem::exists(uninstallPath)) {
+                    std::filesystem::path baseDir = uninstallPath.parent_path();
+                    if (!baseDir.empty()) {
+                        std::filesystem::path localManifest = baseDir / "install.manifest.json";
+                        if (std::filesystem::exists(localManifest)) {
+                            candidateManifest = Utf8FromPath(localManifest);
+                            if (candidateInstallDir.empty()) {
+                                candidateInstallDir = Utf8FromPath(baseDir);
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    if (manifestPath.empty()) {
-        std::string defaultManifest = getDefaultManifestPath(appName, resolver);
-        if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
-            manifestPath = defaultManifest;
-        }
-    }
-
-    if (!manifestPath.empty()) {
-        json manifest;
-        if (readManifest(manifestPath, manifest)) {
-            std::string manifestInstallDir = manifest.value("installDir", "");
-            if (!manifestInstallDir.empty()) {
-                installDir = manifestInstallDir;
+        if (candidateManifest.empty()) {
+            std::string defaultManifest = getDefaultManifestPath(identity, resolver);
+            if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
+                candidateManifest = defaultManifest;
             }
         }
+
+        if (!candidateManifest.empty()) {
+            json manifest;
+            if (readManifest(candidateManifest, manifest)) {
+                std::string manifestInstallDir = manifest.value("installDir", "");
+                if (!manifestInstallDir.empty() && ExistingInstallDirectoryLooksValid(manifestInstallDir)) {
+                    candidateInstallDir = manifestInstallDir;
+                }
+            }
+        }
+
+        if (!candidateManifest.empty() || ExistingInstallDirectoryLooksValid(candidateInstallDir)) {
+            manifestPath = std::move(candidateManifest);
+            installDir = std::move(candidateInstallDir);
+            if (matchedIdentity) {
+                *matchedIdentity = identity;
+            }
+            return true;
+        }
     }
 
-    return !manifestPath.empty() || !installDir.empty();
+    return false;
 }
 
 bool scheduleSelfDelete() {
@@ -332,6 +407,7 @@ bool scheduleSelfDeleteImmediate(const std::vector<std::string>& cleanupRoots,
     script.write(reinterpret_cast<const char*>(bom), sizeof(bom));
 
     writeLine(L"@echo off\r\n");
+    writeLine(L"cd /d \"%TEMP%\"\r\n");
     writeLine(L":repeat\r\n");
     writeLine(L"del /f /q \"" + exePathW + L"\" >nul 2>&1\r\n");
     writeLine(L"if exist \"" + exePathW + L"\" (\r\n");
@@ -361,14 +437,14 @@ bool scheduleSelfDeleteImmediate(const std::vector<std::string>& cleanupRoots,
     writeLine(L"del /f /q \"%~f0\" >nul 2>&1\r\n");
     script.close();
 
-    std::wstring cmd = L"cmd.exe /c start \"\" /b \"" + scriptPath + L"\"";
+    std::wstring cmd = L"cmd.exe /d /c call \"" + scriptPath + L"\"";
     STARTUPINFOW si{};
     PROCESS_INFORMATION pi{};
     si.cb = sizeof(si);
     std::vector<wchar_t> cmdLine(cmd.begin(), cmd.end());
     cmdLine.push_back(L'\0');
     BOOL ok = CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr, FALSE,
-                             CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+                             CREATE_NO_WINDOW, nullptr, tempPath, &si, &pi);
     if (ok) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
@@ -575,7 +651,11 @@ bool uninstallFromManifest(const std::string& manifestPath,
     }
     console.showInfo("Loaded manifest: " + manifestPath);
 
-    std::string appName = manifest.value("appName", "");
+    std::string appId = GetManifestAppId(manifest);
+    std::string displayName = GetManifestDisplayName(manifest);
+    std::vector<std::string> legacyAppIds = GetManifestLegacyAppIds(manifest);
+    std::vector<std::string> identityCandidates =
+        buildIdentityCandidates(appId, legacyAppIds, displayName);
     std::string installDir = manifest.value("installDir", "");
     bool autoStartup = manifest.value("autoStartup", false);
     bool desktopIcons = manifest.value("desktopIcons", false);
@@ -646,8 +726,8 @@ bool uninstallFromManifest(const std::string& manifestPath,
     console.showInfo("Manifest files: " + std::to_string(files.size()));
 
     std::vector<std::string> cleanupRoots;
-    if (!appName.empty()) {
-        std::string appLower = appName;
+    if (!displayName.empty()) {
+        std::string appLower = displayName;
         std::transform(appLower.begin(), appLower.end(), appLower.begin(), ::tolower);
         for (const auto& file : files) {
             std::filesystem::path path = PathFromUtf8(file);
@@ -679,22 +759,22 @@ bool uninstallFromManifest(const std::string& manifestPath,
         console.showInfo("Cleanup root: " + root);
     }
 
-    std::vector<std::string> killTargets = buildKillProcessList(appName, installKillProcesses);
+    std::vector<std::string> killTargets = buildKillProcessList(displayName, installKillProcesses);
 
     addWorkUnits(2); // install state: uninstalling + uninstalled
     if (!killTargets.empty()) {
         addWorkUnits(1);
     }
-    if (autoStartup && !appName.empty()) {
+    if (autoStartup && !displayName.empty()) {
         addWorkUnits(1);
     }
-    if (desktopIcons && !appName.empty()) {
+    if (desktopIcons && !displayName.empty()) {
         addWorkUnits(1);
     }
     addWorkUnits(componentActions.size());
     addWorkUnits(manifestRegistryEntries.size());
 #ifdef _WIN32
-    if (!appName.empty()) {
+    if (!identityCandidates.empty()) {
         addWorkUnits(1);
     }
 #endif
@@ -706,7 +786,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
     if (!manifestPath.empty()) {
         addWorkUnits(1);
     }
-    if (!appName.empty()) {
+    if (!identityCandidates.empty()) {
         addWorkUnits(1);
     }
 
@@ -788,12 +868,12 @@ bool uninstallFromManifest(const std::string& manifestPath,
         completeWorkUnit("Replaying component uninstall action: " + label);
     }
 
-    if (autoStartup && !appName.empty()) {
-        removeAutoStartup(appName);
+    if (autoStartup && !displayName.empty()) {
+        removeAutoStartup(displayName);
         completeWorkUnit("Removing auto startup entry");
     }
-    if (desktopIcons && !appName.empty()) {
-        deleteDesktopShortcut(appName);
+    if (desktopIcons && !displayName.empty()) {
+        deleteDesktopShortcut(displayName);
         completeWorkUnit("Removing desktop shortcut");
     }
 
@@ -808,12 +888,17 @@ bool uninstallFromManifest(const std::string& manifestPath,
     }
 
 #ifdef _WIN32
-    if (!appName.empty()) {
+    if (!identityCandidates.empty()) {
         bool perMachine = isRunningAsAdmin();
-        removedUninstall = deleteUninstallRegistryEntry(appName, perMachine);
-        if (!removedUninstall) {
-            deleteUninstallRegistryEntry(appName, !perMachine);
+        for (size_t i = 0; i < identityCandidates.size(); ++i) {
+            const bool removedPrimary = deleteUninstallRegistryEntry(identityCandidates[i], perMachine);
+            const bool removedSecondary = deleteUninstallRegistryEntry(identityCandidates[i], !perMachine);
+            if (i == 0) {
+                removedUninstall = removedPrimary || removedSecondary;
+            }
         }
+        deleteMatchingUninstallRegistryEntries(installDir, uninstallPath, perMachine);
+        deleteMatchingUninstallRegistryEntries(installDir, uninstallPath, !perMachine);
         completeWorkUnit("Removing uninstall registry entry");
     }
 #endif
@@ -976,13 +1061,17 @@ bool uninstallFromManifest(const std::string& manifestPath,
         completeWorkUnit("Removing uninstall manifest");
     }
 
-    if (!appName.empty()) {
-        std::string defaultPath = getDefaultManifestPath(appName, resolver);
+    for (const auto& identity : identityCandidates) {
+        std::string defaultPath = getDefaultManifestPath(identity, resolver);
         if (!defaultPath.empty() && defaultPath != manifestPath) {
-            std::filesystem::remove(toLongPath(PathFromUtf8(defaultPath)));
+            std::error_code removeEc;
+            std::filesystem::remove(toLongPath(PathFromUtf8(defaultPath)), removeEc);
+            if (removeEc && std::filesystem::exists(PathFromUtf8(defaultPath))) {
+                console.showWarning("Failed to remove legacy default manifest: " + defaultPath);
+            }
         }
-        completeWorkUnit("Removing default manifest pointer");
     }
+    completeWorkUnit("Removing default manifest pointer");
 
     std::filesystem::path exePath = PathFromUtf8(getCurrentExecutablePath());
     std::string exeName = Utf8FromPath(exePath.filename());

@@ -194,18 +194,22 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         }
 
         if (!foundMapping) {
+            const std::string directoryName =
+                resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName);
             std::string basePath;
             if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
                 basePath = pathResolver.resolveFinalPath(
                     userSelectedPath,
                     mapping.targetDirType,
-                    metadata.applicationName
+                    directoryName,
+                    mapping.appendDirectoryName
                 );
             } else {
                 basePath = pathResolver.resolveFinalPath(
                     mapping.customTargetPath.empty() ? mapping.targetPath : mapping.customTargetPath,
                     mapping.targetDirType,
-                    metadata.applicationName
+                    directoryName,
+                    mapping.appendDirectoryName
                 );
             }
 

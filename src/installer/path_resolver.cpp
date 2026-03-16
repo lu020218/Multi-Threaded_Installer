@@ -9,7 +9,8 @@ namespace MultiThreadedInstaller {
 std::string InstallerPathResolver::resolveFinalPath(
     const std::string& userSelectedPath,
     SpecialDirectoryType targetDirType,
-    const std::string& applicationName) {
+    const std::string& directoryName,
+    bool appendDirectoryName) {
     
     std::string basePath;
     
@@ -27,7 +28,10 @@ std::string InstallerPathResolver::resolveFinalPath(
     basePath = normalizePath(basePath);
     
 
-    return appendAppNameIfNeeded(basePath, applicationName);
+    if (!appendDirectoryName) {
+        return basePath;
+    }
+    return appendAppNameIfNeeded(basePath, directoryName);
 }
 
 std::string InstallerPathResolver::expandEnvironmentVariables(const std::string& path) {
@@ -117,6 +121,8 @@ std::string InstallerPathResolver::getSpecialDirectoryPath(SpecialDirectoryType 
             return "%LocalAppData%";
         case SpecialDirectoryType::PROGRAM_DATA:
             return "%ProgramData%";
+        case SpecialDirectoryType::USER_PROFILE:
+            return "%USERPROFILE%";
         case SpecialDirectoryType::INSTALL_DIRECTORY:
         default:
             return "";

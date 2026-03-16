@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace MultiThreadedInstaller {
 
@@ -11,10 +12,10 @@ public:
     explicit UninstallWorker(HWND hNotifyWindow);
     ~UninstallWorker();
 
-    void StartUninstall(const std::string& appName);
+    void StartUninstall(const std::vector<std::string>& identityCandidates);
 
 private:
-    void WorkerThreadFunc(const std::string& appName);
+    void WorkerThreadFunc(const std::vector<std::string>& identityCandidates);
     void PostCompletionMessage(bool success, const std::wstring& errorMsg);
 
     HWND m_hNotifyWindow;

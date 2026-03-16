@@ -465,6 +465,31 @@ static std::wstring NormalizeInstallPath(const std::wstring& basePath,
     return childPath.wstring();
 }
 
+static std::vector<std::string> BuildIdentityCandidatesFromConfig(const InstallConfig& config) {
+    std::vector<std::string> legacyIds;
+    legacyIds.reserve(config.legacyAppIds.size());
+    for (const auto& legacyId : config.legacyAppIds) {
+        legacyIds.push_back(WideToUtf8(legacyId));
+    }
+    return buildIdentityCandidates(WideToUtf8(config.appId),
+                                   legacyIds,
+                                   WideToUtf8(config.applicationName));
+}
+
+static std::wstring ResolveEffectiveDirectoryNameFromConfig(const InstallConfig& config) {
+    const std::string directoryName = resolveEffectiveDirectoryName(
+        WideToUtf8(config.directoryName),
+        WideToUtf8(config.applicationName));
+    return Utf8ToWide(directoryName);
+}
+
+static std::wstring ApplyInstallDirectoryRule(const std::wstring& basePath, const InstallConfig& config) {
+    if (!config.installDirectoryAppendName) {
+        return basePath;
+    }
+    return NormalizeInstallPath(basePath, ResolveEffectiveDirectoryNameFromConfig(config));
+}
+
 int GUIManager::GetWelcomePageIndex() const {
     return m_uninstallMode ? 0 : kPageWelcome;
 }
@@ -576,7 +601,19 @@ void GUIManager::InitWindow() {
         }
     }
 
-    installPath = NormalizeInstallPath(installPath, m_config.applicationName);
+    InstallerPathResolver identityResolver;
+    std::string previousManifest;
+    std::string previousInstallDir;
+    std::vector<std::string> identityCandidates = BuildIdentityCandidatesFromConfig(m_config);
+    if (resolveExistingInstallInfo(identityCandidates,
+                                   identityResolver,
+                                   previousManifest,
+                                   previousInstallDir) &&
+        !previousInstallDir.empty()) {
+        installPath = Utf8ToWide(previousInstallDir);
+    } else {
+        installPath = ApplyInstallDirectoryRule(installPath, m_config);
+    }
 
     if (m_pInstallPathEdit) {
         m_pInstallPathEdit->SetText(WStringToTStr(installPath));
@@ -1104,8 +1141,8 @@ void GUIManager::OnUninstallConfirmClick() {
         m_pUninstallWorker = new UninstallWorker(m_hWnd);
     }
 
-    std::string appName = WideToUtf8(m_config.applicationName);
-    if (appName.empty()) {
+    std::vector<std::string> identityCandidates = BuildIdentityCandidatesFromConfig(m_config);
+    if (identityCandidates.empty()) {
         CompletionMessageData* pData = new CompletionMessageData();
         pData->success = false;
         std::wstring text = GUIHelpers::GetLocalizedText(L"msg.uninstall.appname_missing", L"");
@@ -1114,7 +1151,7 @@ void GUIManager::OnUninstallConfirmClick() {
         return;
     }
 
-    m_pUninstallWorker->StartUninstall(appName);
+    m_pUninstallWorker->StartUninstall(identityCandidates);
 }
 
 void GUIManager::OnCancelButtonClick() {
@@ -1139,15 +1176,16 @@ void GUIManager::OnBrowseButtonClick() {
         selectedPath)) {
         
         std::wstring finalPath = selectedPath;
-        if (!m_config.applicationName.empty()) {
+        std::wstring effectiveDirectoryName = ResolveEffectiveDirectoryNameFromConfig(m_config);
+        if (m_config.installDirectoryAppendName && !effectiveDirectoryName.empty()) {
             std::filesystem::path selectedFs = selectedPath;
-            std::wstring appNameLower = ToLowerString(m_config.applicationName);
+            std::wstring appNameLower = ToLowerString(effectiveDirectoryName);
             std::wstring selectedNameLower = ToLowerString(selectedFs.filename().wstring());
 
             if (selectedNameLower == appNameLower) {
                 finalPath = selectedFs.wstring();
             } else {
-                std::filesystem::path childPath = selectedFs / m_config.applicationName;
+                std::filesystem::path childPath = selectedFs / effectiveDirectoryName;
                 std::error_code ec;
                 if (std::filesystem::exists(childPath, ec) &&
                     std::filesystem::is_directory(childPath, ec)) {
@@ -1485,15 +1523,25 @@ static bool RequestPreviousInstallCleanup(HWND hWnd,
 
     InstallerPathResolver pathResolver;
     std::string installPathUtf8 = WideToUtf8(installPath);
+    bool installDirectoryAppendName = true;
+    for (const auto& mapping : metadata.extendedMappings) {
+        if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
+            installDirectoryAppendName = mapping.appendDirectoryName;
+            break;
+        }
+    }
     std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
         installPathUtf8,
         SpecialDirectoryType::INSTALL_DIRECTORY,
-        metadata.applicationName
+        resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName),
+        installDirectoryAppendName
     );
 
     std::string previousManifest;
     std::string previousInstallDir;
-    if (!resolveExistingInstallInfo(metadata.applicationName, pathResolver,
+    std::vector<std::string> identityCandidates =
+        buildIdentityCandidates(metadata.appId, metadata.legacyAppIds, metadata.applicationName);
+    if (!resolveExistingInstallInfo(identityCandidates, pathResolver,
                                     previousManifest, previousInstallDir)) {
         return false;
     }

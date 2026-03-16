@@ -195,6 +195,9 @@ json NormalizeStructuredConfigSchema(const json& root) {
         const json& package = root["package"];
         SetNormalizedFieldIfMissing(normalized, "Version", package, "version");
         SetNormalizedFieldIfMissing(normalized, "AppName", package, "appName");
+        SetNormalizedFieldIfMissing(normalized, "AppId", package, "appId");
+        SetNormalizedFieldIfMissing(normalized, "DirectoryName", package, "directoryName");
+        SetNormalizedFieldIfMissing(normalized, "LegacyAppIds", package, "legacyAppIds");
         SetNormalizedFieldIfMissing(normalized, "Icon", package, "icon");
         SetNormalizedFieldIfMissing(normalized, "WebPageUrl", package, "webPageUrl");
         SetNormalizedFieldIfMissing(normalized, "ProductName", package, "productName");
@@ -274,6 +277,10 @@ json NormalizeStructuredConfigSchema(const json& root) {
                 folderMap["Roaming"] = folderName;
             } else if (loweredTarget.find("%localappdata%") != std::string::npos) {
                 folderMap["Local"] = folderName;
+            } else if (loweredTarget.find("%programdata%") != std::string::npos) {
+                folderMap["ProgramData"] = folderName;
+            } else if (loweredTarget.find("%userprofile%") != std::string::npos) {
+                folderMap["UserProfile"] = folderName;
             }
         }
 
@@ -531,6 +538,19 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
         return true;
     };
 
+    auto getOptionalStringList = [&](const char* key, std::vector<std::string>& out) -> bool {
+        if (!configObject.contains(key)) {
+            return true;
+        }
+        out.clear();
+        if (!JsonArrayToStringList(configObject[key], out)) {
+            lastError_ = "Invalid field '" + std::string(key) + "' in " + formatLabel +
+                         " config: expected string array";
+            return false;
+        }
+        return true;
+    };
+
     auto getOptionalBool = [&](const char* key, bool& out) -> bool {
         if (!configObject.contains(key)) {
             return true;
@@ -574,7 +594,10 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
         return std::nullopt;
     }
 
-    if (!getOptionalString("Icon", config.iconPath) ||
+    if (!getOptionalString("AppId", config.appId) ||
+        !getOptionalString("DirectoryName", config.directoryName) ||
+        !getOptionalStringList("LegacyAppIds", config.legacyAppIds) ||
+        !getOptionalString("Icon", config.iconPath) ||
         !getOptionalString("WebPageUrl", config.webPageUrl) ||
         !getOptionalString("ProductName", config.productName) ||
         !getOptionalString("FileVersion", config.fileVersion) ||
@@ -608,6 +631,76 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
         return std::nullopt;
     }
 
+    auto upsertFolderTarget = [&](FolderTargetConfig folderTarget) {
+        auto it = std::find_if(config.folderTargets.begin(),
+                               config.folderTargets.end(),
+                               [&](const FolderTargetConfig& current) {
+                                   return current.folderName == folderTarget.folderName;
+                               });
+        if (it != config.folderTargets.end()) {
+            *it = std::move(folderTarget);
+        } else {
+            config.folderTargets.push_back(std::move(folderTarget));
+        }
+    };
+
+    if (configObject.contains("folders")) {
+        const auto& folders = configObject["folders"];
+        if (!folders.is_array()) {
+            lastError_ = "Invalid field 'folders': expected array";
+            return std::nullopt;
+        }
+        for (const auto& item : folders) {
+            if (!item.is_object()) {
+                lastError_ = "Invalid field 'folders[]': expected object";
+                return std::nullopt;
+            }
+
+            FolderTargetConfig ftc;
+            if (!item.contains("name") || !JsonValueToString(item["name"], ftc.folderName) ||
+                ftc.folderName.empty()) {
+                lastError_ = "Invalid field 'folders[].name': expected non-empty string";
+                return std::nullopt;
+            }
+
+            std::string target;
+            if (!item.contains("target") || !JsonValueToString(item["target"], target) ||
+                target.empty()) {
+                lastError_ = "Invalid field 'folders[].target': expected non-empty string";
+                return std::nullopt;
+            }
+
+            if (item.contains("appendDirectoryName") &&
+                !JsonValueToBool(item["appendDirectoryName"], ftc.appendDirectoryName)) {
+                lastError_ = "Invalid field 'folders[].appendDirectoryName': expected boolean";
+                return std::nullopt;
+            }
+
+            ftc.targetDirectory = target;
+            const std::string loweredTarget = ToLowerCopy(target);
+            if (loweredTarget == "installdirectory" || loweredTarget == "%installdir%") {
+                ftc.targetDirectory = "installDirectory";
+                ftc.dirType = SpecialDirectoryType::INSTALL_DIRECTORY;
+            } else if (loweredTarget.find("%localappdata%") != std::string::npos) {
+                ftc.dirType = SpecialDirectoryType::APPDATA_LOCAL;
+            } else if (loweredTarget.find("%appdata%") != std::string::npos) {
+                ftc.dirType = SpecialDirectoryType::APPDATA_ROAMING;
+            } else if (loweredTarget.find("%programfiles(x86)%") != std::string::npos) {
+                ftc.dirType = SpecialDirectoryType::PROGRAM_FILES_X86;
+            } else if (loweredTarget.find("%programfiles%") != std::string::npos) {
+                ftc.dirType = SpecialDirectoryType::PROGRAM_FILES;
+            } else if (loweredTarget.find("%programdata%") != std::string::npos) {
+                ftc.dirType = SpecialDirectoryType::PROGRAM_DATA;
+            } else if (loweredTarget.find("%userprofile%") != std::string::npos) {
+                ftc.dirType = SpecialDirectoryType::USER_PROFILE;
+            } else {
+                ftc.dirType = SpecialDirectoryType::INSTALL_DIRECTORY;
+            }
+
+            upsertFolderTarget(std::move(ftc));
+        }
+    }
+
     if (configObject.contains("Folder")) {
         if (!configObject["Folder"].is_object()) {
             lastError_ = "Invalid field 'Folder': expected object";
@@ -625,7 +718,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
             ftc.folderName = folderName;
             ftc.targetDirectory = "installDirectory";
             ftc.dirType = SpecialDirectoryType::INSTALL_DIRECTORY;
-            config.folderTargets.push_back(std::move(ftc));
+            upsertFolderTarget(std::move(ftc));
         }
 
         if (folderObj.contains("Roaming")) {
@@ -638,7 +731,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
             ftc.folderName = folderName;
             ftc.targetDirectory = "%AppData%\\Roaming";
             ftc.dirType = SpecialDirectoryType::APPDATA_ROAMING;
-            config.folderTargets.push_back(std::move(ftc));
+            upsertFolderTarget(std::move(ftc));
         }
 
         if (folderObj.contains("Local")) {
@@ -651,7 +744,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
             ftc.folderName = folderName;
             ftc.targetDirectory = "%LocalAppData%";
             ftc.dirType = SpecialDirectoryType::APPDATA_LOCAL;
-            config.folderTargets.push_back(std::move(ftc));
+            upsertFolderTarget(std::move(ftc));
         }
 
         if (folderObj.contains("ProgramFilesX86")) {
@@ -664,7 +757,33 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
             ftc.folderName = folderName;
             ftc.targetDirectory = "%ProgramFiles(x86)%";
             ftc.dirType = SpecialDirectoryType::PROGRAM_FILES_X86;
-            config.folderTargets.push_back(std::move(ftc));
+            upsertFolderTarget(std::move(ftc));
+        }
+
+        if (folderObj.contains("ProgramData")) {
+            std::string folderName;
+            if (!JsonValueToString(folderObj["ProgramData"], folderName)) {
+                lastError_ = "Invalid field 'Folder.ProgramData': expected string";
+                return std::nullopt;
+            }
+            FolderTargetConfig ftc;
+            ftc.folderName = folderName;
+            ftc.targetDirectory = "%ProgramData%";
+            ftc.dirType = SpecialDirectoryType::PROGRAM_DATA;
+            upsertFolderTarget(std::move(ftc));
+        }
+
+        if (folderObj.contains("UserProfile")) {
+            std::string folderName;
+            if (!JsonValueToString(folderObj["UserProfile"], folderName)) {
+                lastError_ = "Invalid field 'Folder.UserProfile': expected string";
+                return std::nullopt;
+            }
+            FolderTargetConfig ftc;
+            ftc.folderName = folderName;
+            ftc.targetDirectory = "%USERPROFILE%";
+            ftc.dirType = SpecialDirectoryType::USER_PROFILE;
+            upsertFolderTarget(std::move(ftc));
         }
     }
 
@@ -732,9 +851,10 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
         }
     }
 
-    config.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + config.applicationName;
-    config.installState.filePath = "%ProgramData%\\" + config.applicationName + "\\install.state";
-    config.installState.mutexName = "Global\\" + config.applicationName + "_Install";
+    const std::string effectiveIdentity = config.appId.empty() ? config.applicationName : config.appId;
+    config.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + effectiveIdentity;
+    config.installState.filePath = "%ProgramData%\\" + effectiveIdentity + "\\install.state";
+    config.installState.mutexName = "Global\\" + effectiveIdentity + "_Install";
 
     if (configObject.contains("InstallState")) {
         if (!configObject["InstallState"].is_object()) {

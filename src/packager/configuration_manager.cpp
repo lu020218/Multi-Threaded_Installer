@@ -13,14 +13,15 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory) {
 
     auto configOpt = loader_.loadConfiguration(inputDirectory);
     auto applyInstallStateDefaults = [](PackagerConfiguration& config) {
+        const std::string identity = config.appId.empty() ? config.applicationName : config.appId;
         if (config.installState.registryPath.empty()) {
-            config.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + config.applicationName;
+            config.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + identity;
         }
         if (config.installState.filePath.empty()) {
-            config.installState.filePath = "%ProgramData%\\" + config.applicationName + "\\install.state";
+            config.installState.filePath = "%ProgramData%\\" + identity + "\\install.state";
         }
         if (config.installState.mutexName.empty()) {
-            config.installState.mutexName = "Global\\" + config.applicationName + "_Install";
+            config.installState.mutexName = "Global\\" + identity + "_Install";
         }
     };
     

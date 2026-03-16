@@ -438,44 +438,25 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     }
     offset += sizeof(uint32_t);
     
-    if (offset + sizeof(uint32_t) > data.size()) {
-        std::cerr << "Missing application name length" << std::endl;
+    if (!ReadString(data, offset, metadata.applicationName, "applicationName")) {
         return metadata;
     }
-    uint32_t appNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-    offset += sizeof(uint32_t);
-    if (offset + appNameLen > data.size()) {
-        std::cerr << "Insufficient data for application name" << std::endl;
+    if (header->version >= 15) {
+        if (!ReadString(data, offset, metadata.appId, "appId") ||
+            (header->version >= 16 &&
+             !ReadString(data, offset, metadata.directoryName, "directoryName")) ||
+            !ReadStringList(data, offset, metadata.legacyAppIds, "legacyAppIds")) {
+            return metadata;
+        }
+    } else {
+        metadata.appId.clear();
+        metadata.directoryName.clear();
+        metadata.legacyAppIds.clear();
+    }
+    if (!ReadString(data, offset, metadata.defaultInstallDir, "defaultInstallDir") ||
+        !ReadString(data, offset, metadata.configVersion, "configVersion")) {
         return metadata;
     }
-    metadata.applicationName = std::string(reinterpret_cast<const char*>(data.data() + offset), appNameLen);
-    offset += appNameLen;
-    
-    if (offset + sizeof(uint32_t) > data.size()) {
-        std::cerr << "Missing install dir length" << std::endl;
-        return metadata;
-    }
-    uint32_t installDirLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-    offset += sizeof(uint32_t);
-    if (offset + installDirLen > data.size()) {
-        std::cerr << "Insufficient data for install dir" << std::endl;
-        return metadata;
-    }
-    metadata.defaultInstallDir = std::string(reinterpret_cast<const char*>(data.data() + offset), installDirLen);
-    offset += installDirLen;
-
-    if (offset + sizeof(uint32_t) > data.size()) {
-        std::cerr << "Missing config version length" << std::endl;
-        return metadata;
-    }
-    uint32_t configVersionLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-    offset += sizeof(uint32_t);
-    if (offset + configVersionLen > data.size()) {
-        std::cerr << "Insufficient data for config version" << std::endl;
-        return metadata;
-    }
-    metadata.configVersion = std::string(reinterpret_cast<const char*>(data.data() + offset), configVersionLen);
-    offset += configVersionLen;
 
     if (header->version >= 10) {
         if (offset + sizeof(uint32_t) > data.size()) {
@@ -492,6 +473,13 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         offset += webUrlLen;
     } else {
         metadata.webPageUrl.clear();
+    }
+
+    if (metadata.appId.empty()) {
+        metadata.appId = metadata.applicationName;
+    }
+    if (metadata.directoryName.empty()) {
+        metadata.directoryName = metadata.applicationName;
     }
 
     if (header->version >= 7) {
@@ -760,6 +748,17 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         }
         mapping.targetDirType = *reinterpret_cast<const SpecialDirectoryType*>(data.data() + offset);
         offset += sizeof(SpecialDirectoryType);
+
+        if (header->version >= 17) {
+            if (offset + sizeof(uint8_t) > data.size()) {
+                std::cerr << "Insufficient data for appendDirectoryName flag" << std::endl;
+                return metadata;
+            }
+            mapping.appendDirectoryName = data[offset] != 0;
+            offset += sizeof(uint8_t);
+        } else {
+            mapping.appendDirectoryName = true;
+        }
         
         if (offset + sizeof(uint32_t) > data.size()) {
             std::cerr << "Insufficient data for custom path length" << std::endl;

@@ -801,10 +801,38 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         currentPhaseProgress = 0.0f;
         emitStatus(currentStatus, currentPhase, 0.0f, "Running installation prechecks...");
 
+        const std::string effectiveAppId =
+            resolveEffectiveAppId(metadata.appId, metadata.applicationName);
+        const std::string effectiveDirectoryName =
+            resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName);
+        bool installDirectoryAppendName = true;
+        for (const auto& mapping : metadata.extendedMappings) {
+            if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
+                installDirectoryAppendName = mapping.appendDirectoryName;
+                break;
+            }
+        }
+        const std::vector<std::string> identityCandidates =
+            buildIdentityCandidates(metadata.appId, metadata.legacyAppIds, metadata.applicationName);
+
+        std::string previousManifest;
+        std::string previousInstallDir;
+        std::string matchedPreviousIdentity;
+        const bool hasPreviousInstall =
+            resolveExistingInstallInfo(identityCandidates,
+                                       pathResolver,
+                                       previousManifest,
+                                       previousInstallDir,
+                                       &matchedPreviousIdentity);
+
         std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
             options.installPath,
             SpecialDirectoryType::INSTALL_DIRECTORY,
-            metadata.applicationName);
+            effectiveDirectoryName,
+            installDirectoryAppendName);
+        if (hasPreviousInstall && !options.installPathExplicit && !previousInstallDir.empty()) {
+            resolvedInstallRoot = previousInstallDir;
+        }
         std::string diskCheckPath = resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot;
 
         ComponentSelectionPlan componentPlan;
@@ -938,12 +966,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             return result;
         }
 
-        std::string previousManifest;
-        std::string previousInstallDir;
-        if (resolveExistingInstallInfo(metadata.applicationName,
-                                       pathResolver,
-                                       previousManifest,
-                                       previousInstallDir)) {
+        if (hasPreviousInstall) {
             std::string normalizedOld = normalizePathForCompare(previousInstallDir);
             std::string normalizedNew = normalizePathForCompare(
                 resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot);
@@ -1401,28 +1424,12 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         }
 
         std::string languageCode = ResolveLanguageCode(options.languageCode);
-        std::string manifestPath = getDefaultManifestPath(metadata.applicationName, pathResolver);
-        if (!writeManifest(manifestPath,
-                           metadata.applicationName,
-                           metadata.configVersion,
-                           result.installRootPath,
-                           result.installedFiles,
-                           effectiveRegistry,
-                           effectiveKillProcesses,
-                           effectiveAutoStartup,
-                           effectiveDesktopIcons,
-                           metadata.installState,
-                           result.uninstallPath,
-                           languageCode,
-                           componentActions)) {
-            emitMessage(InstallServiceEventType::Warning,
-                        "Failed to write install manifest");
-        }
-
         if (!result.installRootPath.empty()) {
             std::filesystem::path localPath = PathFromUtf8(result.installRootPath) / "install.manifest.json";
             if (!writeManifest(Utf8FromPath(localPath),
+                               effectiveAppId,
                                metadata.applicationName,
+                               metadata.legacyAppIds,
                                metadata.configVersion,
                                result.installRootPath,
                                result.installedFiles,
@@ -1450,13 +1457,23 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
 #ifdef _WIN32
         if (options.writeUninstallRegistry && !result.uninstallPath.empty()) {
             bool perMachine = isRunningAsAdmin();
-            if (!writeUninstallRegistryEntry(metadata.applicationName,
+            if (!writeUninstallRegistryEntry(effectiveAppId,
                                              metadata.configVersion,
                                              result.installRootPath,
                                              result.uninstallPath,
                                              perMachine)) {
                 emitMessage(InstallServiceEventType::Warning,
                             "Failed to write uninstall registry entry");
+            }
+            for (const auto& legacyId : metadata.legacyAppIds) {
+                deleteUninstallRegistryEntry(legacyId, perMachine);
+                deleteUninstallRegistryEntry(legacyId, !perMachine);
+            }
+            if (!metadata.applicationName.empty() &&
+                normalizePathForCompare(metadata.applicationName) !=
+                    normalizePathForCompare(effectiveAppId)) {
+                deleteUninstallRegistryEntry(metadata.applicationName, perMachine);
+                deleteUninstallRegistryEntry(metadata.applicationName, !perMachine);
             }
         }
 #endif

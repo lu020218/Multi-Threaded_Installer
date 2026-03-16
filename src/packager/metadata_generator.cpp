@@ -47,6 +47,15 @@ void AppendUiLinks(std::vector<uint8_t>& out, const std::vector<UiLinkBinding>& 
     }
 }
 
+std::string ResolveEffectiveAppIdLocal(const std::string& appId, const std::string& applicationName) {
+    return appId.empty() ? applicationName : appId;
+}
+
+std::string ResolveEffectiveDirectoryNameLocal(const std::string& directoryName,
+                                               const std::string& applicationName) {
+    return directoryName.empty() ? applicationName : directoryName;
+}
+
 } // namespace
 
 InstallationMetadata MetadataGenerator::generateMetadata(const std::vector<CompressionResult>& results,
@@ -76,6 +85,10 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     
 
     metadata.applicationName = config.applicationName;
+    metadata.appId = ResolveEffectiveAppIdLocal(config.appId, config.applicationName);
+    metadata.directoryName =
+        ResolveEffectiveDirectoryNameLocal(config.directoryName, config.applicationName);
+    metadata.legacyAppIds = config.legacyAppIds;
     metadata.configVersion = config.version;
     metadata.defaultInstallDir = config.defaultInstallDir;
     metadata.webPageUrl = config.webPageUrl;
@@ -184,6 +197,13 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     AppendPod(serialized, extendedMarker);
     
     AppendString(serialized, metadata.applicationName);
+    if (header.version >= 15) {
+        AppendString(serialized, metadata.appId);
+        if (header.version >= 16) {
+            AppendString(serialized, metadata.directoryName);
+        }
+        AppendStringList(serialized, metadata.legacyAppIds);
+    }
     
     AppendString(serialized, metadata.defaultInstallDir);
 
@@ -303,6 +323,10 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
         
         const uint8_t* dirTypeBytes = reinterpret_cast<const uint8_t*>(&extMapping.targetDirType);
         serialized.insert(serialized.end(), dirTypeBytes, dirTypeBytes + sizeof(SpecialDirectoryType));
+
+        if (header.version >= 17) {
+            serialized.push_back(extMapping.appendDirectoryName ? 1 : 0);
+        }
         
         uint32_t customPathLen = static_cast<uint32_t>(extMapping.customTargetPath.length());
         const uint8_t* customPathLenBytes = reinterpret_cast<const uint8_t*>(&customPathLen);
@@ -399,11 +423,13 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
 
     mapping.targetDirType = SpecialDirectoryType::INSTALL_DIRECTORY;
     mapping.customTargetPath = "";
+    mapping.appendDirectoryName = true;
     
     for (const auto& folderTarget : config.folderTargets) {
         if (folderTarget.folderName == folderName) {
             mapping.targetDirType = folderTarget.dirType;
             mapping.customTargetPath = folderTarget.targetDirectory;
+            mapping.appendDirectoryName = folderTarget.appendDirectoryName;
             break;
         }
     }

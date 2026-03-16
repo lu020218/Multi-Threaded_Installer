@@ -21,7 +21,8 @@ enum class SpecialDirectoryType {
     PROGRAM_FILES_X86,  // %ProgramFiles(x86)%
     APPDATA_ROAMING,    // %AppData%
     APPDATA_LOCAL,      // %LocalAppData%
-    PROGRAM_DATA        // %ProgramData%
+    PROGRAM_DATA,       // %ProgramData%
+    USER_PROFILE        // %USERPROFILE%
 };
 
 
@@ -78,9 +79,11 @@ struct FolderTargetConfig {
     std::string folderName;
     std::string targetDirectory;
     SpecialDirectoryType dirType;
+    bool appendDirectoryName;
     
     FolderTargetConfig()
-        : dirType(SpecialDirectoryType::INSTALL_DIRECTORY) {}
+        : dirType(SpecialDirectoryType::INSTALL_DIRECTORY),
+          appendDirectoryName(true) {}
 };
 
 
@@ -183,6 +186,9 @@ struct UiComponentSelectionConfig {
 struct PackagerConfiguration {
     std::string version;
     std::string applicationName;
+    std::string appId;
+    std::string directoryName;
+    std::vector<std::string> legacyAppIds;
     std::string defaultInstallDir;
     std::string iconPath;
     std::string webPageUrl;
@@ -214,6 +220,8 @@ struct PackagerConfiguration {
     PackagerConfiguration() 
         : version("1.0"),
           applicationName("MyApplication"),
+          appId(""),
+          directoryName(""),
           defaultInstallDir("%ProgramFiles%"),
           compressionAlgorithm(CompressionAlgorithm::LZMA_HIGH),
           compressionLevel(-1),
@@ -275,12 +283,14 @@ struct FolderMapping {
 struct ExtendedFolderMapping : public FolderMapping {
     SpecialDirectoryType targetDirType;
     std::string customTargetPath;
+    bool appendDirectoryName;
     std::vector<FileIndexEntry> fileIndex;
     std::vector<BlockIndexEntry> blockIndex;
     
     ExtendedFolderMapping() 
         : FolderMapping(),
-          targetDirType(SpecialDirectoryType::INSTALL_DIRECTORY) {}
+          targetDirType(SpecialDirectoryType::INSTALL_DIRECTORY),
+          appendDirectoryName(true) {}
 };
 
 
@@ -296,6 +306,9 @@ struct InstallationMetadata {
 
 struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::string applicationName;
+    std::string appId;
+    std::string directoryName;
+    std::vector<std::string> legacyAppIds;
     std::string configVersion;
     std::string defaultInstallDir;
     std::string webPageUrl;
@@ -318,6 +331,8 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     ExtendedInstallationMetadata() 
         : InstallationMetadata(),
           applicationName("MyApplication"),
+          appId(""),
+          directoryName(""),
           configVersion("1.0"),
           defaultInstallDir("%ProgramFiles%"),
           webPageUrl(""),
@@ -362,7 +377,7 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;  // "MTDP"
-    constexpr uint32_t VERSION = 14;
+    constexpr uint32_t VERSION = 17;
     
 
     constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;

@@ -18,14 +18,14 @@ UninstallWorker::~UninstallWorker() {
     }
 }
 
-void UninstallWorker::StartUninstall(const std::string& appName) {
+void UninstallWorker::StartUninstall(const std::vector<std::string>& identityCandidates) {
     if (m_thread.joinable()) {
         m_thread.join();
     }
-    m_thread = std::thread(&UninstallWorker::WorkerThreadFunc, this, appName);
+    m_thread = std::thread(&UninstallWorker::WorkerThreadFunc, this, identityCandidates);
 }
 
-void UninstallWorker::WorkerThreadFunc(const std::string& appName) {
+void UninstallWorker::WorkerThreadFunc(const std::vector<std::string>& identityCandidates) {
     bool success = false;
     std::wstring errorMessage;
 
@@ -33,7 +33,7 @@ void UninstallWorker::WorkerThreadFunc(const std::string& appName) {
         InstallerPathResolver resolver;
         ConsoleInterface console;
         std::string exePath = getCurrentExecutablePath();
-        std::string manifestPath = resolveInstalledManifestPath(appName, exePath, resolver);
+        std::string manifestPath = resolveInstalledManifestPath(identityCandidates, exePath, resolver);
 
         if (manifestPath.empty()) {
             throw std::runtime_error("Manifest not found for uninstall");

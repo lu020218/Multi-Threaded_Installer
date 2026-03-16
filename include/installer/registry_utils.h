@@ -27,5 +27,8 @@ bool writeUninstallRegistryEntry(const std::string& appName,
                                  const std::string& uninstallExePath,
                                  bool perMachine);
 bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine);
+bool deleteMatchingUninstallRegistryEntries(const std::string& installDir,
+                                            const std::string& uninstallExePath,
+                                            bool perMachine);
 
 } // namespace MultiThreadedInstaller

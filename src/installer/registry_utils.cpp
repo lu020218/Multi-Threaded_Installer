@@ -69,6 +69,48 @@ std::string normalizeRegistrySubkey(const std::string& rawSubkey) {
     return normalized.substr(start, end - start);
 }
 
+std::string normalizePathForCompareLocal(const std::string& path) {
+    std::string normalized = path;
+    std::replace(normalized.begin(), normalized.end(), '/', '\\');
+    while (!normalized.empty() && (normalized.back() == '\\' || normalized.back() == '/')) {
+        normalized.pop_back();
+    }
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return normalized;
+}
+
+std::string extractExecutablePathFromCommand(const std::string& command) {
+    std::string trimmed = command;
+    trimmed.erase(trimmed.begin(), std::find_if(trimmed.begin(), trimmed.end(),
+                                                [](unsigned char c) { return !std::isspace(c); }));
+    if (trimmed.empty()) {
+        return {};
+    }
+    if (trimmed.front() == '"') {
+        size_t endQuote = trimmed.find('"', 1);
+        if (endQuote != std::string::npos) {
+            return trimmed.substr(1, endQuote - 1);
+        }
+    }
+    size_t firstSpace = trimmed.find_first_of(" \t");
+    return firstSpace == std::string::npos ? trimmed : trimmed.substr(0, firstSpace);
+}
+
+#ifdef _WIN32
+bool deleteRegistryTree(HKEY root, const std::string& subkey) {
+    std::wstring subkeyW = Utf8ToWide(subkey);
+    if (subkeyW.empty()) {
+        return false;
+    }
+    LONG status = RegDeleteTreeW(root, subkeyW.c_str());
+    if (status == ERROR_FILE_NOT_FOUND) {
+        return true;
+    }
+    return status == ERROR_SUCCESS;
+}
+#endif
+
 } // namespace
 
 std::string sanitizeRegistryKeyName(const std::string& name) {
@@ -446,18 +488,111 @@ bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine) {
         return false;
     }
 
-    std::wstring subkeyW = Utf8ToWide(subkey);
-    if (subkeyW.empty()) {
+    return deleteRegistryTree(root, subkey);
+#else
+    (void)appName;
+    (void)perMachine;
+    return false;
+#endif
+}
+
+bool deleteMatchingUninstallRegistryEntries(const std::string& installDir,
+                                            const std::string& uninstallExePath,
+                                            bool perMachine) {
+#ifdef _WIN32
+    const std::string normalizedInstallDir = normalizePathForCompareLocal(installDir);
+    const std::string normalizedUninstallExe = normalizePathForCompareLocal(uninstallExePath);
+    if (normalizedInstallDir.empty() && normalizedUninstallExe.empty()) {
         return false;
     }
 
-    LONG status = RegDeleteTreeW(root, subkeyW.c_str());
-    if (status == ERROR_FILE_NOT_FOUND) {
-        return true;
+    HKEY root = perMachine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
+    const wchar_t* uninstallSubkeyW = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+    HKEY uninstallKey = nullptr;
+    LONG status = RegOpenKeyExW(root, uninstallSubkeyW, 0, KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE, &uninstallKey);
+    if (status != ERROR_SUCCESS) {
+        return false;
     }
-    return status == ERROR_SUCCESS;
+
+    std::vector<std::string> matchedSubkeys;
+    DWORD index = 0;
+    wchar_t nameBuffer[512];
+    DWORD nameLen = static_cast<DWORD>(std::size(nameBuffer));
+    while (RegEnumKeyExW(uninstallKey, index, nameBuffer, &nameLen, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
+        std::wstring subkeyNameW(nameBuffer, nameLen);
+        std::string subkeyName = WideToUtf8(subkeyNameW);
+        std::string fullPath = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + subkeyName;
+
+        HKEY entryKey = nullptr;
+        if (RegOpenKeyExW(root, (std::wstring(uninstallSubkeyW) + L"\\" + subkeyNameW).c_str(),
+                          0, KEY_QUERY_VALUE, &entryKey) == ERROR_SUCCESS) {
+            auto queryString = [&](const wchar_t* valueName) -> std::string {
+                DWORD type = 0;
+                DWORD size = 0;
+                LONG queryStatus = RegQueryValueExW(entryKey, valueName, nullptr, &type, nullptr, &size);
+                if (queryStatus != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ) || size == 0) {
+                    return {};
+                }
+                std::wstring value;
+                value.resize(size / sizeof(wchar_t));
+                queryStatus = RegQueryValueExW(entryKey, valueName, nullptr, &type,
+                                               reinterpret_cast<BYTE*>(&value[0]), &size);
+                if (queryStatus != ERROR_SUCCESS) {
+                    return {};
+                }
+                if (!value.empty() && value.back() == L'\0') {
+                    value.pop_back();
+                }
+                if (type == REG_EXPAND_SZ) {
+                    DWORD expandedSize = ExpandEnvironmentStringsW(value.c_str(), nullptr, 0);
+                    if (expandedSize > 0) {
+                        std::wstring expanded(expandedSize, L'\0');
+                        if (ExpandEnvironmentStringsW(value.c_str(), expanded.data(), expandedSize) > 0) {
+                            if (!expanded.empty() && expanded.back() == L'\0') {
+                                expanded.pop_back();
+                            }
+                            return WideToUtf8(expanded);
+                        }
+                    }
+                }
+                return WideToUtf8(value);
+            };
+
+            const std::string entryInstallLocation = normalizePathForCompareLocal(queryString(L"InstallLocation"));
+            const std::string entryUninstallPath =
+                normalizePathForCompareLocal(extractExecutablePathFromCommand(queryString(L"UninstallString")));
+            RegCloseKey(entryKey);
+
+            bool matches = false;
+            if (!normalizedInstallDir.empty() && !entryInstallLocation.empty() &&
+                entryInstallLocation == normalizedInstallDir) {
+                matches = true;
+            }
+            if (!matches && !normalizedUninstallExe.empty() && !entryUninstallPath.empty() &&
+                entryUninstallPath == normalizedUninstallExe) {
+                matches = true;
+            }
+            if (matches) {
+                matchedSubkeys.push_back(fullPath);
+            }
+        }
+
+        ++index;
+        nameLen = static_cast<DWORD>(std::size(nameBuffer));
+    }
+
+    RegCloseKey(uninstallKey);
+
+    bool removedAny = false;
+    for (const auto& subkey : matchedSubkeys) {
+        if (deleteRegistryTree(root, subkey)) {
+            removedAny = true;
+        }
+    }
+    return removedAny;
 #else
-    (void)appName;
+    (void)installDir;
+    (void)uninstallExePath;
     (void)perMachine;
     return false;
 #endif

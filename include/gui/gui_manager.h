@@ -21,6 +21,10 @@ class UninstallWorker;
 
 struct InstallConfig {
     std::wstring applicationName;
+    std::wstring appId;
+    std::wstring directoryName;
+    std::vector<std::wstring> legacyAppIds;
+    bool installDirectoryAppendName;
     std::wstring version;
     std::wstring defaultInstallPath;
     std::wstring registryPath;
@@ -36,6 +40,9 @@ struct InstallConfig {
     
     InstallConfig()
         : applicationName(L"Application"),
+          appId(L""),
+          directoryName(L""),
+          installDirectoryAppendName(true),
           version(L"1.0.0"),
           defaultInstallPath(L"C:\\Program Files\\MyApp"),
           registryPath(L""),

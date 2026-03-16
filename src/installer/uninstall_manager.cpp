@@ -391,93 +391,57 @@ bool scheduleSelfDeleteImmediate(const std::vector<std::string>& cleanupRoots,
         return false;
     }
 
-    std::wstring scriptPath = std::wstring(tempFile) + L".ps1";
-    std::filesystem::path scriptFs(scriptPath);
-    std::ofstream script(scriptFs, std::ios::binary | std::ios::trunc);
-    if (!script) {
+    std::wstring helperPath = std::wstring(tempFile) + L".exe";
+    DeleteFileW(tempFile);
+    if (!CopyFileW(exePathW.c_str(), helperPath.c_str(), FALSE)) {
         return false;
     }
-
-    auto escapePs = [](const std::wstring& value) {
-        std::wstring escaped;
-        escaped.reserve(value.size() + 8);
+    auto quoteArg = [](const std::wstring& value) {
+        std::wstring quoted = L"\"";
         for (wchar_t ch : value) {
-            if (ch == L'\'') {
-                escaped += L"''";
-            } else {
-                escaped.push_back(ch);
+            if (ch == L'"') {
+                quoted += L'\\';
             }
+            quoted += ch;
         }
-        return escaped;
+        quoted += L"\"";
+        return quoted;
     };
 
-    const unsigned char bom[] = {0xEF, 0xBB, 0xBF};
-    script.write(reinterpret_cast<const char*>(bom), sizeof(bom));
-
-    auto writeUtf8Line = [&](const std::wstring& line) {
-        std::string utf8 = WideToUtf8(line);
-        script.write(utf8.c_str(), static_cast<std::streamsize>(utf8.size()));
-    };
-
-    writeUtf8Line(L"$ErrorActionPreference = 'SilentlyContinue'\r\n");
-    writeUtf8Line(L"Set-Location -LiteralPath $env:TEMP\r\n");
-    writeUtf8Line(L"$exePath = '" + escapePs(exePathW) + L"'\r\n");
+    std::wstring cmd = quoteArg(helperPath) +
+                       L" --cleanup-self --cleanup-parent-pid " +
+                       std::to_wstring(GetCurrentProcessId()) +
+                       L" --cleanup-exe " + quoteArg(exePathW);
     if (!manifestPath.empty()) {
         std::wstring manifestW = Utf8ToWide(manifestPath);
         if (!manifestW.empty()) {
-            writeUtf8Line(L"$manifestPath = '" + escapePs(manifestW) + L"'\r\n");
+            cmd += L" --cleanup-manifest " + quoteArg(manifestW);
         }
-    } else {
-        writeUtf8Line(L"$manifestPath = ''\r\n");
     }
-    writeUtf8Line(L"$cleanupRoots = @(\r\n");
     for (const auto& root : cleanupRoots) {
         if (root.empty()) {
             continue;
         }
         std::wstring rootW = Utf8ToWide(root);
         if (!rootW.empty()) {
-            writeUtf8Line(L"    '" + escapePs(rootW) + L"',\r\n");
+            cmd += L" --cleanup-root " + quoteArg(rootW);
         }
     }
-    writeUtf8Line(L")\r\n");
-    writeUtf8Line(L"function Remove-PathWithRetry([string]$path, [bool]$recurse) {\r\n");
-    writeUtf8Line(L"    if ([string]::IsNullOrWhiteSpace($path)) { return }\r\n");
-    writeUtf8Line(L"    for ($i = 0; $i -lt 120; $i++) {\r\n");
-    writeUtf8Line(L"        if (-not (Test-Path -LiteralPath $path)) { return }\r\n");
-    writeUtf8Line(L"        if ($recurse) {\r\n");
-    writeUtf8Line(L"            Remove-Item -LiteralPath $path -Force -Recurse -ErrorAction SilentlyContinue\r\n");
-    writeUtf8Line(L"        } else {\r\n");
-    writeUtf8Line(L"            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue\r\n");
-    writeUtf8Line(L"        }\r\n");
-    writeUtf8Line(L"        if (-not (Test-Path -LiteralPath $path)) { return }\r\n");
-    writeUtf8Line(L"        Start-Sleep -Milliseconds 500\r\n");
-    writeUtf8Line(L"    }\r\n");
-    writeUtf8Line(L"}\r\n");
-    writeUtf8Line(L"Remove-PathWithRetry -path $exePath -recurse $false\r\n");
-    writeUtf8Line(L"Start-Sleep -Milliseconds 1000\r\n");
-    writeUtf8Line(L"if ($manifestPath) {\r\n");
-    writeUtf8Line(L"    Remove-PathWithRetry -path $manifestPath -recurse $false\r\n");
-    writeUtf8Line(L"}\r\n");
-    writeUtf8Line(L"foreach ($root in $cleanupRoots) {\r\n");
-    writeUtf8Line(L"    Remove-PathWithRetry -path $root -recurse $true\r\n");
-    writeUtf8Line(L"}\r\n");
-    writeUtf8Line(L"Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue\r\n");
-    script.close();
 
-    std::wstring cmd =
-        L"powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
-        scriptPath + L"\"";
     STARTUPINFOW si{};
     PROCESS_INFORMATION pi{};
     si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
     std::vector<wchar_t> cmdLine(cmd.begin(), cmd.end());
     cmdLine.push_back(L'\0');
-    BOOL ok = CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr, FALSE,
+    BOOL ok = CreateProcessW(helperPath.c_str(), cmdLine.data(), nullptr, nullptr, FALSE,
                              CREATE_NO_WINDOW, nullptr, tempPath, &si, &pi);
     if (ok) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
+    } else {
+        DeleteFileW(helperPath.c_str());
     }
     return ok == TRUE;
 #else

@@ -143,6 +143,107 @@ static bool hasFlagWide(int argc, wchar_t** argv, const std::wstring& flag) {
     return hasFlagImpl(argc, argv, flag, ToLowerWideCopy);
 }
 
+static std::wstring getWideArgValue(int argc, wchar_t** argv, const std::wstring& flag) {
+    const std::wstring loweredFlag = ToLowerWideCopy(flag);
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (!argv[i]) {
+            continue;
+        }
+        std::wstring current = ToLowerWideCopy(argv[i]);
+        if (current == loweredFlag) {
+            return argv[i + 1] ? std::wstring(argv[i + 1]) : std::wstring();
+        }
+    }
+    return {};
+}
+
+static std::vector<std::wstring> collectWideArgValues(int argc,
+                                                      wchar_t** argv,
+                                                      const std::wstring& flag) {
+    std::vector<std::wstring> values;
+    const std::wstring loweredFlag = ToLowerWideCopy(flag);
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (!argv[i]) {
+            continue;
+        }
+        std::wstring current = ToLowerWideCopy(argv[i]);
+        if (current == loweredFlag && argv[i + 1]) {
+            values.emplace_back(argv[i + 1]);
+            ++i;
+        }
+    }
+    return values;
+}
+
+static bool removePathWithRetry(const std::filesystem::path& path, bool recursive) {
+    if (path.empty()) {
+        return true;
+    }
+    for (int attempt = 0; attempt < 120; ++attempt) {
+        std::error_code existsEc;
+        if (!std::filesystem::exists(path, existsEc)) {
+            return true;
+        }
+        std::error_code removeEc;
+        if (recursive) {
+            std::filesystem::remove_all(path, removeEc);
+        } else {
+            std::filesystem::remove(path, removeEc);
+        }
+        std::error_code existsAfterEc;
+        if (!std::filesystem::exists(path, existsAfterEc)) {
+            return true;
+        }
+        Sleep(500);
+    }
+    std::error_code finalExistsEc;
+    return !std::filesystem::exists(path, finalExistsEc);
+}
+
+static int runCleanupHelperWithWideArgs(int argc, wchar_t** argv) {
+    std::wstring parentPidValue = getWideArgValue(argc, argv, L"--cleanup-parent-pid");
+    DWORD parentPid = 0;
+    if (!parentPidValue.empty()) {
+        parentPid = static_cast<DWORD>(std::wcstoul(parentPidValue.c_str(), nullptr, 10));
+    }
+
+    if (parentPid != 0) {
+        HANDLE parentHandle = OpenProcess(SYNCHRONIZE, FALSE, parentPid);
+        if (parentHandle) {
+            WaitForSingleObject(parentHandle, 60000);
+            CloseHandle(parentHandle);
+        } else {
+            Sleep(1000);
+        }
+    }
+
+    const std::wstring cleanupExe = getWideArgValue(argc, argv, L"--cleanup-exe");
+    const std::wstring cleanupManifest = getWideArgValue(argc, argv, L"--cleanup-manifest");
+    const std::vector<std::wstring> cleanupRoots =
+        collectWideArgValues(argc, argv, L"--cleanup-root");
+
+    if (!cleanupExe.empty()) {
+        removePathWithRetry(cleanupExe, false);
+    }
+    if (!cleanupManifest.empty()) {
+        removePathWithRetry(cleanupManifest, false);
+    }
+    for (const auto& root : cleanupRoots) {
+        if (!root.empty()) {
+            removePathWithRetry(root, true);
+        }
+    }
+
+    std::string helperExePath = getCurrentExecutablePath();
+    if (!helperExePath.empty()) {
+        std::wstring helperExeWide = Utf8ToWide(helperExePath);
+        if (!helperExeWide.empty()) {
+            MoveFileExW(helperExeWide.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+        }
+    }
+    return 0;
+}
+
 static int runConsoleInstallerWithWideArgs() {
     int argc = 0;
     LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -1039,6 +1140,14 @@ int runConsoleInstaller(int argc, char* argv[]) {
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     int argc = 0;
     LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
+    bool cleanupMode = argvW ? hasFlagWide(argc, argvW, L"--cleanup-self") : false;
+    if (cleanupMode) {
+        int exitCode = runCleanupHelperWithWideArgs(argc, argvW);
+        if (argvW) {
+            LocalFree(argvW);
+        }
+        return exitCode;
+    }
     bool silentMode = argvW ? (hasFlagWide(argc, argvW, L"-s") ||
                                hasFlagWide(argc, argvW, L"--silent")) : false;
     bool debugMode = argvW ? hasFlagWide(argc, argvW, L"--debug") : false;
@@ -1228,6 +1337,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
 // NOTE: Comment text normalized to avoid encoding mojibake.
 int main(int argc, char* argv[]) {
+    bool cleanupMode = hasFlag(argc, argv, "--cleanup-self");
+    if (cleanupMode) {
+#ifdef _WIN32
+        int wideArgc = 0;
+        LPWSTR* wideArgv = CommandLineToArgvW(GetCommandLineW(), &wideArgc);
+        if (!wideArgv) {
+            return 1;
+        }
+        int exitCode = runCleanupHelperWithWideArgs(wideArgc, wideArgv);
+        LocalFree(wideArgv);
+        return exitCode;
+#else
+        return 0;
+#endif
+    }
     bool silentMode = hasFlag(argc, argv, "-s") || hasFlag(argc, argv, "--silent");
     bool debugMode = hasFlag(argc, argv, "--debug");
 

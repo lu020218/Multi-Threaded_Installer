@@ -391,53 +391,83 @@ bool scheduleSelfDeleteImmediate(const std::vector<std::string>& cleanupRoots,
         return false;
     }
 
-    std::wstring scriptPath = std::wstring(tempFile) + L".cmd";
+    std::wstring scriptPath = std::wstring(tempFile) + L".ps1";
     std::filesystem::path scriptFs(scriptPath);
     std::ofstream script(scriptFs, std::ios::binary | std::ios::trunc);
     if (!script) {
         return false;
     }
 
-    auto writeLine = [&](const std::wstring& line) {
-        script.write(reinterpret_cast<const char*>(line.c_str()),
-                     static_cast<std::streamsize>(line.size() * sizeof(wchar_t)));
+    auto escapePs = [](const std::wstring& value) {
+        std::wstring escaped;
+        escaped.reserve(value.size() + 8);
+        for (wchar_t ch : value) {
+            if (ch == L'\'') {
+                escaped += L"''";
+            } else {
+                escaped.push_back(ch);
+            }
+        }
+        return escaped;
     };
 
-    const unsigned char bom[] = {0xFF, 0xFE};
+    const unsigned char bom[] = {0xEF, 0xBB, 0xBF};
     script.write(reinterpret_cast<const char*>(bom), sizeof(bom));
 
-    writeLine(L"@echo off\r\n");
-    writeLine(L"cd /d \"%TEMP%\"\r\n");
-    writeLine(L":repeat\r\n");
-    writeLine(L"del /f /q \"" + exePathW + L"\" >nul 2>&1\r\n");
-    writeLine(L"if exist \"" + exePathW + L"\" (\r\n");
-    writeLine(L"  ping 127.0.0.1 -n 2 >nul\r\n");
-    writeLine(L"  goto repeat\r\n");
-    writeLine(L")\r\n");
+    auto writeUtf8Line = [&](const std::wstring& line) {
+        std::string utf8 = WideToUtf8(line);
+        script.write(utf8.c_str(), static_cast<std::streamsize>(utf8.size()));
+    };
 
+    writeUtf8Line(L"$ErrorActionPreference = 'SilentlyContinue'\r\n");
+    writeUtf8Line(L"Set-Location -LiteralPath $env:TEMP\r\n");
+    writeUtf8Line(L"$exePath = '" + escapePs(exePathW) + L"'\r\n");
     if (!manifestPath.empty()) {
         std::wstring manifestW = Utf8ToWide(manifestPath);
         if (!manifestW.empty()) {
-            writeLine(L"if exist \"" + manifestW + L"\" del /f /q \"" + manifestW + L"\" >nul 2>&1\r\n");
+            writeUtf8Line(L"$manifestPath = '" + escapePs(manifestW) + L"'\r\n");
         }
+    } else {
+        writeUtf8Line(L"$manifestPath = ''\r\n");
     }
+    writeUtf8Line(L"$cleanupRoots = @(\r\n");
     for (const auto& root : cleanupRoots) {
         if (root.empty()) {
             continue;
         }
         std::wstring rootW = Utf8ToWide(root);
-        if (rootW.empty()) {
-            continue;
+        if (!rootW.empty()) {
+            writeUtf8Line(L"    '" + escapePs(rootW) + L"',\r\n");
         }
-        writeLine(L"if exist \"" + rootW + L"\" (\r\n");
-        writeLine(L"  for /f \"delims=\" %%d in ('dir /ad /b /s \"" + rootW + L"\" ^| sort /r') do rmdir \"%%d\" 2>nul\r\n");
-        writeLine(L"  rmdir \"" + rootW + L"\" 2>nul\r\n");
-        writeLine(L")\r\n");
     }
-    writeLine(L"del /f /q \"%~f0\" >nul 2>&1\r\n");
+    writeUtf8Line(L")\r\n");
+    writeUtf8Line(L"function Remove-PathWithRetry([string]$path, [bool]$recurse) {\r\n");
+    writeUtf8Line(L"    if ([string]::IsNullOrWhiteSpace($path)) { return }\r\n");
+    writeUtf8Line(L"    for ($i = 0; $i -lt 120; $i++) {\r\n");
+    writeUtf8Line(L"        if (-not (Test-Path -LiteralPath $path)) { return }\r\n");
+    writeUtf8Line(L"        if ($recurse) {\r\n");
+    writeUtf8Line(L"            Remove-Item -LiteralPath $path -Force -Recurse -ErrorAction SilentlyContinue\r\n");
+    writeUtf8Line(L"        } else {\r\n");
+    writeUtf8Line(L"            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue\r\n");
+    writeUtf8Line(L"        }\r\n");
+    writeUtf8Line(L"        if (-not (Test-Path -LiteralPath $path)) { return }\r\n");
+    writeUtf8Line(L"        Start-Sleep -Milliseconds 500\r\n");
+    writeUtf8Line(L"    }\r\n");
+    writeUtf8Line(L"}\r\n");
+    writeUtf8Line(L"Remove-PathWithRetry -path $exePath -recurse $false\r\n");
+    writeUtf8Line(L"Start-Sleep -Milliseconds 1000\r\n");
+    writeUtf8Line(L"if ($manifestPath) {\r\n");
+    writeUtf8Line(L"    Remove-PathWithRetry -path $manifestPath -recurse $false\r\n");
+    writeUtf8Line(L"}\r\n");
+    writeUtf8Line(L"foreach ($root in $cleanupRoots) {\r\n");
+    writeUtf8Line(L"    Remove-PathWithRetry -path $root -recurse $true\r\n");
+    writeUtf8Line(L"}\r\n");
+    writeUtf8Line(L"Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue\r\n");
     script.close();
 
-    std::wstring cmd = L"cmd.exe /d /c call \"" + scriptPath + L"\"";
+    std::wstring cmd =
+        L"powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
+        scriptPath + L"\"";
     STARTUPINFOW si{};
     PROCESS_INFORMATION pi{};
     si.cb = sizeof(si);

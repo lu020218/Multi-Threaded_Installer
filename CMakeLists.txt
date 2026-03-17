@@ -321,6 +321,10 @@ set(COMMON_SOURCES
     src/common/utf8_utils.cpp
 )
 
+set(POST_SETUP_AGENT_SOURCES
+    src/post_setup_agent/main.cpp
+)
+
 # Create packager executable
 add_executable(packager ${PACKAGER_SOURCES} ${COMMON_SOURCES})
 target_link_libraries(packager ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads ${YAML_CPP_LIBRARIES})
@@ -344,6 +348,15 @@ if(LIBLZMA_STATIC)
 endif()
 apply_msvc_liblzma_link_fixes(installer)
 copy_dlls_to_target(installer)
+
+add_executable(post_setup_agent ${POST_SETUP_AGENT_SOURCES} src/common/utf8_utils.cpp)
+target_link_libraries(post_setup_agent Threads::Threads)
+if(WIN32)
+    target_link_libraries(post_setup_agent winhttp bcrypt advapi32 user32)
+endif()
+if(MSVC)
+    target_compile_definitions(post_setup_agent PRIVATE UNICODE _UNICODE)
+endif()
 
 if(MSVC)
     target_compile_definitions(installer PRIVATE UNICODE _UNICODE)

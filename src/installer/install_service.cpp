@@ -390,6 +390,35 @@ std::string ExpandInstallDirToken(const std::string& text, const std::string& in
     return expanded;
 }
 
+std::string ExpandRuntimeTokens(const std::string& text,
+                                const std::string& installDir,
+                                const ExtendedInstallationMetadata& metadata,
+                                InstallerPathResolver& resolver,
+                                const std::string& componentInstallDir = {}) {
+    if (text.empty()) {
+        return text;
+    }
+
+    std::string expanded = ExpandInstallDirToken(text, installDir);
+    const std::vector<std::pair<std::string, std::string>> tokens = {
+        { "%AppVersion%", metadata.configVersion },
+        { "%AppId%", resolveEffectiveAppId(metadata.appId, metadata.applicationName) },
+        { "%DirectoryName%", resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName) },
+        { "%ComponentInstallDir%", componentInstallDir }
+    };
+    for (const auto& token : tokens) {
+        if (token.second.empty()) {
+            continue;
+        }
+        size_t position = 0;
+        while ((position = expanded.find(token.first, position)) != std::string::npos) {
+            expanded.replace(position, token.first.size(), token.second);
+            position += token.second.size();
+        }
+    }
+    return resolver.expandEnvironmentVariables(expanded);
+}
+
 std::string NormalizePathString(const std::filesystem::path& path) {
     std::string value = Utf8FromPath(path.lexically_normal());
     std::replace(value.begin(), value.end(), '/', '\\');
@@ -1170,11 +1199,25 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                 if (component->source.type == ComponentSourceType::LOCAL) {
 #ifdef _WIN32
                     const std::string baseUtf8 =
-                        ExpandInstallDirToken(component->source.local.base, installRootForComponents);
+                        ExpandRuntimeTokens(component->source.local.base,
+                                            installRootForComponents,
+                                            metadata,
+                                            pathResolver);
                     std::filesystem::path basePath = PathFromUtf8(baseUtf8);
                     std::filesystem::path installerPath =
                         basePath / PathFromUtf8(component->source.local.installer);
                     installerPath = installerPath.lexically_normal();
+                    const std::string componentInstallDir =
+                        ExpandRuntimeTokens(component->source.local.base,
+                                            installRootForComponents,
+                                            metadata,
+                                            pathResolver);
+                    const std::string expandedArgs =
+                        ExpandRuntimeTokens(component->source.local.args,
+                                            installRootForComponents,
+                                            metadata,
+                                            pathResolver,
+                                            componentInstallDir);
 
                     if (!IsPathUnderBase(basePath, installerPath)) {
                         componentError = "Local installer path escapes component base directory.";
@@ -1184,7 +1227,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                         DWORD exitCode = 0;
                         std::string executeError;
                         if (!ExecuteProcess(installerPath,
-                                            component->source.local.args,
+                                            expandedArgs,
                                             component->source.local.wait,
                                             component->source.local.timeoutSec,
                                             options.cancellationCallback,
@@ -1199,8 +1242,12 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                             ComponentExecutionRecord record;
                             record.componentId = component->id;
                             record.sourceType = "local";
-                            record.uninstallCommand = ExpandInstallDirToken(component->source.local.uninstall,
-                                                                             installRootForComponents);
+                            record.uninstallCommand =
+                                ExpandRuntimeTokens(component->source.local.uninstall,
+                                                    installRootForComponents,
+                                                    metadata,
+                                                    pathResolver,
+                                                    componentInstallDir);
                             record.workingDirectory = Utf8FromPath(basePath);
                             record.wait = component->source.local.wait;
                             record.timeoutSec = component->source.local.timeoutSec;
@@ -1216,18 +1263,35 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                     if (saveAs.empty()) {
                         saveAs = "%InstallDir%\\downloads\\" + component->id + "_setup.bin";
                     }
-                    std::string targetUtf8 = ExpandInstallDirToken(saveAs, installRootForComponents);
+                    const std::string componentInstallDir;
+                    std::string targetUtf8 = ExpandRuntimeTokens(saveAs,
+                                                                 installRootForComponents,
+                                                                 metadata,
+                                                                 pathResolver,
+                                                                 componentInstallDir);
                     std::filesystem::path targetPath = PathFromUtf8(targetUtf8);
                     if (!targetPath.is_absolute()) {
                         targetPath = PathFromUtf8(installRootForComponents) / targetPath;
                     }
                     targetPath = targetPath.lexically_normal();
 
+                    const std::string downloadUrl =
+                        ExpandRuntimeTokens(component->source.download.url,
+                                            installRootForComponents,
+                                            metadata,
+                                            pathResolver,
+                                            componentInstallDir);
+                    const std::string expandedArgs =
+                        ExpandRuntimeTokens(component->source.download.args,
+                                            installRootForComponents,
+                                            metadata,
+                                            pathResolver,
+                                            componentInstallDir);
                     if (!IsPathUnderBase(PathFromUtf8(installRootForComponents), targetPath)) {
                         componentError = "Downloaded installer target path must stay under install directory.";
                     } else {
                         std::string downloadError;
-                        if (!DownloadFile(component->source.download.url, targetPath, downloadError)) {
+                        if (!DownloadFile(downloadUrl, targetPath, downloadError)) {
                             componentError = downloadError.empty() ? "Failed to download component installer."
                                                                    : downloadError;
                         } else {
@@ -1248,7 +1312,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                     DWORD exitCode = 0;
                                     std::string executeError;
                                     if (!ExecuteProcess(targetPath,
-                                                        component->source.download.args,
+                                                        expandedArgs,
                                                         component->source.download.wait,
                                                         component->source.download.timeoutSec,
                                                         options.cancellationCallback,
@@ -1266,8 +1330,11 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                         record.componentId = component->id;
                                         record.sourceType = "download";
                                         record.uninstallCommand =
-                                            ExpandInstallDirToken(component->source.download.uninstall,
-                                                                  installRootForComponents);
+                                            ExpandRuntimeTokens(component->source.download.uninstall,
+                                                                installRootForComponents,
+                                                                metadata,
+                                                                pathResolver,
+                                                                componentInstallDir);
                                         record.workingDirectory = Utf8FromPath(targetPath.parent_path());
                                         record.wait = component->source.download.wait;
                                         record.timeoutSec = component->source.download.timeoutSec;

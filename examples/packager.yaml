@@ -96,6 +96,23 @@ components:
         timeoutSec: 900
         uninstall: "%InstallDir%\\components\\ppt_plugin\\uninstall_ppt_plugin.bat"
 
+  - id: post_setup_agent
+    name: Post Setup Agent
+    description: Fetch remote runtime config and apply environment setup.
+    required: true
+    defaultSelected: true
+    dependsOn:
+      - main_app
+    sizeHintMB: 5
+    source:
+      type: local
+      local:
+        base: "%InstallDir%\\components"
+        installer: "post_setup_agent\\post_setup_agent.exe"
+        args: "--install-dir \"%InstallDir%\" --app-version \"%AppVersion%\" --config-url \"https://example.com/runtime-config.json\" --state-path \"%ProgramData%\\%AppId%\\post_setup_state.json\" --log-path \"%ProgramData%\\%AppId%\\post_setup_agent.log\""
+        wait: true
+        timeoutSec: 1800
+
 ui:
   links:
     - control: btnChrome

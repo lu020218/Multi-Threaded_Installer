@@ -105,6 +105,29 @@ static std::vector<std::string> GetManifestLegacyAppIds(const json& manifest) {
     return legacyAppIds;
 }
 
+static std::vector<UninstallCleanupRule> GetManifestCleanupRules(const json& manifest) {
+    std::vector<UninstallCleanupRule> rules;
+    if (!manifest.contains("uninstallCleanupRules") || !manifest["uninstallCleanupRules"].is_array()) {
+        return rules;
+    }
+    for (const auto& item : manifest["uninstallCleanupRules"]) {
+        if (!item.is_object()) {
+            continue;
+        }
+        UninstallCleanupRule rule;
+        if (!item.contains("path") || !item["path"].is_string()) {
+            continue;
+        }
+        rule.path = item["path"].get<std::string>();
+        rule.recursive = item.value("recursive", true);
+        rule.onlyIfEmpty = item.value("onlyIfEmpty", false);
+        if (!rule.path.empty()) {
+            rules.push_back(std::move(rule));
+        }
+    }
+    return rules;
+}
+
 static bool ExistingInstallDirectoryLooksValid(const std::string& path) {
     if (path.empty()) {
         return false;
@@ -114,12 +137,41 @@ static bool ExistingInstallDirectoryLooksValid(const std::string& path) {
            std::filesystem::is_directory(PathFromUtf8(path), ec);
 }
 
+static std::string ExpandInstallDirTokenLocal(const std::string& text,
+                                              const std::string& installDir) {
+    if (text.empty()) {
+        return text;
+    }
+    const std::string token = "%InstallDir%";
+    std::string expanded = text;
+    size_t position = 0;
+    while ((position = expanded.find(token, position)) != std::string::npos) {
+        expanded.replace(position, token.size(), installDir);
+        position += installDir.size();
+    }
+    return expanded;
+}
+
+static bool IsDirectoryEmptySafe(const std::filesystem::path& path) {
+    std::error_code ec;
+    return std::filesystem::is_directory(path, ec) && std::filesystem::is_empty(path, ec);
+}
+
+static std::string ExpandCleanupRulePath(const UninstallCleanupRule& rule,
+                                         const std::string& installDir,
+                                         InstallerPathResolver& resolver) {
+    std::string expanded = ExpandInstallDirTokenLocal(rule.path, installDir);
+    return resolver.expandEnvironmentVariables(expanded);
+}
+
 bool writeManifest(const std::string& manifestPath,
                    const std::string& appId,
                    const std::string& displayName,
                    const std::vector<std::string>& legacyAppIds,
                    const std::string& configVersion,
                    const std::string& installDir,
+                   const std::vector<std::string>& cleanupRoots,
+                   const std::vector<UninstallCleanupRule>& uninstallCleanupRules,
                    const std::vector<std::string>& filePaths,
                    const std::vector<RegistryEntry>& registry,
                    const std::vector<std::string>& installKillProcesses,
@@ -143,6 +195,16 @@ bool writeManifest(const std::string& manifestPath,
         root["configVersion"] = ensureUtf8(configVersion);
         root["installDir"] = ensureUtf8(installDir);
         root["uninstallPath"] = ensureUtf8(uninstallPath);
+        root["cleanupRoots"] = EnsureUtf8List(cleanupRoots);
+        json cleanup = json::array();
+        for (const auto& rule : uninstallCleanupRules) {
+            json item;
+            item["path"] = ensureUtf8(rule.path);
+            item["recursive"] = rule.recursive;
+            item["onlyIfEmpty"] = rule.onlyIfEmpty;
+            cleanup.push_back(std::move(item));
+        }
+        root["uninstallCleanupRules"] = std::move(cleanup);
 
         std::vector<std::string> safeFiles;
         safeFiles.reserve(filePaths.size());
@@ -718,9 +780,17 @@ bool uninstallFromManifest(const std::string& manifestPath,
         }
     }
     console.showInfo("Manifest files: " + std::to_string(files.size()));
+    std::vector<UninstallCleanupRule> uninstallCleanupRules = GetManifestCleanupRules(manifest);
 
     std::vector<std::string> cleanupRoots;
-    if (!displayName.empty()) {
+    if (manifest.contains("cleanupRoots") && manifest["cleanupRoots"].is_array()) {
+        for (const auto& item : manifest["cleanupRoots"]) {
+            if (item.is_string()) {
+                cleanupRoots.push_back(item.get<std::string>());
+            }
+        }
+    }
+    if (cleanupRoots.empty() && !displayName.empty()) {
         std::string appLower = displayName;
         std::transform(appLower.begin(), appLower.end(), appLower.begin(), ::tolower);
         for (const auto& file : files) {
@@ -1038,6 +1108,43 @@ bool uninstallFromManifest(const std::string& manifestPath,
         }
 
         completeWorkUnit("Removing install root: " + root);
+    }
+
+    for (const auto& rule : uninstallCleanupRules) {
+        if (isCancelled()) {
+            console.showWarning("Uninstall cancelled while running cleanup rules");
+            return false;
+        }
+        const std::string expandedPath = ExpandCleanupRulePath(rule, installDir, resolver);
+        if (expandedPath.empty()) {
+            continue;
+        }
+        std::filesystem::path cleanupPath = PathFromUtf8(expandedPath);
+        std::error_code existsEc;
+        if (!std::filesystem::exists(cleanupPath, existsEc)) {
+            continue;
+        }
+
+        if (rule.onlyIfEmpty) {
+            if (std::filesystem::is_directory(cleanupPath, existsEc) &&
+                !IsDirectoryEmptySafe(cleanupPath)) {
+                console.showInfo("Skipping non-empty cleanup path: " + expandedPath);
+                continue;
+            }
+        }
+
+        std::error_code removeEc;
+        if (rule.recursive && std::filesystem::is_directory(cleanupPath, existsEc)) {
+            std::filesystem::remove_all(toLongPath(cleanupPath), removeEc);
+        } else {
+            std::filesystem::remove(toLongPath(cleanupPath), removeEc);
+        }
+
+        if (removeEc && std::filesystem::exists(cleanupPath)) {
+            console.showWarning("Failed to remove cleanup path: " + expandedPath);
+        } else {
+            console.showInfo("Removed cleanup path: " + expandedPath);
+        }
     }
 
     removeInstallStateArtifacts(installState, resolver);

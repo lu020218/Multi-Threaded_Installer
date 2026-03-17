@@ -113,6 +113,18 @@ ui:
             - chkChrome
             - chkPPt
 
+cleanup:
+  onUninstall:
+    - path: "%LocalAppData%\\MyDesktopApp\\Cache"
+      recursive: true
+      onlyIfEmpty: false
+    - path: "%LocalAppData%\\MyDesktopApp\\Logs"
+      recursive: true
+      onlyIfEmpty: false
+    - path: "%LocalAppData%\\MyDesktopApp"
+      recursive: true
+      onlyIfEmpty: true
+
 flow:
   install:
     - id: precheck

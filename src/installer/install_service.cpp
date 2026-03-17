@@ -1432,6 +1432,8 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                metadata.legacyAppIds,
                                metadata.configVersion,
                                result.installRootPath,
+                               result.installedRoots,
+                               metadata.uninstallCleanupRules,
                                result.installedFiles,
                                effectiveRegistry,
                                effectiveKillProcesses,

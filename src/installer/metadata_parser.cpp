@@ -240,6 +240,35 @@ bool ReadUiLinks(const std::vector<uint8_t>& data,
     return true;
 }
 
+bool ReadCleanupRules(const std::vector<uint8_t>& data,
+                      size_t& offset,
+                      std::vector<UninstallCleanupRule>& out) {
+    uint32_t count = 0;
+    if (!ReadPod<uint32_t>(data, offset, count)) {
+        std::cerr << "Missing cleanup rule count" << std::endl;
+        return false;
+    }
+    out.clear();
+    out.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        UninstallCleanupRule rule;
+        if (!ReadString(data, offset, rule.path, "cleanup.path")) {
+            return false;
+        }
+        uint8_t recursive = 0;
+        uint8_t onlyIfEmpty = 0;
+        if (!ReadPod<uint8_t>(data, offset, recursive) ||
+            !ReadPod<uint8_t>(data, offset, onlyIfEmpty)) {
+            std::cerr << "Missing cleanup rule flags" << std::endl;
+            return false;
+        }
+        rule.recursive = recursive != 0;
+        rule.onlyIfEmpty = onlyIfEmpty != 0;
+        out.push_back(std::move(rule));
+    }
+    return true;
+}
+
 } // namespace
 
 InstallationMetadata MetadataParser::parseEmbeddedMetadata() {
@@ -691,10 +720,18 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         } else {
             metadata.uiLinks.clear();
         }
+        if (header->version >= 18) {
+            if (!ReadCleanupRules(data, offset, metadata.uninstallCleanupRules)) {
+                return metadata;
+            }
+        } else {
+            metadata.uninstallCleanupRules.clear();
+        }
     } else {
         metadata.components.clear();
         metadata.componentUi = UiComponentSelectionConfig();
         metadata.uiLinks.clear();
+        metadata.uninstallCleanupRules.clear();
     }
 
     for (uint32_t i = 0; i < header->folderCount; ++i) {

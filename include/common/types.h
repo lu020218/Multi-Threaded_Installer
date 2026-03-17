@@ -169,6 +169,14 @@ struct UiLinkBinding {
     std::string url;
 };
 
+struct UninstallCleanupRule {
+    std::string path;
+    bool recursive;
+    bool onlyIfEmpty;
+
+    UninstallCleanupRule() : recursive(true), onlyIfEmpty(false) {}
+};
+
 
 struct UiComponentSelectionConfig {
     std::string mode;        // dedicatedPage | embeddedInExistingPages | hybrid
@@ -206,6 +214,7 @@ struct PackagerConfiguration {
     std::vector<ComponentConfig> components;
     UiComponentSelectionConfig componentUi;
     std::vector<UiLinkBinding> uiLinks;
+    std::vector<UninstallCleanupRule> uninstallCleanupRules;
     bool autoStartup;
     bool desktopIcons;
     bool autoCleanOldInstall;
@@ -327,6 +336,7 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::vector<ComponentConfig> components;
     UiComponentSelectionConfig componentUi;
     std::vector<UiLinkBinding> uiLinks;
+    std::vector<UninstallCleanupRule> uninstallCleanupRules;
     
     ExtendedInstallationMetadata() 
         : InstallationMetadata(),
@@ -377,7 +387,7 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;  // "MTIP"
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;  // "MTDP"
-    constexpr uint32_t VERSION = 17;
+    constexpr uint32_t VERSION = 18;
     
 
     constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;

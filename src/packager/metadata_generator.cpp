@@ -47,6 +47,16 @@ void AppendUiLinks(std::vector<uint8_t>& out, const std::vector<UiLinkBinding>& 
     }
 }
 
+void AppendCleanupRules(std::vector<uint8_t>& out, const std::vector<UninstallCleanupRule>& values) {
+    uint32_t count = static_cast<uint32_t>(values.size());
+    AppendPod(out, count);
+    for (const auto& rule : values) {
+        AppendString(out, rule.path);
+        out.push_back(rule.recursive ? 1 : 0);
+        out.push_back(rule.onlyIfEmpty ? 1 : 0);
+    }
+}
+
 std::string ResolveEffectiveAppIdLocal(const std::string& appId, const std::string& applicationName) {
     return appId.empty() ? applicationName : appId;
 }
@@ -106,6 +116,7 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.components = config.components;
     metadata.componentUi = config.componentUi;
     metadata.uiLinks = config.uiLinks;
+    metadata.uninstallCleanupRules = config.uninstallCleanupRules;
     
     uint64_t currentOffset = 0;
     for (size_t i = 0; i < results.size() && i < folderInfos.size(); ++i) {
@@ -290,6 +301,9 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
 
         if (header.version >= 14) {
             AppendUiLinks(serialized, metadata.uiLinks);
+        }
+        if (header.version >= 18) {
+            AppendCleanupRules(serialized, metadata.uninstallCleanupRules);
         }
     }
 

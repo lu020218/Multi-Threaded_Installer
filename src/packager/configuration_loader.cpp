@@ -185,14 +185,10 @@ void SetNormalizedFieldIfMissing(json& target,
 }
 
 json NormalizeStructuredConfigSchema(const json& root) {
-    if (!root.is_object() || !IsStructuredConfigSchema(root)) {
-        return root;
-    }
-
     json normalized = root;
 
-    if (root.contains("package") && root["package"].is_object()) {
-        const json& package = root["package"];
+    if (normalized.contains("package") && normalized["package"].is_object()) {
+        const json& package = normalized["package"];
         SetNormalizedFieldIfMissing(normalized, "Version", package, "version");
         SetNormalizedFieldIfMissing(normalized, "AppName", package, "appName");
         SetNormalizedFieldIfMissing(normalized, "AppId", package, "appId");
@@ -210,8 +206,8 @@ json NormalizeStructuredConfigSchema(const json& root) {
         SetNormalizedFieldIfMissing(normalized, "compressionLevel", package, "compressionLevel");
     }
 
-    if (root.contains("install") && root["install"].is_object()) {
-        const json& install = root["install"];
+    if (normalized.contains("install") && normalized["install"].is_object()) {
+        const json& install = normalized["install"];
         SetNormalizedFieldIfMissing(normalized, "InstallDir", install, "defaultInstallDir");
         SetNormalizedFieldIfMissing(normalized, "AutoStartup", install, "autoStartup");
         SetNormalizedFieldIfMissing(normalized, "DesktopIcons", install, "desktopIcons");
@@ -247,45 +243,16 @@ json NormalizeStructuredConfigSchema(const json& root) {
         }
     }
 
-    if (!normalized.contains("Registry") && root.contains("registry")) {
-        normalized["Registry"] = root["registry"];
+    if (!normalized.contains("Registry") && normalized.contains("registry")) {
+        normalized["Registry"] = normalized["registry"];
     }
 
-    if (root.contains("folders") && root["folders"].is_array()) {
-        json folderMap = json::object();
-        if (normalized.contains("Folder") && normalized["Folder"].is_object()) {
-            folderMap = normalized["Folder"];
-        }
-
-        for (const auto& item : root["folders"]) {
-            if (!item.is_object()) {
-                continue;
-            }
-            std::string folderName;
-            std::string target;
-            if (!item.contains("name") || !JsonValueToString(item["name"], folderName)) {
-                continue;
-            }
-            if (!item.contains("target") || !JsonValueToString(item["target"], target)) {
-                continue;
-            }
-
-            const std::string loweredTarget = ToLowerCopy(target);
-            if (loweredTarget == "installdirectory" || loweredTarget == "%installdir%") {
-                folderMap["InstallDir"] = folderName;
-            } else if (loweredTarget.find("%appdata%") != std::string::npos) {
-                folderMap["Roaming"] = folderName;
-            } else if (loweredTarget.find("%localappdata%") != std::string::npos) {
-                folderMap["Local"] = folderName;
-            } else if (loweredTarget.find("%programdata%") != std::string::npos) {
-                folderMap["ProgramData"] = folderName;
-            } else if (loweredTarget.find("%userprofile%") != std::string::npos) {
-                folderMap["UserProfile"] = folderName;
-            }
-        }
-
-        if (!folderMap.empty()) {
-            normalized["Folder"] = std::move(folderMap);
+    if (!normalized.contains("Cleanup") &&
+        normalized.contains("cleanup") && normalized["cleanup"].is_object()) {
+        const json& cleanup = normalized["cleanup"];
+        if (cleanup.contains("onUninstall")) {
+            normalized["Cleanup"] = json::object();
+            normalized["Cleanup"]["OnUninstall"] = cleanup["onUninstall"];
         }
     }
 
@@ -465,6 +432,12 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
             return std::nullopt;
         }
 
+        if (!IsStructuredConfigSchema(parsed)) {
+            lastError_ = "Unsupported JSON config schema in " + filePath +
+                         ": only the structured package/install/folders schema is supported";
+            return std::nullopt;
+        }
+
         return parseConfigObject(NormalizeStructuredConfigSchema(parsed), filePath, "JSON");
     } catch (const std::exception& e) {
         lastError_ = "Error parsing JSON configuration file: " + std::string(e.what());
@@ -496,6 +469,11 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseYamlConfig(
         }
 
         const json parsed = YamlNodeToJson(yamlRoot);
+        if (!IsStructuredConfigSchema(parsed)) {
+            lastError_ = "Unsupported YAML config schema in " + filePath +
+                         ": only the structured package/install/folders schema is supported";
+            return std::nullopt;
+        }
         return parseConfigObject(NormalizeStructuredConfigSchema(parsed), filePath, "YAML");
     } catch (const std::exception& e) {
         lastError_ = "Error parsing YAML configuration file: " + std::string(e.what());
@@ -697,92 +675,6 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
                 ftc.dirType = SpecialDirectoryType::INSTALL_DIRECTORY;
             }
 
-            upsertFolderTarget(std::move(ftc));
-        }
-    }
-
-    if (configObject.contains("Folder")) {
-        if (!configObject["Folder"].is_object()) {
-            lastError_ = "Invalid field 'Folder': expected object";
-            return std::nullopt;
-        }
-        const auto& folderObj = configObject["Folder"];
-
-        if (folderObj.contains("InstallDir")) {
-            std::string folderName;
-            if (!JsonValueToString(folderObj["InstallDir"], folderName)) {
-                lastError_ = "Invalid field 'Folder.InstallDir': expected string";
-                return std::nullopt;
-            }
-            FolderTargetConfig ftc;
-            ftc.folderName = folderName;
-            ftc.targetDirectory = "installDirectory";
-            ftc.dirType = SpecialDirectoryType::INSTALL_DIRECTORY;
-            upsertFolderTarget(std::move(ftc));
-        }
-
-        if (folderObj.contains("Roaming")) {
-            std::string folderName;
-            if (!JsonValueToString(folderObj["Roaming"], folderName)) {
-                lastError_ = "Invalid field 'Folder.Roaming': expected string";
-                return std::nullopt;
-            }
-            FolderTargetConfig ftc;
-            ftc.folderName = folderName;
-            ftc.targetDirectory = "%AppData%\\Roaming";
-            ftc.dirType = SpecialDirectoryType::APPDATA_ROAMING;
-            upsertFolderTarget(std::move(ftc));
-        }
-
-        if (folderObj.contains("Local")) {
-            std::string folderName;
-            if (!JsonValueToString(folderObj["Local"], folderName)) {
-                lastError_ = "Invalid field 'Folder.Local': expected string";
-                return std::nullopt;
-            }
-            FolderTargetConfig ftc;
-            ftc.folderName = folderName;
-            ftc.targetDirectory = "%LocalAppData%";
-            ftc.dirType = SpecialDirectoryType::APPDATA_LOCAL;
-            upsertFolderTarget(std::move(ftc));
-        }
-
-        if (folderObj.contains("ProgramFilesX86")) {
-            std::string folderName;
-            if (!JsonValueToString(folderObj["ProgramFilesX86"], folderName)) {
-                lastError_ = "Invalid field 'Folder.ProgramFilesX86': expected string";
-                return std::nullopt;
-            }
-            FolderTargetConfig ftc;
-            ftc.folderName = folderName;
-            ftc.targetDirectory = "%ProgramFiles(x86)%";
-            ftc.dirType = SpecialDirectoryType::PROGRAM_FILES_X86;
-            upsertFolderTarget(std::move(ftc));
-        }
-
-        if (folderObj.contains("ProgramData")) {
-            std::string folderName;
-            if (!JsonValueToString(folderObj["ProgramData"], folderName)) {
-                lastError_ = "Invalid field 'Folder.ProgramData': expected string";
-                return std::nullopt;
-            }
-            FolderTargetConfig ftc;
-            ftc.folderName = folderName;
-            ftc.targetDirectory = "%ProgramData%";
-            ftc.dirType = SpecialDirectoryType::PROGRAM_DATA;
-            upsertFolderTarget(std::move(ftc));
-        }
-
-        if (folderObj.contains("UserProfile")) {
-            std::string folderName;
-            if (!JsonValueToString(folderObj["UserProfile"], folderName)) {
-                lastError_ = "Invalid field 'Folder.UserProfile': expected string";
-                return std::nullopt;
-            }
-            FolderTargetConfig ftc;
-            ftc.folderName = folderName;
-            ftc.targetDirectory = "%USERPROFILE%";
-            ftc.dirType = SpecialDirectoryType::USER_PROFILE;
             upsertFolderTarget(std::move(ftc));
         }
     }
@@ -1298,6 +1190,46 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
                     return std::nullopt;
                 }
                 config.uiLinks.push_back(std::move(link));
+            }
+        }
+    }
+
+    if (configObject.contains("Cleanup")) {
+        if (!configObject["Cleanup"].is_object()) {
+            lastError_ = "Invalid field 'Cleanup': expected object";
+            return std::nullopt;
+        }
+        const auto& cleanup = configObject["Cleanup"];
+        if (cleanup.contains("OnUninstall")) {
+            const auto& onUninstall = cleanup["OnUninstall"];
+            if (!onUninstall.is_array()) {
+                lastError_ = "Invalid field 'Cleanup.OnUninstall': expected array";
+                return std::nullopt;
+            }
+            config.uninstallCleanupRules.clear();
+            for (const auto& item : onUninstall) {
+                if (!item.is_object()) {
+                    lastError_ = "Invalid field 'Cleanup.OnUninstall[]': expected object";
+                    return std::nullopt;
+                }
+                UninstallCleanupRule rule;
+                if (!item.contains("path") ||
+                    !JsonValueToString(item["path"], rule.path) ||
+                    rule.path.empty()) {
+                    lastError_ = "Invalid field 'Cleanup.OnUninstall[].path': expected non-empty string";
+                    return std::nullopt;
+                }
+                if (item.contains("recursive") &&
+                    !JsonValueToBool(item["recursive"], rule.recursive)) {
+                    lastError_ = "Invalid field 'Cleanup.OnUninstall[].recursive': expected boolean";
+                    return std::nullopt;
+                }
+                if (item.contains("onlyIfEmpty") &&
+                    !JsonValueToBool(item["onlyIfEmpty"], rule.onlyIfEmpty)) {
+                    lastError_ = "Invalid field 'Cleanup.OnUninstall[].onlyIfEmpty': expected boolean";
+                    return std::nullopt;
+                }
+                config.uninstallCleanupRules.push_back(std::move(rule));
             }
         }
     }

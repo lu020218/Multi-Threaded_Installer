@@ -1161,6 +1161,8 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         componentActions.reserve(executableComponentCount);
         std::unordered_set<std::string> failedOptionalComponentIds;
         failedOptionalComponentIds.reserve(executableComponentCount);
+        std::vector<std::string> failedOptionalComponentMessages;
+        failedOptionalComponentMessages.reserve(executableComponentCount);
 
         if (executableComponentCount > 0) {
             const std::string installRootForComponents = result.installRootPath.empty()
@@ -1358,6 +1360,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                     }
 
                     failedOptionalComponentIds.insert(component->id);
+                    failedOptionalComponentMessages.push_back(failureMessage);
                     emitMessage(InstallServiceEventType::Warning,
                                 failureMessage + " Continuing because component is optional.");
                     ++completedComponents;
@@ -1553,6 +1556,23 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         releaseResources();
 
         advanceFinalize(1.0f, "Finalization complete");
+
+        if (!failedOptionalComponentMessages.empty()) {
+            result.success = false;
+            result.errors.insert(result.errors.end(),
+                                 failedOptionalComponentMessages.begin(),
+                                 failedOptionalComponentMessages.end());
+            currentStatus = InstallServiceStatus::Failed;
+            emitMessage(InstallServiceEventType::Error,
+                        "Installation completed with component failures.");
+            EmitStatus(callbacks,
+                       currentStatus,
+                       InstallServicePhase::Finalizing,
+                       1.0f,
+                       calcOverall(InstallServicePhase::Finalizing, 1.0f),
+                       "Installation completed with component failures.");
+            return result;
+        }
 
         result.success = true;
         currentStatus = InstallServiceStatus::Completed;

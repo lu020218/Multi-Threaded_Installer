@@ -1786,36 +1786,62 @@ void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {
         m_pTabPages->SelectItem(GetCompletionPageIndex());
     }
     
+    CLabelUI* pCompletionTitle = static_cast<CLabelUI*>(
+        m_pm.FindControl(_T("completion_title")));
     CLabelUI* pResultMessageLabel = static_cast<CLabelUI*>(
         m_pm.FindControl(_T("result_message")));
-    if (pResultMessageLabel) {
-        if (pData->success) {
-            std::wstring text = GUIHelpers::GetLocalizedText(L"msg.install.success", L"");
-            pResultMessageLabel->SetText(WStringToTStr(text));
+    CControlUI* pSuccessIcon = m_pm.FindControl(_T("completion_success_icon"));
+    CControlUI* pFailureIcon = m_pm.FindControl(_T("completion_failure_icon"));
+    CCheckBoxUI* pOpenWebCheckbox = static_cast<CCheckBoxUI*>(
+        m_pm.FindControl(_T("open_web_checkbox")));
+    CButtonUI* pRunButton = static_cast<CButtonUI*>(m_pm.FindControl(_T("btnRun")));
+
+    if (pData->success) {
+        if (pCompletionTitle) {
+            pCompletionTitle->SetText(WStringToTStr(
+                GUIHelpers::GetLocalizedText(L"msg.install.success", L"")));
+            pCompletionTitle->SetTextColor(0xFF333333);
+        }
+        if (pResultMessageLabel) {
+            pResultMessageLabel->SetText(WStringToTStr(
+                GUIHelpers::GetLocalizedText(L"msg.install.success", L"")));
             pResultMessageLabel->SetTextColor(0xFF4CAF50);
-        } else {
-            std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.install.failed", L"");
-            std::wstring errorText = prefix + pData->errorMessage;
+        }
+        if (pSuccessIcon) {
+            pSuccessIcon->SetVisible(true);
+        }
+        if (pFailureIcon) {
+            pFailureIcon->SetVisible(false);
+        }
+        if (pRunButton) {
+            pRunButton->SetVisible(true);
+        }
+        if (pOpenWebCheckbox) {
+            pOpenWebCheckbox->SetVisible(!m_config.webPageUrl.empty());
+        }
+    } else {
+        if (pCompletionTitle) {
+            pCompletionTitle->SetText(WStringToTStr(
+                GUIHelpers::GetLocalizedText(L"msg.install.failed", L"")));
+            pCompletionTitle->SetTextColor(0xFFFF0000);
+        }
+        if (pResultMessageLabel) {
+            std::wstring errorText = pData->errorMessage;
+            if (errorText.empty()) {
+                errorText = GUIHelpers::GetLocalizedText(L"msg.error.install_failed", L"");
+            }
             pResultMessageLabel->SetText(WStringToTStr(errorText));
             pResultMessageLabel->SetTextColor(0xFFFF0000);
         }
-    }
-    
-    if (!pData->success) {
-        CCheckBoxUI* pRunAppCheckbox = static_cast<CCheckBoxUI*>(
-            m_pm.FindControl(_T("run_app_checkbox")));
-        if (pRunAppCheckbox) {
-            pRunAppCheckbox->SetVisible(false);
+        if (pSuccessIcon) {
+            pSuccessIcon->SetVisible(false);
         }
-        
-        CCheckBoxUI* pOpenWebCheckbox = static_cast<CCheckBoxUI*>(
-            m_pm.FindControl(_T("open_web_checkbox")));
-        if (pOpenWebCheckbox) {
-            pOpenWebCheckbox->SetVisible(false);
+        if (pFailureIcon) {
+            pFailureIcon->SetVisible(true);
         }
-    } else if (m_config.webPageUrl.empty()) {
-        CCheckBoxUI* pOpenWebCheckbox = static_cast<CCheckBoxUI*>(
-            m_pm.FindControl(_T("open_web_checkbox")));
+        if (pRunButton) {
+            pRunButton->SetVisible(false);
+        }
         if (pOpenWebCheckbox) {
             pOpenWebCheckbox->SetVisible(false);
         }

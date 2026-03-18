@@ -1,15 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Windows>
-<!-- 完成 -->
- <VerticalLayout >
-	<Control padding="240,100,0,0" width="80" height="80" bkimage="images\finish.png" />
-	
-	<HorizontalLayout float="true" pos="130,254,560,350" >
-	<Button name="btnClose" resourcetext="true" text="msg.finish" cursor="hand" font="3" width="140" height="36" textcolor="0xFF333333" normalimage="file='images\round_light.png'" hotimage="file='images\round_light_hover.png' " pushedimage="file='images\round_light_push.png'" textpadding="0,-1,0,0" align="center"/>
-	<Button name="btnRun" resourcetext="true" text="msg.launch" padding="20,0,0,0" cursor="hand" font="3" width="140" height="36" textcolor="0xFFFFFFFF" normalimage="file='images\round_dark.png'" hotimage="file='images\round_dark_hover.png' " pushedimage="file='images\round_dark_push.png'" textpadding="0,-1,0,0" align="center"/>
-	</HorizontalLayout>
-	<HorizontalLayout float="true" pos="130,210,560,240">
-		<CheckBox name="open_web_checkbox" width="180" font="0" textcolor="0xFFFFFFFF" resourcetext="true" text="msg.open_web" selectedimage="file='images\check_blue.png' dest='0,0,16,16'" normalimage="file='images\check_darkgray.png' dest='0,0,16,16'" selected="true"/>
-	</HorizontalLayout>
+ <VerticalLayout name="completion_page" padding="40,30,40,30">
+    <HorizontalLayout height="90">
+        <Control/>
+        <Control name="completion_success_icon" width="80" height="80" bkimage="images\finish.png"/>
+        <Control name="completion_failure_icon" visible="false" width="80" height="80" bkimage="images\warning.png"/>
+        <Control/>
+    </HorizontalLayout>
+
+    <Label name="completion_title" resourcetext="true" text="msg.install.success" font="2"
+           textcolor="#FF333333" align="center" height="34"/>
+    <Label name="result_message" resourcetext="true" text="msg.install.success" font="1"
+           textcolor="#FF4CAF50" align="center" padding="0,16,0,0" width="520" height="56"
+           showhtml="false"/>
+
+    <HorizontalLayout name="completion_options" height="30" padding="90,20,90,0">
+        <CheckBox name="open_web_checkbox" width="180" font="0" textcolor="0xFFFFFFFF"
+                  resourcetext="true" text="msg.open_web"
+                  selectedimage="file='images\check_blue.png' dest='0,0,16,16'"
+                  normalimage="file='images\check_darkgray.png' dest='0,0,16,16'" selected="true"/>
+        <Control/>
+    </HorizontalLayout>
+
+    <Control/>
+
+    <HorizontalLayout name="completion_actions" height="36">
+        <Control/>
+        <Button name="btnClose" resourcetext="true" text="msg.finish" cursor="hand" font="3"
+                width="140" height="36" textcolor="0xFF333333"
+                normalimage="file='images\round_light.png'"
+                hotimage="file='images\round_light_hover.png'"
+                pushedimage="file='images\round_light_push.png'"
+                textpadding="0,-1,0,0" align="center"/>
+        <Button name="btnRun" resourcetext="true" text="msg.launch" padding="20,0,0,0"
+                cursor="hand" font="3" width="140" height="36" textcolor="0xFFFFFFFF"
+                normalimage="file='images\round_dark.png'"
+                hotimage="file='images\round_dark_hover.png'"
+                pushedimage="file='images\round_dark_push.png'"
+                textpadding="0,-1,0,0" align="center"/>
+        <Control/>
+    </HorizontalLayout>
  </VerticalLayout>
 </Windows>

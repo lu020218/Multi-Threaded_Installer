@@ -252,6 +252,7 @@ if (m_cancellationRequested) {
         };
         InstallServiceOptions serviceOptions;
         serviceOptions.installPath = installPathStr;
+        serviceOptions.installPathExplicit = true;
         serviceOptions.selectedComponentIds = m_selectedComponents;
         serviceOptions.languageCode = WideToUtf8(m_languageCode);
         serviceOptions.applyRegistryBeforeFinalize = true;

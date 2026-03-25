@@ -5,6 +5,7 @@
 #include "installer/install_state_utils.h"
 #include "installer/installer_helpers.h"
 #include "installer/registry_utils.h"
+#include "installer/upgrade_cleanup.h"
 #include "installer/uninstall_manager.h"
 
 #include <algorithm>
@@ -854,12 +855,16 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                        previousInstallDir,
                                        &matchedPreviousIdentity);
 
-        std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
+        const std::string requestedInstallRoot = pathResolver.resolveFinalPath(
             options.installPath,
             SpecialDirectoryType::INSTALL_DIRECTORY,
             effectiveDirectoryName,
             installDirectoryAppendName);
-        if (hasPreviousInstall && !options.installPathExplicit && !previousInstallDir.empty()) {
+        std::string resolvedInstallRoot = requestedInstallRoot;
+        if (hasPreviousInstall &&
+            !options.installPathExplicit &&
+            !options.cleanupOldInstallRequested &&
+            !previousInstallDir.empty()) {
             resolvedInstallRoot = previousInstallDir;
         }
         std::string diskCheckPath = resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot;
@@ -996,9 +1001,13 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         }
 
         if (hasPreviousInstall) {
+            std::string cleanupTargetInstallRoot = resolvedInstallRoot;
+            if (options.installPathExplicit || options.cleanupOldInstallRequested) {
+                cleanupTargetInstallRoot = requestedInstallRoot;
+            }
             std::string normalizedOld = normalizePathForCompare(previousInstallDir);
             std::string normalizedNew = normalizePathForCompare(
-                resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot);
+                cleanupTargetInstallRoot.empty() ? options.installPath : cleanupTargetInstallRoot);
             if (!normalizedOld.empty() && !normalizedNew.empty() && normalizedOld != normalizedNew) {
                 emitMessage(InstallServiceEventType::Info,
                             "Detected previous install at: " + previousInstallDir);
@@ -1014,18 +1023,19 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                "Cleaning previous installation...");
 
                     ConsoleInterface console;
-                    auto cleanupProgress = [&](const UninstallProgressInfo& info) {
+                    auto cleanupProgress = [&](const UpgradeCleanupProgressInfo& info) {
                         const std::string detail = info.currentItem.empty()
                                                        ? std::string("Cleaning previous installation")
                                                        : info.currentItem;
                         emitProgress("cleanup", detail, info.progress);
                     };
 
-                    if (!uninstallFromManifest(previousManifest,
-                                               pathResolver,
-                                               console,
-                                               cleanupProgress,
-                                               options.cancellationCallback)) {
+                    if (!cleanupPreviousInstallForUpgrade(previousManifest,
+                                                          previousInstallDir,
+                                                          cleanupTargetInstallRoot,
+                                                          console,
+                                                          cleanupProgress,
+                                                          options.cancellationCallback)) {
                         if (IsCancellationRequested(options)) {
                             markFailed("Installation cancelled.", true, true);
                             return result;

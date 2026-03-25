@@ -292,6 +292,7 @@ set(INSTALLER_SOURCES
     src/installer/registry_utils.cpp
     src/installer/install_state_utils.cpp
     src/installer/install_service.cpp
+    src/installer/upgrade_cleanup.cpp
     src/installer/uninstall_manager.cpp
     src/installer/main.cpp
     src/common/installer_parallel_install.cpp

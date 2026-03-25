@@ -19,9 +19,9 @@ package:
   compressionLevel: 9
 install:
   defaultInstallDir: "%ProgramFiles%"
-  autoStartup: false
+  autoStartup: true
   desktopIcons: true
-  autoCleanOldInstall: false
+  autoCleanOldInstall: true
   requireAdmin: true
   minWindowsVersion: 10.0.19041
   sparseFileThresholdBytes: 4194304

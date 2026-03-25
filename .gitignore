@@ -34,3 +34,4 @@ build/post_setup_agent.vcxproj
 build/post_setup_agent.vcxproj.filters
 build/ZERO_CHECK.vcxproj
 build/ZERO_CHECK.vcxproj.filters
+/build/Debug

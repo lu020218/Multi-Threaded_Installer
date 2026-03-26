@@ -43,6 +43,7 @@ private:
     std::mutex queueMutex;
     std::condition_variable condition;
     bool stopFlag;
+    size_t pendingTasks;
     
     size_t activeThreads;
     mutable std::mutex activeThreadsMutex;
@@ -71,6 +72,7 @@ auto ThreadPoolManager::enqueue(F&& f, Args&&... args) -> std::future<typename s
         }
         
         tasks.emplace([task]() { (*task)(); });
+        ++pendingTasks;
     }
     
     condition.notify_one();

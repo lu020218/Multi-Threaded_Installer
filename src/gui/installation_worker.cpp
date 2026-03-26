@@ -6,6 +6,7 @@
 #include "../../include/installer/installer_helpers.h"
 #include "../../include/installer/install_service.h"
 #include "common/utf8_utils.h"
+#include "common/installer_logger.h"
 
 #include <codecvt>
 #include <locale>
@@ -14,7 +15,6 @@
 #include <mutex>
 #include <atomic>
 #include <algorithm>
-#include <iostream>
 #include <unordered_map>
 #include <chrono>
 #ifdef _WIN32
@@ -171,7 +171,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
     auto logElapsed = [startTime](const char* label) {
         auto now = std::chrono::steady_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
-        std::cout << "[timing] " << label << " +" << ms << "ms" << std::endl;
+        logInstallerDebug(std::string("[GUI][timing] ") + label + " +" + std::to_string(ms) + "ms");
     };
     
     try {
@@ -179,7 +179,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
 PostProgressMessage(
             GUIHelpers::GetLocalizedText(L"msg.progress.preparing", L""),
             0.0f);
-        std::cout << "Installation started." << std::endl;
+        logInstallerInfo("[GUI] Installation started.");
         logElapsed("start");
         
         // NOTE: Comment text normalized to avoid encoding mojibake.
@@ -190,8 +190,8 @@ PostProgressMessage(
             throw std::runtime_error(WideToUtf8(
                 GUIHelpers::GetLocalizedText(L"msg.error.metadata_invalid", L"")));
         }
-        std::cout << "Metadata loaded. App=" << metadata.applicationName
-                  << " folders=" << metadata.folderCount << std::endl;
+        logInstallerInfo(std::string("[GUI] Metadata loaded. App=") + metadata.applicationName +
+                         " folders=" + std::to_string(metadata.folderCount));
         logElapsed("metadata_loaded");
 
         metadata.autoStartup = m_autoRun;
@@ -233,17 +233,17 @@ if (m_cancellationRequested) {
                     break;
                 }
                 case InstallServiceEventType::Info:
-                    std::cout << "INFO: " << event.message << std::endl;
+                    logInstallerInfo(std::string("[InstallService] ") + event.message);
                     break;
                 case InstallServiceEventType::Warning:
-                    std::cout << "WARN: " << event.message << std::endl;
+                    logInstallerWarning(std::string("[InstallService] ") + event.message);
                     break;
                 case InstallServiceEventType::Error:
-                    std::cout << "ERROR: " << event.message << std::endl;
+                    logInstallerError(std::string("[InstallService] ") + event.message);
                     break;
                 case InstallServiceEventType::Status:
                     if (!event.message.empty()) {
-                        std::cout << "STATUS: " << event.message << std::endl;
+                        logInstallerInfo(std::string("[InstallService][Status] ") + event.message);
                     }
                     break;
                 default:
@@ -263,7 +263,7 @@ if (m_cancellationRequested) {
             return m_cancellationRequested.load();
         };
 
-        std::cout << "Decompression engine initialized." << std::endl;
+        logInstallerInfo("[GUI] Decompression engine initialized.");
         logElapsed("decompression_init");
 
         InstallServiceResult serviceResult = ExecuteInstallService(
@@ -273,8 +273,8 @@ if (m_cancellationRequested) {
             serviceOptions,
             serviceCallbacks);
 
-        std::cout << "Decompression complete. success="
-                  << (serviceResult.success ? "true" : "false") << std::endl;
+        logInstallerInfo(std::string("[GUI] Decompression complete. success=") +
+                         (serviceResult.success ? "true" : "false"));
         logElapsed("decompression_complete");
 
         if (!serviceResult.success) {
@@ -299,7 +299,7 @@ if (m_cancellationRequested) {
 
         success = true;
         errorMessage = L"";
-        std::cout << "Installation completed successfully." << std::endl;
+        logInstallerInfo("[GUI] Installation completed successfully.");
         logElapsed("success");
     } catch (const std::filesystem::filesystem_error& e) {
         success = false;
@@ -315,7 +315,7 @@ if (m_cancellationRequested) {
             detail += e.path2().wstring();
         }
         errorMessage = detail;
-        std::cout << "Installation failed (filesystem): " << e.what() << std::endl;
+        logInstallerError(std::string("[GUI] Installation failed (filesystem): ") + e.what());
         logElapsed("failed_fs");
     } catch (const std::exception& e) {
         // NOTE: Comment text normalized to avoid encoding mojibake.
@@ -325,13 +325,13 @@ success = false;
         } else {
             errorMessage = Utf8ToWide(e.what());
         }
-        std::cout << "Installation failed: " << e.what() << std::endl;
+        logInstallerError(std::string("[GUI] Installation failed: ") + e.what());
         logElapsed("failed");
     } catch (...) {
         // NOTE: Comment text normalized to avoid encoding mojibake.
         success = false;
         errorMessage = GUIHelpers::GetLocalizedText(L"msg.error.unknown", L"");
-        std::cout << "Installation failed: unknown error." << std::endl;
+        logInstallerError("[GUI] Installation failed: unknown error.");
         logElapsed("failed_unknown");
     }
     

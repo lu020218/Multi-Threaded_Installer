@@ -1,5 +1,6 @@
 #include "installer/metadata_parser.h"
 #include "installer/installer_helpers.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <cstddef>
 #include <cstring>
@@ -15,6 +16,11 @@
 
 namespace MultiThreadedInstaller {
 namespace {
+
+#define META_LOG() \
+    do { \
+        logInstallerError(std::string("[Metadata] Parse/read error at line ") + std::to_string(__LINE__)); \
+    } while (0)
 
 bool IsSupportedMetadataVersion(uint32_t version) {
     return version >= 5 && version <= Constants::VERSION;
@@ -36,11 +42,11 @@ bool ReadString(const std::vector<uint8_t>& data,
                 const char* label) {
     uint32_t len = 0;
     if (!ReadPod<uint32_t>(data, offset, len)) {
-        std::cerr << "Missing " << label << " length" << std::endl;
+        META_LOG();
         return false;
     }
     if (offset + len > data.size()) {
-        std::cerr << "Insufficient data for " << label << std::endl;
+        META_LOG();
         return false;
     }
     out.assign(reinterpret_cast<const char*>(data.data() + offset), len);
@@ -54,7 +60,7 @@ bool ReadStringList(const std::vector<uint8_t>& data,
                     const char* label) {
     uint32_t count = 0;
     if (!ReadPod<uint32_t>(data, offset, count)) {
-        std::cerr << "Missing " << label << " count" << std::endl;
+        META_LOG();
         return false;
     }
     out.clear();
@@ -75,7 +81,7 @@ bool ReadRegistryList(const std::vector<uint8_t>& data,
                       const char* label) {
     uint32_t count = 0;
     if (!ReadPod<uint32_t>(data, offset, count)) {
-        std::cerr << "Missing " << label << " count" << std::endl;
+        META_LOG();
         return false;
     }
     out.clear();
@@ -88,7 +94,7 @@ bool ReadRegistryList(const std::vector<uint8_t>& data,
         }
         uint8_t valueType = 0;
         if (!ReadPod<uint8_t>(data, offset, valueType)) {
-            std::cerr << "Missing registry value type" << std::endl;
+            META_LOG();
             return false;
         }
         reg.type = static_cast<RegistryValueType>(valueType);
@@ -105,7 +111,7 @@ bool ReadComponentList(const std::vector<uint8_t>& data,
                        std::vector<ComponentConfig>& out) {
     uint32_t componentCount = 0;
     if (!ReadPod<uint32_t>(data, offset, componentCount)) {
-        std::cerr << "Missing component count" << std::endl;
+        META_LOG();
         return false;
     }
     out.clear();
@@ -122,14 +128,14 @@ bool ReadComponentList(const std::vector<uint8_t>& data,
         uint8_t defaultSelected = 0;
         if (!ReadPod<uint8_t>(data, offset, required) ||
             !ReadPod<uint8_t>(data, offset, defaultSelected)) {
-            std::cerr << "Missing component boolean flags" << std::endl;
+            META_LOG();
             return false;
         }
         component.required = required != 0;
         component.defaultSelected = defaultSelected != 0;
 
         if (!ReadPod<uint32_t>(data, offset, component.sizeHintMB)) {
-            std::cerr << "Missing component sizeHintMB" << std::endl;
+            META_LOG();
             return false;
         }
 
@@ -140,7 +146,7 @@ bool ReadComponentList(const std::vector<uint8_t>& data,
 
         uint8_t sourceType = 0;
         if (!ReadPod<uint8_t>(data, offset, sourceType)) {
-            std::cerr << "Missing component source type" << std::endl;
+            META_LOG();
             return false;
         }
         component.source.type = static_cast<ComponentSourceType>(sourceType);
@@ -181,7 +187,7 @@ bool ReadComponentList(const std::vector<uint8_t>& data,
         uint8_t autoStartup = 0;
         if (!ReadPod<uint8_t>(data, offset, createDesktopShortcut) ||
             !ReadPod<uint8_t>(data, offset, autoStartup)) {
-            std::cerr << "Missing component trailing boolean flags" << std::endl;
+            META_LOG();
             return false;
         }
         component.createDesktopShortcut = createDesktopShortcut != 0;
@@ -203,7 +209,7 @@ bool ReadComponentUiConfig(const std::vector<uint8_t>& data,
 
     uint32_t pageCount = 0;
     if (!ReadPod<uint32_t>(data, offset, pageCount)) {
-        std::cerr << "Missing componentUi.pages count" << std::endl;
+        META_LOG();
         return false;
     }
     out.pages.clear();
@@ -224,7 +230,7 @@ bool ReadUiLinks(const std::vector<uint8_t>& data,
                  std::vector<UiLinkBinding>& out) {
     uint32_t count = 0;
     if (!ReadPod<uint32_t>(data, offset, count)) {
-        std::cerr << "Missing ui.links count" << std::endl;
+        META_LOG();
         return false;
     }
     out.clear();
@@ -245,7 +251,7 @@ bool ReadCleanupRules(const std::vector<uint8_t>& data,
                       std::vector<UninstallCleanupRule>& out) {
     uint32_t count = 0;
     if (!ReadPod<uint32_t>(data, offset, count)) {
-        std::cerr << "Missing cleanup rule count" << std::endl;
+        META_LOG();
         return false;
     }
     out.clear();
@@ -259,7 +265,7 @@ bool ReadCleanupRules(const std::vector<uint8_t>& data,
         uint8_t onlyIfEmpty = 0;
         if (!ReadPod<uint8_t>(data, offset, recursive) ||
             !ReadPod<uint8_t>(data, offset, onlyIfEmpty)) {
-            std::cerr << "Missing cleanup rule flags" << std::endl;
+            META_LOG();
             return false;
         }
         rule.recursive = recursive != 0;
@@ -274,7 +280,7 @@ bool ReadCleanupRules(const std::vector<uint8_t>& data,
 InstallationMetadata MetadataParser::parseEmbeddedMetadata() {
     std::vector<uint8_t> embeddedData = dataPackagePath_.empty() ? readEmbeddedData() : readExternalMetadata();
     if (embeddedData.empty()) {
-        std::cerr << "No embedded data found" << std::endl;
+        META_LOG();
         return InstallationMetadata{};
     }
     
@@ -284,7 +290,7 @@ InstallationMetadata MetadataParser::parseEmbeddedMetadata() {
 ExtendedInstallationMetadata MetadataParser::parseExtendedEmbeddedMetadata() {
     std::vector<uint8_t> embeddedData = dataPackagePath_.empty() ? readEmbeddedData() : readExternalMetadata();
     if (embeddedData.empty()) {
-        std::cerr << "No embedded data found" << std::endl;
+        META_LOG();
         return ExtendedInstallationMetadata{};
     }
     
@@ -293,17 +299,17 @@ ExtendedInstallationMetadata MetadataParser::parseExtendedEmbeddedMetadata() {
 
 bool MetadataParser::validateMetadata(const InstallationMetadata& metadata) {
     if (!IsSupportedMetadataVersion(metadata.version)) {
-        std::cerr << "Unsupported metadata version: " << metadata.version << std::endl;
+        META_LOG();
         return false;
     }
     
     if (metadata.folderCount == 0) {
-        std::cerr << "No folders found in metadata" << std::endl;
+        META_LOG();
         return false;
     }
     
     if (metadata.folderMappings.size() != metadata.folderCount) {
-        std::cerr << "Folder mapping count mismatch" << std::endl;
+        META_LOG();
         return false;
     }
     
@@ -318,7 +324,7 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
     
     std::ifstream file(PathFromUtf8(executablePath), std::ios::binary);
     if (!file) {
-        std::cerr << "Failed to open executable file: " << executablePath << std::endl;
+        META_LOG();
         return {};
     }
     
@@ -338,7 +344,7 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
     file.read(reinterpret_cast<char*>(metadata.data()), locator.metadataSize);
     
     if (file.gcount() != static_cast<std::streamsize>(locator.metadataSize)) {
-        std::cerr << "Failed to read complete metadata" << std::endl;
+        META_LOG();
         return {};
     }
     
@@ -349,7 +355,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
     InstallationMetadata metadata;
     
     if (data.size() < sizeof(BinaryMetadata)) {
-        std::cerr << "Insufficient data for metadata header" << std::endl;
+        META_LOG();
         return metadata;
     }
     
@@ -370,7 +376,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         
 
         if (offset + sizeof(uint64_t) * 3 + sizeof(uint32_t) * 3 > data.size()) {
-            std::cerr << "Insufficient data for folder mapping " << i << " numeric fields" << std::endl;
+            META_LOG();
             break;
         }
         
@@ -392,7 +398,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         
 
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Insufficient data for folder name length" << std::endl;
+            META_LOG();
             break;
         }
         
@@ -400,7 +406,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         offset += sizeof(uint32_t);
         
         if (offset + folderNameLen > data.size()) {
-            std::cerr << "Insufficient data for folder name" << std::endl;
+            META_LOG();
             break;
         }
         
@@ -409,7 +415,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         
 
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Insufficient data for target path length" << std::endl;
+            META_LOG();
             break;
         }
         
@@ -417,7 +423,7 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         offset += sizeof(uint32_t);
         
         if (offset + targetPathLen > data.size()) {
-            std::cerr << "Insufficient data for target path" << std::endl;
+            META_LOG();
             break;
         }
         
@@ -440,7 +446,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     ExtendedInstallationMetadata metadata;
     
     if (data.size() < sizeof(BinaryMetadata)) {
-        std::cerr << "Insufficient data for metadata header" << std::endl;
+        META_LOG();
         return metadata;
     }
     
@@ -456,13 +462,13 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     size_t offset = sizeof(BinaryMetadata);
     
     if (offset + sizeof(uint32_t) > data.size()) {
-        std::cerr << "Missing extended marker" << std::endl;
+        META_LOG();
         return metadata;
     }
     
     uint32_t extendedMarker = *reinterpret_cast<const uint32_t*>(data.data() + offset);
     if (extendedMarker != 0x45585444) {
-        std::cerr << "Invalid extended marker" << std::endl;
+        META_LOG();
         return metadata;
     }
     offset += sizeof(uint32_t);
@@ -489,13 +495,13 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
 
     if (header->version >= 10) {
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Missing web page URL length" << std::endl;
+            META_LOG();
             return metadata;
         }
         uint32_t webUrlLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
         if (offset + webUrlLen > data.size()) {
-            std::cerr << "Insufficient data for web page URL" << std::endl;
+            META_LOG();
             return metadata;
         }
         metadata.webPageUrl = std::string(reinterpret_cast<const char*>(data.data() + offset), webUrlLen);
@@ -514,7 +520,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     if (header->version >= 7) {
         size_t flagCount = header->version >= 9 ? 4 : 3;
         if (offset + sizeof(uint8_t) * flagCount > data.size()) {
-            std::cerr << "Missing startup/desktop/admin flags" << std::endl;
+            META_LOG();
             return metadata;
         }
         metadata.autoStartup = data[offset] != 0;
@@ -524,7 +530,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         offset += sizeof(uint8_t) * flagCount;
     } else {
         if (offset + sizeof(uint8_t) * 2 > data.size()) {
-            std::cerr << "Missing startup/desktop flags" << std::endl;
+            META_LOG();
             return metadata;
         }
         metadata.autoStartup = data[offset] != 0;
@@ -536,7 +542,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
 
     if (header->version >= 8) {
         if (offset + sizeof(uint16_t) * 2 + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Missing minimum Windows version" << std::endl;
+            META_LOG();
             return metadata;
         }
         metadata.minWindowsMajor = *reinterpret_cast<const uint16_t*>(data.data() + offset);
@@ -553,7 +559,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
 
     if (header->version >= 6) {
         if (offset + sizeof(uint64_t) > data.size()) {
-            std::cerr << "Missing sparse file threshold" << std::endl;
+            META_LOG();
             return metadata;
         }
         metadata.sparseFileThresholdBytes = *reinterpret_cast<const uint64_t*>(data.data() + offset);
@@ -563,7 +569,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     }
 
     if (offset + sizeof(uint8_t) * 2 > data.size()) {
-        std::cerr << "Missing install state flags" << std::endl;
+        META_LOG();
         return metadata;
     }
     metadata.installState.mode = static_cast<InstallStateMode>(data[offset]);
@@ -571,59 +577,59 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     offset += sizeof(uint8_t) * 2;
 
     if (offset + sizeof(uint32_t) > data.size()) {
-        std::cerr << "Missing install state registry path length" << std::endl;
+        META_LOG();
         return metadata;
     }
     uint32_t regPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
     offset += sizeof(uint32_t);
     if (offset + regPathLen > data.size()) {
-        std::cerr << "Insufficient data for install state registry path" << std::endl;
+        META_LOG();
         return metadata;
     }
     metadata.installState.registryPath = std::string(reinterpret_cast<const char*>(data.data() + offset), regPathLen);
     offset += regPathLen;
 
     if (offset + sizeof(uint32_t) > data.size()) {
-        std::cerr << "Missing install state registry key length" << std::endl;
+        META_LOG();
         return metadata;
     }
     uint32_t regKeyLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
     offset += sizeof(uint32_t);
     if (offset + regKeyLen > data.size()) {
-        std::cerr << "Insufficient data for install state registry key" << std::endl;
+        META_LOG();
         return metadata;
     }
     metadata.installState.registryKey = std::string(reinterpret_cast<const char*>(data.data() + offset), regKeyLen);
     offset += regKeyLen;
 
     if (offset + sizeof(uint32_t) > data.size()) {
-        std::cerr << "Missing install state file path length" << std::endl;
+        META_LOG();
         return metadata;
     }
     uint32_t filePathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
     offset += sizeof(uint32_t);
     if (offset + filePathLen > data.size()) {
-        std::cerr << "Insufficient data for install state file path" << std::endl;
+        META_LOG();
         return metadata;
     }
     metadata.installState.filePath = std::string(reinterpret_cast<const char*>(data.data() + offset), filePathLen);
     offset += filePathLen;
 
     if (offset + sizeof(uint32_t) > data.size()) {
-        std::cerr << "Missing install state mutex name length" << std::endl;
+        META_LOG();
         return metadata;
     }
     uint32_t mutexNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
     offset += sizeof(uint32_t);
     if (offset + mutexNameLen > data.size()) {
-        std::cerr << "Insufficient data for install state mutex name" << std::endl;
+        META_LOG();
         return metadata;
     }
     metadata.installState.mutexName = std::string(reinterpret_cast<const char*>(data.data() + offset), mutexNameLen);
     offset += mutexNameLen;
 
     if (offset + sizeof(uint32_t) > data.size()) {
-        std::cerr << "Missing registry entry count" << std::endl;
+        META_LOG();
         return metadata;
     }
     uint32_t registryCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
@@ -631,13 +637,13 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     metadata.registry.reserve(registryCount);
     for (uint32_t r = 0; r < registryCount; ++r) {
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Missing registry path length" << std::endl;
+            META_LOG();
             return metadata;
         }
         uint32_t pathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
         if (offset + pathLen > data.size()) {
-            std::cerr << "Insufficient data for registry path" << std::endl;
+            META_LOG();
             return metadata;
         }
         RegistryEntry reg;
@@ -645,33 +651,33 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         offset += pathLen;
         
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Missing registry key length" << std::endl;
+            META_LOG();
             return metadata;
         }
         uint32_t keyLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
         if (offset + keyLen > data.size()) {
-            std::cerr << "Insufficient data for registry key" << std::endl;
+            META_LOG();
             return metadata;
         }
         reg.key = std::string(reinterpret_cast<const char*>(data.data() + offset), keyLen);
         offset += keyLen;
         
         if (offset + sizeof(uint8_t) > data.size()) {
-            std::cerr << "Missing registry value type" << std::endl;
+            META_LOG();
             return metadata;
         }
         reg.type = static_cast<RegistryValueType>(data[offset]);
         offset += sizeof(uint8_t);
         
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Missing registry value length" << std::endl;
+            META_LOG();
             return metadata;
         }
         uint32_t valueLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
         if (offset + valueLen > data.size()) {
-            std::cerr << "Insufficient data for registry value" << std::endl;
+            META_LOG();
             return metadata;
         }
         reg.value = std::string(reinterpret_cast<const char*>(data.data() + offset), valueLen);
@@ -682,7 +688,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     
     if (header->version >= 12) {
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Missing kill process count" << std::endl;
+            META_LOG();
             return metadata;
         }
         uint32_t killCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
@@ -690,13 +696,13 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         metadata.installKillProcesses.reserve(killCount);
         for (uint32_t k = 0; k < killCount; ++k) {
             if (offset + sizeof(uint32_t) > data.size()) {
-                std::cerr << "Missing kill process name length" << std::endl;
+                META_LOG();
                 return metadata;
             }
             uint32_t nameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
             offset += sizeof(uint32_t);
             if (offset + nameLen > data.size()) {
-                std::cerr << "Insufficient data for kill process name" << std::endl;
+                META_LOG();
                 return metadata;
             }
             metadata.installKillProcesses.emplace_back(reinterpret_cast<const char*>(data.data() + offset), nameLen);
@@ -738,7 +744,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         ExtendedFolderMapping mapping;
         
         if (offset + sizeof(uint64_t) * 3 + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Insufficient data for folder mapping numeric fields" << std::endl;
+            META_LOG();
             return metadata;
         }
         
@@ -754,33 +760,33 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         offset += sizeof(CompressionAlgorithm);
         
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Insufficient data for folder name length" << std::endl;
+            META_LOG();
             return metadata;
         }
         uint32_t folderNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
         if (offset + folderNameLen > data.size()) {
-            std::cerr << "Insufficient data for folder name" << std::endl;
+            META_LOG();
             return metadata;
         }
         mapping.folderName = std::string(reinterpret_cast<const char*>(data.data() + offset), folderNameLen);
         offset += folderNameLen;
         
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Insufficient data for target path length" << std::endl;
+            META_LOG();
             return metadata;
         }
         uint32_t targetPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
         if (offset + targetPathLen > data.size()) {
-            std::cerr << "Insufficient data for target path" << std::endl;
+            META_LOG();
             return metadata;
         }
         mapping.targetPath = std::string(reinterpret_cast<const char*>(data.data() + offset), targetPathLen);
         offset += targetPathLen;
         
         if (offset + sizeof(SpecialDirectoryType) > data.size()) {
-            std::cerr << "Insufficient data for target dir type" << std::endl;
+            META_LOG();
             return metadata;
         }
         mapping.targetDirType = *reinterpret_cast<const SpecialDirectoryType*>(data.data() + offset);
@@ -788,7 +794,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
 
         if (header->version >= 17) {
             if (offset + sizeof(uint8_t) > data.size()) {
-                std::cerr << "Insufficient data for appendDirectoryName flag" << std::endl;
+                META_LOG();
                 return metadata;
             }
             mapping.appendDirectoryName = data[offset] != 0;
@@ -798,20 +804,20 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         }
         
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Insufficient data for custom path length" << std::endl;
+            META_LOG();
             return metadata;
         }
         uint32_t customPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
         if (offset + customPathLen > data.size()) {
-            std::cerr << "Insufficient data for custom path" << std::endl;
+            META_LOG();
             return metadata;
         }
         mapping.customTargetPath = std::string(reinterpret_cast<const char*>(data.data() + offset), customPathLen);
         offset += customPathLen;
         
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Insufficient data for file count" << std::endl;
+            META_LOG();
             return metadata;
         }
         uint32_t fileCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
@@ -819,20 +825,20 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         mapping.fileIndex.reserve(fileCount);
         for (uint32_t f = 0; f < fileCount; ++f) {
             if (offset + sizeof(uint32_t) > data.size()) {
-                std::cerr << "Insufficient data for file path length" << std::endl;
+                META_LOG();
                 return metadata;
             }
             uint32_t pathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
             offset += sizeof(uint32_t);
             if (offset + pathLen > data.size()) {
-                std::cerr << "Insufficient data for file path" << std::endl;
+                META_LOG();
                 return metadata;
             }
             FileIndexEntry fileEntry;
             fileEntry.relativePath = std::string(reinterpret_cast<const char*>(data.data() + offset), pathLen);
             offset += pathLen;
             if (offset + sizeof(uint64_t) * 2 > data.size()) {
-                std::cerr << "Insufficient data for file entry" << std::endl;
+                META_LOG();
                 return metadata;
             }
             fileEntry.offset = *reinterpret_cast<const uint64_t*>(data.data() + offset);
@@ -843,7 +849,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         }
         
         if (offset + sizeof(uint32_t) > data.size()) {
-            std::cerr << "Insufficient data for block count" << std::endl;
+            META_LOG();
             return metadata;
         }
         uint32_t blockCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
@@ -851,7 +857,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         mapping.blockIndex.reserve(blockCount);
         for (uint32_t b = 0; b < blockCount; ++b) {
             if (offset + sizeof(uint32_t) + sizeof(uint64_t) * 3 + sizeof(uint32_t) > data.size()) {
-                std::cerr << "Insufficient data for block entry" << std::endl;
+                META_LOG();
                 return metadata;
             }
             BlockIndexEntry blockEntry;
@@ -901,7 +907,7 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
     
     std::ifstream file(PathFromUtf8(executablePath), std::ios::binary);
     if (!file) {
-        std::cerr << "Failed to open executable file: " << executablePath << std::endl;
+        META_LOG();
         return {};
     }
     
@@ -921,7 +927,7 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
 
     if (absoluteOffset >= logicalEnd ||
         absoluteOffset + size > logicalEnd) {
-        std::cerr << "Invalid data offset or size" << std::endl;
+        META_LOG();
         return {};
     }
     
@@ -931,7 +937,7 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
     file.read(reinterpret_cast<char*>(compressedData.data()), size);
     
     if (file.gcount() != static_cast<std::streamsize>(size)) {
-        std::cerr << "Failed to read complete compressed data" << std::endl;
+        META_LOG();
         return {};
     }
     
@@ -941,14 +947,14 @@ std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_
 std::vector<uint8_t> MetadataParser::readExternalMetadata() {
     std::ifstream file(PathFromUtf8(dataPackagePath_), std::ios::binary);
     if (!file) {
-        std::cerr << "Failed to open data package: " << dataPackagePath_ << std::endl;
+        META_LOG();
         return {};
     }
     
     DataPackageHeader header;
     file.read(reinterpret_cast<char*>(&header), sizeof(DataPackageHeader));
     if (!file || header.magic != Constants::DATA_MAGIC_NUMBER) {
-        std::cerr << "Invalid data package header" << std::endl;
+        META_LOG();
         return {};
     }
     
@@ -957,7 +963,7 @@ std::vector<uint8_t> MetadataParser::readExternalMetadata() {
     file.read(reinterpret_cast<char*>(metadata.data()), header.metadataSize);
     
     if (file.gcount() != static_cast<std::streamsize>(header.metadataSize)) {
-        std::cerr << "Failed to read complete metadata from data package" << std::endl;
+        META_LOG();
         return {};
     }
     
@@ -967,20 +973,20 @@ std::vector<uint8_t> MetadataParser::readExternalMetadata() {
 std::vector<uint8_t> MetadataParser::readExternalCompressedData(uint64_t offset, uint64_t size) {
     std::ifstream file(PathFromUtf8(dataPackagePath_), std::ios::binary);
     if (!file) {
-        std::cerr << "Failed to open data package: " << dataPackagePath_ << std::endl;
+        META_LOG();
         return {};
     }
     
     DataPackageHeader header;
     file.read(reinterpret_cast<char*>(&header), sizeof(DataPackageHeader));
     if (!file || header.magic != Constants::DATA_MAGIC_NUMBER) {
-        std::cerr << "Invalid data package header" << std::endl;
+        META_LOG();
         return {};
     }
     
     uint64_t absoluteOffset = header.dataOffset + offset;
     if (absoluteOffset + size > header.dataOffset + header.dataSize) {
-        std::cerr << "Invalid data offset or size for data package" << std::endl;
+        META_LOG();
         return {};
     }
     
@@ -989,7 +995,7 @@ std::vector<uint8_t> MetadataParser::readExternalCompressedData(uint64_t offset,
     file.read(reinterpret_cast<char*>(compressedData.data()), size);
     
     if (file.gcount() != static_cast<std::streamsize>(size)) {
-        std::cerr << "Failed to read complete compressed data from data package" << std::endl;
+        META_LOG();
         return {};
     }
     
@@ -998,12 +1004,12 @@ std::vector<uint8_t> MetadataParser::readExternalCompressedData(uint64_t offset,
 
 bool MetadataParser::validateHeader(const BinaryMetadata& header) {
     if (header.magic != Constants::MAGIC_NUMBER) {
-        std::cerr << "Invalid magic number in metadata header" << std::endl;
+        META_LOG();
         return false;
     }
     
     if (!IsSupportedMetadataVersion(header.version)) {
-        std::cerr << "Unsupported metadata version: " << header.version << std::endl;
+        META_LOG();
         return false;
     }
     
@@ -1016,7 +1022,7 @@ bool MetadataParser::readEmbeddedLocator(std::ifstream& file,
                                          DataLocator& locator) {
     EmbeddedDataLocatorRecord resolvedLocator;
     if (!findEmbeddedDataLocator(file, fileSize, logicalEnd, resolvedLocator)) {
-        std::cerr << "Invalid end magic number, no embedded data found" << std::endl;
+        META_LOG();
         return false;
     }
 
@@ -1028,13 +1034,13 @@ bool MetadataParser::readEmbeddedLocator(std::ifstream& file,
 
     if (locator.metadataOffset >= logicalEnd ||
         locator.metadataOffset + locator.metadataSize > logicalEnd) {
-        std::cerr << "Invalid metadata offset or size" << std::endl;
+        META_LOG();
         return false;
     }
 
     if (locator.dataOffset >= logicalEnd ||
         locator.dataOffset + locator.dataSize > logicalEnd) {
-        std::cerr << "Invalid data offset or size" << std::endl;
+        META_LOG();
         return false;
     }
 

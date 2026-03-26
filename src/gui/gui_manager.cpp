@@ -10,12 +10,12 @@
 #include "../../include/installer/uninstall_manager.h"
 #include "../../include/installer/registry_utils.h"
 #include "common/utf8_utils.h"
+#include "common/installer_logger.h"
 #include "Utils/unzip.h"
 #include <shlobj.h>
 #include <sstream>
 #include <iomanip>
 #include <vector>
-#include <iostream>
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
@@ -416,7 +416,7 @@ static bool HandleRunningApplicationDialog(HWND hWnd, const std::vector<std::str
         return joined;
     };
 
-    std::cout << "Terminating processes: " << joinNames(running) << std::endl;
+    logInstallerInfo(std::string("[GUI] Terminating processes: ") + joinNames(running));
     terminateProcessesByName(running);
     Sleep(500);
 
@@ -578,7 +578,8 @@ void GUIManager::InitWindow() {
         m_pTabPages->SelectItem(GetWelcomePageIndex());
     }
 
-    std::cout << "GUI mode uninstall=" << (m_uninstallMode ? "true" : "false") << std::endl;
+    logInstallerInfo(std::string("[GUI] GUI mode uninstall=") +
+                     (m_uninstallMode ? "true" : "false"));
     
     std::wstring installPath = ExpandEnvVars(m_config.defaultInstallPath);
 #ifdef _WIN32
@@ -782,10 +783,10 @@ bool GUIManager::EnsureInstallMetadataLoaded() {
         m_installMetadataLoaded = true;
         return true;
     } catch (const std::exception& ex) {
-        std::cout << "Failed to load install metadata: " << ex.what() << std::endl;
+        logInstallerError(std::string("[GUI] Failed to load install metadata: ") + ex.what());
         return false;
     } catch (...) {
-        std::cout << "Failed to load install metadata: unknown error." << std::endl;
+        logInstallerError("[GUI] Failed to load install metadata: unknown error.");
         return false;
     }
 }
@@ -802,7 +803,7 @@ void GUIManager::InitializeComponentSelectionUi() {
 
     for (const auto& warning : warnings) {
         if (!warning.empty()) {
-            std::cout << "WARN: " << warning << std::endl;
+            logInstallerWarning(std::string("[GUI] ") + warning);
         }
     }
 }
@@ -821,7 +822,7 @@ std::vector<std::string> GUIManager::CollectSelectedComponentsFromUi() {
 
     for (const auto& warning : warnings) {
         if (!warning.empty()) {
-            std::cout << "WARN: " << warning << std::endl;
+            logInstallerWarning(std::string("[GUI] ") + warning);
         }
     }
 
@@ -1377,10 +1378,11 @@ void GUIManager::OnShowMoreClick() {
         windowWidth,
         targetWindowHeight,
         SWP_NOZORDER | SWP_NOACTIVATE);
-    std::cout << "btnShowMore toggled=" << (show ? "true" : "false")
-               << " base=" << m_baseClientWidth << "x" << m_baseClientHeight
-               << " targetWindow=" << windowWidth << "x" << targetWindowHeight
-               << std::endl;
+    logInstallerDebug(std::string("[GUI] btnShowMore toggled=") + (show ? "true" : "false") +
+                      " base=" + std::to_string(m_baseClientWidth) + "x" +
+                      std::to_string(m_baseClientHeight) +
+                      " targetWindow=" + std::to_string(windowWidth) + "x" +
+                      std::to_string(targetWindowHeight));
     m_pm.NeedUpdate();
     m_pm.Invalidate();
 }
@@ -1554,7 +1556,7 @@ static bool RequestPreviousInstallCleanup(HWND hWnd,
     }
 
     if (previousManifest.empty()) {
-        std::cout << "Old install manifest not found; skipping cleanup prompt." << std::endl;
+        logInstallerInfo("[GUI] Old install manifest not found; skipping cleanup prompt.");
         return false;
     }
 
@@ -1860,8 +1862,9 @@ void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
 
     std::wstring appliedCode = code;
 
-    std::cout << "Language resource path: " << WideToUtf8(TCharToWide(CPaintManagerUI::GetResourcePath().GetData()))
-              << " file=" << WideToUtf8(langPath) << std::endl;
+    logInstallerInfo(std::string("[GUI] Language resource path: ") +
+                     WideToUtf8(TCharToWide(CPaintManagerUI::GetResourcePath().GetData())) +
+                     " file=" + WideToUtf8(langPath));
 
     if (!CResourceManager::GetInstance()->LoadLanguage(langPath.c_str())) {
         if (code != L"en_US") {
@@ -1870,13 +1873,16 @@ void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
                 CResourceManager::GetInstance()->LoadLanguage(fallbackPath.c_str())) {
                 CResourceManager::GetInstance()->SetLanguage(L"en_US");
                 appliedCode = L"en_US";
-                std::cout << "Language fallback loaded: " << WideToUtf8(fallbackPath) << std::endl;
+                logInstallerInfo(std::string("[GUI] Language fallback loaded: ") +
+                                 WideToUtf8(fallbackPath));
             } else {
-                std::cout << "Failed to load language file: " << WideToUtf8(langPath) << std::endl;
+                logInstallerWarning(std::string("[GUI] Failed to load language file: ") +
+                                   WideToUtf8(langPath));
                 return;
             }
         } else {
-            std::cout << "Failed to load language file: " << WideToUtf8(langPath) << std::endl;
+            logInstallerWarning(std::string("[GUI] Failed to load language file: ") +
+                               WideToUtf8(langPath));
             return;
         }
     } else {

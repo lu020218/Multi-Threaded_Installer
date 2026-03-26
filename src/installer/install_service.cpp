@@ -1,6 +1,7 @@
 #include "installer/install_service.h"
 
 #include "common/utf8_utils.h"
+#include "common/installer_logger.h"
 #include "installer/console_interface.h"
 #include "installer/install_state_utils.h"
 #include "installer/installer_helpers.h"
@@ -67,6 +68,43 @@ float ToOverallProgress(InstallServicePhase phase, float phaseProgress) {
         case InstallServicePhase::None:
         default:
             return 0.0f;
+    }
+}
+
+const char* InstallServicePhaseName(InstallServicePhase phase) {
+    switch (phase) {
+        case InstallServicePhase::Precheck:
+            return "Precheck";
+        case InstallServicePhase::CleanupOldInstall:
+            return "CleanupOldInstall";
+        case InstallServicePhase::Installing:
+            return "Installing";
+        case InstallServicePhase::Finalizing:
+            return "Finalizing";
+        case InstallServicePhase::None:
+        default:
+            return "None";
+    }
+}
+
+const char* InstallServiceStatusName(InstallServiceStatus status) {
+    switch (status) {
+        case InstallServiceStatus::Preparing:
+            return "Preparing";
+        case InstallServiceStatus::Precheck:
+            return "Precheck";
+        case InstallServiceStatus::Installing:
+            return "Installing";
+        case InstallServiceStatus::Finalizing:
+            return "Finalizing";
+        case InstallServiceStatus::Completed:
+            return "Completed";
+        case InstallServiceStatus::Failed:
+            return "Failed";
+        case InstallServiceStatus::Cancelled:
+            return "Cancelled";
+        default:
+            return "Unknown";
     }
 }
 
@@ -760,6 +798,12 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                    currentPhaseProgress,
                    calcOverall(currentPhase, currentPhaseProgress),
                    message);
+        logInstallerDebug(std::string("[InstallFlow][Status] status=") +
+                          InstallServiceStatusName(currentStatus) +
+                          " phase=" + InstallServicePhaseName(currentPhase) +
+                          " phaseProgress=" + std::to_string(currentPhaseProgress) +
+                          " overall=" + std::to_string(lastOverallProgress) +
+                          " message=" + message);
     };
 
     auto emitMessage = [&](InstallServiceEventType type, const std::string& message) {
@@ -855,6 +899,14 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                        previousInstallDir,
                                        &matchedPreviousIdentity);
 
+        logInstallerInfo(std::string("[InstallFlow][Plan] requestedPath=") + options.installPath +
+                         " installPathExplicit=" +
+                         (options.installPathExplicit ? "true" : "false") +
+                         " cleanupOldInstallRequested=" +
+                         (options.cleanupOldInstallRequested ? "true" : "false") +
+                         " selectedComponents=" + std::to_string(options.selectedComponentIds.size()) +
+                         " hasPreviousInstall=" + (hasPreviousInstall ? "true" : "false"));
+
         const std::string requestedInstallRoot = pathResolver.resolveFinalPath(
             options.installPath,
             SpecialDirectoryType::INSTALL_DIRECTORY,
@@ -868,6 +920,10 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             resolvedInstallRoot = previousInstallDir;
         }
         std::string diskCheckPath = resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot;
+        logInstallerInfo(std::string("[InstallFlow][Path] previousInstallDir=") + previousInstallDir +
+                         " requestedInstallRoot=" + requestedInstallRoot +
+                         " resolvedInstallRoot=" + resolvedInstallRoot +
+                         " diskCheckPath=" + diskCheckPath);
 
         ComponentSelectionPlan componentPlan;
         std::string componentPlanError;
@@ -920,6 +976,11 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             selectedEmbeddedFolders.push_back(mapping.folderName);
             totalInstallBytes += mapping.originalSize;
         }
+
+        logInstallerInfo(std::string("[InstallFlow][Plan] selectedEmbeddedFolders=") +
+                         std::to_string(selectedEmbeddedFolders.size()) +
+                         " totalInstallBytes=" + std::to_string(totalInstallBytes) +
+                         " threadCount=" + std::to_string(options.threadCount));
 
         if (componentPlan.hasComponents) {
             std::string selectedSummary = "Selected components:";
@@ -1015,6 +1076,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                     emitMessage(InstallServiceEventType::Warning,
                                 "Old install manifest not found; skipping cleanup.");
                 } else if (metadata.autoCleanOldInstall || options.cleanupOldInstallRequested) {
+                    logInstallerInfo(std::string("[InstallFlow][Cleanup] start previousManifest=") +
+                                     previousManifest + " previousInstallDir=" + previousInstallDir +
+                                     " targetInstallRoot=" + cleanupTargetInstallRoot);
                     currentPhase = InstallServicePhase::CleanupOldInstall;
                     currentPhaseProgress = 0.0f;
                     emitStatus(InstallServiceStatus::Precheck,
@@ -1042,6 +1106,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                         }
                         emitMessage(InstallServiceEventType::Warning,
                                     "Previous install cleanup reported failure.");
+                        logInstallerWarning("[InstallFlow][Cleanup] finished with failure");
+                    } else {
+                        logInstallerInfo("[InstallFlow][Cleanup] finished successfully");
                     }
                     emitProgress("cleanup", "Previous installation cleanup finished", 1.0f);
                 } else {
@@ -1125,7 +1192,12 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             parallelResult.installRootPath = resolvedInstallRoot;
             emitMessage(InstallServiceEventType::Info,
                         "No embedded folders selected; skipping package extraction.");
+            logInstallerInfo("[InstallFlow][Extract] skipped embedded extraction");
         } else {
+            logInstallerInfo(std::string("[InstallFlow][Extract] start folderCount=") +
+                             std::to_string(selectedEmbeddedFolders.size()) +
+                             " installPath=" + options.installPath +
+                             " threadCount=" + std::to_string(options.threadCount));
             parallelResult = RunParallelInstall(
                 metadata,
                 parser,
@@ -1139,6 +1211,11 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                 infoCallback,
                 errorCallback,
                 options.cancellationCallback);
+            logInstallerInfo(std::string("[InstallFlow][Extract] end success=") +
+                             (parallelResult.success ? "true" : "false") +
+                             " cancelled=" + (parallelResult.cancelled ? "true" : "false") +
+                             " errors=" + std::to_string(parallelResult.errors.size()) +
+                             " installRootPath=" + parallelResult.installRootPath);
         }
 
         result.timing = parallelResult.timing;
@@ -1147,6 +1224,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         result.cancelled = parallelResult.cancelled;
 
         if (!parallelResult.success) {
+            logInstallerError("[InstallFlow][Extract] failed, aborting installation");
             result.errors = std::move(parallelResult.errors);
             if (result.cancelled && result.errors.empty()) {
                 result.errors.push_back("Installation cancelled.");
@@ -1424,6 +1502,10 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         currentPhase = InstallServicePhase::Finalizing;
         currentPhaseProgress = 0.0f;
         emitStatus(currentStatus, currentPhase, 0.0f, "Finalizing installation...");
+        logInstallerInfo(std::string("[InstallFlow][Finalize] start installRootPath=") +
+                         result.installRootPath +
+                         " registryEntries=" + std::to_string(effectiveRegistry.size()) +
+                         " componentActions=" + std::to_string(componentActions.size()));
 
         auto advanceFinalize = [&](float progress, const std::string& detail) {
             emitProgress("finalize", detail, progress);
@@ -1581,6 +1663,10 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                        1.0f,
                        calcOverall(InstallServicePhase::Finalizing, 1.0f),
                        "Installation completed with component failures.");
+            logInstallerWarning(std::string("[InstallFlow][Done] success=false cancelled=") +
+                                (result.cancelled ? "true" : "false") +
+                                " errors=" + std::to_string(result.errors.size()) +
+                                " installRootPath=" + result.installRootPath);
             return result;
         }
 
@@ -1592,6 +1678,10 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                    1.0f,
                    calcOverall(InstallServicePhase::Finalizing, 1.0f),
                    "Installation completed.");
+        logInstallerInfo(std::string("[InstallFlow][Done] success=true cancelled=") +
+                         (result.cancelled ? "true" : "false") +
+                         " errors=" + std::to_string(result.errors.size()) +
+                         " installRootPath=" + result.installRootPath);
         return result;
     } catch (const std::exception& ex) {
         markFailed(ex.what(), IsCancellationRequested(options), true);

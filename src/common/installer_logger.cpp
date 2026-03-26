@@ -6,92 +6,72 @@
 #include <ctime>
 #include <exception>
 #include <cstdlib>
-#include <streambuf>
-#include <memory>
 #include <iostream>
+#include <atomic>
+#include <mutex>
 
 #ifdef _WIN32
 #include <Windows.h>
+#include <DbgHelp.h>
 #endif
 
 namespace MultiThreadedInstaller {
 
 namespace {
 
-class TimestampedBuffer : public std::streambuf {
-public:
-    explicit TimestampedBuffer(FILE* fileHandle)
-        : file(fileHandle), atLineStart(true) {}
-
-protected:
-    int overflow(int ch) override {
-        if (ch == EOF || !file) {
-            return ch;
-        }
-        if (atLineStart) {
-            writeTimestamp();
-            atLineStart = false;
-        }
-        if (ch == '\n') {
-            atLineStart = true;
-        }
-        fputc(ch, file);
-        return ch;
-    }
-
-    std::streamsize xsputn(const char* s, std::streamsize count) override {
-        if (!file || !s || count <= 0) {
-            return 0;
-        }
-        std::streamsize written = 0;
-        for (std::streamsize i = 0; i < count; ++i) {
-            if (atLineStart) {
-                writeTimestamp();
-                atLineStart = false;
-            }
-            char ch = s[i];
-            fputc(ch, file);
-            if (ch == '\n') {
-                atLineStart = true;
-            }
-            ++written;
-        }
-        return written;
-    }
-
-private:
-    void writeTimestamp() {
-        if (!file) {
-            return;
-        }
-#ifdef _WIN32
-        SYSTEMTIME st{};
-        GetLocalTime(&st);
-        fprintf(file, "[%04d-%02d-%02d %02d:%02d:%02d] ",
-                st.wYear, st.wMonth, st.wDay,
-                st.wHour, st.wMinute, st.wSecond);
-#else
-        std::time_t now = std::time(nullptr);
-        std::tm localTime{};
-        localtime_s(&localTime, &now);
-        fprintf(file, "[%04d-%02d-%02d %02d:%02d:%02d] ",
-                localTime.tm_year + 1900,
-                localTime.tm_mon + 1,
-                localTime.tm_mday,
-                localTime.tm_hour,
-                localTime.tm_min,
-                localTime.tm_sec);
-#endif
-    }
-
-    FILE* file;
-    bool atLineStart;
-};
-
-std::unique_ptr<TimestampedBuffer> g_logBuffer;
+std::mutex g_logWriteMutex;
 FILE* g_logFile = nullptr;
 std::string g_logPath;
 bool g_crashHandlersRegistered = false;
+std::atomic_flag g_crashHandling = ATOMIC_FLAG_INIT;
+std::wstring g_crashDumpDirWide;
+std::wstring g_crashLogPathWide;
+
+const char* levelToText(InstallerLogLevel level) {
+    switch (level) {
+        case InstallerLogLevel::Info:
+            return "INFO";
+        case InstallerLogLevel::Warning:
+            return "WARN";
+        case InstallerLogLevel::Error:
+            return "ERROR";
+        case InstallerLogLevel::Debug:
+            return "DEBUG";
+        default:
+            return "INFO";
+    }
+}
+
+void writeTimestampPrefix(FILE* file) {
+    if (!file) {
+        return;
+    }
+#ifdef _WIN32
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    std::fprintf(file,
+                 "[%04d-%02d-%02d %02d:%02d:%02d.%03d] ",
+                 st.wYear,
+                 st.wMonth,
+                 st.wDay,
+                 st.wHour,
+                 st.wMinute,
+                 st.wSecond,
+                 st.wMilliseconds);
+#else
+    std::time_t now = std::time(nullptr);
+    std::tm localTime{};
+    localtime_s(&localTime, &now);
+    std::fprintf(file,
+                 "[%04d-%02d-%02d %02d:%02d:%02d] ",
+                 localTime.tm_year + 1900,
+                 localTime.tm_mon + 1,
+                 localTime.tm_mday,
+                 localTime.tm_hour,
+                 localTime.tm_min,
+                 localTime.tm_sec);
+#endif
+}
 
 #ifdef _WIN32
 std::string getCrashLogPath() {
@@ -101,9 +81,116 @@ std::string getCrashLogPath() {
     return "MTInstaller_crash.log";
 }
 
-void writeCrashLogLine(const char* reason, DWORD code) {
-    std::string path = getCrashLogPath();
-    std::wstring pathW = Utf8ToWide(path);
+std::filesystem::path getCrashDumpDirectory() {
+    std::filesystem::path baseDir;
+    if (!g_logPath.empty()) {
+        baseDir = PathFromUtf8(g_logPath).parent_path();
+    }
+    if (baseDir.empty()) {
+        wchar_t localAppData[MAX_PATH] = {};
+        DWORD localLen = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH);
+        if (localLen > 0 && localLen < MAX_PATH) {
+            baseDir = std::filesystem::path(localAppData) / L"MTInstaller";
+        }
+    }
+    if (baseDir.empty()) {
+        baseDir = std::filesystem::temp_directory_path() / L"MTInstaller";
+    }
+    std::filesystem::path dumpDir = baseDir / L"CrashDumps";
+    std::error_code ec;
+    std::filesystem::create_directories(dumpDir, ec);
+    return dumpDir;
+}
+
+std::wstring buildCrashDumpPathWide(DWORD exceptionCode) {
+    std::wstring dumpDir = g_crashDumpDirWide;
+    if (dumpDir.empty()) {
+        std::filesystem::path fallback = getCrashDumpDirectory();
+        dumpDir = fallback.wstring();
+    }
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    wchar_t fileName[256] = {};
+    swprintf_s(fileName,
+               L"MTInstaller_%04d%02d%02d_%02d%02d%02d_%lu_%lu_%08lX.dmp",
+               st.wYear,
+               st.wMonth,
+               st.wDay,
+               st.wHour,
+               st.wMinute,
+               st.wSecond,
+               static_cast<unsigned long>(GetCurrentProcessId()),
+               static_cast<unsigned long>(GetCurrentThreadId()),
+               static_cast<unsigned long>(exceptionCode));
+    if (!dumpDir.empty() && dumpDir.back() != L'\\' && dumpDir.back() != L'/') {
+        dumpDir.push_back(L'\\');
+    }
+    dumpDir += fileName;
+    return dumpDir;
+}
+
+bool writeMiniDump(EXCEPTION_POINTERS* info,
+                   DWORD exceptionCode,
+                   std::string& dumpPath,
+                   DWORD& lastError) {
+    std::wstring dumpPathW = buildCrashDumpPathWide(exceptionCode);
+    dumpPath = WideToUtf8(dumpPathW);
+
+    HANDLE dumpFile = CreateFileW(dumpPathW.c_str(),
+                                  GENERIC_WRITE,
+                                  FILE_SHARE_READ,
+                                  nullptr,
+                                  CREATE_ALWAYS,
+                                  FILE_ATTRIBUTE_NORMAL,
+                                  nullptr);
+    if (dumpFile == INVALID_HANDLE_VALUE) {
+        lastError = GetLastError();
+        return false;
+    }
+
+    MINIDUMP_EXCEPTION_INFORMATION exceptionInfo{};
+    MINIDUMP_EXCEPTION_INFORMATION* exceptionInfoPtr = nullptr;
+    if (info) {
+        exceptionInfo.ThreadId = GetCurrentThreadId();
+        exceptionInfo.ExceptionPointers = info;
+        exceptionInfo.ClientPointers = FALSE;
+        exceptionInfoPtr = &exceptionInfo;
+    }
+
+    MINIDUMP_TYPE dumpType = static_cast<MINIDUMP_TYPE>(
+        MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory);
+
+    BOOL ok = MiniDumpWriteDump(GetCurrentProcess(),
+                                GetCurrentProcessId(),
+                                dumpFile,
+                                dumpType,
+                                exceptionInfoPtr,
+                                nullptr,
+                                nullptr);
+    if (!ok) {
+        ok = MiniDumpWriteDump(GetCurrentProcess(),
+                               GetCurrentProcessId(),
+                               dumpFile,
+                               MiniDumpNormal,
+                               exceptionInfoPtr,
+                               nullptr,
+                               nullptr);
+    }
+    lastError = ok ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(dumpFile);
+    return ok == TRUE;
+}
+
+void writeCrashLogLine(const char* reason,
+                       DWORD code,
+                       const std::string& dumpPath,
+                       DWORD dumpError,
+                       bool dumpWritten) {
+    std::wstring pathW = g_crashLogPathWide;
+    if (pathW.empty()) {
+        const std::string path = getCrashLogPath();
+        pathW = Utf8ToWide(path);
+    }
     if (pathW.empty()) {
         return;
     }
@@ -119,12 +206,18 @@ void writeCrashLogLine(const char* reason, DWORD code) {
     }
     SYSTEMTIME st{};
     GetLocalTime(&st);
-    char buffer[512] = {};
+    char buffer[1024] = {};
+    const char* dumpState = dumpWritten ? "written" : "failed";
+    const char* dumpPathRaw = dumpPath.empty() ? "" : dumpPath.c_str();
     int count = std::snprintf(buffer, sizeof(buffer),
-                              "[%04d-%02d-%02d %02d:%02d:%02d] Crash: %s (code=0x%08lx)\r\n",
+                              "[%04d-%02d-%02d %02d:%02d:%02d] Crash: %s (code=0x%08lx) dump=%s path=%s error=%lu\r\n",
                               st.wYear, st.wMonth, st.wDay,
                               st.wHour, st.wMinute, st.wSecond,
-                              reason ? reason : "unknown", static_cast<unsigned long>(code));
+                              reason ? reason : "unknown",
+                              static_cast<unsigned long>(code),
+                              dumpState,
+                              dumpPathRaw,
+                              static_cast<unsigned long>(dumpError));
     if (count > 0) {
         DWORD written = 0;
         WriteFile(file, buffer, static_cast<DWORD>(count), &written, nullptr);
@@ -133,17 +226,30 @@ void writeCrashLogLine(const char* reason, DWORD code) {
 }
 
 LONG WINAPI InstallerUnhandledExceptionFilter(EXCEPTION_POINTERS* info) {
+    if (g_crashHandling.test_and_set()) {
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
     DWORD code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
-    writeCrashLogLine("Unhandled exception", code);
+    std::string dumpPath;
+    DWORD dumpError = ERROR_SUCCESS;
+    bool dumpWritten = writeMiniDump(info, code, dumpPath, dumpError);
+    writeCrashLogLine("Unhandled exception", code, dumpPath, dumpError, dumpWritten);
     if (g_logFile) {
+        std::lock_guard<std::mutex> lock(g_logWriteMutex);
         fflush(g_logFile);
     }
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
 void InstallerTerminateHandler() {
-    writeCrashLogLine("std::terminate", 0);
+    if (!g_crashHandling.test_and_set()) {
+        std::string dumpPath;
+        DWORD dumpError = ERROR_SUCCESS;
+        bool dumpWritten = writeMiniDump(nullptr, 0, dumpPath, dumpError);
+        writeCrashLogLine("std::terminate", 0, dumpPath, dumpError, dumpWritten);
+    }
     if (g_logFile) {
+        std::lock_guard<std::mutex> lock(g_logWriteMutex);
         fflush(g_logFile);
     }
     std::abort();
@@ -154,7 +260,7 @@ void InstallerTerminateHandler() {
 
 void initializeInstallerLogging() {
 #ifdef _WIN32
-    if (g_logBuffer) {
+    if (g_logFile) {
         return;
     }
     std::filesystem::path logPath;
@@ -176,10 +282,23 @@ void initializeInstallerLogging() {
             std::filesystem::path logDir = std::filesystem::path(localAppData) / L"MTInstaller";
             std::error_code ec;
             std::filesystem::create_directories(logDir, ec);
-            logPath = logDir / (L"MTInstaller_" + sanitized + L".log");
+            SYSTEMTIME st{};
+            GetLocalTime(&st);
+            wchar_t fileName[256] = {};
+            swprintf_s(fileName,
+                       L"MTInstaller_%s_%04d%02d%02d_%02d%02d%02d_%lu.log",
+                       sanitized.c_str(),
+                       st.wYear,
+                       st.wMonth,
+                       st.wDay,
+                       st.wHour,
+                       st.wMinute,
+                       st.wSecond,
+                       static_cast<unsigned long>(GetCurrentProcessId()));
+            logPath = logDir / fileName;
         } else {
             logPath = std::filesystem::temp_directory_path() /
-                      (L"MTInstaller_" + sanitized + L".log");
+                       (L"MTInstaller_" + sanitized + L".log");
         }
     } catch (...) {
         logPath = std::filesystem::path(L"MTInstaller_Installer.log");
@@ -192,10 +311,11 @@ void initializeInstallerLogging() {
     setvbuf(fp, nullptr, _IOLBF, 4096);
     g_logFile = fp;
     g_logPath = Utf8FromPath(logPath);
-    g_logBuffer = std::make_unique<TimestampedBuffer>(g_logFile);
-    std::cout.rdbuf(g_logBuffer.get());
-    std::cerr.rdbuf(g_logBuffer.get());
-    std::cout << "Installer log started. Log: " << g_logPath << std::endl;
+    g_crashLogPathWide = Utf8ToWide(g_logPath + ".crash.log");
+    g_crashDumpDirWide = getCrashDumpDirectory().wstring();
+    writeInstallerLog(InstallerLogLevel::Info, "Installer log started. Log: " + g_logPath);
+    writeInstallerLog(InstallerLogLevel::Info,
+                      "Crash dumps enabled. Directory: " + Utf8FromPath(getCrashDumpDirectory()));
 
     if (!g_crashHandlersRegistered) {
         SetUnhandledExceptionFilter(InstallerUnhandledExceptionFilter);
@@ -203,13 +323,14 @@ void initializeInstallerLogging() {
         g_crashHandlersRegistered = true;
     }
 #else
-    std::cout << "Installer log started." << std::endl;
+    writeInstallerLog(InstallerLogLevel::Info, "Installer log started.");
 #endif
 }
 
 void flushInstallerLogging() {
 #ifdef _WIN32
     if (g_logFile) {
+        std::lock_guard<std::mutex> lock(g_logWriteMutex);
         fflush(g_logFile);
     }
 #endif
@@ -217,6 +338,39 @@ void flushInstallerLogging() {
 
 std::string getInstallerLogPath() {
     return g_logPath;
+}
+
+void writeInstallerLog(InstallerLogLevel level, const std::string& message) {
+#ifdef _WIN32
+    if (message.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_logWriteMutex);
+    if (g_logFile) {
+        writeTimestampPrefix(g_logFile);
+        std::fprintf(g_logFile, "[%s] %s\n", levelToText(level), message.c_str());
+        std::fflush(g_logFile);
+    }
+#else
+    (void)level;
+    (void)message;
+#endif
+}
+
+void logInstallerInfo(const std::string& message) {
+    writeInstallerLog(InstallerLogLevel::Info, message);
+}
+
+void logInstallerWarning(const std::string& message) {
+    writeInstallerLog(InstallerLogLevel::Warning, message);
+}
+
+void logInstallerError(const std::string& message) {
+    writeInstallerLog(InstallerLogLevel::Error, message);
+}
+
+void logInstallerDebug(const std::string& message) {
+    writeInstallerLog(InstallerLogLevel::Debug, message);
 }
 
 } // namespace MultiThreadedInstaller

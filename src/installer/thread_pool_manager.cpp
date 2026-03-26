@@ -1,10 +1,10 @@
 #include "installer/thread_pool_manager.h"
-#include <iostream>
+#include "common/installer_logger.h"
 
 namespace MultiThreadedInstaller {
 
 ThreadPoolManager::ThreadPoolManager(size_t threadCount) 
-    : stopFlag(false), activeThreads(0) {
+    : stopFlag(false), pendingTasks(0), activeThreads(0) {
     
     for (size_t i = 0; i < threadCount; ++i) {
         workers.emplace_back(&ThreadPoolManager::workerThread, this);
@@ -16,9 +16,9 @@ ThreadPoolManager::~ThreadPoolManager() {
 }
 
 void ThreadPoolManager::waitForAll() {
-    std::unique_lock<std::mutex> lock(activeThreadsMutex);
+    std::unique_lock<std::mutex> lock(queueMutex);
     allTasksComplete.wait(lock, [this] { 
-        return tasks.empty() && activeThreads == 0; 
+        return pendingTasks == 0;
     });
 }
 
@@ -74,16 +74,27 @@ void ThreadPoolManager::workerThread() {
         try {
             task();
         } catch (const std::exception& e) {
-            std::cerr << "Task execution failed: " << e.what() << std::endl;
+            logInstallerError(std::string("[ThreadPool] Task execution failed: ") + e.what());
+        } catch (...) {
+            logInstallerError("[ThreadPool] Task execution failed: unknown exception");
         }
         
 
         {
             std::lock_guard<std::mutex> lock(activeThreadsMutex);
             --activeThreads;
-            if (activeThreads == 0 && tasks.empty()) {
-                allTasksComplete.notify_all();
+        }
+
+        bool notifyComplete = false;
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            if (pendingTasks > 0) {
+                --pendingTasks;
             }
+            notifyComplete = (pendingTasks == 0);
+        }
+        if (notifyComplete) {
+            allTasksComplete.notify_all();
         }
     }
 }

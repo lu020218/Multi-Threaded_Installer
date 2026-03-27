@@ -1,9 +1,8 @@
 #pragma once
 
-#include "common/types.h"
+#include "common/archive_types.h"
 #include <string>
 #include <vector>
-#include <filesystem>
 
 namespace MultiThreadedInstaller {
 
@@ -29,11 +28,6 @@ public:
 
 
     std::string findDefaultInstallerTemplatePath() const;
-
-
-    void setTemplateResourceDir(const std::filesystem::path& resourceDir) {
-        templateResourceDirOverride = resourceDir;
-    }
     
 private:
 
@@ -49,37 +43,16 @@ private:
     };
     
     std::string installerTemplatePath;
-    std::filesystem::path templateResourceDirOverride;
     std::string lastError_;
     
 
     bool createSelfExtractingExecutable(const std::string& outputPath,
                                       const std::vector<uint8_t>& metadata,
                                       const std::vector<CompressionResult>& compressionResults);
-    
-
-    std::vector<uint8_t> getDefaultInstallerTemplate();
-    
-
-    std::vector<uint8_t> loadInstallerTemplate(const std::string& templatePath);
-    
-
-    std::vector<uint8_t> createPlaceholderTemplate();
-    
 
     bool setExecutablePermissions(const std::string& filePath);
-    
-
-    bool appendDataToExecutable(const std::string& executablePath,
-                               const std::vector<uint8_t>& data);
-    
 
     bool copyRuntimeDependencies(const std::string& installerPath);
-
-    std::filesystem::path resolveTemplateDirectory() const;
-    bool appendEmbeddedResources(std::vector<uint8_t>& installerTemplate,
-                                 const std::filesystem::path& resourceDir);
-    bool hasEmbeddedResourceTable(const std::vector<uint8_t>& installerTemplate) const;
 };
 
 } // namespace MultiThreadedInstaller

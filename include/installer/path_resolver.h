@@ -1,7 +1,7 @@
 #pragma once
 
 #include <string>
-#include "common/types.h"
+#include "common/config_types.h"
 
 namespace MultiThreadedInstaller {
 

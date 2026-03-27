@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/installer_parallel_install.h"
-#include "common/types.h"
+#include "common/archive_types.h"
 
 #include <functional>
 #include <string>

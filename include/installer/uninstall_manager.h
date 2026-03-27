@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/types.h"
+#include "common/config_types.h"
 #include "installer/console_interface.h"
 #include "installer/path_resolver.h"
 

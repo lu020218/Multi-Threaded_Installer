@@ -204,7 +204,7 @@ std::string EmbeddedResourceManager::extractResources() {
     
 
     if (!anyExtracted) {
-        std::cout << "No embedded resources found, will use external resources" << std::endl;
+        std::cout << "No embedded resources found" << std::endl;
         cleanup();
         return "";
     }

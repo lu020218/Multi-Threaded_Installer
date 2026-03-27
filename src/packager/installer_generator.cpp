@@ -1,257 +1,18 @@
 #include "packager/installer_generator.h"
+#include "packager/resource_embedder.h"
+#include "packager/template_loader.h"
 #include "common/utf8_utils.h"
 #include <fstream>
 #include <iostream>
 #include <filesystem>
-#include <cstring>
-#include <cctype>
 #include <vector>
-#include <algorithm>
 #include <cstdint>
-#include <unordered_set>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
+#ifndef _WIN32
 #include <sys/stat.h>
 #endif
 
 namespace MultiThreadedInstaller {
-
-namespace {
-
-struct ZipFileEntry {
-    std::string name;
-    std::filesystem::path path;
-};
-
-static uint32_t crc32(const uint8_t* data, size_t size) {
-    uint32_t crc = 0xFFFFFFFFu;
-    for (size_t i = 0; i < size; ++i) {
-        crc ^= data[i];
-        for (int bit = 0; bit < 8; ++bit) {
-            uint32_t mask = -(crc & 1u);
-            crc = (crc >> 1) ^ (0xEDB88320u & mask);
-        }
-    }
-    return ~crc;
-}
-
-static void appendUint16(std::vector<uint8_t>& out, uint16_t value) {
-    out.push_back(static_cast<uint8_t>(value & 0xFF));
-    out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
-}
-
-static void appendUint32(std::vector<uint8_t>& out, uint32_t value) {
-    out.push_back(static_cast<uint8_t>(value & 0xFF));
-    out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
-    out.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
-    out.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
-}
-
-static bool readFileBytes(const std::filesystem::path& path, std::vector<uint8_t>& out) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return false;
-    }
-    std::streamsize size = file.tellg();
-    if (size < 0) {
-        return false;
-    }
-    file.seekg(0, std::ios::beg);
-    out.resize(static_cast<size_t>(size));
-    if (size > 0 && !file.read(reinterpret_cast<char*>(out.data()), size)) {
-        return false;
-    }
-    return true;
-}
-
-static std::string addScaleSuffix(const std::string& fileName, const std::string& suffix) {
-    size_t dot = fileName.rfind('.');
-    if (dot == std::string::npos) {
-        return fileName + suffix;
-    }
-    return fileName.substr(0, dot) + suffix + fileName.substr(dot);
-}
-
-static bool replaceScaleSuffix(const std::string& fileName,
-                               const std::string& from,
-                               const std::string& to,
-                               std::string& out) {
-    size_t pos = fileName.find(from);
-    if (pos == std::string::npos) {
-        return false;
-    }
-    out = fileName;
-    out.replace(pos, from.size(), to);
-    return true;
-}
-
-static void collectResourceFiles(const std::filesystem::path& resourceDir,
-                                 std::vector<ZipFileEntry>& outFiles) {
-    std::unordered_set<std::string> seen;
-    auto addEntry = [&](const std::string& name, const std::filesystem::path& path) {
-        if (seen.insert(name).second) {
-            outFiles.push_back({name, path});
-        }
-    };
-
-    auto addDir = [&](const std::filesystem::path& dir, const std::string& prefix,
-                      const std::vector<std::string>& extraPrefixes) {
-        if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
-            return;
-        }
-        for (const auto& entry : std::filesystem::directory_iterator(dir)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            const std::string fileName = Utf8FromPath(entry.path().filename());
-            addEntry(prefix + fileName, entry.path());
-            for (const auto& extra : extraPrefixes) {
-                addEntry(extra + fileName, entry.path());
-            }
-        }
-    };
-
-    addDir(resourceDir / "skins", "skins/", {""});
-
-    const std::filesystem::path imagesDir = resourceDir / "images";
-    if (std::filesystem::exists(imagesDir) && std::filesystem::is_directory(imagesDir)) {
-        auto addImageEntry = [&](const std::string& name, const std::filesystem::path& path) {
-            addEntry("images/" + name, path);
-            addEntry("../images/" + name, path);
-        };
-
-        std::vector<std::pair<std::string, std::filesystem::path>> imageFiles;
-        for (const auto& entry : std::filesystem::directory_iterator(imagesDir)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            imageFiles.emplace_back(Utf8FromPath(entry.path().filename()), entry.path());
-        }
-
-        for (const auto& item : imageFiles) {
-            addImageEntry(item.first, item.second);
-        }
-
-        for (const auto& item : imageFiles) {
-            std::string alias;
-            if (replaceScaleSuffix(item.first, "@1.5x", "@150", alias)) {
-                addImageEntry(alias, item.second);
-            } else if (replaceScaleSuffix(item.first, "@2x", "@200", alias)) {
-                addImageEntry(alias, item.second);
-            } else if (replaceScaleSuffix(item.first, "@3x", "@300", alias)) {
-                addImageEntry(alias, item.second);
-            }
-        }
-
-        for (const auto& item : imageFiles) {
-            if (item.first.find('@') != std::string::npos) {
-                continue;
-            }
-            addImageEntry(addScaleSuffix(item.first, "@125"), item.second);
-            addImageEntry(addScaleSuffix(item.first, "@150"), item.second);
-            addImageEntry(addScaleSuffix(item.first, "@200"), item.second);
-            addImageEntry(addScaleSuffix(item.first, "@300"), item.second);
-        }
-    }
-
-    addDir(resourceDir / "lang", "lang/", {"../lang/"});
-    addDir(resourceDir / "license", "license/", {"../license/"});
-
-    std::filesystem::path licensePath = resourceDir / "license.txt";
-    if (std::filesystem::exists(licensePath) && std::filesystem::is_regular_file(licensePath)) {
-        addEntry("license.txt", licensePath);
-        addEntry("../license.txt", licensePath);
-    }
-
-    std::sort(outFiles.begin(), outFiles.end(),
-              [](const ZipFileEntry& a, const ZipFileEntry& b) {
-                  return a.name < b.name;
-              });
-}
-
-static bool buildResourceZip(const std::filesystem::path& resourceDir,
-                             std::vector<uint8_t>& outZip) {
-    std::vector<ZipFileEntry> files;
-    collectResourceFiles(resourceDir, files);
-    if (files.empty()) {
-        return false;
-    }
-
-    struct CentralEntry {
-        std::string name;
-        uint32_t crc;
-        uint32_t size;
-        uint32_t offset;
-    };
-
-    std::vector<CentralEntry> central;
-    outZip.clear();
-
-    for (const auto& entry : files) {
-        std::vector<uint8_t> data;
-        if (!readFileBytes(entry.path, data)) {
-            return false;
-        }
-
-        uint32_t crc = crc32(data.data(), data.size());
-        uint32_t size = static_cast<uint32_t>(data.size());
-        uint32_t offset = static_cast<uint32_t>(outZip.size());
-        std::string name = entry.name;
-
-        appendUint32(outZip, 0x04034b50);
-        appendUint16(outZip, 20);
-        appendUint16(outZip, 0);
-        appendUint16(outZip, 0);
-        appendUint16(outZip, 0);
-        appendUint16(outZip, 0);
-        appendUint32(outZip, crc);
-        appendUint32(outZip, size);
-        appendUint32(outZip, size);
-        appendUint16(outZip, static_cast<uint16_t>(name.size()));
-        appendUint16(outZip, 0);
-        outZip.insert(outZip.end(), name.begin(), name.end());
-        outZip.insert(outZip.end(), data.begin(), data.end());
-
-        central.push_back({name, crc, size, offset});
-    }
-
-    uint32_t centralOffset = static_cast<uint32_t>(outZip.size());
-    for (const auto& entry : central) {
-        appendUint32(outZip, 0x02014b50);
-        appendUint16(outZip, 20);
-        appendUint16(outZip, 20);
-        appendUint16(outZip, 0);
-        appendUint16(outZip, 0);
-        appendUint16(outZip, 0);
-        appendUint16(outZip, 0);
-        appendUint32(outZip, entry.crc);
-        appendUint32(outZip, entry.size);
-        appendUint32(outZip, entry.size);
-        appendUint16(outZip, static_cast<uint16_t>(entry.name.size()));
-        appendUint16(outZip, 0);
-        appendUint16(outZip, 0);
-        appendUint16(outZip, 0);
-        appendUint16(outZip, 0);
-        appendUint32(outZip, 0);
-        appendUint32(outZip, entry.offset);
-        outZip.insert(outZip.end(), entry.name.begin(), entry.name.end());
-    }
-
-    uint32_t centralSize = static_cast<uint32_t>(outZip.size() - centralOffset);
-    appendUint32(outZip, 0x06054b50);
-    appendUint16(outZip, 0);
-    appendUint16(outZip, 0);
-    appendUint16(outZip, static_cast<uint16_t>(central.size()));
-    appendUint16(outZip, static_cast<uint16_t>(central.size()));
-    appendUint32(outZip, centralSize);
-    appendUint32(outZip, centralOffset);
-    appendUint16(outZip, 0);
-    return true;
-}
-
-} // namespace
 
 bool InstallerGenerator::generateInstaller(const std::string& outputPath,
                                           const std::vector<uint8_t>& metadata,
@@ -310,24 +71,21 @@ bool InstallerGenerator::embedInstallerTemplate(const std::string& templatePath)
 }
 
 std::string InstallerGenerator::findDefaultInstallerTemplatePath() const {
-    std::vector<std::string> possiblePaths = {
-        "build/Release/installer.exe",
-        "build/Debug/installer.exe",
-        "build/installer.exe",
-        "installer.exe",
-        "build/installer",
-        "installer",
-        "./build/Release/installer.exe",
-        "./build/Debug/installer.exe",
-        "./installer.exe",
-        "./installer"
-    };
-
-    for (const auto& path : possiblePaths) {
-        if (std::filesystem::exists(PathFromUtf8(path))) {
-            return path;
-        }
+    std::filesystem::path exeDir = GetPackagerExecutableDirectory();
+    if (exeDir.empty()) {
+        std::cerr << "ERROR: Failed to resolve packager executable directory while locating installer template"
+                  << std::endl;
+        return {};
     }
+
+    const std::filesystem::path installerPath = GetDefaultInstallerTemplatePath();
+    if (std::filesystem::exists(installerPath)) {
+        return Utf8FromPath(installerPath);
+    }
+
+    std::cerr << "ERROR: Installer template not found. Packager directory: "
+              << Utf8FromPath(exeDir) << ", expected template: "
+              << Utf8FromPath(installerPath) << std::endl;
 
     return {};
 }
@@ -338,29 +96,47 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
     try {
         lastError_.clear();
 
-        std::vector<uint8_t> installerTemplate = getDefaultInstallerTemplate();
-        if (installerTemplate.empty()) {
-            lastError_ = "Failed to load installer template executable";
-            std::cerr << "Failed to get installer template" << std::endl;
+        const std::filesystem::path templatePath =
+            installerTemplatePath.empty() ? GetDefaultInstallerTemplatePath()
+                                          : PathFromUtf8(installerTemplatePath);
+        if (templatePath.empty()) {
+            lastError_ = "Failed to resolve installer template path";
+            std::cerr << "ERROR: " << lastError_ << std::endl;
             return false;
         }
 
-        std::filesystem::path templateDir = resolveTemplateDirectory();
+        std::vector<uint8_t> installerTemplate;
+        std::string templateError;
+        if (!LoadInstallerTemplate(templatePath, installerTemplate, templateError)) {
+            lastError_ = templateError.empty()
+                             ? "Failed to load installer template executable"
+                             : templateError;
+            std::cerr << "ERROR: " << lastError_ << std::endl;
+            return false;
+        }
+
+        std::filesystem::path templateDir = GetPackagerExecutableDirectory();
         if (templateDir.empty()) {
-            lastError_ = "Cannot resolve installer template directory for UI resource embedding";
+            lastError_ = "Cannot resolve packager directory for UI resource embedding";
             std::cerr << "ERROR: " << lastError_ << std::endl;
             return false;
         }
         std::filesystem::path resourceDir = templateDir / "resources";
+        std::cout << "Template resource directory: " << Utf8FromPath(templateDir) << std::endl;
+        std::cout << "Resolved UI resources directory: " << Utf8FromPath(resourceDir) << std::endl;
         if (!std::filesystem::exists(resourceDir) || !std::filesystem::is_directory(resourceDir)) {
             lastError_ = "UI resources directory not found: " + Utf8FromPath(resourceDir) +
+                         ". Template directory: " + Utf8FromPath(templateDir) +
                          ". Packaging requires embedded UI resources and external resources are disabled.";
             std::cerr << "ERROR: " << lastError_ << std::endl;
             return false;
         }
-        if (!appendEmbeddedResources(installerTemplate, resourceDir)) {
-            lastError_ = "Failed to embed UI resources from: " + Utf8FromPath(resourceDir) +
-                         ". Packaging aborted because embedded UI resources are required.";
+        std::string embedError;
+        if (!AppendEmbeddedResources(installerTemplate, resourceDir, embedError)) {
+            lastError_ = embedError.empty()
+                             ? "Failed to embed UI resources from: " + Utf8FromPath(resourceDir) +
+                                   ". Packaging aborted because embedded UI resources are required."
+                             : embedError;
             std::cerr << "ERROR: " << lastError_ << std::endl;
             return false;
         }
@@ -442,62 +218,6 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
     }
 }
 
-std::vector<uint8_t> InstallerGenerator::getDefaultInstallerTemplate() {
-
-    if (!installerTemplatePath.empty()) {
-        return loadInstallerTemplate(installerTemplatePath);
-    }
-    
-    std::string defaultPath = findDefaultInstallerTemplatePath();
-    if (!defaultPath.empty()) {
-        std::cout << "Using installer template: " << defaultPath << std::endl;
-        return loadInstallerTemplate(defaultPath);
-    }
-    
-
-    std::cerr << "Warning: No installer template found, creating placeholder" << std::endl;
-    return createPlaceholderTemplate();
-}
-
-std::vector<uint8_t> InstallerGenerator::loadInstallerTemplate(const std::string& templatePath) {
-    try {
-        std::ifstream file(PathFromUtf8(templatePath), std::ios::binary | std::ios::ate);
-        if (!file) {
-            std::cerr << "Failed to open installer template: " << templatePath << std::endl;
-            return {};
-        }
-        
-        std::streamsize size = file.tellg();
-        file.seekg(0, std::ios::beg);
-        
-        std::vector<uint8_t> buffer(size);
-        if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
-            std::cerr << "Failed to read installer template: " << templatePath << std::endl;
-            return {};
-        }
-        
-        return buffer;
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Error loading installer template: " << e.what() << std::endl;
-        return {};
-    }
-}
-
-std::vector<uint8_t> InstallerGenerator::createPlaceholderTemplate() {
-
-
-    std::string placeholder = 
-        "#!/bin/bash\n"
-        "# Multi-threaded Installer Placeholder\n"
-        "# This is a placeholder installer template.\n"
-        "# In production, this should be replaced with the actual installer executable.\n"
-        "echo \"Installer placeholder - data embedded below\"\n"
-        "exit 1\n";
-    
-    return std::vector<uint8_t>(placeholder.begin(), placeholder.end());
-}
-
 bool InstallerGenerator::setExecutablePermissions(const std::string& filePath) {
     try {
 #ifdef _WIN32
@@ -516,394 +236,6 @@ bool InstallerGenerator::setExecutablePermissions(const std::string& filePath) {
     }
 }
 
-bool InstallerGenerator::appendDataToExecutable(const std::string& executablePath,
-                                               const std::vector<uint8_t>& data) {
-    try {
-        std::ofstream file(PathFromUtf8(executablePath), std::ios::binary | std::ios::app);
-        if (!file) {
-            return false;
-        }
-        
-        file.write(reinterpret_cast<const char*>(data.data()), data.size());
-        return file.good();
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Error appending data to executable: " << e.what() << std::endl;
-        return false;
-    }
-}
-
-std::filesystem::path InstallerGenerator::resolveTemplateDirectory() const {
-    if (!templateResourceDirOverride.empty()) {
-        // Honor explicit override only when it is a valid directory.
-        if (std::filesystem::exists(templateResourceDirOverride) &&
-            std::filesystem::is_directory(templateResourceDirOverride)) {
-            return templateResourceDirOverride;
-        }
-    }
-
-    if (!installerTemplatePath.empty()) {
-        // When icon/version patching is enabled, installerTemplatePath may point to a
-        // temporary template under output/. Avoid treating output/ as template resources root.
-        std::filesystem::path templateParent = PathFromUtf8(installerTemplatePath).parent_path();
-        if (!templateParent.empty() &&
-            std::filesystem::exists(templateParent) &&
-            std::filesystem::is_directory(templateParent)) {
-            if (std::filesystem::exists(templateParent / "resources") ||
-                std::filesystem::exists(templateParent / "installer.exe") ||
-                std::filesystem::exists(templateParent / "installer")) {
-                return templateParent;
-            }
-        }
-    }
-
-    std::vector<std::string> possibleDirs = {
-        "build/Release",
-        "build/Debug",
-        "build",
-        "."
-    };
-
-    for (const auto& dir : possibleDirs) {
-        std::filesystem::path dirPath = PathFromUtf8(dir);
-        if (std::filesystem::exists(dirPath / "installer.exe") ||
-            std::filesystem::exists(dirPath / "installer")) {
-            return dirPath;
-        }
-    }
-
-    return {};
-}
-
-bool InstallerGenerator::hasEmbeddedResourceTable(const std::vector<uint8_t>& installerTemplate) const {
-#ifdef _WIN32
-    if (installerTemplate.size() < sizeof(IMAGE_DOS_HEADER) + sizeof(uint32_t)) {
-        return false;
-    }
-
-    auto readAt = [&](uint64_t offset, void* out, size_t bytes) -> bool {
-        if (offset + bytes > installerTemplate.size()) {
-            return false;
-        }
-        std::memcpy(out, installerTemplate.data() + offset, bytes);
-        return true;
-    };
-
-    IMAGE_DOS_HEADER dosHeader{};
-    if (!readAt(0, &dosHeader, sizeof(dosHeader))) {
-        return false;
-    }
-    if (dosHeader.e_magic != IMAGE_DOS_SIGNATURE) {
-        return false;
-    }
-
-    uint64_t ntOffset = static_cast<uint64_t>(dosHeader.e_lfanew);
-    uint32_t peSignature = 0;
-    if (!readAt(ntOffset, &peSignature, sizeof(peSignature))) {
-        return false;
-    }
-    if (peSignature != IMAGE_NT_SIGNATURE) {
-        return false;
-    }
-
-    IMAGE_FILE_HEADER fileHeader{};
-    if (!readAt(ntOffset + sizeof(uint32_t), &fileHeader, sizeof(fileHeader))) {
-        return false;
-    }
-
-    uint64_t sectionOffset = ntOffset + sizeof(uint32_t) + sizeof(IMAGE_FILE_HEADER) +
-                             static_cast<uint64_t>(fileHeader.SizeOfOptionalHeader);
-    uint64_t peEnd = sectionOffset;
-    for (uint16_t i = 0; i < fileHeader.NumberOfSections; ++i) {
-        IMAGE_SECTION_HEADER section{};
-        if (!readAt(sectionOffset + static_cast<uint64_t>(i) * sizeof(IMAGE_SECTION_HEADER),
-                    &section, sizeof(section))) {
-            return false;
-        }
-        uint64_t sectionEnd = static_cast<uint64_t>(section.PointerToRawData) +
-                              static_cast<uint64_t>(section.SizeOfRawData);
-        if (sectionEnd > peEnd) {
-            peEnd = sectionEnd;
-        }
-    }
-
-    if (peEnd >= installerTemplate.size()) {
-        return false;
-    }
-
-    const uint32_t magic = 0x52534D45; // "EMSR"
-
-    auto parseTable = [&](uint64_t magicOffset) -> bool {
-        if (magicOffset <= peEnd || magicOffset > installerTemplate.size()) {
-            return false;
-        }
-
-        uint64_t offset = peEnd;
-        while (offset < magicOffset) {
-            if (offset + sizeof(uint32_t) + sizeof(uint64_t) > magicOffset) {
-                return false;
-            }
-
-            uint32_t nameLen = 0;
-            if (!readAt(offset, &nameLen, sizeof(nameLen))) {
-                return false;
-            }
-            offset += sizeof(nameLen);
-            if (nameLen == 0 || offset + nameLen + sizeof(uint64_t) > magicOffset) {
-                return false;
-            }
-
-            offset += nameLen;
-
-            uint64_t dataLen = 0;
-            if (!readAt(offset, &dataLen, sizeof(dataLen))) {
-                return false;
-            }
-            offset += sizeof(dataLen);
-            if (dataLen == 0 || offset + dataLen > magicOffset) {
-                return false;
-            }
-            offset += dataLen;
-        }
-
-        return offset == magicOffset;
-    };
-
-    for (uint64_t i = installerTemplate.size() - sizeof(uint32_t);
-         i + sizeof(uint32_t) <= installerTemplate.size();
-         --i) {
-        uint32_t candidate = 0;
-        if (!readAt(i, &candidate, sizeof(candidate))) {
-            return false;
-        }
-        if (candidate == magic && parseTable(i)) {
-            return true;
-        }
-        if (i == 0) {
-            break;
-        }
-    }
-#endif
-    return false;
-}
-
-bool InstallerGenerator::appendEmbeddedResources(std::vector<uint8_t>& installerTemplate,
-                                                 const std::filesystem::path& resourceDir) {
-    try {
-        if (!std::filesystem::exists(resourceDir) || !std::filesystem::is_directory(resourceDir)) {
-            return false;
-        }
-
-        if (hasEmbeddedResourceTable(installerTemplate)) {
-            std::cout << "Installer template already contains embedded resources; appending updated resources" << std::endl;
-        }
-
-        auto appendBytes = [&](const void* data, size_t size) {
-            const uint8_t* bytes = static_cast<const uint8_t*>(data);
-            installerTemplate.insert(installerTemplate.end(), bytes, bytes + size);
-        };
-
-        auto appendEntry = [&](const std::string& name, const std::filesystem::path& filePath) -> bool {
-            std::ifstream file(filePath, std::ios::binary | std::ios::ate);
-            if (!file) {
-                return false;
-            }
-            std::streamsize size = file.tellg();
-            if (size <= 0) {
-                return false;
-            }
-            file.seekg(0, std::ios::beg);
-
-            std::vector<uint8_t> data(static_cast<size_t>(size));
-            if (!file.read(reinterpret_cast<char*>(data.data()), size)) {
-                return false;
-            }
-
-            uint32_t nameLen = static_cast<uint32_t>(name.size());
-            uint64_t dataLen = static_cast<uint64_t>(data.size());
-            appendBytes(&nameLen, sizeof(nameLen));
-            appendBytes(name.data(), name.size());
-            appendBytes(&dataLen, sizeof(dataLen));
-            appendBytes(data.data(), data.size());
-            return true;
-        };
-        auto appendRawEntry = [&](const std::string& name, const std::vector<uint8_t>& data) -> bool {
-            if (data.empty()) {
-                return false;
-            }
-            uint32_t nameLen = static_cast<uint32_t>(name.size());
-            uint64_t dataLen = static_cast<uint64_t>(data.size());
-            appendBytes(&nameLen, sizeof(nameLen));
-            appendBytes(name.data(), name.size());
-            appendBytes(&dataLen, sizeof(dataLen));
-            appendBytes(data.data(), data.size());
-            return true;
-        };
-
-        auto toResourceName = [](const std::string& prefix, const std::string& fileName) {
-            std::string name = prefix + fileName;
-            for (char& ch : name) {
-                if (ch == '.') {
-                    ch = '_';
-                    continue;
-                }
-                ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-            }
-            return name;
-        };
-
-        bool anyEmbedded = false;
-        bool useZip = false;
-        std::vector<uint8_t> zipData;
-        if (buildResourceZip(resourceDir, zipData)) {
-            if (appendRawEntry("RES_ZIP", zipData)) {
-                std::cout << "  Embedded: resources.zip" << std::endl;
-                anyEmbedded = true;
-                useZip = true;
-            }
-        }
-
-        std::vector<std::string> imageNames;
-        std::vector<std::string> langFiles;
-        std::vector<std::string> licenseFiles;
-        if (!useZip) {
-            std::filesystem::path skinsDir = resourceDir / "skins";
-            if (std::filesystem::exists(skinsDir) && std::filesystem::is_directory(skinsDir)) {
-                for (const auto& entry : std::filesystem::directory_iterator(skinsDir)) {
-                    if (!entry.is_regular_file()) {
-                        continue;
-                    }
-                    if (entry.path().extension() != ".xml") {
-                        continue;
-                    }
-                    std::string fileName = Utf8FromPath(entry.path().filename());
-                    std::string resourceName = toResourceName("XML_", fileName);
-                    if (appendEntry(resourceName, entry.path())) {
-                        std::cout << "  Embedded: " << fileName << std::endl;
-                        anyEmbedded = true;
-                    }
-                }
-            }
-            
-            std::filesystem::path imagesDir = resourceDir / "images";
-            if (std::filesystem::exists(imagesDir) && std::filesystem::is_directory(imagesDir)) {
-                for (const auto& entry : std::filesystem::directory_iterator(imagesDir)) {
-                    if (!entry.is_regular_file()) {
-                        continue;
-                    }
-                    std::string fileName = Utf8FromPath(entry.path().filename());
-                    if (fileName.empty() || fileName.front() == '.') {
-                        continue;
-                    }
-                    std::string resourceName = toResourceName("IMG_", fileName);
-                    if (appendEntry(resourceName, entry.path())) {
-                        std::cout << "  Embedded: " << fileName << std::endl;
-                        anyEmbedded = true;
-                        imageNames.push_back(fileName);
-                    }
-                }
-            }
-
-            std::filesystem::path langDir = resourceDir / "lang";
-            if (std::filesystem::exists(langDir) && std::filesystem::is_directory(langDir)) {
-                for (const auto& entry : std::filesystem::directory_iterator(langDir)) {
-                    if (!entry.is_regular_file()) {
-                        continue;
-                    }
-                    std::string fileName = Utf8FromPath(entry.path().filename());
-                    if (fileName.empty() || fileName.front() == '.') {
-                        continue;
-                    }
-                    std::string resourceName = toResourceName("LANG_", fileName);
-                    if (appendEntry(resourceName, entry.path())) {
-                        std::cout << "  Embedded: " << fileName << std::endl;
-                        anyEmbedded = true;
-                        langFiles.push_back(fileName);
-                    }
-                }
-            }
-
-            std::filesystem::path licenseDir = resourceDir / "license";
-            if (std::filesystem::exists(licenseDir) && std::filesystem::is_directory(licenseDir)) {
-                for (const auto& entry : std::filesystem::directory_iterator(licenseDir)) {
-                    if (!entry.is_regular_file()) {
-                        continue;
-                    }
-                    std::string fileName = Utf8FromPath(entry.path().filename());
-                    if (fileName.empty() || fileName.front() == '.') {
-                        continue;
-                    }
-                    std::string resourceName = toResourceName("LICENSE_", fileName);
-                    if (appendEntry(resourceName, entry.path())) {
-                        std::cout << "  Embedded: license/" << fileName << std::endl;
-                        anyEmbedded = true;
-                        licenseFiles.push_back(fileName);
-                    }
-                }
-            }
-        }
-
-        if (!useZip && !imageNames.empty()) {
-            std::string listText;
-            for (const auto& name : imageNames) {
-                listText += name;
-                listText += "\n";
-            }
-            std::vector<uint8_t> listData(listText.begin(), listText.end());
-            if (appendRawEntry("IMAGES_LIST", listData)) {
-                anyEmbedded = true;
-            }
-        }
-
-        if (!useZip && !langFiles.empty()) {
-            std::string listText;
-            for (const auto& name : langFiles) {
-                listText += name;
-                listText += "\n";
-            }
-            std::vector<uint8_t> listData(listText.begin(), listText.end());
-            if (appendRawEntry("LANG_LIST", listData)) {
-                anyEmbedded = true;
-            }
-        }
-
-        if (!useZip && !licenseFiles.empty()) {
-            std::string listText;
-            for (const auto& name : licenseFiles) {
-                listText += name;
-                listText += "\n";
-            }
-            std::vector<uint8_t> listData(listText.begin(), listText.end());
-            if (appendRawEntry("LICENSE_LIST", listData)) {
-                anyEmbedded = true;
-            }
-        }
-
-        if (!useZip) {
-            std::filesystem::path licensePath = resourceDir / "license.txt";
-            if (std::filesystem::exists(licensePath)) {
-                if (appendEntry("LICENSE_TXT", licensePath)) {
-                    std::cout << "  Embedded: license.txt" << std::endl;
-                    anyEmbedded = true;
-                }
-            }
-        }
-
-        if (!anyEmbedded) {
-            return false;
-        }
-
-        uint32_t magic = 0x52534D45; // "EMSR"
-        appendBytes(&magic, sizeof(magic));
-
-        std::cout << "Embedded UI resources into installer template" << std::endl;
-        return true;
-    } catch (const std::exception& e) {
-        std::cerr << "Failed to embed UI resources: " << e.what() << std::endl;
-        return false;
-    }
-}
-
 bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPath) {
     try {
         std::filesystem::path installerFile = PathFromUtf8(installerPath);
@@ -916,7 +248,7 @@ bool InstallerGenerator::copyRuntimeDependencies(const std::string& installerPat
         
         bool allSuccess = true;
         
-        std::filesystem::path templateDir = resolveTemplateDirectory();
+        std::filesystem::path templateDir = GetPackagerExecutableDirectory();
         
         if (templateDir.empty()) {
             std::cerr << "Warning: Could not find template directory with runtime dependencies" << std::endl;

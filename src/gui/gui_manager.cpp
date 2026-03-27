@@ -1,6 +1,11 @@
 #include "../../include/gui/gui_manager.h"
 #include "../../include/gui/page_controller.h"
 #include "../../include/gui/gui_helpers.h"
+#include "../../include/gui/gui_install_actions.h"
+#include "../../include/gui/gui_install_flow_utils.h"
+#include "../../include/gui/gui_runtime_utils.h"
+#include "../../include/gui/gui_status_presenter.h"
+#include "../../include/gui/gui_text_presenter.h"
 #include "../../include/gui/license_text_loader.h"
 #include "../../include/gui/installation_worker.h"
 #include "../../include/gui/uninstall_worker.h"
@@ -37,99 +42,6 @@ static constexpr int kPageProgress = static_cast<int>(PageType::Progress);
 static constexpr int kPageCompletion = static_cast<int>(PageType::Completion);
 static constexpr UINT_PTR kProgressTimerId = 1001;
 static constexpr UINT kProgressTimerIntervalMs = 33;
-
-static UINT GetDpiForWindowSafe(HWND hwnd) {
-#ifdef _WIN32
-    typedef UINT(WINAPI* GetDpiForWindowFn)(HWND);
-    HMODULE user32 = GetModuleHandleW(L"user32.dll");
-    if (user32) {
-        auto fn = reinterpret_cast<GetDpiForWindowFn>(
-            GetProcAddress(user32, "GetDpiForWindow"));
-        if (fn && hwnd) {
-            return fn(hwnd);
-        }
-        if (!hwnd) {
-            auto getSystemDpi = reinterpret_cast<UINT(WINAPI*)(void)>(
-                GetProcAddress(user32, "GetDpiForSystem"));
-            if (getSystemDpi) {
-                return getSystemDpi();
-            }
-        }
-    }
-
-    if (!hwnd) {
-        HMODULE shcore = LoadLibraryW(L"shcore.dll");
-        if (shcore) {
-            typedef HRESULT(WINAPI* GetDpiForMonitorFn)(HMONITOR, int, UINT*, UINT*);
-            auto getDpiForMonitor = reinterpret_cast<GetDpiForMonitorFn>(
-                GetProcAddress(shcore, "GetDpiForMonitor"));
-            if (getDpiForMonitor) {
-                POINT pt = {0, 0};
-                HMONITOR monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
-                UINT dpiX = 96;
-                UINT dpiY = 96;
-                if (SUCCEEDED(getDpiForMonitor(monitor, 0, &dpiX, &dpiY))) {
-                    FreeLibrary(shcore);
-                    return dpiX ? dpiX : 96;
-                }
-            }
-            FreeLibrary(shcore);
-        }
-    }
-    HDC screen = GetDC(NULL);
-    if (!screen) {
-        return 96;
-    }
-    int dpi = GetDeviceCaps(screen, LOGPIXELSX);
-    ReleaseDC(NULL, screen);
-    return dpi > 0 ? static_cast<UINT>(dpi) : 96;
-#else
-    return 96;
-#endif
-}
-
-
-// Convert wstring to LPCTSTR for Unicode/MBCS builds.
-// Returns a static buffer that's valid until next call.
-static LPCTSTR WStringToTStr(const std::wstring& wstr) {
-#ifdef UNICODE
-    static thread_local std::vector<std::wstring> stringPool;
-#else
-    static thread_local std::vector<std::string> stringPool;
-#endif
-    static thread_local size_t poolIndex = 0;
-
-    if (stringPool.size() < 10) {
-        stringPool.resize(10);
-    }
-
-#ifdef UNICODE
-    std::wstring& result = stringPool[poolIndex];
-#else
-    std::string& result = stringPool[poolIndex];
-#endif
-    poolIndex = (poolIndex + 1) % stringPool.size();
-
-#ifdef UNICODE
-    result = wstr;
-    return result.c_str();
-#else
-    if (wstr.empty()) {
-        result.clear();
-    } else {
-        result = WideToMultiByte(wstr, CP_ACP, 0);
-    }
-    return result.c_str();
-#endif
-}
-
-static std::wstring ToLowerString(const std::wstring& value);
-static int GetDefaultLanguageComboIndex();
-static std::wstring GetLanguageCodeForIndex(int index);
-static int GetLanguageIndexForCode(const std::wstring& code);
-static std::wstring GetLanguageFilePath(const std::wstring& code);
-static bool RequestPreviousInstallCleanup(HWND hWnd, const ExtendedInstallationMetadata& metadata, const std::wstring& installPath);
-
 struct ComponentControlBinding {
     CCheckBoxUI* checkBox = nullptr;
     std::string componentId;
@@ -465,17 +377,6 @@ static std::wstring NormalizeInstallPath(const std::wstring& basePath,
     return childPath.wstring();
 }
 
-static std::vector<std::string> BuildIdentityCandidatesFromConfig(const InstallConfig& config) {
-    std::vector<std::string> legacyIds;
-    legacyIds.reserve(config.legacyAppIds.size());
-    for (const auto& legacyId : config.legacyAppIds) {
-        legacyIds.push_back(WideToUtf8(legacyId));
-    }
-    return buildIdentityCandidates(WideToUtf8(config.appId),
-                                   legacyIds,
-                                   WideToUtf8(config.applicationName));
-}
-
 static std::wstring ResolveEffectiveDirectoryNameFromConfig(const InstallConfig& config) {
     const std::string directoryName = resolveEffectiveDirectoryName(
         WideToUtf8(config.directoryName),
@@ -605,7 +506,8 @@ void GUIManager::InitWindow() {
     InstallerPathResolver identityResolver;
     std::string previousManifest;
     std::string previousInstallDir;
-    std::vector<std::string> identityCandidates = BuildIdentityCandidatesFromConfig(m_config);
+    std::vector<std::string> identityCandidates =
+        GUIInstallActions::BuildIdentityCandidatesFromConfig(m_config);
     if (resolveExistingInstallInfo(identityCandidates,
                                    identityResolver,
                                    previousManifest,
@@ -698,61 +600,7 @@ void GUIManager::InitControls() {
         pShortcut->SetCheck(m_config.desktopIcons);
     }
     
-    CLabelUI* pAppName = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_name")));
-    if (pAppName) {
-        pAppName->SetText(WStringToTStr(m_config.applicationName));
-    }
-    
-    CLabelUI* pAppVersion = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_version")));
-    if (pAppVersion) {
-        std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.version.prefix", L"");
-        std::wstring versionText = prefix + m_config.version;
-        pAppVersion->SetText(WStringToTStr(versionText));
-    }
-    
-    CLabelUI* pAppNameProgress = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_name_progress")));
-    if (pAppNameProgress) {
-        pAppNameProgress->SetText(WStringToTStr(m_config.applicationName));
-    }
-    
-    CLabelUI* pAppVersionProgress = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_version_progress")));
-    if (pAppVersionProgress) {
-        std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.version.prefix", L"");
-        std::wstring versionText = prefix + m_config.version;
-        pAppVersionProgress->SetText(WStringToTStr(versionText));
-    }
-    
-    CLabelUI* pAppNameCompletion = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_name_completion")));
-    if (pAppNameCompletion) {
-        pAppNameCompletion->SetText(WStringToTStr(m_config.applicationName));
-    }
-    
-    CLabelUI* pAppVersionCompletion = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_version_completion")));
-    if (pAppVersionCompletion) {
-        std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.version.prefix", L"");
-        std::wstring versionText = prefix + m_config.version;
-        pAppVersionCompletion->SetText(WStringToTStr(versionText));
-    }
-
-    CLabelUI* pAppNameUninstall = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_name_uninstall")));
-    if (pAppNameUninstall) {
-        pAppNameUninstall->SetText(WStringToTStr(m_config.applicationName));
-    }
-
-    CLabelUI* pAppVersionUninstall = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_version_uninstall")));
-    if (pAppVersionUninstall) {
-        std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.version.prefix", L"");
-        std::wstring versionText = prefix + m_config.version;
-        pAppVersionUninstall->SetText(WStringToTStr(versionText));
-    }
+    GUITextPresenter::BindStaticAppTexts(m_pm, m_config);
     
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetWelcomePageIndex());
@@ -1047,16 +895,6 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 }
 
 void GUIManager::OnInstallButtonClick() {
-    CCheckBoxUI* pAgree = static_cast<CCheckBoxUI*>(
-        m_pm.FindControl(_T("chkAgree")));
-    if (pAgree && !pAgree->GetCheck()) {
-        GUIHelpers::ShowWarningDialog(
-            m_hWnd,
-            GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L""),
-            GUIHelpers::GetLocalizedText(L"msg.dialog.agree_required", L""));
-        return;
-    }
-
     if (!m_pPageController) {
         GUIHelpers::ShowErrorDialog(
             m_hWnd,
@@ -1065,15 +903,9 @@ void GUIManager::OnInstallButtonClick() {
         return;
     }
 
-    std::wstring installPath;
-    if (m_pInstallPathEdit) {
-        installPath = m_pInstallPathEdit->GetText().GetData();
-    }
-    if (installPath.empty()) {
-        GUIHelpers::ShowWarningDialog(
-            m_hWnd,
-            GUIHelpers::GetLocalizedText(L"msg.dialog.title.warning", L""),
-            GUIHelpers::GetLocalizedText(L"msg.dialog.select_install_dir", L""));
+    GUIInstallActions::InstallStartRequest request;
+    if (!GUIInstallActions::TryBuildInstallStartRequest(
+            m_hWnd, m_pm, m_pInstallPathEdit, m_config, request)) {
         return;
     }
 
@@ -1083,25 +915,7 @@ void GUIManager::OnInstallButtonClick() {
     m_progressFolder.clear();
     UpdateProgressDisplay(0.0f);
 
-    bool autoRun = false;
-    bool desktopIcons = false;
-    if (auto* pAutoRun = static_cast<CCheckBoxUI*>(m_pm.FindControl(_T("chkAutoRun")))) {
-        autoRun = pAutoRun->GetCheck();
-    }
-    if (auto* pShortcut = static_cast<CCheckBoxUI*>(m_pm.FindControl(_T("chkShotcut")))) {
-        desktopIcons = pShortcut->GetCheck();
-    }
-
     CollapseConfigIfExpanded();
-    std::wstring languageCode = GetLanguageCodeForIndex(GetDefaultLanguageComboIndex());
-    if (auto* pLangCombo = static_cast<CComboUI*>(m_pm.FindControl(_T("comboLanguageSelect")))) {
-        int index = pLangCombo->GetCurSel();
-        if (index >= 0) {
-            languageCode = GetLanguageCodeForIndex(index);
-        }
-    } else if (!m_config.languageCode.empty()) {
-        languageCode = m_config.languageCode;
-    }
 
     if (!EnsureInstallMetadataLoaded()) {
         GUIHelpers::ShowErrorDialog(
@@ -1113,7 +927,8 @@ void GUIManager::OnInstallButtonClick() {
     const ExtendedInstallationMetadata& metadata = m_installMetadata;
     std::vector<std::string> selectedComponents = CollectSelectedComponentsFromUi();
 
-    bool cleanupOldInstall = RequestPreviousInstallCleanup(m_hWnd, metadata, installPath);
+    bool cleanupOldInstall =
+        GUIInstallFlowUtils::ConfirmCleanupOldInstall(m_hWnd, metadata, request.installPath);
 
     std::vector<std::string> processNames = buildKillProcessList(
         metadata.applicationName,
@@ -1122,8 +937,10 @@ void GUIManager::OnInstallButtonClick() {
         return;
     }
 
-
-    m_pPageController->StartInstallation(installPath, autoRun, desktopIcons, languageCode,
+    m_pPageController->StartInstallation(request.installPath,
+                                         request.autoRun,
+                                         request.desktopIcons,
+                                         request.languageCode,
                                          cleanupOldInstall, selectedComponents, m_hWnd);
 
     if (m_pTabPages) {
@@ -1142,7 +959,8 @@ void GUIManager::OnUninstallConfirmClick() {
         m_pUninstallWorker = new UninstallWorker(m_hWnd);
     }
 
-    std::vector<std::string> identityCandidates = BuildIdentityCandidatesFromConfig(m_config);
+    std::vector<std::string> identityCandidates =
+        GUIInstallActions::BuildIdentityCandidatesFromConfig(m_config);
     if (identityCandidates.empty()) {
         CompletionMessageData* pData = new CompletionMessageData();
         pData->success = false;
@@ -1176,26 +994,8 @@ void GUIManager::OnBrowseButtonClick() {
         currentPath,
         selectedPath)) {
         
-        std::wstring finalPath = selectedPath;
-        std::wstring effectiveDirectoryName = ResolveEffectiveDirectoryNameFromConfig(m_config);
-        if (m_config.installDirectoryAppendName && !effectiveDirectoryName.empty()) {
-            std::filesystem::path selectedFs = selectedPath;
-            std::wstring appNameLower = ToLowerString(effectiveDirectoryName);
-            std::wstring selectedNameLower = ToLowerString(selectedFs.filename().wstring());
-
-            if (selectedNameLower == appNameLower) {
-                finalPath = selectedFs.wstring();
-            } else {
-                std::filesystem::path childPath = selectedFs / effectiveDirectoryName;
-                std::error_code ec;
-                if (std::filesystem::exists(childPath, ec) &&
-                    std::filesystem::is_directory(childPath, ec)) {
-                    finalPath = childPath.wstring();
-                } else {
-                    finalPath = childPath.wstring();
-                }
-            }
-        }
+        std::wstring finalPath =
+            GUIInstallFlowUtils::ResolveSelectedInstallPath(m_config, selectedPath);
 
         if (m_pInstallPathEdit) {
             m_pInstallPathEdit->SetText(WStringToTStr(finalPath));
@@ -1275,46 +1075,7 @@ void GUIManager::SyncLicenseAgreementFromPage() {
 }
 
 void GUIManager::OnFinishButtonClick() {
-    CCheckBoxUI* pRunAppCheckbox = static_cast<CCheckBoxUI*>(
-        m_pm.FindControl(_T("run_app_checkbox")));
-    bool shouldRun = true;
-    if (pRunAppCheckbox) {
-        shouldRun = pRunAppCheckbox->GetCheck();
-    }
-    if (shouldRun) {
-        std::wstring installPath;
-        if (m_pInstallPathEdit) {
-            installPath = m_pInstallPathEdit->GetText().GetData();
-        }
-        
-        if (!installPath.empty() && !m_config.executableName.empty()) {
-            std::wstring exePath = installPath;
-            if (exePath.back() != L'\\' && exePath.back() != L'/') {
-                exePath += L"\\";
-            }
-            exePath += m_config.executableName;
-            if (!GUIHelpers::LaunchApplication(exePath, installPath)) {
-                GUIHelpers::ShowWarningDialog(
-                    m_hWnd,
-                    GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L""),
-                    GUIHelpers::GetLocalizedText(L"msg.dialog.launch_failed", L""));
-            }
-        }
-    }
-    
-    CCheckBoxUI* pOpenWebCheckbox = static_cast<CCheckBoxUI*>(
-        m_pm.FindControl(_T("open_web_checkbox")));
-    if (pOpenWebCheckbox && pOpenWebCheckbox->GetCheck()) {
-        if (!m_config.webPageUrl.empty()) {
-            if (!GUIHelpers::OpenWebPage(m_config.webPageUrl)) {
-                GUIHelpers::ShowWarningDialog(
-                    m_hWnd,
-                    GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L""),
-                    GUIHelpers::GetLocalizedText(L"msg.dialog.web_failed", L""));
-            }
-        }
-    }
-    
+    GUIInstallActions::RunPostInstallActions(m_hWnd, m_pm, m_pInstallPathEdit, m_config);
     Close();
 }
 
@@ -1420,245 +1181,21 @@ void GUIManager::CollapseConfigIfExpanded() {
     m_pm.Invalidate();
 }
 
-
-static std::wstring ToLowerString(const std::wstring& value) {
-    std::wstring result = value;
-    std::transform(result.begin(), result.end(), result.begin(),
-                   [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
-    return result;
-}
-
-static int GetDefaultLanguageComboIndex() {
-#ifdef _WIN32
-    LANGID langId = GetUserDefaultUILanguage();
-    switch (PRIMARYLANGID(langId)) {
-        case LANG_CHINESE:
-            return 0;
-        case LANG_ENGLISH:
-            return 1;
-        case LANG_JAPANESE:
-            return 2;
-        case LANG_KOREAN:
-            return 3;
-        case LANG_SPANISH:
-            return 4;
-        case LANG_FRENCH:
-            return 5;
-        default:
-            return 1;
-    }
-#else
-    return 1;
-#endif
-}
-
-static std::wstring GetLanguageCodeForIndex(int index) {
-    switch (index) {
-        case 0:
-            return L"zh_CN";
-        case 1:
-            return L"en_US";
-        case 2:
-            return L"ja_JP";
-        case 3:
-            return L"ko_KR";
-        case 4:
-            return L"es_ES";
-        case 5:
-            return L"fr_FR";
-        default:
-            return L"en_US";
-    }
-}
-
-static int GetLanguageIndexForCode(const std::wstring& code) {
-    std::wstring lower = ToLowerString(code);
-    if (lower == L"zh_cn" || lower == L"zh-cn" || lower == L"zh") {
-        return 0;
-    }
-    if (lower == L"en_us" || lower == L"en-us" || lower == L"en") {
-        return 1;
-    }
-    if (lower == L"ja_jp" || lower == L"ja-jp" || lower == L"ja") {
-        return 2;
-    }
-    if (lower == L"ko_kr" || lower == L"ko-kr" || lower == L"ko") {
-        return 3;
-    }
-    if (lower == L"es_es" || lower == L"es-es" || lower == L"es") {
-        return 4;
-    }
-    if (lower == L"fr_fr" || lower == L"fr-fr" || lower == L"fr") {
-        return 5;
-    }
-    return 1;
-}
-
-static std::wstring GetLanguageFilePath(const std::wstring& code) {
-    CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
-    if (resourcePath.IsEmpty()) {
-        return L"";
-    }
-    std::filesystem::path resPath = PathFromTChar(resourcePath.GetData());
-    if (resPath.filename().empty()) {
-        resPath = resPath.parent_path();
-    }
-    std::wstring tail = ToLowerString(resPath.filename().wstring());
-    bool inSkins = (tail == L"skins");
-
-    std::filesystem::path langPath;
-    if (inSkins) {
-        langPath = std::filesystem::path(L"..") / L"lang";
-    } else {
-        langPath = std::filesystem::path(L"lang");
-    }
-    langPath /= code + L".xml";
-    return langPath.wstring();
-}
-
-static bool RequestPreviousInstallCleanup(HWND hWnd,
-                                          const ExtendedInstallationMetadata& metadata,
-                                          const std::wstring& installPath) {
-    if (metadata.autoCleanOldInstall) {
-        return true;
-    }
-
-    InstallerPathResolver pathResolver;
-    std::string installPathUtf8 = WideToUtf8(installPath);
-    bool installDirectoryAppendName = true;
-    for (const auto& mapping : metadata.extendedMappings) {
-        if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
-            installDirectoryAppendName = mapping.appendDirectoryName;
-            break;
-        }
-    }
-    std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
-        installPathUtf8,
-        SpecialDirectoryType::INSTALL_DIRECTORY,
-        resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName),
-        installDirectoryAppendName
-    );
-
-    std::string previousManifest;
-    std::string previousInstallDir;
-    std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(metadata.appId, metadata.legacyAppIds, metadata.applicationName);
-    if (!resolveExistingInstallInfo(identityCandidates, pathResolver,
-                                    previousManifest, previousInstallDir)) {
-        return false;
-    }
-
-    std::string newPath = resolvedInstallRoot.empty() ? installPathUtf8 : resolvedInstallRoot;
-    std::string normalizedOld = normalizePathForCompare(previousInstallDir);
-    std::string normalizedNew = normalizePathForCompare(newPath);
-    if (normalizedOld.empty() || normalizedNew.empty() || normalizedOld == normalizedNew) {
-        return false;
-    }
-
-    if (previousManifest.empty()) {
-        logInstallerInfo("[GUI] Old install manifest not found; skipping cleanup prompt.");
-        return false;
-    }
-
-    std::wstring title = GUIHelpers::GetLocalizedText(L"msg.dialog.cleanup_old.title", L"");
-    std::wstring yesText = GUIHelpers::GetLocalizedText(L"msg.dialog.cleanup_old.yes", L"");
-    std::wstring noText = GUIHelpers::GetLocalizedText(L"msg.dialog.cleanup_old.no", L"");
-    std::wstring message = GUIHelpers::GetLocalizedText(L"msg.dialog.cleanup_old.message", L"");
-    DialogResult result = GUIHelpers::ShowCustomDialog(
-        hWnd,
-        title,
-        message,
-        yesText,
-        noText,
-        L"");
-    return result == DialogResult::Ok;
-}
-
 void GUIManager::OnLicenseCheckboxChanged() {
     UpdateInstallButtonState();
 }
 
 void GUIManager::UpdateInstallButtonState() {
-    if (!m_pInstallButton || !m_pLicenseCheckbox || !m_pInstallPathEdit) {
-        return;
-    }
-
-    bool licenseAgreed = m_pLicenseCheckbox->GetCheck();
-
-    std::wstring installPath = m_pInstallPathEdit->GetText().GetData();
-    uint64_t availableSpace;
-    bool spaceEnough = GUIHelpers::CheckDiskSpace(
-        installPath,
-        m_config.requiredDiskSpace,
-        availableSpace);
-    m_pInstallButton->SetEnabled(licenseAgreed && spaceEnough);
+    GUIInstallFlowUtils::UpdateInstallButtonEnabled(
+        m_pInstallButton, m_pLicenseCheckbox, m_pInstallPathEdit, m_config.requiredDiskSpace);
 }
 
 void GUIManager::UpdateDiskSpaceInfo(const std::wstring& path) {
-    if (!m_pDiskSpaceLabel) {
-        return;
-    }
-
-    uint64_t totalSpace = GUIHelpers::GetTotalDiskSpace(path);
-    uint64_t availableSpace = GUIHelpers::GetAvailableDiskSpace(path);
-
-    std::wstring totalStr = GUIHelpers::FormatBytes(totalSpace);
-    std::wstring freeStr = GUIHelpers::FormatBytes(availableSpace);
-    std::wstring requiredStr = GUIHelpers::FormatBytes(m_config.requiredDiskSpace);
-
-    std::wstring totalLabel = GUIHelpers::GetLocalizedText(L"msg.space.total", L"");
-    std::wstring freeLabel = GUIHelpers::GetLocalizedText(L"msg.space.free", L"");
-    std::wstring requiredLabel = GUIHelpers::GetLocalizedText(L"msg.space.required", L"");
-    std::wstringstream ss;
-
-    if (totalSpace > 0) {
-        ss << totalLabel << totalStr << L" | " << freeLabel << freeStr;
-    } else {
-        ss << freeLabel << freeStr;
-    }
-    ss << L" | " << requiredLabel << requiredStr;
-    
-    m_pDiskSpaceLabel->SetText(ss.str().c_str());
-    
-    if (availableSpace < m_config.requiredDiskSpace) {
-        m_pDiskSpaceLabel->SetTextColor(0xFFFF0000);
-    } else {
-        m_pDiskSpaceLabel->SetTextColor(0xFF666666);
-    }
+    GUIInstallFlowUtils::UpdateDiskSpaceLabel(m_pDiskSpaceLabel, path, m_config.requiredDiskSpace);
 }
 
 void GUIManager::RefreshLocalizedText() {
-    CLabelUI* pAppVersion = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_version")));
-    if (pAppVersion) {
-        std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.version.prefix", L"");
-        std::wstring versionText = prefix + m_config.version;
-        pAppVersion->SetText(WStringToTStr(versionText));
-    }
-
-    CLabelUI* pAppVersionProgress = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_version_progress")));
-    if (pAppVersionProgress) {
-        std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.version.prefix", L"");
-        std::wstring versionText = prefix + m_config.version;
-        pAppVersionProgress->SetText(WStringToTStr(versionText));
-    }
-
-    CLabelUI* pAppVersionCompletion = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_version_completion")));
-    if (pAppVersionCompletion) {
-        std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.version.prefix", L"");
-        std::wstring versionText = prefix + m_config.version;
-        pAppVersionCompletion->SetText(WStringToTStr(versionText));
-    }
-
-    CLabelUI* pAppVersionUninstall = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("app_version_uninstall")));
-    if (pAppVersionUninstall) {
-        std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.version.prefix", L"");
-        std::wstring versionText = prefix + m_config.version;
-        pAppVersionUninstall->SetText(WStringToTStr(versionText));
-    }
+    GUITextPresenter::RefreshVersionTexts(m_pm, m_config);
 
     std::wstring currentPath;
     if (m_pInstallPathEdit) {
@@ -1746,35 +1283,7 @@ void GUIManager::TickProgressAnimation() {
 }
 
 void GUIManager::UpdateProgressDisplay(float percentage) {
-    CLabelUI* pCurrentFolderLabel = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("current_folder")));
-    if (pCurrentFolderLabel && !m_progressFolder.empty()) {
-        std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.progress.processing", L"");
-        std::wstring folderText = prefix + m_progressFolder;
-        pCurrentFolderLabel->SetText(WStringToTStr(folderText));
-    }
-
-    CProgressUI* pProgressBar = static_cast<CProgressUI*>(
-        m_pm.FindControl(_T("progress_bar")));
-    if (pProgressBar) {
-        int progressValue = static_cast<int>(percentage);
-        pProgressBar->SetValue(progressValue);
-    }
-
-    CLabelUI* pProgressPercentLabel = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("progress_percent")));
-    if (pProgressPercentLabel) {
-        wchar_t percentText[32];
-        swprintf_s(percentText, L"%.1f%%", percentage);
-        pProgressPercentLabel->SetText(percentText);
-    }
-
-    CLabelUI* pEstimatedTimeLabel = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("estimated_time")));
-    if (pEstimatedTimeLabel) {
-        std::wstring text = GUIHelpers::GetLocalizedText(L"msg.progress.eta", L"");
-        pEstimatedTimeLabel->SetText(WStringToTStr(text));
-    }
+    GUIStatusPresenter::UpdateProgressDisplay(m_pm, m_progressFolder, percentage);
 }
 
 void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {
@@ -1788,66 +1297,7 @@ void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {
         m_pTabPages->SelectItem(GetCompletionPageIndex());
     }
     
-    CLabelUI* pCompletionTitle = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("completion_title")));
-    CLabelUI* pResultMessageLabel = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("result_message")));
-    CControlUI* pSuccessIcon = m_pm.FindControl(_T("completion_success_icon"));
-    CControlUI* pFailureIcon = m_pm.FindControl(_T("completion_failure_icon"));
-    CCheckBoxUI* pOpenWebCheckbox = static_cast<CCheckBoxUI*>(
-        m_pm.FindControl(_T("open_web_checkbox")));
-    CButtonUI* pRunButton = static_cast<CButtonUI*>(m_pm.FindControl(_T("btnRun")));
-
-    if (pData->success) {
-        if (pCompletionTitle) {
-            pCompletionTitle->SetText(WStringToTStr(
-                GUIHelpers::GetLocalizedText(L"msg.install.success", L"")));
-            pCompletionTitle->SetTextColor(0xFF333333);
-        }
-        if (pResultMessageLabel) {
-            pResultMessageLabel->SetText(WStringToTStr(
-                GUIHelpers::GetLocalizedText(L"msg.install.success", L"")));
-            pResultMessageLabel->SetTextColor(0xFF4CAF50);
-        }
-        if (pSuccessIcon) {
-            pSuccessIcon->SetVisible(true);
-        }
-        if (pFailureIcon) {
-            pFailureIcon->SetVisible(false);
-        }
-        if (pRunButton) {
-            pRunButton->SetVisible(true);
-        }
-        if (pOpenWebCheckbox) {
-            pOpenWebCheckbox->SetVisible(!m_config.webPageUrl.empty());
-        }
-    } else {
-        if (pCompletionTitle) {
-            pCompletionTitle->SetText(WStringToTStr(
-                GUIHelpers::GetLocalizedText(L"msg.install.failed", L"")));
-            pCompletionTitle->SetTextColor(0xFFFF0000);
-        }
-        if (pResultMessageLabel) {
-            std::wstring errorText = pData->errorMessage;
-            if (errorText.empty()) {
-                errorText = GUIHelpers::GetLocalizedText(L"msg.error.install_failed", L"");
-            }
-            pResultMessageLabel->SetText(WStringToTStr(errorText));
-            pResultMessageLabel->SetTextColor(0xFFFF0000);
-        }
-        if (pSuccessIcon) {
-            pSuccessIcon->SetVisible(false);
-        }
-        if (pFailureIcon) {
-            pFailureIcon->SetVisible(true);
-        }
-        if (pRunButton) {
-            pRunButton->SetVisible(false);
-        }
-        if (pOpenWebCheckbox) {
-            pOpenWebCheckbox->SetVisible(false);
-        }
-    }
+    GUIStatusPresenter::ShowInstallCompletion(m_pm, m_config, *pData);
 }
 
 void GUIManager::ApplyLanguageByIndex(int index) {
@@ -1855,45 +1305,9 @@ void GUIManager::ApplyLanguageByIndex(int index) {
 }
 
 void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
-    std::wstring langPath = GetLanguageFilePath(code);
-    if (langPath.empty()) {
+    if (!GUITextPresenter::ApplyLanguage(m_pm, m_config, code)) {
         return;
     }
-
-    std::wstring appliedCode = code;
-
-    logInstallerInfo(std::string("[GUI] Language resource path: ") +
-                     WideToUtf8(TCharToWide(CPaintManagerUI::GetResourcePath().GetData())) +
-                     " file=" + WideToUtf8(langPath));
-
-    if (!CResourceManager::GetInstance()->LoadLanguage(langPath.c_str())) {
-        if (code != L"en_US") {
-            std::wstring fallbackPath = GetLanguageFilePath(L"en_US");
-            if (!fallbackPath.empty() &&
-                CResourceManager::GetInstance()->LoadLanguage(fallbackPath.c_str())) {
-                CResourceManager::GetInstance()->SetLanguage(L"en_US");
-                appliedCode = L"en_US";
-                logInstallerInfo(std::string("[GUI] Language fallback loaded: ") +
-                                 WideToUtf8(fallbackPath));
-            } else {
-                logInstallerWarning(std::string("[GUI] Failed to load language file: ") +
-                                   WideToUtf8(langPath));
-                return;
-            }
-        } else {
-            logInstallerWarning(std::string("[GUI] Failed to load language file: ") +
-                               WideToUtf8(langPath));
-            return;
-        }
-    } else {
-        CResourceManager::GetInstance()->SetLanguage(code.c_str());
-    }
-
-    m_config.languageCode = appliedCode;
-    CResourceManager::GetInstance()->ReloadText();
-    m_pm.NeedUpdate();
-    m_pm.Invalidate();
-    RefreshLocalizedText();
     RefreshLicenseText();
 }
 
@@ -1908,20 +1322,7 @@ void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) 
         m_pTabPages->SelectItem(GetCompletionPageIndex());
     }
 
-    CLabelUI* pResultMessageLabel = static_cast<CLabelUI*>(
-        m_pm.FindControl(_T("uninstall_result_message")));
-    if (pResultMessageLabel) {
-        if (pData->success) {
-            std::wstring text = GUIHelpers::GetLocalizedText(L"msg.uninstall.success", L"");
-            pResultMessageLabel->SetText(WStringToTStr(text));
-            pResultMessageLabel->SetTextColor(0xFF4CAF50);
-        } else {
-            std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.uninstall.failed", L"");
-            std::wstring errorText = prefix + pData->errorMessage;
-            pResultMessageLabel->SetText(WStringToTStr(errorText));
-            pResultMessageLabel->SetTextColor(0xFFFF0000);
-        }
-    }
+    GUIStatusPresenter::ShowUninstallCompletion(m_pm, *pData);
 }
 
 } // namespace MultiThreadedInstaller

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/types.h"
+#include "common/config_types.h"
 #include "installer/path_resolver.h"
 
 #ifdef _WIN32

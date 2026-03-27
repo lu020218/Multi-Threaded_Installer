@@ -272,6 +272,10 @@ set(PACKAGER_SOURCES
     src/packager/installer_generator.cpp
     src/packager/icon_updater.cpp
     src/packager/version_info_updater.cpp
+    src/packager/template_loader.cpp
+    src/packager/resource_embedder.cpp
+    src/packager/resource_zip_builder.cpp
+    src/packager/embedded_resource_table.cpp
     src/packager/configuration_loader.cpp
     src/packager/configuration_validator.cpp
     src/packager/configuration_manager.cpp
@@ -294,12 +298,18 @@ set(INSTALLER_SOURCES
     src/installer/install_service.cpp
     src/installer/upgrade_cleanup.cpp
     src/installer/uninstall_manager.cpp
+    src/installer/gui_resource_loader.cpp
     src/installer/main.cpp
     src/common/installer_parallel_install.cpp
 )
 
 set(GUI_SOURCES
     src/gui/gui_manager.cpp
+    src/gui/gui_runtime_utils.cpp
+    src/gui/gui_text_presenter.cpp
+    src/gui/gui_status_presenter.cpp
+    src/gui/gui_install_flow_utils.cpp
+    src/gui/gui_install_actions.cpp
     src/gui/page_controller.cpp
     src/gui/installation_worker.cpp
     src/gui/uninstall_worker.cpp

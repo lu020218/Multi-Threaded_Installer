@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/types.h"
+#include "common/config_types.h"
 #include "packager/configuration_loader.h"
 #include "packager/configuration_validator.h"
 #include <string>

@@ -6,7 +6,7 @@
 #include <atomic>
 #include <memory>
 #include <vector>
-#include "../common/types.h"
+#include "../common/config_types.h"
 
 namespace MultiThreadedInstaller {
 

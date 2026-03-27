@@ -44,6 +44,10 @@ input/
 .\build\Release\packager.exe <input_directory> <output_installer.exe>
 ```
 
+Notes:
+- `packager.exe` reads the `installer.exe` template and `resources/` source assets from its current directory.
+- Generated installers embed UI resources, so runtime and distribution no longer require an external `resources/` directory.
+
 示例：
 
 ```powershell
@@ -255,3 +259,9 @@ cleanup:
       recursive: true
       onlyIfEmpty: true
 ```
+
+## Release Model
+
+- Generated installers are `embedded-only` for GUI resources.
+- Keep `installer.exe`, `packager.exe`, and the source `resources/` directory together while running `packager.exe`.
+- Do not distribute an external `resources/` directory with the final generated installer.

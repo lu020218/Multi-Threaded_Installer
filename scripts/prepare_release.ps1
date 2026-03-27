@@ -1,5 +1,7 @@
 # Release Preparation Script
-# This script builds the installer in Release mode and prepares a distribution package
+# This script builds the installer in Release mode and prepares a distribution package.
+# Generated installers embed UI resources; distribution does not require an external
+# resources/ directory.
 
 param(
     [string]$Version = "1.0.0",
@@ -14,23 +16,20 @@ Write-Host "  Installer Release Preparation v$Version" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Step 1: Clean build directory if requested
 if ($Clean -and (Test-Path $BuildDir)) {
     Write-Host "[1/6] Cleaning build directory..." -ForegroundColor Yellow
     Remove-Item -Recurse -Force $BuildDir
-    Write-Host "  ✓ Build directory cleaned" -ForegroundColor Green
+    Write-Host "  Build directory cleaned" -ForegroundColor Green
 } else {
     Write-Host "[1/6] Using existing build directory" -ForegroundColor Yellow
 }
 Write-Host ""
 
-# Step 2: Create build directory
 Write-Host "[2/6] Creating build directory..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
-Write-Host "  ✓ Build directory ready: $BuildDir" -ForegroundColor Green
+Write-Host "  Build directory ready: $BuildDir" -ForegroundColor Green
 Write-Host ""
 
-# Step 3: Configure with CMake
 Write-Host "[3/6] Configuring with CMake..." -ForegroundColor Yellow
 Push-Location $BuildDir
 try {
@@ -42,18 +41,17 @@ try {
         "-DCMAKE_BUILD_TYPE=Release",
         "-DSTATIC_LINK_RUNTIME=ON"
     )
-    
+
     & cmake $cmakeArgs
     if ($LASTEXITCODE -ne 0) {
         throw "CMake configuration failed"
     }
-    Write-Host "  ✓ CMake configuration successful" -ForegroundColor Green
+    Write-Host "  CMake configuration successful" -ForegroundColor Green
 } finally {
     Pop-Location
 }
 Write-Host ""
 
-# Step 4: Build Release version
 Write-Host "[4/6] Building Release version..." -ForegroundColor Yellow
 Push-Location $BuildDir
 try {
@@ -61,49 +59,36 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Build failed"
     }
-    Write-Host "  ✓ Build successful" -ForegroundColor Green
+    Write-Host "  Build successful" -ForegroundColor Green
 } finally {
     Pop-Location
 }
 Write-Host ""
 
-# Step 5: Prepare distribution package
 Write-Host "[5/6] Preparing distribution package..." -ForegroundColor Yellow
 
 $DistDir = "dist-v$Version"
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
-# Clean and create distribution directory
 if (Test-Path $DistDir) {
     Remove-Item -Recurse -Force $DistDir
 }
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
-# Copy installer executable
 $InstallerExe = Join-Path $BuildDir "Release\installer.exe"
 if (Test-Path $InstallerExe) {
     Copy-Item $InstallerExe $DistDir
-    Write-Host "  ✓ Copied installer.exe" -ForegroundColor Green
+    Write-Host "  Copied installer.exe" -ForegroundColor Green
 } else {
     throw "Installer executable not found: $InstallerExe"
 }
 
-# Copy packager executable
 $PackagerExe = Join-Path $BuildDir "Release\packager.exe"
 if (Test-Path $PackagerExe) {
     Copy-Item $PackagerExe $DistDir
-    Write-Host "  ✓ Copied packager.exe" -ForegroundColor Green
+    Write-Host "  Copied packager.exe" -ForegroundColor Green
 }
 
-# Copy resources directory
-if (Test-Path "resources") {
-    Copy-Item -Recurse "resources" $DistDir
-    Write-Host "  ✓ Copied resources directory" -ForegroundColor Green
-} else {
-    Write-Host "  ⚠ Resources directory not found" -ForegroundColor Yellow
-}
-
-# Copy documentation
 $DocsToInclude = @(
     "README.md",
     "LICENSE",
@@ -123,13 +108,12 @@ foreach ($Doc in $DocsToInclude) {
             Join-Path $DistDir (Split-Path $Doc -Leaf)
         }
         Copy-Item $Doc $DestPath
-        Write-Host "  ✓ Copied $(Split-Path $Doc -Leaf)" -ForegroundColor Green
+        Write-Host "  Copied $(Split-Path $Doc -Leaf)" -ForegroundColor Green
     } else {
-        Write-Host "  ⚠ Document not found: $Doc" -ForegroundColor Yellow
+        Write-Host "  Document not found: $Doc" -ForegroundColor Yellow
     }
 }
 
-# Copy any required DLLs
 $DllsDir = Join-Path $BuildDir "Release"
 $RequiredDlls = @("libzstd.dll")
 
@@ -137,24 +121,22 @@ foreach ($Dll in $RequiredDlls) {
     $DllPath = Join-Path $DllsDir $Dll
     if (Test-Path $DllPath) {
         Copy-Item $DllPath $DistDir
-        Write-Host "  ✓ Copied $Dll" -ForegroundColor Green
+        Write-Host "  Copied $Dll" -ForegroundColor Green
     }
 }
 
-Write-Host "  ✓ Distribution package prepared: $DistDir" -ForegroundColor Green
+Write-Host "  Distribution package prepared: $DistDir" -ForegroundColor Green
 Write-Host ""
 
-# Step 6: Create release archive
 Write-Host "[6/6] Creating release archive..." -ForegroundColor Yellow
 
 $ArchiveName = "Installer-v$Version-$Timestamp.zip"
 Compress-Archive -Path "$DistDir\*" -DestinationPath $ArchiveName -Force
 
 $ArchiveSize = (Get-Item $ArchiveName).Length / 1MB
-Write-Host "  ✓ Archive created: $ArchiveName ($([math]::Round($ArchiveSize, 2)) MB)" -ForegroundColor Green
+Write-Host "  Archive created: $ArchiveName ($([math]::Round($ArchiveSize, 2)) MB)" -ForegroundColor Green
 Write-Host ""
 
-# Summary
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Release Preparation Complete!" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
@@ -169,7 +151,6 @@ Write-Host "  3. Create release notes" -ForegroundColor White
 Write-Host "  4. Upload $ArchiveName to distribution server" -ForegroundColor White
 Write-Host ""
 
-# Create a release info file
 $ReleaseInfo = @"
 Release Information
 ===================
@@ -183,8 +164,11 @@ Static Runtime: Yes
 Files Included:
 - installer.exe (Main installer with GUI)
 - packager.exe (Package creation tool)
-- resources/ (UI resources: XML layouts and images)
 - docs/ (User and reference documentation)
+
+Notes:
+- Installer UI resources are embedded into generated installers.
+- External resources/ directories are not required for distribution.
 
 Build Configuration:
 - CMake Generator: Visual Studio 16 2019

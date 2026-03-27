@@ -4,7 +4,7 @@
 #include <vector>
 #include <functional>
 
-#include "common/types.h"
+#include "common/archive_types.h"
 
 namespace MultiThreadedInstaller {
 

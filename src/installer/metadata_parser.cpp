@@ -1047,24 +1047,5 @@ bool MetadataParser::readEmbeddedLocator(std::ifstream& file,
     return true;
 }
 
-std::string MetadataParser::getCurrentExecutablePath() {
-    #ifdef _WIN32
-    wchar_t buffer[MAX_PATH];
-    DWORD len = GetModuleFileNameW(NULL, buffer, MAX_PATH);
-    if (len == 0) {
-        return std::string();
-    }
-    return WideToUtf8(std::wstring(buffer, len));
-    #else
-    char buffer[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
-    if (len != -1) {
-        buffer[len] = '\0';
-        return std::string(buffer);
-    }
-    return {};
-    #endif
-}
-
 } // namespace MultiThreadedInstaller
 

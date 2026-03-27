@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 #include <unordered_map>
-#include "../common/types.h"
+#include "../common/archive_types.h"
 
 // Use DuiLib namespace
 using namespace DuiLib;

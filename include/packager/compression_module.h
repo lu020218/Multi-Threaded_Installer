@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/types.h"
+#include "common/archive_types.h"
 
 #ifdef LibLZMA_FOUND
 #include <lzma.h>

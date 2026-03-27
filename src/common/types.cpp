@@ -1,4 +1,4 @@
-#include "common/types.h"
+#include "common/archive_types.h"
 
 namespace MultiThreadedInstaller {
 

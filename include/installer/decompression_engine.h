@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/types.h"
+#include "common/archive_types.h"
 #include "installer/thread_pool_manager.h"
 #include "installer/stream_sink.h"
 #include "installer/crc32_stream.h"

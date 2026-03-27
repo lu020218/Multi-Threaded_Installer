@@ -386,8 +386,6 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        installerGen.setTemplateResourceDir(PathFromUtf8(baseTemplate).parent_path());
-
         tempTemplatePath = makeTempTemplatePath(outputFilePath);
         std::error_code copyError;
         fs::copy_file(PathFromUtf8(baseTemplate), tempTemplatePath, fs::copy_options::overwrite_existing, copyError);

@@ -1,4 +1,5 @@
 #include "common/lzma_loader.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <iostream>
 #include <string>
@@ -122,7 +123,7 @@ bool LzmaLoader::loadLibrary() {
     for (const auto& path : candidates) {
         hModule = tryLoadLibrary(path);
         if (hModule) {
-            std::cout << "Loaded liblzma.dll from: " << path << std::endl;
+            logInstallerInfo(std::string("[LZMA] Loaded liblzma.dll from: ") + path);
             break;
         }
     }
@@ -131,7 +132,7 @@ bool LzmaLoader::loadLibrary() {
         hModule = LoadLibraryW(L"liblzma.dll");
     }
     if (!hModule) {
-        std::cerr << "Failed to load liblzma.dll" << std::endl;
+        logInstallerError("[LZMA] Failed to load liblzma.dll.");
         return false;
     }
     
@@ -154,28 +155,28 @@ bool LzmaLoader::loadLibrary() {
         loadFunction(lzma_version_number_ptr, "lzma_version_number");
     
     if (!commonOk) {
-        std::cerr << "Failed to load required LZMA common functions" << std::endl;
+        logInstallerError("[LZMA] Failed to load required LZMA common functions.");
         unloadLibrary();
         return false;
     }
     
     if (!compressionOk && !decompressionOk) {
-        std::cerr << "Failed to load both compression and decompression functions" << std::endl;
+        logInstallerError("[LZMA] Failed to load both compression and decompression functions.");
         unloadLibrary();
         return false;
     }
     
     if (!compressionOk) {
-        std::cerr << "Warning: LZMA compression functions not available" << std::endl;
+        logInstallerWarning("[LZMA] Compression functions not available.");
     }
     
     if (!decompressionOk) {
-        std::cerr << "Warning: LZMA decompression functions not available" << std::endl;
+        logInstallerWarning("[LZMA] Decompression functions not available.");
     }
     
-    std::cout << "Successfully loaded LZMA library dynamically" << std::endl;
-    if (compressionOk) std::cout << "  - Compression support: enabled" << std::endl;
-    if (decompressionOk) std::cout << "  - Decompression support: enabled" << std::endl;
+    logInstallerInfo("[LZMA] Successfully loaded LZMA library dynamically.");
+    if (compressionOk) logInstallerInfo("[LZMA] Compression support: enabled.");
+    if (decompressionOk) logInstallerInfo("[LZMA] Decompression support: enabled.");
     
     return true;
     
@@ -187,7 +188,7 @@ bool LzmaLoader::loadLibrary() {
     }
     
     if (!handle) {
-        std::cerr << "Failed to load liblzma.so: " << dlerror() << std::endl;
+        logInstallerError(std::string("[LZMA] Failed to load liblzma.so: ") + dlerror());
         return false;
     }
     
@@ -210,28 +211,28 @@ bool LzmaLoader::loadLibrary() {
         loadFunction(lzma_version_number_ptr, "lzma_version_number");
     
     if (!commonOk) {
-        std::cerr << "Failed to load required LZMA common functions" << std::endl;
+        logInstallerError("[LZMA] Failed to load required LZMA common functions.");
         unloadLibrary();
         return false;
     }
     
     if (!compressionOk && !decompressionOk) {
-        std::cerr << "Failed to load both compression and decompression functions" << std::endl;
+        logInstallerError("[LZMA] Failed to load both compression and decompression functions.");
         unloadLibrary();
         return false;
     }
     
     if (!compressionOk) {
-        std::cerr << "Warning: LZMA compression functions not available" << std::endl;
+        logInstallerWarning("[LZMA] Compression functions not available.");
     }
     
     if (!decompressionOk) {
-        std::cerr << "Warning: LZMA decompression functions not available" << std::endl;
+        logInstallerWarning("[LZMA] Decompression functions not available.");
     }
     
-    std::cout << "Successfully loaded LZMA library dynamically" << std::endl;
-    if (compressionOk) std::cout << "  - Compression support: enabled" << std::endl;
-    if (decompressionOk) std::cout << "  - Decompression support: enabled" << std::endl;
+    logInstallerInfo("[LZMA] Successfully loaded LZMA library dynamically.");
+    if (compressionOk) logInstallerInfo("[LZMA] Compression support: enabled.");
+    if (decompressionOk) logInstallerInfo("[LZMA] Decompression support: enabled.");
     
     return true;
 #endif
@@ -274,7 +275,7 @@ bool LzmaLoader::loadFunction(T& func, const char* name) {
 #endif
     
     if (!func) {
-        std::cerr << "Failed to load function: " << name << std::endl;
+        logInstallerError(std::string("[LZMA] Failed to load function: ") + name);
         return false;
     }
     

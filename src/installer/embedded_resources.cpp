@@ -1,4 +1,5 @@
 #include "../../include/installer/embedded_resources.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <Windows.h>
 #include <filesystem>
@@ -24,26 +25,19 @@ std::string EmbeddedResourceManager::extractResources() {
 
     m_resourcePath = createTempDirectory();
     if (m_resourcePath.empty()) {
-        std::cerr << "Failed to create temporary directory for resources" << std::endl;
+        logInstallerError("[GUI][RES] Failed to create temporary directory for resources.");
         return "";
     }
     
-    std::cout << "Extracting embedded resources to: " << m_resourcePath << std::endl;
+    logInstallerInfo(std::string("[GUI][RES] Extracting embedded resources to: ") + m_resourcePath);
 
-    std::filesystem::path basePath = PathFromUtf8(m_resourcePath);
-
-    std::filesystem::create_directories(basePath / "skins");
-    std::filesystem::create_directories(basePath / "images");
-    std::filesystem::create_directories(basePath / "lang");
-    std::filesystem::create_directories(basePath / "license");
-    
     bool anyExtracted = false;
     
 
     auto duilib = getEmbeddedResource("DUILIB_DLL");
     if (!duilib.empty()) {
         if (extractFile("DuiLib.dll", duilib)) {
-            std::cout << "  Extracted: DuiLib.dll" << std::endl;
+            logInstallerInfo("[GUI][RES] Extracted: DuiLib.dll");
             anyExtracted = true;
         }
     }
@@ -51,7 +45,7 @@ std::string EmbeddedResourceManager::extractResources() {
     auto packedZip = getEmbeddedResource("RES_ZIP");
     if (!packedZip.empty()) {
         if (extractFile("resources.zip", packedZip)) {
-            std::cout << "  Extracted: resources.zip" << std::endl;
+            logInstallerInfo("[GUI][RES] Extracted: resources.zip");
             anyExtracted = true;
             m_extracted = true;
             return m_resourcePath;
@@ -85,7 +79,7 @@ std::string EmbeddedResourceManager::extractResources() {
             std::string path = "skins\\";
             path += xmlFile;
             if (extractFile(path, data)) {
-                std::cout << "  Extracted: " << path << std::endl;
+                logInstallerInfo(std::string("[GUI][RES] Extracted: ") + path);
                 anyExtracted = true;
             }
         }
@@ -114,7 +108,7 @@ std::string EmbeddedResourceManager::extractResources() {
                     std::string path = "images\\";
                     path += fileName;
                     if (extractFile(path, data)) {
-                        std::cout << "  Extracted: " << path << std::endl;
+                        logInstallerInfo(std::string("[GUI][RES] Extracted: ") + path);
                         anyExtracted = true;
                     }
                 }
@@ -148,7 +142,7 @@ std::string EmbeddedResourceManager::extractResources() {
                     std::string path = "lang\\";
                     path += fileName;
                     if (extractFile(path, data)) {
-                        std::cout << "  Extracted: " << path << std::endl;
+                        logInstallerInfo(std::string("[GUI][RES] Extracted: ") + path);
                         anyExtracted = true;
                     }
                 }
@@ -182,7 +176,7 @@ std::string EmbeddedResourceManager::extractResources() {
                     std::string path = "license\\";
                     path += fileName;
                     if (extractFile(path, data)) {
-                        std::cout << "  Extracted: " << path << std::endl;
+                        logInstallerInfo(std::string("[GUI][RES] Extracted: ") + path);
                         anyExtracted = true;
                     }
                 }
@@ -197,14 +191,14 @@ std::string EmbeddedResourceManager::extractResources() {
     auto license = getEmbeddedResource("LICENSE_TXT");
     if (!license.empty()) {
         if (extractFile("license.txt", license)) {
-            std::cout << "  Extracted: license.txt" << std::endl;
+            logInstallerInfo("[GUI][RES] Extracted: license.txt");
             anyExtracted = true;
         }
     }
     
 
     if (!anyExtracted) {
-        std::cout << "No embedded resources found" << std::endl;
+        logInstallerWarning("[GUI][RES] No embedded resources found.");
         cleanup();
         return "";
     }
@@ -217,9 +211,9 @@ void EmbeddedResourceManager::cleanup() {
     if (!m_resourcePath.empty() && m_extracted) {
         try {
             std::filesystem::remove_all(PathFromUtf8(m_resourcePath));
-            std::cout << "Cleaned up temporary resources: " << m_resourcePath << std::endl;
+            logInstallerInfo(std::string("[GUI][RES] Cleaned up temporary resources: ") + m_resourcePath);
         } catch (const std::exception& e) {
-            std::cerr << "Failed to cleanup resources: " << e.what() << std::endl;
+            logInstallerWarning(std::string("[GUI][RES] Failed to cleanup resources: ") + e.what());
         }
         m_resourcePath.clear();
         m_extracted = false;
@@ -257,9 +251,14 @@ bool EmbeddedResourceManager::extractFile(const std::string& relativePath,
     std::filesystem::path fullPath = PathFromUtf8(m_resourcePath) / PathFromUtf8(relativePath);
     
     try {
+        std::filesystem::path parent = fullPath.parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent);
+        }
         std::ofstream file(fullPath, std::ios::binary);
         if (!file) {
-            std::cerr << "Failed to create file: " << Utf8FromPath(fullPath) << std::endl;
+            logInstallerError(std::string("[GUI][RES] Failed to create file: ") +
+                              Utf8FromPath(fullPath));
             return false;
         }
         
@@ -268,7 +267,8 @@ bool EmbeddedResourceManager::extractFile(const std::string& relativePath,
         
         return true;
     } catch (const std::exception& e) {
-        std::cerr << "Error extracting file " << relativePath << ": " << e.what() << std::endl;
+        logInstallerError(std::string("[GUI][RES] Error extracting file ") + relativePath +
+                          ": " + e.what());
         return false;
     }
 }

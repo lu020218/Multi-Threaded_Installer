@@ -43,5 +43,9 @@ void PrepareGuiResources(HINSTANCE hInstance,
 GuiResourceValidationResult ValidateInstallGuiResources(const GuiResourceContext& context);
 
 void ApplyGuiResources(const GuiResourceContext& context, bool verboseLogs);
+void LogGuiResourceDiagnostics(const GuiResourceContext& context,
+                               unsigned int dpi,
+                               const char* stage);
+void LogActiveGuiResourceDiagnostics(unsigned int dpi, const char* stage);
 
 } // namespace MultiThreadedInstaller

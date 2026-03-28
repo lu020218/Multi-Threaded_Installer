@@ -14,6 +14,7 @@
 #include "../../include/installer/installer_helpers.h"
 #include "../../include/installer/uninstall_manager.h"
 #include "../../include/installer/registry_utils.h"
+#include "../../include/installer/gui_resource_loader.h"
 #include "common/utf8_utils.h"
 #include "common/installer_logger.h"
 #include "Utils/unzip.h"
@@ -470,6 +471,8 @@ void GUIManager::InitWindow() {
         m_pm.ReloadImages();
         m_pm.Invalidate();
     }
+    LogActiveGuiResourceDiagnostics(
+        windowDpi > 0 ? static_cast<unsigned int>(windowDpi) : 96U, "GUIManager::InitWindow");
     InitControls();
     
     if (m_pTabPages && !m_uninstallMode) {
@@ -780,6 +783,7 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         }
         m_pm.SetDPI(static_cast<int>(dpi));
         m_pm.ResetDPIAssets();
+        LogActiveGuiResourceDiagnostics(dpi, "GUIManager::WM_DPICHANGED");
         m_pm.NeedUpdate();
         m_pm.Invalidate();
         RECT rcClient;

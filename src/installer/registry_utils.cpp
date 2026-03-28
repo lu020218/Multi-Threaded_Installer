@@ -1,4 +1,5 @@
 #include "installer/registry_utils.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
@@ -282,11 +283,11 @@ void applyRegistryEntries(const std::vector<RegistryEntry>& entries,
         std::string expanded = expandRegistryValue(entry.value, installDir, configVersion, appName);
         bool ok = writeRegistryValue(entry, expanded, entry.type);
         if (ok) {
-            std::cout << "INFO: Registry write ok: " << entry.path
-                      << " [" << entry.key << "]=" << expanded << std::endl;
+            logInstallerInfo(std::string("[REG] Registry write ok: ") + entry.path +
+                             " [" + entry.key + "]=" + expanded);
         } else {
-            std::cout << "WARNING: Registry write failed: " << entry.path
-                      << " [" << entry.key << "]" << std::endl;
+            logInstallerWarning(std::string("[REG] Registry write failed: ") + entry.path +
+                                " [" + entry.key + "]");
         }
     }
 }

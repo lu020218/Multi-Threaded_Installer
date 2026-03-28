@@ -1,4 +1,5 @@
 #include "installer/console_interface.h"
+#include "common/installer_logger.h"
 #include <iostream>
 #include <sstream>
 #include "common/utf8_utils.h"
@@ -63,20 +64,25 @@ void ConsoleInterface::showInstallationResult(bool success, const std::vector<st
     
     if (success) {
         std::cout << "OK: Installation completed successfully!" << std::endl;
+        logInstallerInfo("[CLI] Installation completed successfully.");
     } else {
         std::cout << "ERROR: Installation completed with errors:" << std::endl;
+        logInstallerError("[CLI] Installation completed with errors.");
         for (const auto& error : errors) {
             std::cout << "  - " << error << std::endl;
+            logInstallerError(std::string("[CLI] ") + error);
         }
     }
 }
 
 void ConsoleInterface::showError(const std::string& message) {
     std::cout << "ERROR: " << message << std::endl;
+    logInstallerError(std::string("[CLI] ") + message);
 }
 
 void ConsoleInterface::showWarning(const std::string& message) {
     std::cout << "WARNING: " << message << std::endl;
+    logInstallerWarning(std::string("[CLI] ") + message);
 }
 
 bool ConsoleInterface::confirmAction(const std::string& prompt) {
@@ -87,6 +93,7 @@ bool ConsoleInterface::confirmAction(const std::string& prompt) {
 
 void ConsoleInterface::showInfo(const std::string& message) {
     std::cout << "INFO: " << message << std::endl;
+    logInstallerInfo(std::string("[CLI] ") + message);
 }
 
 ConsoleInterface::PackagerArgs ConsoleInterface::parsePackagerArgs(int argc, char* argv[]) {

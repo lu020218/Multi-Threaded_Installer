@@ -25,6 +25,7 @@
 #include <atomic>
 #include <chrono>
 #include <iomanip>
+#include <sstream>
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -272,6 +273,20 @@ static int runConsoleInstallerWithWideArgs() {
 static void EnsureInstallerLoggingInitialized() {
     static std::once_flag once;
     std::call_once(once, []() { initializeInstallerLogging(); });
+}
+
+static void LogVerboseInfo(bool verboseLogs, const std::string& message) {
+    if (verboseLogs) {
+        std::cout << message << std::endl;
+    }
+    logInstallerInfo(message);
+}
+
+static void LogVerboseError(bool verboseLogs, const std::string& message) {
+    if (verboseLogs) {
+        std::cerr << message << std::endl;
+    }
+    logInstallerError(message);
 }
 
 static std::string deriveAppNameFromExePath(const std::string& exePath,
@@ -531,28 +546,21 @@ static int RunGuiWindow(GUIManager& frame,
         context.useZip, context.resourcePath, context.skinsPath, uninstallMode, fallbackSize);
 
     try {
-        if (verboseLogs) {
-            std::wcout << L"About to call Create()..." << std::endl;
-        }
+        LogVerboseInfo(verboseLogs, "[GUI] About to call Create().");
         hwnd = frame.Create(
             NULL, title.c_str(), UI_WNDSTYLE_FRAME, 0L, 0, 0, baseSize.width, baseSize.height);
     } catch (const std::exception& e) {
-        if (verboseLogs) {
-            std::wcout << L"ERROR: Exception during Create(): " << e.what() << std::endl;
-        }
+        LogVerboseError(verboseLogs, std::string("[GUI] Exception during Create(): ") + e.what());
         return 1;
     } catch (...) {
-        if (verboseLogs) {
-            std::wcout << L"ERROR: Unknown exception during Create()" << std::endl;
-        }
+        LogVerboseError(verboseLogs, "[GUI] Unknown exception during Create().");
         return 1;
     }
 
     if (hwnd == NULL) {
-        if (verboseLogs) {
-            std::wcout << L"ERROR: Create() returned NULL" << std::endl;
-            std::wcout << L"GetLastError() = " << GetLastError() << std::endl;
-        }
+        LogVerboseError(verboseLogs,
+                        "[GUI] Create() returned NULL. GetLastError()=" +
+                            std::to_string(GetLastError()));
         return 1;
     }
 
@@ -561,17 +569,11 @@ static int RunGuiWindow(GUIManager& frame,
 #endif
 
     frame.CenterWindow();
-    if (verboseLogs) {
-        std::wcout << L"Centered window" << std::endl;
-    }
+    LogVerboseInfo(verboseLogs, "[GUI] Centered window.");
     frame.ShowWindow(true);
-    if (verboseLogs) {
-        std::wcout << L"Showed window, entering message loop..." << std::endl;
-    }
+    LogVerboseInfo(verboseLogs, "[GUI] Showed window, entering message loop.");
     CPaintManagerUI::MessageLoop();
-    if (verboseLogs) {
-        std::wcout << L"Message loop exited" << std::endl;
-    }
+    LogVerboseInfo(verboseLogs, "[GUI] Message loop exited.");
     CPaintManagerUI::SetResourceZip(_T(""), true);
     return 0;
 }
@@ -709,8 +711,6 @@ int runConsoleInstaller(int argc, char* argv[]) {
     setInstallerAppNameEnv(metadata.applicationName);
 #endif
 
-    EnsureInstallerLoggingInitialized();
-
 #ifdef _WIN32
     if (metadata.requireAdmin && !isRunningAsAdmin()) {
         console.showError("Administrator privileges required by configuration.");
@@ -721,6 +721,8 @@ int runConsoleInstaller(int argc, char* argv[]) {
         return INSTALLER_EXIT_ADMIN_REQUIRED;
     }
 #endif
+
+    EnsureInstallerLoggingInitialized();
 
     console.showInfo("Found " + std::to_string(metadata.folderCount) + " folders to install");
     console.showInfo("Application: " + metadata.applicationName);
@@ -819,34 +821,51 @@ int runConsoleInstaller(int argc, char* argv[]) {
 
     console.showInstallationResult(serviceResult.success, serviceResult.errors);
 
-    std::cout << "Timing summary: indexed read "
-              << std::fixed << std::setprecision(2)
-              << serviceResult.timing.indexedReadSec << "s, indexed decompress "
-              << serviceResult.timing.indexedDecompressSec << "s, indexed write "
-              << serviceResult.timing.indexedWriteSec << "s, legacy total "
-              << serviceResult.timing.legacyTotalSec << "s" << std::endl;
+    {
+        std::ostringstream timingSummary;
+        timingSummary << std::fixed << std::setprecision(2)
+                      << "Timing summary: indexed read "
+                      << serviceResult.timing.indexedReadSec
+                      << "s, indexed decompress "
+                      << serviceResult.timing.indexedDecompressSec
+                      << "s, indexed write "
+                      << serviceResult.timing.indexedWriteSec
+                      << "s, legacy total "
+                      << serviceResult.timing.legacyTotalSec << "s";
+        std::cout << timingSummary.str() << std::endl;
+        logInstallerInfo(std::string("[CLI] ") + timingSummary.str());
+    }
 
     for (const auto& timing : serviceResult.timing.folderTimings) {
+        std::ostringstream timingLine;
+        timingLine << std::fixed << std::setprecision(2);
         if (timing.indexed) {
-            std::cout << "Timing (indexed) " << timing.folderName
-                      << ": total " << std::fixed << std::setprecision(2) << timing.totalSec
-                      << "s, read " << timing.readSec
-                      << "s, decompress " << timing.decompressSec
-                      << "s, write " << timing.writeSec << "s" << std::endl;
+            timingLine << "Timing (indexed) " << timing.folderName
+                       << ": total " << timing.totalSec
+                       << "s, read " << timing.readSec
+                       << "s, decompress " << timing.decompressSec
+                       << "s, write " << timing.writeSec << "s";
         } else {
-            std::cout << "Timing (legacy) " << timing.folderName
-                      << ": total " << std::fixed << std::setprecision(2) << timing.totalSec
-                      << "s, read " << timing.readSec
-                      << "s, decompress " << timing.decompressSec
-                      << "s, write " << timing.writeSec
-                      << "s, process " << timing.processSec << "s" << std::endl;
+            timingLine << "Timing (legacy) " << timing.folderName
+                       << ": total " << timing.totalSec
+                       << "s, read " << timing.readSec
+                       << "s, decompress " << timing.decompressSec
+                       << "s, write " << timing.writeSec
+                       << "s, process " << timing.processSec << "s";
         }
+        std::cout << timingLine.str() << std::endl;
+        logInstallerInfo(std::string("[CLI] ") + timingLine.str());
     }
 
     auto endTime = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = endTime - startTime;
-    std::cout << "Total time: " << std::fixed << std::setprecision(2) << elapsed.count()
-              << " seconds" << std::endl;
+    {
+        std::ostringstream totalLine;
+        totalLine << std::fixed << std::setprecision(2)
+                  << "Total time: " << elapsed.count() << " seconds";
+        std::cout << totalLine.str() << std::endl;
+        logInstallerInfo(std::string("[CLI] ") + totalLine.str());
+    }
 
     if (serviceResult.success) {
         console.showInfo("Installation completed successfully!");
@@ -944,8 +963,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         setInstallerAppNameEnv(appName);
 #endif
         EnsureInstallerLoggingInitialized();
-
-        std::cout << "Uninstall mode active. exe=" << exeNameString << std::endl;
+        logInstallerInfo(std::string("[GUI] Uninstall mode active. exe=") + exeNameString);
 
         InstallConfig config;
         config.applicationName = Utf8ToWide(appName);
@@ -1021,8 +1039,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     setInstallerAppNameEnv(metadata.applicationName);
 #endif
 
-    EnsureInstallerLoggingInitialized();
-
     if (metadata.requireAdmin && !isRunningAsAdmin()) {
         if (relaunchSelfAsAdmin()) {
             CoUninitialize();
@@ -1035,6 +1051,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         CoUninitialize();
         return 1;
     }
+    EnsureInstallerLoggingInitialized();
     
     // NOTE: Comment text normalized to avoid encoding mojibake.
     InstallConfig config = createInstallConfigFromMetadata(metadata);
@@ -1046,6 +1063,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         CoUninitialize();
         return 1;
     }
+
     if (validation == GuiResourceValidationResult::RunConsoleFallback) {
         CoUninitialize();
         return runConsoleInstallerWithWideArgs();
@@ -1054,16 +1072,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     
     auto pFrame = std::make_unique<GUIManager>();
     if (!pFrame) {
-        std::wcout << L"ERROR: Failed to create GUIManager" << std::endl;
+        logInstallerError("[GUI] Failed to create GUIManager.");
         CoUninitialize();
         return 1;
     }
-    std::wcout << L"Created GUIManager successfully" << std::endl;
+    logInstallerInfo("[GUI] Created GUIManager successfully.");
 
     pFrame->SetUninstallMode(uninstallMode);
 
     pFrame->SetInstallConfig(config);
-    std::wcout << L"Set install config" << std::endl;
+    logInstallerInfo("[GUI] Install config applied.");
     std::wstring installTitle = GUIHelpers::GetLocalizedText(L"msg.title.install", L"");
     int exitCode = RunGuiWindow(
         *pFrame, installTitle, resources, false, WindowSize{ 800, 600 }, true);

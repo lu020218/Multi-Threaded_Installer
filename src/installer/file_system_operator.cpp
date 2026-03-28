@@ -1,4 +1,5 @@
 #include "installer/file_system_operator.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <filesystem>
 #include <fstream>
@@ -14,7 +15,7 @@ bool FileSystemOperator::createDirectoryRecursive(const std::string& path) {
         std::filesystem::create_directories(fsPath);
         return std::filesystem::exists(fsPath) && std::filesystem::is_directory(fsPath);
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Failed to create directory " << path << ": " << e.what() << std::endl;
+        logInstallerError(std::string("[FS] Failed to create directory ") + path + ": " + e.what());
         return false;
     }
 }
@@ -30,7 +31,7 @@ bool FileSystemOperator::writeFile(const std::string& filePath, const std::vecto
         
         std::ofstream file(PathFromUtf8(filePath), std::ios::binary);
         if (!file) {
-            std::cerr << "Failed to create file: " << filePath << std::endl;
+            logInstallerError(std::string("[FS] Failed to create file: ") + filePath);
             return false;
         }
         
@@ -38,7 +39,7 @@ bool FileSystemOperator::writeFile(const std::string& filePath, const std::vecto
         return file.good();
         
     } catch (const std::exception& e) {
-        std::cerr << "Error writing file " << filePath << ": " << e.what() << std::endl;
+        logInstallerError(std::string("[FS] Error writing file ") + filePath + ": " + e.what());
         return false;
     }
 }
@@ -60,7 +61,8 @@ bool FileSystemOperator::handleFileConflict(const std::string& filePath) {
         }
         return true;
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Failed to handle file conflict for " << filePath << ": " << e.what() << std::endl;
+        logInstallerError(std::string("[FS] Failed to handle file conflict for ") + filePath +
+                          ": " + e.what());
         return false;
     }
 }

@@ -1,5 +1,6 @@
 #include "installer/decompression_engine.h"
 #include "installer/tar_stream_extractor.h"
+#include "common/installer_logger.h"
 #ifdef LibLZMA_FOUND
 #include <lzma.h>
 #endif
@@ -82,8 +83,8 @@ bool DecompressionEngine::decompressFolder(const DecompressionTask& task, Legacy
         try {
             return future.get();
         } catch (const std::exception& e) {
-            std::cerr << "Thread pool execution failed for " << task.targetPath
-                      << ": " << e.what() << std::endl;
+            logInstallerError(std::string("[DECOMP] Thread pool execution failed for ") +
+                              task.targetPath + ": " + e.what());
             return false;
         }
     }
@@ -109,7 +110,8 @@ bool DecompressionEngine::decompressToStream(const DecompressionTask& task, Stre
     if (task.algorithm == CompressionAlgorithm::ZSTD) {
         return decompressZstd(task, sink, checksum, timing);
     }
-    std::cerr << "Unsupported compression algorithm for " << task.targetPath << std::endl;
+    logInstallerError(std::string("[DECOMP] Unsupported compression algorithm for ") +
+                      task.targetPath);
     return false;
 }
 
@@ -146,7 +148,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
                                          LegacyStageTiming* timing) {
 #ifdef LibLZMA_FOUND
     if (task.compressedData.empty()) {
-        std::cerr << "No compressed data provided for LZMA decompression" << std::endl;
+        logInstallerError("[DECOMP] No compressed data provided for LZMA decompression.");
         return false;
     }
     
@@ -169,7 +171,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
     lzma_ret ret = lzma_auto_decoder(&stream, UINT64_MAX, 0);
     
     if (ret != LZMA_OK) {
-        std::cerr << "LZMA decoder init failed: " << ret << std::endl;
+        logInstallerError(std::string("[DECOMP] LZMA decoder init failed: ") + std::to_string(ret));
         return false;
     }
     
@@ -217,7 +219,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
             break;
         }
         if (ret != LZMA_OK) {
-            std::cerr << "LZMA decompression failed: " << ret << std::endl;
+            logInstallerError(std::string("[DECOMP] LZMA decompression failed: ") + std::to_string(ret));
             lzma_end(&stream);
             return false;
         }
@@ -237,7 +239,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
     (void)task;
     (void)sink;
     (void)checksum;
-    std::cerr << "LZMA support not compiled in" << std::endl;
+    logInstallerError("[DECOMP] LZMA support not compiled in.");
     return false;
 #endif
 }
@@ -246,7 +248,7 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
                                                LegacyStageTiming* timing) {
 #ifdef LibLZMA_FOUND
     if (task.compressedData.size() < sizeof(uint32_t)) {
-        std::cerr << "Invalid block format: cannot read block count" << std::endl;
+        logInstallerError("[DECOMP] Invalid block format: cannot read block count.");
         return false;
     }
     
@@ -255,7 +257,7 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
     offset += sizeof(uint32_t);
     
     if (offset + blockCount * sizeof(BlockMeta) > task.compressedData.size()) {
-        std::cerr << "Invalid block format: cannot read block metadata" << std::endl;
+        logInstallerError("[DECOMP] Invalid block format: cannot read block metadata.");
         return false;
     }
     
@@ -265,9 +267,10 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
     for (size_t i = 0; i < blocks.size(); ++i) {
         const auto& block = blocks[i];
         if (block.offset + block.compressedSize > task.compressedData.size()) {
-            std::cerr << "Invalid block " << i << ": offset " << block.offset
-                      << " + size " << block.compressedSize
-                      << " exceeds data size " << task.compressedData.size() << std::endl;
+            logInstallerError(std::string("[DECOMP] Invalid block ") + std::to_string(i) +
+                              ": offset " + std::to_string(block.offset) +
+                              " + size " + std::to_string(block.compressedSize) +
+                              " exceeds data size " + std::to_string(task.compressedData.size()));
             return false;
         }
     }
@@ -312,7 +315,7 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
             try {
                 chunk = future.get();
             } catch (const std::exception& e) {
-                std::cerr << "LZMA block decompression failed: " << e.what() << std::endl;
+                logInstallerError(std::string("[DECOMP] LZMA block decompression failed: ") + e.what());
                 return false;
             }
             
@@ -345,7 +348,8 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
             auto decompressStart = std::chrono::steady_clock::now();
             std::vector<uint8_t> blockOut;
             if (!decompressLzmaBlock(task.compressedData.data(), task.compressedData.size(), blocks[i], blockOut)) {
-                std::cerr << "Block " << i << " LZMA decompression failed" << std::endl;
+                logInstallerError(std::string("[DECOMP] Block ") + std::to_string(i) +
+                                  " LZMA decompression failed");
                 return false;
             }
             auto decompressEnd = std::chrono::steady_clock::now();
@@ -377,7 +381,7 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
     sink.flush();
     
     if (checksum && checksum->finalize() != task.expectedChecksum) {
-        std::cerr << "Checksum verification failed for: " << task.targetPath << std::endl;
+        logInstallerError(std::string("[DECOMP] Checksum verification failed for: ") + task.targetPath);
         return false;
     }
     
@@ -387,7 +391,7 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
     (void)task;
     (void)sink;
     (void)checksum;
-    std::cerr << "LZMA support not compiled in" << std::endl;
+    logInstallerError("[DECOMP] LZMA support not compiled in.");
     return false;
 #endif
 }
@@ -396,7 +400,7 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSi
                                          LegacyStageTiming* timing) {
 #ifdef ZSTD_FOUND
     if (task.compressedData.empty()) {
-        std::cerr << "No compressed data provided for ZSTD decompression" << std::endl;
+        logInstallerError("[DECOMP] No compressed data provided for ZSTD decompression.");
         return false;
     }
 
@@ -404,13 +408,13 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSi
 
     ZSTD_DStream* stream = ZSTD_createDStream();
     if (!stream) {
-        std::cerr << "ZSTD stream allocation failed" << std::endl;
+        logInstallerError("[DECOMP] ZSTD stream allocation failed.");
         return false;
     }
 
     size_t ret = ZSTD_initDStream(stream);
     if (ZSTD_isError(ret)) {
-        std::cerr << "ZSTD decoder init failed: " << ZSTD_getErrorName(ret) << std::endl;
+        logInstallerError(std::string("[DECOMP] ZSTD decoder init failed: ") + ZSTD_getErrorName(ret));
         ZSTD_freeDStream(stream);
         return false;
     }
@@ -431,7 +435,7 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSi
         }
 
         if (ZSTD_isError(ret)) {
-            std::cerr << "ZSTD decompression failed: " << ZSTD_getErrorName(ret) << std::endl;
+            logInstallerError(std::string("[DECOMP] ZSTD decompression failed: ") + ZSTD_getErrorName(ret));
             ZSTD_freeDStream(stream);
             return false;
         }
@@ -463,7 +467,7 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSi
     sink.flush();
 
     if (checksum && checksum->finalize() != task.expectedChecksum) {
-        std::cerr << "Checksum verification failed for: " << task.targetPath << std::endl;
+        logInstallerError(std::string("[DECOMP] Checksum verification failed for: ") + task.targetPath);
         return false;
     }
 
@@ -474,7 +478,7 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSi
     (void)sink;
     (void)checksum;
     (void)timing;
-    std::cerr << "ZSTD support not compiled in" << std::endl;
+    logInstallerError("[DECOMP] ZSTD support not compiled in.");
     return false;
 #endif
 }

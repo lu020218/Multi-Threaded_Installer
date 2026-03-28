@@ -3,6 +3,7 @@
 #include "installer/install_state_utils.h"
 #include "installer/installer_helpers.h"
 #include "installer/registry_utils.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
@@ -274,7 +275,7 @@ bool writeManifest(const std::string& manifestPath,
         out.write(payload.c_str(), static_cast<std::streamsize>(payload.size()));
         return static_cast<bool>(out);
     } catch (const std::exception& e) {
-        std::cerr << "Failed to write manifest: " << e.what() << std::endl;
+        logInstallerError(std::string("[UNINSTALL] Failed to write manifest: ") + e.what());
         return false;
     }
 }

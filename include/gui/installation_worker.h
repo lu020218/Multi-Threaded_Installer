@@ -39,6 +39,8 @@ public:
     
 
     bool IsRunning() const;
+
+    bool Joinable() const;
     
 private:
     HWND m_hNotifyWindow;
@@ -66,6 +68,8 @@ private:
     
 
     void PostCompletionMessage(bool success, const std::wstring& errorMsg);
+
+    void JoinFinishedThreadIfNeeded();
     
 
 };

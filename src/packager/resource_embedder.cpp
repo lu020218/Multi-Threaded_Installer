@@ -50,6 +50,7 @@ void AppendListEntry(std::vector<uint8_t>& installerTemplate,
 
 bool AppendEmbeddedResources(std::vector<uint8_t>& installerTemplate,
                              const std::filesystem::path& resourceDir,
+                             const std::vector<uint8_t>& uninstallerBinary,
                              std::string& error) {
     error.clear();
 
@@ -73,6 +74,12 @@ bool AppendEmbeddedResources(std::vector<uint8_t>& installerTemplate,
             std::cout << "  Embedded: resources.zip" << std::endl;
             anyEmbedded = true;
             useZip = true;
+        }
+
+        if (!uninstallerBinary.empty() &&
+            AppendEmbeddedRawEntry(installerTemplate, "UNINSTALLER_EXE", uninstallerBinary)) {
+            std::cout << "  Embedded: uninstaller.exe" << std::endl;
+            anyEmbedded = true;
         }
 
         std::vector<std::string> imageNames;

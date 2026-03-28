@@ -3,10 +3,18 @@
 
 namespace MultiThreadedInstaller {
 
+size_t ResolveThreadPoolWorkerCount(size_t requestedThreadCount) {
+    if (requestedThreadCount > 0) {
+        return requestedThreadCount;
+    }
+    const size_t fallback = static_cast<size_t>(std::thread::hardware_concurrency());
+    return fallback > 0 ? fallback : 1;
+}
+
 ThreadPoolManager::ThreadPoolManager(size_t threadCount) 
     : stopFlag(false), pendingTasks(0), activeThreads(0) {
-    
-    for (size_t i = 0; i < threadCount; ++i) {
+    const size_t resolvedThreadCount = ResolveThreadPoolWorkerCount(threadCount);
+    for (size_t i = 0; i < resolvedThreadCount; ++i) {
         workers.emplace_back(&ThreadPoolManager::workerThread, this);
     }
 }

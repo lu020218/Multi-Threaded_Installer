@@ -8,8 +8,11 @@
 #include <functional>
 #include <vector>
 #include <memory>
+#include <stdexcept>
 
 namespace MultiThreadedInstaller {
+
+size_t ResolveThreadPoolWorkerCount(size_t requestedThreadCount);
 
 class ThreadPoolManager {
 public:

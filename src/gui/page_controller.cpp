@@ -1,8 +1,5 @@
 #include "../../include/gui/page_controller.h"
-#include "../../include/gui/installation_worker.h"
 #include "../../include/gui/license_dialog.h"
-#include <chrono>
-#include <thread>
 
 using namespace DuiLib;
 
@@ -10,8 +7,7 @@ namespace MultiThreadedInstaller {
 
 PageController::PageController(CTabLayoutUI* pTabLayout)
     : m_pTabLayout(pTabLayout)
-    , m_currentPage(PageType::Welcome)
-    , m_pWorker(nullptr) {
+    , m_currentPage(PageType::Welcome) {
 
     if (m_pTabLayout) {
         m_pTabLayout->SelectItem(static_cast<int>(PageType::Welcome));
@@ -19,11 +15,6 @@ PageController::PageController(CTabLayoutUI* pTabLayout)
 }
 
 PageController::~PageController() {
-
-    if (m_pWorker) {
-        delete m_pWorker;
-        m_pWorker = nullptr;
-    }
 }
 
 void PageController::NavigateToPage(PageType pageType) {
@@ -78,58 +69,6 @@ bool PageController::ShowLicenseDialog(HWND hParent) {
     delete pDialog;
     
     return agreed;
-}
-
-void PageController::StartInstallation(const std::wstring& installPath,
-                                       bool autoRun,
-                                       bool desktopIcons,
-                                       const std::wstring& languageCode,
-                                       bool cleanupOldInstall,
-                                       const std::vector<std::string>& selectedComponents,
-                                       HWND hNotifyWindow) {
-
-    if (m_pWorker) {
-        delete m_pWorker;
-        m_pWorker = nullptr;
-    }
-    
-
-    m_pWorker = new InstallationWorker(hNotifyWindow);
-    
-
-
-
-    
-    m_pWorker->StartInstallation(installPath, autoRun, desktopIcons, languageCode,
-                                 cleanupOldInstall, selectedComponents);
-
-
-    NavigateToPage(PageType::Progress);
-}
-
-void PageController::OnInstallationComplete(bool success, const std::wstring& errorMsg) {
-
-    NavigateToPage(PageType::Completion);
-    
-
-
-    
-
-}
-
-void PageController::OnProgressUpdate(const std::wstring& currentFolder, float progress) {
-
-
-    
-
-    if (progress < 0.0f) {
-        progress = 0.0f;
-    }
-    if (progress > 100.0f) {
-        progress = 100.0f;
-    }
-    
-
 }
 
 } // namespace MultiThreadedInstaller

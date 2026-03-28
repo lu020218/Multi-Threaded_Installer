@@ -1,9 +1,6 @@
 #pragma once
 
 #include <UIlib.h>
-#include <string>
-#include <vector>
-
 using namespace DuiLib;
 
 namespace MultiThreadedInstaller {
@@ -15,9 +12,6 @@ enum class PageType {
     Progress = 2,
     Completion = 3
 };
-
-// Forward declarations
-class InstallationWorker;
 
 class PageController {
 public:
@@ -34,25 +28,9 @@ public:
     bool ShowLicenseDialog(HWND hParent);
     
 
-    void StartInstallation(const std::wstring& installPath,
-                           bool autoRun,
-                           bool desktopIcons,
-                           const std::wstring& languageCode,
-                           bool cleanupOldInstall,
-                           const std::vector<std::string>& selectedComponents,
-                           HWND hNotifyWindow);
-    
-
-    void OnInstallationComplete(bool success, const std::wstring& errorMsg);
-    
-
-    void OnProgressUpdate(const std::wstring& currentFolder, float progress);
-    
 private:
     CTabLayoutUI* m_pTabLayout;
     PageType m_currentPage;
-    InstallationWorker* m_pWorker;
-    
 
     void ApplyTransitionAnimation();
 };

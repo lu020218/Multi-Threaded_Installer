@@ -46,13 +46,6 @@ void ConsoleInterface::showPackagingProgress(const std::string& currentFolder, f
     std::cout.flush();
 }
 
-void ConsoleInterface::showInstallerMenu() {
-    clearScreen();
-    std::cout << "=== Multi-Threaded Installer ===" << std::endl;
-    std::cout << "This installer will extract and install packaged folders." << std::endl;
-    std::cout << std::endl;
-}
-
 void ConsoleInterface::showInstallationProgress(const std::string& currentFolder, float progress) {
     std::cout << "\rInstalling: " << currentFolder << " ";
     showProgressBar(progress);
@@ -164,8 +157,8 @@ ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, c
             args.showHelp = true;
         } else if (arg == "-s" || arg == "--silent") {
             args.silent = true;
-        } else if (arg == "--uninstall") {
-            args.uninstall = true;
+        } else if (arg == "--repair") {
+            args.repair = true;
         } else if (arg == "--all-components") {
             args.installAllComponents = true;
         } else if (arg == "--component" && i + 1 < argc) {
@@ -207,8 +200,7 @@ void ConsoleInterface::showInstallerHelp() {
     std::cout << "Options:" << std::endl;
     std::cout << "  -d, --destination <directory>  Default installation directory" << std::endl;
     std::cout << "  -s, --silent                   Silent installation mode" << std::endl;
-    std::cout << "  --debug                        Show console alongside GUI" << std::endl;
-    std::cout << "  --uninstall                    Uninstall using saved manifest" << std::endl;
+    std::cout << "  --repair                       Repair an existing installation" << std::endl;
     std::cout << "  --component <id>               Select one component id (repeatable)" << std::endl;
     std::cout << "  --components <id1,id2,...>     Select multiple component ids" << std::endl;
     std::cout << "  --all-components               Install all optional components" << std::endl;
@@ -217,8 +209,22 @@ void ConsoleInterface::showInstallerHelp() {
     std::cout << "Examples:" << std::endl;
     std::cout << "  installer -d C:\\Program Files\\MyApp" << std::endl;
     std::cout << "  installer -s -d C:\\Program Files\\MyApp" << std::endl;
+    std::cout << "  installer --repair" << std::endl;
+    std::cout << "  installer -s --repair" << std::endl;
     std::cout << "  installer -s --components main_app,chrome_plugin" << std::endl;
-    std::cout << "  uninstall.exe (runs uninstall automatically)" << std::endl;
+}
+
+void ConsoleInterface::showUninstallerHelp() {
+    std::cout << "Multi-Threaded Uninstaller" << std::endl;
+    std::cout << "Usage: uninstaller [options]" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Options:" << std::endl;
+    std::cout << "  -s, --silent                   Silent uninstall mode" << std::endl;
+    std::cout << "  -h, --help                     Show this help message" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Examples:" << std::endl;
+    std::cout << "  uninstaller.exe" << std::endl;
+    std::cout << "  uninstaller.exe --silent" << std::endl;
 }
 
 void ConsoleInterface::clearScreen() {

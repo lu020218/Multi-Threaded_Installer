@@ -6,8 +6,31 @@
 #include "../../include/installer/console_interface.h"
 #include "../../include/installer/path_resolver.h"
 #include "common/utf8_utils.h"
+#include "common/installer_logger.h"
 
 namespace MultiThreadedInstaller {
+
+namespace {
+
+template <typename T>
+bool PostOwnedWorkerMessage(HWND hwnd, UINT message, T* payload, const char* tag) {
+    if (!payload) {
+        return false;
+    }
+    if (!hwnd || !::IsWindow(hwnd)) {
+        logInstallerWarning(std::string(tag) + " notify window is invalid; dropping message.");
+        delete payload;
+        return false;
+    }
+    if (!::PostMessage(hwnd, message, 0, reinterpret_cast<LPARAM>(payload))) {
+        logInstallerWarning(std::string(tag) + " PostMessage failed; dropping message.");
+        delete payload;
+        return false;
+    }
+    return true;
+}
+
+} // namespace
 
 UninstallWorker::UninstallWorker(HWND hNotifyWindow)
     : m_hNotifyWindow(hNotifyWindow) {}
@@ -23,6 +46,10 @@ void UninstallWorker::StartUninstall(const std::vector<std::string>& identityCan
         m_thread.join();
     }
     m_thread = std::thread(&UninstallWorker::WorkerThreadFunc, this, identityCandidates);
+}
+
+bool UninstallWorker::Joinable() const {
+    return m_thread.joinable();
 }
 
 void UninstallWorker::WorkerThreadFunc(const std::vector<std::string>& identityCandidates) {
@@ -60,7 +87,7 @@ void UninstallWorker::PostCompletionMessage(bool success, const std::wstring& er
     }
     wcsncpy_s(pData->errorMessage, 512, errorMsg.c_str(), copyLen);
     pData->errorMessage[copyLen] = L'\0';
-    ::PostMessage(m_hNotifyWindow, WM_UNINSTALL_COMPLETE, 0, reinterpret_cast<LPARAM>(pData));
+    PostOwnedWorkerMessage(m_hNotifyWindow, WM_UNINSTALL_COMPLETE, pData, "[GUI][UninstallWorker]");
 }
 
 } // namespace MultiThreadedInstaller

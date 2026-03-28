@@ -297,15 +297,32 @@ bool IsXmlEntry(const std::string& entry) {
 }
 
 std::vector<std::string> CollectReferencedImageEntries(const CDuiString& zipPath,
-                                                       const std::vector<std::string>& entries) {
+                                                       const std::vector<std::string>& entries,
+                                                       const std::vector<std::string>* xmlEntriesFilter) {
     static const std::regex imageRefPattern(
         R"(((?:\.\./)?images[\\/][^"'<>|]+?\.(?:png|jpg|jpeg|bmp|gif|webp)))",
         std::regex::icase);
+
+    std::unordered_set<std::string> allowedXmlEntries;
+    if (xmlEntriesFilter) {
+        for (const auto& xmlEntry : *xmlEntriesFilter) {
+            std::string normalized = xmlEntry;
+            std::replace(normalized.begin(), normalized.end(), '\\', '/');
+            allowedXmlEntries.insert(ToLowerAsciiCopy(normalized));
+        }
+    }
 
     std::unordered_set<std::string> uniqueRefs;
     for (const auto& entry : entries) {
         if (!IsXmlEntry(entry)) {
             continue;
+        }
+        if (!allowedXmlEntries.empty()) {
+            std::string normalizedEntry = entry;
+            std::replace(normalizedEntry.begin(), normalizedEntry.end(), '\\', '/');
+            if (allowedXmlEntries.find(ToLowerAsciiCopy(normalizedEntry)) == allowedXmlEntries.end()) {
+                continue;
+            }
         }
 
         CDuiString entryPath(Utf8ToWide(entry).c_str());
@@ -335,7 +352,10 @@ void UpdateActiveDiagnosticsContext(const GuiResourceContext& context) {
     g_activeDiagnosticsContext.valid = true;
 }
 
-void LogZipResourceDiagnostics(const CDuiString& zipPath, unsigned int dpi, const char* stage) {
+void LogZipResourceDiagnostics(const CDuiString& zipPath,
+                               unsigned int dpi,
+                               const char* stage,
+                               const std::vector<std::string>* xmlEntriesFilter) {
     const unsigned int scalePercent = DpiToScalePercent(dpi);
     const std::vector<std::string> entries = EnumerateZipEntriesUtf8(zipPath);
     if (entries.empty()) {
@@ -348,7 +368,8 @@ void LogZipResourceDiagnostics(const CDuiString& zipPath, unsigned int dpi, cons
     }
 
     std::unordered_set<std::string> entrySet(entries.begin(), entries.end());
-    const std::vector<std::string> referencedImages = CollectReferencedImageEntries(zipPath, entries);
+    const std::vector<std::string> referencedImages =
+        CollectReferencedImageEntries(zipPath, entries, xmlEntriesFilter);
     std::vector<std::string> baseImages;
     std::vector<std::string> expectedMissing;
     std::vector<std::string> legacyFallbacks;
@@ -411,6 +432,10 @@ void LogZipResourceDiagnostics(const CDuiString& zipPath, unsigned int dpi, cons
                      " dpi=" + std::to_string(dpi) +
                      " scale=" + std::to_string(scalePercent) +
                      "% zip_path=" + WideToUtf8(TCharToWide(zipPath.GetData())) +
+                     " xml_scope=" +
+                     (xmlEntriesFilter && !xmlEntriesFilter->empty()
+                          ? JoinSampleList(*xmlEntriesFilter, 6)
+                          : std::string("(all-xml)")) +
                      " total_entries=" + std::to_string(entries.size()) +
                      " xml_referenced_images=" + std::to_string(referencedImages.size()) +
                      " image_entries=" + std::to_string(imageEntryCount) +
@@ -567,7 +592,7 @@ void ApplyGuiResources(const GuiResourceContext& context, bool verboseLogs) {
     logInstallerInfo("[GUI][RES] Resource zip enabled: true");
     CDuiString zipPath = context.resourcePath + _T("resources.zip");
     LogZipEntryCheck(zipPath, BuildResourceZipChecks());
-    LogZipResourceDiagnostics(zipPath, 96, "ApplyGuiResources");
+    LogZipResourceDiagnostics(zipPath, 96, "ApplyGuiResources", nullptr);
 }
 
 void LogGuiResourceDiagnostics(const GuiResourceContext& context,
@@ -583,7 +608,7 @@ void LogGuiResourceDiagnostics(const GuiResourceContext& context,
     }
 
     CDuiString zipPath = context.resourcePath + _T("resources.zip");
-    LogZipResourceDiagnostics(zipPath, dpi, stage);
+    LogZipResourceDiagnostics(zipPath, dpi, stage, nullptr);
 }
 
 void LogActiveGuiResourceDiagnostics(unsigned int dpi, const char* stage) {
@@ -604,7 +629,30 @@ void LogActiveGuiResourceDiagnostics(unsigned int dpi, const char* stage) {
 
     CDuiString resourcePath(g_activeDiagnosticsContext.resourcePath.c_str());
     CDuiString zipPath = resourcePath + _T("resources.zip");
-    LogZipResourceDiagnostics(zipPath, dpi, stage);
+    LogZipResourceDiagnostics(zipPath, dpi, stage, nullptr);
+}
+
+void LogActiveGuiResourceDiagnosticsForXmlEntries(unsigned int dpi,
+                                                 const char* stage,
+                                                 const std::vector<std::string>& xmlEntries) {
+    if (!g_activeDiagnosticsContext.valid) {
+        logInstallerWarning(std::string("[GUI][DPI] stage=") + (stage ? stage : "unknown") +
+                            " dpi=" + std::to_string(dpi) +
+                            " no active GUI resource context");
+        return;
+    }
+
+    if (!g_activeDiagnosticsContext.useZip || g_activeDiagnosticsContext.resourcePath.empty()) {
+        logInstallerWarning(std::string("[GUI][DPI] stage=") + (stage ? stage : "unknown") +
+                            " dpi=" + std::to_string(dpi) +
+                            " use_zip=false resource_path=" +
+                            WideToUtf8(g_activeDiagnosticsContext.resourcePath));
+        return;
+    }
+
+    CDuiString resourcePath(g_activeDiagnosticsContext.resourcePath.c_str());
+    CDuiString zipPath = resourcePath + _T("resources.zip");
+    LogZipResourceDiagnostics(zipPath, dpi, stage, &xmlEntries);
 }
 
 } // namespace MultiThreadedInstaller

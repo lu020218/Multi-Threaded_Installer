@@ -32,6 +32,28 @@
 
 namespace MultiThreadedInstaller {
 
+namespace {
+
+template <typename T>
+bool PostOwnedWorkerMessage(HWND hwnd, UINT message, T* payload, const char* tag) {
+    if (!payload) {
+        return false;
+    }
+    if (!hwnd || !::IsWindow(hwnd)) {
+        logInstallerWarning(std::string(tag) + " notify window is invalid; dropping message.");
+        delete payload;
+        return false;
+    }
+    if (!::PostMessage(hwnd, message, 0, reinterpret_cast<LPARAM>(payload))) {
+        logInstallerWarning(std::string(tag) + " PostMessage failed; dropping message.");
+        delete payload;
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
 InstallationWorker::InstallationWorker(HWND hNotifyWindow)
     : m_hNotifyWindow(hNotifyWindow)
     , m_running(false)
@@ -46,12 +68,9 @@ InstallationWorker::InstallationWorker(HWND hNotifyWindow)
 }
 
 InstallationWorker::~InstallationWorker() {
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-if (m_running) {
+    if (m_workerThread.joinable()) {
         RequestCancellation();
-        if (m_workerThread.joinable()) {
-            m_workerThread.join();
-        }
+        m_workerThread.join();
     }
 }
 
@@ -65,12 +84,11 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
                                            const std::wstring& languageCode,
                                            bool cleanupOldInstall,
                                            const std::vector<std::string>& selectedComponents) {
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-if (m_running) {
+    if (m_running.load()) {
         return;
     }
-    
-    // NOTE: Comment text normalized to avoid encoding mojibake.
+
+    JoinFinishedThreadIfNeeded();
     m_cancellationRequested = false;
     m_running = true;
     m_autoRun = autoRun;
@@ -79,7 +97,6 @@ if (m_running) {
     m_cleanupOldInstallRequested = cleanupOldInstall;
     m_selectedComponents = selectedComponents;
     
-    // NOTE: Comment text normalized to avoid encoding mojibake.
     m_workerThread = std::thread(&InstallationWorker::WorkerThreadFunc, this, installPath);
 }
 
@@ -89,6 +106,10 @@ void InstallationWorker::RequestCancellation() {
 
 bool InstallationWorker::IsRunning() const {
     return m_running;
+}
+
+bool InstallationWorker::Joinable() const {
+    return m_workerThread.joinable();
 }
 
 // ============================================================================
@@ -122,40 +143,33 @@ void InstallationWorker::ProgressCallback(const std::string& folder, const std::
 }
 
 void InstallationWorker::PostProgressMessage(const std::wstring& folder, float progress) {
-    // NOTE: Comment text normalized to avoid encoding mojibake.
     ProgressMessageData* pData = new ProgressMessageData();
-    
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-size_t copyLen = folder.length();
+
+    size_t copyLen = folder.length();
     if (copyLen >= MAX_PATH) {
         copyLen = MAX_PATH - 1;
     }
     wcsncpy_s(pData->currentFolder, MAX_PATH, folder.c_str(), copyLen);
     pData->currentFolder[copyLen] = L'\0';
-    
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-pData->percentage = progress;
-    
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-::PostMessage(m_hNotifyWindow, WM_INSTALLATION_PROGRESS, 0, reinterpret_cast<LPARAM>(pData));
+
+    pData->percentage = progress;
+
+    PostOwnedWorkerMessage(m_hNotifyWindow, WM_INSTALLATION_PROGRESS, pData, "[GUI][Worker]");
 }
 
 void InstallationWorker::PostCompletionMessage(bool success, const std::wstring& errorMsg) {
-    // NOTE: Comment text normalized to avoid encoding mojibake.
     CompletionMessageData* pData = new CompletionMessageData();
-    
+
     pData->success = success;
-    
-    // NOTE: Comment text normalized to avoid encoding mojibake.
+
     size_t copyLen = errorMsg.length();
     if (copyLen >= 512) {
         copyLen = 511;
     }
     wcsncpy_s(pData->errorMessage, 512, errorMsg.c_str(), copyLen);
     pData->errorMessage[copyLen] = L'\0';
-    
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-::PostMessage(m_hNotifyWindow, WM_INSTALLATION_COMPLETE, 0, reinterpret_cast<LPARAM>(pData));
+
+    PostOwnedWorkerMessage(m_hNotifyWindow, WM_INSTALLATION_COMPLETE, pData, "[GUI][Worker]");
 }
 
 // ============================================================================
@@ -335,11 +349,14 @@ success = false;
         logElapsed("failed_unknown");
     }
     
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-m_running = false;
-    
-    // NOTE: Comment text normalized to avoid encoding mojibake.
-PostCompletionMessage(success, errorMessage);
+    m_running = false;
+    PostCompletionMessage(success, errorMessage);
+}
+
+void InstallationWorker::JoinFinishedThreadIfNeeded() {
+    if (m_workerThread.joinable() && !m_running.load()) {
+        m_workerThread.join();
+    }
 }
 
 // ============================================================================

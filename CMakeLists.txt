@@ -299,7 +299,28 @@ set(INSTALLER_SOURCES
     src/installer/upgrade_cleanup.cpp
     src/installer/uninstall_manager.cpp
     src/installer/gui_resource_loader.cpp
-    src/installer/main.cpp
+    src/installer/launch_support.cpp
+    src/installer/installer_main.cpp
+    src/common/installer_parallel_install.cpp
+)
+
+set(UNINSTALLER_SOURCES
+    src/installer/metadata_parser.cpp
+    src/installer/thread_pool_manager.cpp
+    src/installer/decompression_engine.cpp
+    src/installer/tar_stream_extractor.cpp
+    src/installer/file_system_operator.cpp
+    src/installer/console_interface.cpp
+    src/installer/path_resolver.cpp
+    src/installer/installer_helpers.cpp
+    src/installer/registry_utils.cpp
+    src/installer/install_state_utils.cpp
+    src/installer/install_service.cpp
+    src/installer/upgrade_cleanup.cpp
+    src/installer/uninstall_manager.cpp
+    src/installer/gui_resource_loader.cpp
+    src/installer/launch_support.cpp
+    src/installer/uninstaller_main.cpp
     src/common/installer_parallel_install.cpp
 )
 
@@ -323,6 +344,7 @@ set(GUI_SOURCES
     src/installer/embedded_resources.cpp
 )
 list(APPEND INSTALLER_SOURCES ${GUI_SOURCES})
+list(APPEND UNINSTALLER_SOURCES ${GUI_SOURCES})
 message(STATUS "Added GUI source files to installer")
 
 # Common source files
@@ -363,6 +385,18 @@ endif()
 apply_msvc_liblzma_link_fixes(installer)
 copy_dlls_to_target(installer)
 
+add_executable(uninstaller WIN32 ${UNINSTALLER_SOURCES} ${COMMON_SOURCES})
+target_link_libraries(uninstaller ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads)
+if(WIN32)
+    target_link_libraries(uninstaller ole32 shell32 bcrypt urlmon dbghelp)
+endif()
+target_include_directories(uninstaller PRIVATE ${LIBLZMA_INCLUDE_DIRS} ${ZSTD_INCLUDE_DIRS})
+if(LIBLZMA_STATIC)
+    target_compile_definitions(uninstaller PRIVATE LZMA_API_STATIC)
+endif()
+apply_msvc_liblzma_link_fixes(uninstaller)
+copy_dlls_to_target(uninstaller)
+
 add_executable(post_setup_agent ${POST_SETUP_AGENT_SOURCES} src/common/utf8_utils.cpp)
 target_link_libraries(post_setup_agent Threads::Threads)
 if(WIN32)
@@ -374,6 +408,7 @@ endif()
 
 if(MSVC)
     target_compile_definitions(installer PRIVATE UNICODE _UNICODE)
+    target_compile_definitions(uninstaller PRIVATE UNICODE _UNICODE)
     message(STATUS "Configured installer for Unicode character set")
 endif()
 
@@ -381,9 +416,16 @@ target_link_libraries(installer
     ${DUILIB_LIB}
     ${GUI_WINDOWS_LIBS}
 )
+target_link_libraries(uninstaller
+    ${DUILIB_LIB}
+    ${GUI_WINDOWS_LIBS}
+)
 
 if(MSVC)
     set_target_properties(installer PROPERTIES
+        LINK_FLAGS "/MANIFEST:EMBED /MANIFESTINPUT:${CMAKE_SOURCE_DIR}/src/installer/installer.exe.manifest"
+    )
+    set_target_properties(uninstaller PROPERTIES
         LINK_FLAGS "/MANIFEST:EMBED /MANIFESTINPUT:${CMAKE_SOURCE_DIR}/src/installer/installer.exe.manifest"
     )
     message(STATUS "Embedding application manifest: ${CMAKE_SOURCE_DIR}/src/installer/installer.exe.manifest")
@@ -393,6 +435,13 @@ add_custom_command(TARGET installer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${CMAKE_SOURCE_DIR}/resources
     $<TARGET_FILE_DIR:installer>/resources
+    COMMENT "Copying GUI resources (XML layouts and images) to output directory"
+)
+
+add_custom_command(TARGET uninstaller POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_SOURCE_DIR}/resources
+    $<TARGET_FILE_DIR:uninstaller>/resources
     COMMENT "Copying GUI resources (XML layouts and images) to output directory"
 )
 

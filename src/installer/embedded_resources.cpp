@@ -9,6 +9,31 @@
 
 namespace MultiThreadedInstaller {
 
+namespace {
+
+std::vector<uint8_t> ReadEmbeddedResourceFromCurrentModule(const std::string& name) {
+    HMODULE hModule = GetModuleHandle(NULL);
+    HRSRC hResource = FindResourceA(hModule, name.c_str(), "BINARY");
+
+    if (hResource != NULL) {
+        HGLOBAL hLoadedResource = LoadResource(hModule, hResource);
+        if (hLoadedResource != NULL) {
+            LPVOID pLockedResource = LockResource(hLoadedResource);
+            if (pLockedResource != NULL) {
+                DWORD dwResourceSize = SizeofResource(hModule, hResource);
+                if (dwResourceSize > 0) {
+                    std::vector<uint8_t> data(dwResourceSize);
+                    memcpy(data.data(), pLockedResource, dwResourceSize);
+                    return data;
+                }
+            }
+        }
+    }
+    return {};
+}
+
+} // namespace
+
 EmbeddedResourceManager::EmbeddedResourceManager()
     : m_extracted(false) {
 }
@@ -274,26 +299,10 @@ bool EmbeddedResourceManager::extractFile(const std::string& relativePath,
 }
 
 std::vector<uint8_t> EmbeddedResourceManager::getEmbeddedResource(const std::string& name) {
-
-    HMODULE hModule = GetModuleHandle(NULL);
-    HRSRC hResource = FindResourceA(hModule, name.c_str(), "BINARY");
-    
-    if (hResource != NULL) {
-        HGLOBAL hLoadedResource = LoadResource(hModule, hResource);
-        if (hLoadedResource != NULL) {
-            LPVOID pLockedResource = LockResource(hLoadedResource);
-            if (pLockedResource != NULL) {
-                DWORD dwResourceSize = SizeofResource(hModule, hResource);
-                if (dwResourceSize > 0) {
-                    std::vector<uint8_t> data(dwResourceSize);
-                    memcpy(data.data(), pLockedResource, dwResourceSize);
-                    return data;
-                }
-            }
-        }
+    std::vector<uint8_t> data = ReadEmbeddedResourceFromCurrentModule(name);
+    if (!data.empty()) {
+        return data;
     }
-    
-
 
     return readEmbeddedResourceFromFile(name);
 }
@@ -467,6 +476,34 @@ std::vector<uint8_t> EmbeddedResourceManager::readEmbeddedResourceFromFile(const
     }
 
     return {};
+}
+
+std::vector<uint8_t> LoadEmbeddedBinaryResource(const std::string& name) {
+    EmbeddedResourceManager manager;
+    return manager.getEmbeddedResource(name);
+}
+
+bool ExtractEmbeddedBinaryResourceToFile(const std::string& name, const std::string& outputPath) {
+    const std::vector<uint8_t> data = LoadEmbeddedBinaryResource(name);
+    if (data.empty()) {
+        return false;
+    }
+    try {
+        const std::filesystem::path output = PathFromUtf8(outputPath);
+        const std::filesystem::path parent = output.parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent);
+        }
+        std::ofstream file(output, std::ios::binary);
+        if (!file) {
+            return false;
+        }
+        file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        return file.good();
+    } catch (const std::exception& e) {
+        logInstallerError(std::string("[GUI][RES] Failed to extract embedded binary resource: ") + e.what());
+        return false;
+    }
 }
 
 } // namespace MultiThreadedInstaller

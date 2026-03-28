@@ -4,6 +4,7 @@
 #include "common/installer_logger.h"
 #include "installer/console_interface.h"
 #include "installer/install_state_utils.h"
+#include "installer/embedded_resources.h"
 #include "installer/installer_helpers.h"
 #include "installer/registry_utils.h"
 #include "installer/upgrade_cleanup.h"
@@ -1558,23 +1559,12 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
 
         if (!result.installRootPath.empty()) {
             std::filesystem::path target = PathFromUtf8(result.installRootPath) / "uninstall.exe";
-            std::string currentExe = getCurrentExecutablePath();
-            std::filesystem::path currentExePath = PathFromUtf8(currentExe);
-            std::error_code ec;
-            if (!currentExe.empty() && std::filesystem::exists(currentExePath)) {
-                std::string targetUtf8 = Utf8FromPath(target);
-                if (createUninstallStub(currentExe, targetUtf8)) {
-                    result.uninstallPath = targetUtf8;
-                } else {
-                    std::filesystem::copy_file(currentExePath, target,
-                                               std::filesystem::copy_options::overwrite_existing, ec);
-                    if (ec) {
-                        emitMessage(InstallServiceEventType::Warning,
-                                    "Failed to create uninstall.exe");
-                    } else {
-                        result.uninstallPath = targetUtf8;
-                    }
-                }
+            const std::string targetUtf8 = Utf8FromPath(target);
+            if (ExtractEmbeddedBinaryResourceToFile("UNINSTALLER_EXE", targetUtf8)) {
+                result.uninstallPath = targetUtf8;
+            } else {
+                emitMessage(InstallServiceEventType::Warning,
+                            "Failed to extract embedded uninstaller.exe");
             }
         }
         advanceFinalize(0.50f, "Preparing uninstall entry point");

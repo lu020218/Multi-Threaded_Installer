@@ -19,7 +19,6 @@ public:
     void showPackagingProgress(const std::string& currentFolder, float progress);
     
 
-    void showInstallerMenu();
     void showInstallationProgress(const std::string& currentFolder, float progress);
     void showInstallationResult(bool success, const std::vector<std::string>& errors);
     
@@ -47,8 +46,8 @@ public:
         std::vector<std::string> selectedComponents;
         bool installAllComponents = false;
         bool silent = false;
+        bool repair = false;
         bool showHelp = false;
-        bool uninstall = false;
     };
     
 
@@ -60,6 +59,7 @@ public:
 
     void showPackagerHelp();
     void showInstallerHelp();
+    void showUninstallerHelp();
     
 private:
 

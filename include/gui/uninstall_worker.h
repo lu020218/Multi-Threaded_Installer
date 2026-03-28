@@ -13,6 +13,7 @@ public:
     ~UninstallWorker();
 
     void StartUninstall(const std::vector<std::string>& identityCandidates);
+    bool Joinable() const;
 
 private:
     void WorkerThreadFunc(const std::vector<std::string>& identityCandidates);

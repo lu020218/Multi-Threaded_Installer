@@ -31,6 +31,7 @@ struct InstallConfig {
     std::wstring registryKey;
     bool autoStartup;
     bool desktopIcons;
+    bool repairMode;
     std::wstring logoResourceId;
     std::wstring licenseText;
     std::wstring webPageUrl;
@@ -49,6 +50,7 @@ struct InstallConfig {
           registryKey(L""),
           autoStartup(false),
           desktopIcons(false),
+          repairMode(false),
           logoResourceId(L"logo.png"),
           webPageUrl(L"https://example.com"),
           executableName(L"app.exe"),
@@ -124,6 +126,7 @@ private:
     InstallationWorker* m_pWorker;
     UninstallWorker* m_pUninstallWorker;
     bool m_uninstallMode;
+    bool m_repairMode;
     
 
     InstallConfig m_config;
@@ -180,6 +183,7 @@ private:
 
 public:
     void SetUninstallMode(bool enabled) { m_uninstallMode = enabled; }
+    void SetRepairMode(bool enabled) { m_repairMode = enabled; }
 
 private:
     float m_progressTarget;

@@ -35,3 +35,7 @@ build/post_setup_agent.vcxproj.filters
 build/ZERO_CHECK.vcxproj
 build/ZERO_CHECK.vcxproj.filters
 /build/Debug
+/build/uninstaller.dir/Release/uninstaller.tlog
+/build/uninstaller.dir
+*.vcxproj
+*.filters

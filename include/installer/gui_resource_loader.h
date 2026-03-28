@@ -3,6 +3,7 @@
 #include "installer/embedded_resources.h"
 #include <UIlib.h>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -47,5 +48,8 @@ void LogGuiResourceDiagnostics(const GuiResourceContext& context,
                                unsigned int dpi,
                                const char* stage);
 void LogActiveGuiResourceDiagnostics(unsigned int dpi, const char* stage);
+void LogActiveGuiResourceDiagnosticsForXmlEntries(unsigned int dpi,
+                                                 const char* stage,
+                                                 const std::vector<std::string>& xmlEntries);
 
 } // namespace MultiThreadedInstaller

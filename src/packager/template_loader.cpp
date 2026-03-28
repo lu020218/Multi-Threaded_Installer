@@ -33,6 +33,14 @@ std::filesystem::path GetDefaultInstallerTemplatePath() {
     return exeDir / "installer.exe";
 }
 
+std::filesystem::path GetDefaultUninstallerTemplatePath() {
+    const std::filesystem::path exeDir = GetPackagerExecutableDirectory();
+    if (exeDir.empty()) {
+        return {};
+    }
+    return exeDir / "uninstaller.exe";
+}
+
 bool LoadInstallerTemplate(const std::filesystem::path& templatePath,
                            std::vector<uint8_t>& outTemplate,
                            std::string& error) {

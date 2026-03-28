@@ -107,11 +107,10 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     bool hasInfoCallback = static_cast<bool>(infoCallback);
 
     auto threadPool = std::make_shared<ThreadPoolManager>(
-        threadCount > 0 ? threadCount : std::thread::hardware_concurrency()
+        ResolveThreadPoolWorkerCount(threadCount > 0 ? static_cast<size_t>(threadCount) : 0)
     );
 
     DecompressionEngine decompressor;
-    decompressor.setThreadPool(threadPool);
     if (progressCallback) {
         decompressor.registerProgressCallback(progressCallback);
     }

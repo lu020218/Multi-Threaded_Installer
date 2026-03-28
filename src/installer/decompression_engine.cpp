@@ -73,22 +73,6 @@ DecompressionEngine::DecompressionEngine() = default;
 DecompressionEngine::~DecompressionEngine() = default;
 
 bool DecompressionEngine::decompressFolder(const DecompressionTask& task, LegacyStageTiming* timing) {
-    if (threadPool && threadPool->getTotalThreadCount() > 1) {
-        auto future = threadPool->enqueue([this, task, timing]() -> bool {
-            TarStreamExtractor extractor(task.targetPath);
-            Crc32Stream checksum;
-            return decompressToStream(task, extractor, &checksum, timing);
-        });
-        
-        try {
-            return future.get();
-        } catch (const std::exception& e) {
-            logInstallerError(std::string("[DECOMP] Thread pool execution failed for ") +
-                              task.targetPath + ": " + e.what());
-            return false;
-        }
-    }
-    
     TarStreamExtractor extractor(task.targetPath);
     Crc32Stream checksum;
     return decompressToStream(task, extractor, &checksum, timing);

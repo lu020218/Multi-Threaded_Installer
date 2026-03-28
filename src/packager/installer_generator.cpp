@@ -122,6 +122,7 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
             return false;
         }
         std::filesystem::path resourceDir = templateDir / "resources";
+        std::filesystem::path uninstallerTemplatePath = GetDefaultUninstallerTemplatePath();
         std::cout << "Template resource directory: " << Utf8FromPath(templateDir) << std::endl;
         std::cout << "Resolved UI resources directory: " << Utf8FromPath(resourceDir) << std::endl;
         if (!std::filesystem::exists(resourceDir) || !std::filesystem::is_directory(resourceDir)) {
@@ -131,8 +132,29 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
             std::cerr << "ERROR: " << lastError_ << std::endl;
             return false;
         }
+
+        std::vector<uint8_t> uninstallerTemplate;
+        std::string uninstallerError;
+        if (!LoadInstallerTemplate(uninstallerTemplatePath, uninstallerTemplate, uninstallerError)) {
+            lastError_ = uninstallerError.empty()
+                             ? "Failed to load uninstaller template executable: " +
+                                   Utf8FromPath(uninstallerTemplatePath)
+                             : uninstallerError;
+            std::cerr << "ERROR: " << lastError_ << std::endl;
+            return false;
+        }
+
+        std::string uninstallerEmbedError;
+        if (!AppendEmbeddedResources(uninstallerTemplate, resourceDir, {}, uninstallerEmbedError)) {
+            lastError_ = uninstallerEmbedError.empty()
+                             ? "Failed to embed UI resources into uninstaller template."
+                             : uninstallerEmbedError;
+            std::cerr << "ERROR: " << lastError_ << std::endl;
+            return false;
+        }
+
         std::string embedError;
-        if (!AppendEmbeddedResources(installerTemplate, resourceDir, embedError)) {
+        if (!AppendEmbeddedResources(installerTemplate, resourceDir, uninstallerTemplate, embedError)) {
             lastError_ = embedError.empty()
                              ? "Failed to embed UI resources from: " + Utf8FromPath(resourceDir) +
                                    ". Packaging aborted because embedded UI resources are required."

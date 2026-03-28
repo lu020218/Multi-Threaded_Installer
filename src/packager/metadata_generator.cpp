@@ -1,5 +1,6 @@
 #include "packager/metadata_generator.h"
 #include "common/utf8_utils.h"
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 
@@ -23,6 +24,19 @@ void AppendStringList(std::vector<uint8_t>& out, const std::vector<std::string>&
     AppendPod(out, count);
     for (const auto& value : values) {
         AppendString(out, value);
+    }
+}
+
+void AppendStringMap(std::vector<uint8_t>& out,
+                     const std::unordered_map<std::string, std::string>& values) {
+    uint32_t count = static_cast<uint32_t>(values.size());
+    AppendPod(out, count);
+    std::vector<std::pair<std::string, std::string>> ordered(values.begin(), values.end());
+    std::sort(ordered.begin(), ordered.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (const auto& item : ordered) {
+        AppendString(out, item.first);
+        AppendString(out, item.second);
     }
 }
 
@@ -99,6 +113,11 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.directoryName =
         ResolveEffectiveDirectoryNameLocal(config.directoryName, config.applicationName);
     metadata.legacyAppIds = config.legacyAppIds;
+    metadata.desktopShortcutName = config.desktopShortcutName.empty()
+                                       ? config.applicationName
+                                       : config.desktopShortcutName;
+    metadata.desktopShortcutNameI18n = config.desktopShortcutNameI18n;
+    metadata.legacyDesktopShortcutNames = config.legacyDesktopShortcutNames;
     metadata.configVersion = config.version;
     metadata.defaultInstallDir = config.defaultInstallDir;
     metadata.webPageUrl = config.webPageUrl;
@@ -117,6 +136,7 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.componentUi = config.componentUi;
     metadata.uiLinks = config.uiLinks;
     metadata.uninstallCleanupRules = config.uninstallCleanupRules;
+    metadata.upgradeCleanup = config.upgradeCleanup;
     
     uint64_t currentOffset = 0;
     for (size_t i = 0; i < results.size() && i < folderInfos.size(); ++i) {
@@ -214,6 +234,11 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
             AppendString(serialized, metadata.directoryName);
         }
         AppendStringList(serialized, metadata.legacyAppIds);
+        if (header.version >= 19) {
+            AppendString(serialized, metadata.desktopShortcutName);
+            AppendStringMap(serialized, metadata.desktopShortcutNameI18n);
+            AppendStringList(serialized, metadata.legacyDesktopShortcutNames);
+        }
     }
     
     AppendString(serialized, metadata.defaultInstallDir);
@@ -304,6 +329,11 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
         }
         if (header.version >= 18) {
             AppendCleanupRules(serialized, metadata.uninstallCleanupRules);
+        }
+        if (header.version >= 20) {
+            serialized.push_back(metadata.upgradeCleanup.registry.deleteFromManifest ? 1 : 0);
+            AppendRegistryList(serialized, metadata.upgradeCleanup.registry.legacyKeys);
+            AppendCleanupRules(serialized, metadata.upgradeCleanup.extraPaths);
         }
     }
 

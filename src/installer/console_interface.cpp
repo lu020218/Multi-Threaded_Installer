@@ -9,14 +9,14 @@
 
 namespace MultiThreadedInstaller {
 
-void ConsoleInterface::showPackagerMenu() {
+void CliSupport::showPackagerMenu() {
     clearScreen();
     std::cout << "=== Multi-Threaded Installer Packager ===" << std::endl;
     std::cout << "This tool will package folders into a self-extracting installer." << std::endl;
     std::cout << std::endl;
 }
 
-bool ConsoleInterface::getPackagerInput(std::string& inputPath, std::string& outputPath,
+bool CliSupport::getPackagerInput(std::string& inputPath, std::string& outputPath,
                                        CompressionAlgorithm& algorithm) {
     inputPath = getUserInput("Enter input directory path: ");
     if (!validatePath(inputPath, true)) {
@@ -40,19 +40,19 @@ bool ConsoleInterface::getPackagerInput(std::string& inputPath, std::string& out
     return true;
 }
 
-void ConsoleInterface::showPackagingProgress(const std::string& currentFolder, float progress) {
+void CliSupport::showPackagingProgress(const std::string& currentFolder, float progress) {
     std::cout << "\rPackaging: " << currentFolder << " ";
     showProgressBar(progress);
     std::cout.flush();
 }
 
-void ConsoleInterface::showInstallationProgress(const std::string& currentFolder, float progress) {
+void CliSupport::showInstallationProgress(const std::string& currentFolder, float progress) {
     std::cout << "\rInstalling: " << currentFolder << " ";
     showProgressBar(progress);
     std::cout.flush();
 }
 
-void ConsoleInterface::showInstallationResult(bool success, const std::vector<std::string>& errors) {
+void CliSupport::showInstallationResult(bool success, const std::vector<std::string>& errors) {
     std::cout << std::endl;
     
     if (success) {
@@ -68,28 +68,28 @@ void ConsoleInterface::showInstallationResult(bool success, const std::vector<st
     }
 }
 
-void ConsoleInterface::showError(const std::string& message) {
+void CliSupport::showError(const std::string& message) {
     std::cout << "ERROR: " << message << std::endl;
     logInstallerError(std::string("[CLI] ") + message);
 }
 
-void ConsoleInterface::showWarning(const std::string& message) {
+void CliSupport::showWarning(const std::string& message) {
     std::cout << "WARNING: " << message << std::endl;
     logInstallerWarning(std::string("[CLI] ") + message);
 }
 
-bool ConsoleInterface::confirmAction(const std::string& prompt) {
+bool CliSupport::confirmAction(const std::string& prompt) {
     std::string response = getUserInput(prompt + " (y/N): ");
     std::transform(response.begin(), response.end(), response.begin(), ::tolower);
     return response == "y" || response == "yes";
 }
 
-void ConsoleInterface::showInfo(const std::string& message) {
+void CliSupport::showInfo(const std::string& message) {
     std::cout << "INFO: " << message << std::endl;
     logInstallerInfo(std::string("[CLI] ") + message);
 }
 
-ConsoleInterface::PackagerArgs ConsoleInterface::parsePackagerArgs(int argc, char* argv[]) {
+CliSupport::PackagerArgs CliSupport::parsePackagerArgs(int argc, char* argv[]) {
     PackagerArgs args;
     
     for (int i = 1; i < argc; ++i) {
@@ -118,7 +118,7 @@ ConsoleInterface::PackagerArgs ConsoleInterface::parsePackagerArgs(int argc, cha
     return args;
 }
 
-ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, char* argv[]) {
+CliSupport::InstallerArgs CliSupport::parseInstallerArgs(int argc, char* argv[]) {
     InstallerArgs args;
 
     auto trim = [](std::string value) {
@@ -149,6 +149,21 @@ ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, c
             start = end + 1;
         }
     };
+
+    auto parseBoolValue = [](const std::string& value, bool& parsed) -> bool {
+        std::string lowered = value;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lowered == "1" || lowered == "true" || lowered == "yes" || lowered == "on") {
+            parsed = true;
+            return true;
+        }
+        if (lowered == "0" || lowered == "false" || lowered == "no" || lowered == "off") {
+            parsed = false;
+            return true;
+        }
+        return false;
+    };
     
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -159,15 +174,29 @@ ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, c
             args.silent = true;
         } else if (arg == "--repair") {
             args.repair = true;
-        } else if (arg == "--all-components") {
-            args.installAllComponents = true;
-        } else if (arg == "--component" && i + 1 < argc) {
-            std::string id = trim(argv[++i]);
-            if (!id.empty()) {
-                args.selectedComponents.push_back(id);
-            }
         } else if (arg == "--components" && i + 1 < argc) {
-            appendComponents(argv[++i]);
+            std::string value = trim(argv[++i]);
+            std::string lowered = value;
+            std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (lowered == "all" || lowered == "*") {
+                args.installAllComponents = true;
+                args.selectedComponents.clear();
+            } else {
+                appendComponents(value);
+            }
+        } else if (arg == "--auto-startup" && i + 1 < argc) {
+            bool parsed = false;
+            if (parseBoolValue(trim(argv[++i]), parsed)) {
+                args.autoStartupSpecified = true;
+                args.autoStartupEnabled = parsed;
+            }
+        } else if (arg == "--desktop-icon" && i + 1 < argc) {
+            bool parsed = false;
+            if (parseBoolValue(trim(argv[++i]), parsed)) {
+                args.desktopIconSpecified = true;
+                args.desktopIconEnabled = parsed;
+            }
         } else if ((arg == "-d" || arg == "--destination") && i + 1 < argc) {
             args.defaultDestination = argv[++i];
         }
@@ -176,7 +205,7 @@ ConsoleInterface::InstallerArgs ConsoleInterface::parseInstallerArgs(int argc, c
     return args;
 }
 
-void ConsoleInterface::showPackagerHelp() {
+void CliSupport::showPackagerHelp() {
     std::cout << "Multi-Threaded Installer Packager" << std::endl;
     std::cout << "Usage: packager [options] <input_directory> <output_file>" << std::endl;
     std::cout << std::endl;
@@ -193,7 +222,7 @@ void ConsoleInterface::showPackagerHelp() {
     std::cout << "  packager -a zstd -l 3 ./input ./output/installer.exe" << std::endl;
 }
 
-void ConsoleInterface::showInstallerHelp() {
+void CliSupport::showInstallerHelp() {
     std::cout << "Multi-Threaded Installer" << std::endl;
     std::cout << "Usage: installer [options]" << std::endl;
     std::cout << std::endl;
@@ -201,20 +230,21 @@ void ConsoleInterface::showInstallerHelp() {
     std::cout << "  -d, --destination <directory>  Default installation directory" << std::endl;
     std::cout << "  -s, --silent                   Silent installation mode" << std::endl;
     std::cout << "  --repair                       Repair an existing installation" << std::endl;
-    std::cout << "  --component <id>               Select one component id (repeatable)" << std::endl;
-    std::cout << "  --components <id1,id2,...>     Select multiple component ids" << std::endl;
-    std::cout << "  --all-components               Install all optional components" << std::endl;
+    std::cout << "  --components <id1,id2,...|all> Select optional components or all" << std::endl;
+    std::cout << "  --auto-startup <true|false>    Enable or disable auto startup" << std::endl;
+    std::cout << "  --desktop-icon <true|false>    Enable or disable desktop icon" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  installer -d C:\\Program Files\\MyApp" << std::endl;
     std::cout << "  installer -s -d C:\\Program Files\\MyApp" << std::endl;
     std::cout << "  installer --repair" << std::endl;
-    std::cout << "  installer -s --repair" << std::endl;
     std::cout << "  installer -s --components main_app,chrome_plugin" << std::endl;
+    std::cout << "  installer -s --components all" << std::endl;
+    std::cout << "  installer -s --auto-startup true --desktop-icon false" << std::endl;
 }
 
-void ConsoleInterface::showUninstallerHelp() {
+void CliSupport::showUninstallerHelp() {
     std::cout << "Multi-Threaded Uninstaller" << std::endl;
     std::cout << "Usage: uninstaller [options]" << std::endl;
     std::cout << std::endl;
@@ -227,7 +257,7 @@ void ConsoleInterface::showUninstallerHelp() {
     std::cout << "  uninstaller.exe --silent" << std::endl;
 }
 
-void ConsoleInterface::clearScreen() {
+void CliSupport::clearScreen() {
     #ifdef _WIN32
     system("cls");
     #else
@@ -235,7 +265,7 @@ void ConsoleInterface::clearScreen() {
     #endif
 }
 
-void ConsoleInterface::showProgressBar(float progress, int width) {
+void CliSupport::showProgressBar(float progress, int width) {
     int filledWidth = static_cast<int>(progress * width);
     
     std::cout << "[";
@@ -251,14 +281,14 @@ void ConsoleInterface::showProgressBar(float progress, int width) {
     std::cout << "] " << static_cast<int>(progress * 100) << "%";
 }
 
-std::string ConsoleInterface::getUserInput(const std::string& prompt) {
+std::string CliSupport::getUserInput(const std::string& prompt) {
     std::cout << prompt;
     std::string input;
     std::getline(std::cin, input);
     return input;
 }
 
-bool ConsoleInterface::validatePath(const std::string& path, bool shouldExist) {
+bool CliSupport::validatePath(const std::string& path, bool shouldExist) {
     if (path.empty()) {
         return false;
     }
@@ -274,7 +304,7 @@ bool ConsoleInterface::validatePath(const std::string& path, bool shouldExist) {
     return true;
 }
 
-CompressionAlgorithm ConsoleInterface::parseCompressionAlgorithm(const std::string& algorithmStr) {
+CompressionAlgorithm CliSupport::parseCompressionAlgorithm(const std::string& algorithmStr) {
     std::string lower = algorithmStr;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
     
@@ -288,7 +318,7 @@ CompressionAlgorithm ConsoleInterface::parseCompressionAlgorithm(const std::stri
     return CompressionAlgorithm::LZMA_HIGH;
 }
 
-std::string ConsoleInterface::compressionAlgorithmToString(CompressionAlgorithm algorithm) {
+std::string CliSupport::compressionAlgorithmToString(CompressionAlgorithm algorithm) {
     switch (algorithm) {
         case CompressionAlgorithm::LZMA_HIGH:
             return "LZMA";

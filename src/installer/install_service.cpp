@@ -55,6 +55,18 @@ float Clamp01(float value) {
     return value;
 }
 
+std::string TrimAsciiCopy(const std::string& value) {
+    size_t start = 0;
+    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])) != 0) {
+        ++start;
+    }
+    size_t end = value.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+        --end;
+    }
+    return value.substr(start, end - start);
+}
+
 float ToOverallProgress(InstallServicePhase phase, float phaseProgress) {
     const float clamped = Clamp01(phaseProgress);
     switch (phase) {
@@ -234,6 +246,75 @@ struct ComponentSelectionPlan {
     bool desktopIcons = false;
 };
 
+enum class InstallTargetMode {
+    FreshInstall,
+    UpgradeMigration,
+    Repair,
+};
+
+struct InstallPathDecision {
+    InstallTargetMode mode = InstallTargetMode::FreshInstall;
+    std::string requestedInstallRoot;
+    std::string resolvedInstallRoot;
+    std::string diskCheckPath;
+    std::string cleanupTargetInstallRoot;
+    std::string shortcutCleanupTargetRoot;
+};
+
+InstallPathDecision ResolveInstallPathDecision(InstallerPathResolver& pathResolver,
+                                               const std::string& requestedInstallPath,
+                                               const std::string& effectiveDirectoryName,
+                                               bool installDirectoryAppendName,
+                                               bool installPathExplicit,
+                                               bool cleanupOldInstallRequested,
+                                               bool hasPreviousInstall,
+                                               const std::string& previousInstallDir,
+                                               bool repairMode) {
+    InstallPathDecision decision;
+    decision.requestedInstallRoot = pathResolver.resolveFinalPath(
+        requestedInstallPath,
+        SpecialDirectoryType::INSTALL_DIRECTORY,
+        effectiveDirectoryName,
+        installDirectoryAppendName);
+    decision.resolvedInstallRoot = decision.requestedInstallRoot;
+
+    if (repairMode) {
+        decision.mode = InstallTargetMode::Repair;
+        if (!previousInstallDir.empty()) {
+            decision.resolvedInstallRoot = previousInstallDir;
+        }
+    } else if (hasPreviousInstall &&
+               !installPathExplicit &&
+               !cleanupOldInstallRequested &&
+               !previousInstallDir.empty()) {
+        decision.mode = InstallTargetMode::UpgradeMigration;
+        decision.resolvedInstallRoot = previousInstallDir;
+    }
+
+    decision.diskCheckPath =
+        decision.resolvedInstallRoot.empty() ? requestedInstallPath : decision.resolvedInstallRoot;
+    decision.cleanupTargetInstallRoot = decision.resolvedInstallRoot;
+    if (installPathExplicit || cleanupOldInstallRequested) {
+        decision.cleanupTargetInstallRoot = decision.requestedInstallRoot;
+    }
+    decision.shortcutCleanupTargetRoot =
+        decision.requestedInstallRoot.empty() ? decision.resolvedInstallRoot : decision.requestedInstallRoot;
+    return decision;
+}
+
+const char* InstallTargetModeName(InstallTargetMode mode) {
+    switch (mode) {
+        case InstallTargetMode::FreshInstall:
+            return "FreshInstall";
+        case InstallTargetMode::UpgradeMigration:
+            return "UpgradeMigration";
+        case InstallTargetMode::Repair:
+            return "Repair";
+        default:
+            return "FreshInstall";
+    }
+}
+
 void AppendUniqueString(std::vector<std::string>& target,
                         std::unordered_set<std::string>& seen,
                         const std::string& value) {
@@ -243,6 +324,69 @@ void AppendUniqueString(std::vector<std::string>& target,
     if (seen.insert(value).second) {
         target.push_back(value);
     }
+}
+
+void AppendShortcutNameCandidate(std::vector<std::string>& target,
+                                 std::unordered_set<std::string>& seen,
+                                 const std::string& value) {
+    std::string trimmed = TrimAsciiCopy(value);
+    if (trimmed.empty()) {
+        return;
+    }
+    std::string lowered = trimmed;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (seen.insert(lowered).second) {
+        target.push_back(std::move(trimmed));
+    }
+}
+
+std::vector<std::string> CollectLegacyDesktopShortcutCandidates(
+    const ExtendedInstallationMetadata& metadata,
+    const std::string& previousManifest) {
+    std::vector<std::string> candidates;
+    std::unordered_set<std::string> seen;
+    seen.reserve(metadata.legacyDesktopShortcutNames.size() + 2);
+
+    nlohmann::json manifest;
+    if (readManifest(previousManifest, manifest)) {
+        AppendShortcutNameCandidate(candidates, seen, manifest.value("desktopShortcutDisplayName", ""));
+    }
+    for (const auto& legacyName : metadata.legacyDesktopShortcutNames) {
+        AppendShortcutNameCandidate(candidates, seen, legacyName);
+    }
+
+    return candidates;
+}
+
+std::string ResolveDesktopShortcutDisplayName(const ExtendedInstallationMetadata& metadata,
+                                             const std::string& languageCode) {
+    std::string normalizedLanguage = languageCode;
+    std::replace(normalizedLanguage.begin(), normalizedLanguage.end(), '-', '_');
+    if (!normalizedLanguage.empty()) {
+        auto exact = metadata.desktopShortcutNameI18n.find(normalizedLanguage);
+        if (exact != metadata.desktopShortcutNameI18n.end() && !exact->second.empty()) {
+            return exact->second;
+        }
+
+        std::string lowered = normalizedLanguage;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        for (const auto& item : metadata.desktopShortcutNameI18n) {
+            std::string key = item.first;
+            std::replace(key.begin(), key.end(), '-', '_');
+            std::transform(key.begin(), key.end(), key.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (key == lowered && !item.second.empty()) {
+                return item.second;
+            }
+        }
+    }
+
+    if (!metadata.desktopShortcutName.empty()) {
+        return metadata.desktopShortcutName;
+    }
+    return metadata.applicationName;
 }
 
 void AppendUniqueRegistry(std::vector<RegistryEntry>& target,
@@ -908,23 +1052,39 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                          " selectedComponents=" + std::to_string(options.selectedComponentIds.size()) +
                          " hasPreviousInstall=" + (hasPreviousInstall ? "true" : "false"));
 
-        const std::string requestedInstallRoot = pathResolver.resolveFinalPath(
+        const InstallPathDecision installPathDecision = ResolveInstallPathDecision(
+            pathResolver,
             options.installPath,
-            SpecialDirectoryType::INSTALL_DIRECTORY,
             effectiveDirectoryName,
-            installDirectoryAppendName);
-        std::string resolvedInstallRoot = requestedInstallRoot;
-        if (hasPreviousInstall &&
-            !options.installPathExplicit &&
-            !options.cleanupOldInstallRequested &&
-            !previousInstallDir.empty()) {
-            resolvedInstallRoot = previousInstallDir;
-        }
-        std::string diskCheckPath = resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot;
-        logInstallerInfo(std::string("[InstallFlow][Path] previousInstallDir=") + previousInstallDir +
-                         " requestedInstallRoot=" + requestedInstallRoot +
-                         " resolvedInstallRoot=" + resolvedInstallRoot +
-                         " diskCheckPath=" + diskCheckPath);
+            installDirectoryAppendName,
+            options.installPathExplicit,
+            options.cleanupOldInstallRequested,
+            hasPreviousInstall,
+            previousInstallDir,
+            options.repairMode);
+        const std::string normalizedPreviousInstallRoot = normalizePathForCompare(previousInstallDir);
+        const std::string normalizedShortcutCleanupTarget = normalizePathForCompare(
+            installPathDecision.shortcutCleanupTargetRoot.empty()
+                ? installPathDecision.resolvedInstallRoot
+                : installPathDecision.shortcutCleanupTargetRoot);
+        const bool shouldCleanupLegacyDesktopShortcuts =
+            hasPreviousInstall &&
+            !normalizedPreviousInstallRoot.empty() &&
+            !normalizedShortcutCleanupTarget.empty() &&
+            (normalizedPreviousInstallRoot == normalizedShortcutCleanupTarget ||
+             metadata.autoCleanOldInstall ||
+             options.cleanupOldInstallRequested);
+        const std::vector<std::string> legacyDesktopShortcutCandidates =
+            shouldCleanupLegacyDesktopShortcuts
+                ? CollectLegacyDesktopShortcutCandidates(metadata, previousManifest)
+                : std::vector<std::string>{};
+        logInstallerInfo(std::string("[InstallFlow][Path] mode=") +
+                         InstallTargetModeName(installPathDecision.mode) +
+                         " previousInstallDir=" + previousInstallDir +
+                         " requestedInstallRoot=" + installPathDecision.requestedInstallRoot +
+                         " resolvedInstallRoot=" + installPathDecision.resolvedInstallRoot +
+                         " cleanupTargetInstallRoot=" + installPathDecision.cleanupTargetInstallRoot +
+                         " diskCheckPath=" + installPathDecision.diskCheckPath);
 
         ComponentSelectionPlan componentPlan;
         std::string componentPlanError;
@@ -960,8 +1120,12 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             AppendUniqueString(effectiveKillProcesses, processSeen, process);
         }
 
-        bool effectiveAutoStartup = metadata.autoStartup;
-        bool effectiveDesktopIcons = metadata.desktopIcons;
+        bool effectiveAutoStartup = options.overrideAutoStartup
+                                        ? options.autoStartupEnabled
+                                        : metadata.autoStartup;
+        bool effectiveDesktopIcons = options.overrideDesktopIcons
+                                         ? options.desktopIconsEnabled
+                                         : metadata.desktopIcons;
 
         auto shouldInstallMapping = [&](const ExtendedFolderMapping& mapping) {
             return ShouldInstallEmbeddedFolder(componentPlan, mapping);
@@ -997,7 +1161,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         }
 
         uint64_t availableBytes = 0;
-        if (!checkDiskSpaceForInstall(diskCheckPath, totalInstallBytes, availableBytes)) {
+        if (!checkDiskSpaceForInstall(installPathDecision.diskCheckPath,
+                                      totalInstallBytes,
+                                      availableBytes)) {
             markFailed("Insufficient disk space for installation. required=" +
                            std::to_string(totalInstallBytes) + " available=" +
                            std::to_string(availableBytes),
@@ -1063,23 +1229,18 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         }
 
         if (hasPreviousInstall) {
-            std::string cleanupTargetInstallRoot = resolvedInstallRoot;
-            if (options.installPathExplicit || options.cleanupOldInstallRequested) {
-                cleanupTargetInstallRoot = requestedInstallRoot;
-            }
             std::string normalizedOld = normalizePathForCompare(previousInstallDir);
             std::string normalizedNew = normalizePathForCompare(
-                cleanupTargetInstallRoot.empty() ? options.installPath : cleanupTargetInstallRoot);
+                installPathDecision.cleanupTargetInstallRoot.empty()
+                    ? options.installPath
+                    : installPathDecision.cleanupTargetInstallRoot);
             if (!normalizedOld.empty() && !normalizedNew.empty() && normalizedOld != normalizedNew) {
                 emitMessage(InstallServiceEventType::Info,
                             "Detected previous install at: " + previousInstallDir);
-                if (previousManifest.empty()) {
-                    emitMessage(InstallServiceEventType::Warning,
-                                "Old install manifest not found; skipping cleanup.");
-                } else if (metadata.autoCleanOldInstall || options.cleanupOldInstallRequested) {
+                if (metadata.autoCleanOldInstall || options.cleanupOldInstallRequested) {
                     logInstallerInfo(std::string("[InstallFlow][Cleanup] start previousManifest=") +
                                      previousManifest + " previousInstallDir=" + previousInstallDir +
-                                     " targetInstallRoot=" + cleanupTargetInstallRoot);
+                                     " targetInstallRoot=" + installPathDecision.cleanupTargetInstallRoot);
                     currentPhase = InstallServicePhase::CleanupOldInstall;
                     currentPhaseProgress = 0.0f;
                     emitStatus(InstallServiceStatus::Precheck,
@@ -1087,7 +1248,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                0.0f,
                                "Cleaning previous installation...");
 
-                    ConsoleInterface console;
+                    CliSupport console;
                     auto cleanupProgress = [&](const UpgradeCleanupProgressInfo& info) {
                         const std::string detail = info.currentItem.empty()
                                                        ? std::string("Cleaning previous installation")
@@ -1097,7 +1258,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
 
                     if (!cleanupPreviousInstallForUpgrade(previousManifest,
                                                           previousInstallDir,
-                                                          cleanupTargetInstallRoot,
+                                                          installPathDecision.cleanupTargetInstallRoot,
                                                           console,
                                                           cleanupProgress,
                                                           options.cancellationCallback)) {
@@ -1110,6 +1271,23 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                         logInstallerWarning("[InstallFlow][Cleanup] finished with failure");
                     } else {
                         logInstallerInfo("[InstallFlow][Cleanup] finished successfully");
+                    }
+                    if (!cleanupUpgradeSystemArtifacts(previousManifest,
+                                                      previousInstallDir,
+                                                      metadata,
+                                                      pathResolver,
+                                                      console,
+                                                      cleanupProgress,
+                                                      options.cancellationCallback)) {
+                        if (IsCancellationRequested(options)) {
+                            markFailed("Installation cancelled.", true, true);
+                            return result;
+                        }
+                        emitMessage(InstallServiceEventType::Warning,
+                                    "Previous install system cleanup reported failure.");
+                        logInstallerWarning("[InstallFlow][Cleanup] system cleanup finished with failure");
+                    } else {
+                        logInstallerInfo("[InstallFlow][Cleanup] system cleanup finished successfully");
                     }
                     emitProgress("cleanup", "Previous installation cleanup finished", 1.0f);
                 } else {
@@ -1190,7 +1368,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         ParallelInstallResult parallelResult;
         if (selectedEmbeddedFolders.empty() && componentPlan.hasComponents) {
             parallelResult.success = true;
-            parallelResult.installRootPath = resolvedInstallRoot;
+            parallelResult.installRootPath = installPathDecision.resolvedInstallRoot;
             emitMessage(InstallServiceEventType::Info,
                         "No embedded folders selected; skipping package extraction.");
             logInstallerInfo("[InstallFlow][Extract] skipped embedded extraction");
@@ -1241,7 +1419,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         }
 
         if (result.installRootPath.empty()) {
-            result.installRootPath = resolvedInstallRoot.empty() ? options.installPath : resolvedInstallRoot;
+            result.installRootPath = installPathDecision.resolvedInstallRoot.empty()
+                                         ? options.installPath
+                                         : installPathDecision.resolvedInstallRoot;
         }
 
         emitProgress("", "File installation completed", extractionWeight);
@@ -1255,7 +1435,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
 
         if (executableComponentCount > 0) {
             const std::string installRootForComponents = result.installRootPath.empty()
-                                                             ? diskCheckPath
+                                                             ? installPathDecision.diskCheckPath
                                                              : result.installRootPath;
             size_t completedComponents = 0;
 
@@ -1528,7 +1708,20 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                         "Install root not detected; AutoStartup/DesktopIcons skipped");
         }
 
+        const std::string languageCode = ResolveLanguageCode(options.languageCode);
+        const std::string desktopShortcutDisplayName =
+            ResolveDesktopShortcutDisplayName(metadata, languageCode);
+
         if (!result.installRootPath.empty()) {
+            if (!legacyDesktopShortcutCandidates.empty()) {
+                for (const auto& shortcutName : legacyDesktopShortcutCandidates) {
+                    if (deleteDesktopShortcut(shortcutName)) {
+                        emitMessage(InstallServiceEventType::Info,
+                                    "Removed legacy desktop shortcut: " + shortcutName);
+                    }
+                }
+            }
+
             std::filesystem::path exePath = findPrimaryExecutable(PathFromUtf8(result.installRootPath),
                                                                   metadata.applicationName);
             if ((effectiveAutoStartup || effectiveDesktopIcons) && exePath.empty()) {
@@ -1544,7 +1737,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                     }
                 }
                 if (effectiveDesktopIcons) {
-                    if (createDesktopShortcut(metadata.applicationName, exePath)) {
+                    if (createDesktopShortcut(desktopShortcutDisplayName, exePath)) {
                         emitMessage(InstallServiceEventType::Info, "Desktop icon created");
                     } else {
                         emitMessage(InstallServiceEventType::Warning,
@@ -1575,13 +1768,13 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                 result.installedFiles.end());
         }
 
-        std::string languageCode = ResolveLanguageCode(options.languageCode);
         if (!result.installRootPath.empty()) {
             std::filesystem::path localPath = PathFromUtf8(result.installRootPath) / "install.manifest.json";
             if (!writeManifest(Utf8FromPath(localPath),
                                effectiveAppId,
                                metadata.applicationName,
                                metadata.legacyAppIds,
+                               metadata.legacyDesktopShortcutNames,
                                metadata.configVersion,
                                result.installRootPath,
                                result.installedRoots,
@@ -1591,6 +1784,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                effectiveKillProcesses,
                                effectiveAutoStartup,
                                effectiveDesktopIcons,
+                               desktopShortcutDisplayName,
                                metadata.installState,
                                result.uninstallPath,
                                languageCode,

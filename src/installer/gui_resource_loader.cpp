@@ -569,9 +569,7 @@ GuiResourceValidationResult ValidateInstallGuiResources(const GuiResourceContext
         GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.title", L""),
         errorMessage);
 
-    bool debugMode = GetEnvironmentVariableW(L"MTINSTALLER_DEBUG", nullptr, 0) > 0;
-    return debugMode ? GuiResourceValidationResult::RunConsoleFallback
-                     : GuiResourceValidationResult::Abort;
+    return GuiResourceValidationResult::Abort;
 }
 
 void ApplyGuiResources(const GuiResourceContext& context, bool verboseLogs) {

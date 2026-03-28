@@ -118,7 +118,7 @@ void showUsage(const std::string& programName) {
     std::cout << "  output_file      Path for the generated installer executable\n";
     std::cout << "\n";
     std::cout << "Configuration:\n";
-    std::cout << "  Place packager.yaml/packager.yml/packager.json/.packager.json in the input directory\n";
+    std::cout << "  Place packager.yaml or packager.yml in the input directory\n";
     std::cout << "  to configure packaging options. If no configuration file is found,\n";
     std::cout << "  default settings will be used.\n";
 }
@@ -135,7 +135,7 @@ static fs::path makeTempTemplatePath(const fs::path& outputPath) {
 }
 
 int main(int argc, char* argv[]) {
-    ConsoleInterface console;
+    CliSupport console;
     auto startTime = std::chrono::steady_clock::now();
     PackagerStageTimings timings;
     auto args = console.parsePackagerArgs(argc, argv);

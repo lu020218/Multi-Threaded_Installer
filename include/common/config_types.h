@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace MultiThreadedInstaller {
@@ -163,6 +164,18 @@ struct UninstallCleanupRule {
     UninstallCleanupRule() : recursive(true), onlyIfEmpty(false) {}
 };
 
+struct UpgradeCleanupRegistryConfig {
+    bool deleteFromManifest;
+    std::vector<RegistryEntry> legacyKeys;
+
+    UpgradeCleanupRegistryConfig() : deleteFromManifest(true) {}
+};
+
+struct UpgradeCleanupConfig {
+    UpgradeCleanupRegistryConfig registry;
+    std::vector<UninstallCleanupRule> extraPaths;
+};
+
 struct UiComponentSelectionConfig {
     std::string mode;
     std::string strategy;
@@ -182,6 +195,9 @@ struct PackagerConfiguration {
     std::string directoryName;
     std::vector<std::string> legacyAppIds;
     std::string defaultInstallDir;
+    std::string desktopShortcutName;
+    std::unordered_map<std::string, std::string> desktopShortcutNameI18n;
+    std::vector<std::string> legacyDesktopShortcutNames;
     std::string iconPath;
     std::string webPageUrl;
     std::string productName;
@@ -199,6 +215,7 @@ struct PackagerConfiguration {
     UiComponentSelectionConfig componentUi;
     std::vector<UiLinkBinding> uiLinks;
     std::vector<UninstallCleanupRule> uninstallCleanupRules;
+    UpgradeCleanupConfig upgradeCleanup;
     bool autoStartup;
     bool desktopIcons;
     bool autoCleanOldInstall;
@@ -215,6 +232,7 @@ struct PackagerConfiguration {
           appId(""),
           directoryName(""),
           defaultInstallDir("%ProgramFiles%"),
+          desktopShortcutName(""),
           compressionAlgorithm(CompressionAlgorithm::LZMA_HIGH),
           compressionLevel(-1),
           autoStartup(false),

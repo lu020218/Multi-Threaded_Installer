@@ -382,7 +382,7 @@ std::string ResolveInstallPathForSilentRun(const ExtendedInstallationMetadata& m
     return pathResolver.expandEnvironmentVariables(metadata.defaultInstallDir);
 }
 
-InstallServiceCallbacks BuildConsoleServiceCallbacks(ConsoleInterface& console) {
+InstallServiceCallbacks BuildConsoleServiceCallbacks(CliSupport& console) {
     InstallServiceCallbacks callbacks;
     callbacks.onEvent = [&console](const InstallServiceEvent& event) {
         switch (event.type) {
@@ -457,7 +457,7 @@ InstallConfig BuildUninstallConfigFromManifest(const std::string& manifestPath) 
 }
 
 int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
-    ConsoleInterface console;
+    CliSupport console;
     InstallerPathResolver pathResolver;
     MetadataParser parser;
     ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
@@ -491,6 +491,10 @@ int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
     options.installAllComponents = context.args.installAllComponents;
     options.writeUninstallRegistry = true;
     options.cleanupOldInstallRequested = repairMode;
+    options.overrideAutoStartup = context.args.autoStartupSpecified;
+    options.autoStartupEnabled = context.args.autoStartupEnabled;
+    options.overrideDesktopIcons = context.args.desktopIconSpecified;
+    options.desktopIconsEnabled = context.args.desktopIconEnabled;
 
     InstallServiceResult result = ExecuteInstallService(
         metadata, parser, pathResolver, options, BuildConsoleServiceCallbacks(console));
@@ -564,7 +568,7 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, boo
 }
 
 int RunSilentUninstallMode() {
-    ConsoleInterface console;
+    CliSupport console;
     InstallerPathResolver resolver;
     MetadataParser parser;
     ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
@@ -648,7 +652,7 @@ LaunchContext BuildLaunchContextFromCommandLine(LaunchBinary binary) {
         context.utf8Args.push_back(WideToUtf8(arg));
     }
 
-    ConsoleInterface console;
+    CliSupport console;
     std::vector<char*> argv = BuildArgv(context.utf8Args);
     context.args = console.parseInstallerArgs(static_cast<int>(context.utf8Args.size()), argv.data());
 
@@ -673,7 +677,7 @@ LaunchContext BuildLaunchContextFromCommandLine(LaunchBinary binary) {
 int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
     EnablePerMonitorDpiAwareness();
 
-    ConsoleInterface console;
+    CliSupport console;
     if (context.args.showHelp) {
         if (context.binary == LaunchBinary::Installer) {
             console.showInstallerHelp();
@@ -681,6 +685,13 @@ int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
             console.showUninstallerHelp();
         }
         return INSTALLER_EXIT_SUCCESS;
+    }
+
+    if (context.binary == LaunchBinary::Installer &&
+        context.args.silent &&
+        context.args.repair) {
+        console.showError("Silent mode does not support --repair.");
+        return INSTALLER_EXIT_FAILED;
     }
 
     switch (context.mode) {

@@ -28,7 +28,6 @@ struct GuiResourceContext {
 enum class GuiResourceValidationResult {
     Ok,
     Abort,
-    RunConsoleFallback,
 };
 
 WindowSize GetWindowSizeFromResources(bool useZip,

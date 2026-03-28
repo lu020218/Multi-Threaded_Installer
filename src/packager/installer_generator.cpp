@@ -145,7 +145,11 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
         }
 
         std::string uninstallerEmbedError;
-        if (!AppendEmbeddedResources(uninstallerTemplate, resourceDir, {}, uninstallerEmbedError)) {
+        if (!AppendEmbeddedResources(uninstallerTemplate,
+                                     resourceDir,
+                                     {},
+                                     "uninstaller template",
+                                     uninstallerEmbedError)) {
             lastError_ = uninstallerEmbedError.empty()
                              ? "Failed to embed UI resources into uninstaller template."
                              : uninstallerEmbedError;
@@ -154,7 +158,11 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
         }
 
         std::string embedError;
-        if (!AppendEmbeddedResources(installerTemplate, resourceDir, uninstallerTemplate, embedError)) {
+        if (!AppendEmbeddedResources(installerTemplate,
+                                     resourceDir,
+                                     uninstallerTemplate,
+                                     "installer template",
+                                     embedError)) {
             lastError_ = embedError.empty()
                              ? "Failed to embed UI resources from: " + Utf8FromPath(resourceDir) +
                                    ". Packaging aborted because embedded UI resources are required."

@@ -21,6 +21,13 @@ install:
   defaultInstallDir: "%ProgramFiles%"
   autoStartup: true
   desktopIcons: true
+  desktopShortcutName: MyDesktopApp
+  desktopShortcutNameI18n:
+    zh_CN: 我的桌面应用
+    en_US: MyDesktopApp
+  legacyDesktopShortcutNames:
+    - MyDesktopApp Legacy
+    - 我的旧版桌面应用
   autoCleanOldInstall: true
   requireAdmin: true
   minWindowsVersion: 10.0.19041
@@ -37,6 +44,28 @@ install:
     filePath: "%ProgramData%\\my_desktop_app\\install.state"
     useMutex: true
     mutexName: Global\\my_desktop_app_Install
+
+registry:
+  - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
+    key: InstallDir
+    value: "%InstallDir%"
+    type: expand
+  - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
+    key: InstallLocation
+    value: "%InstallDir%"
+    type: expand
+  - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
+    key: ExecutablePath
+    value: "%InstallDir%\\MyDesktopApp.exe"
+    type: expand
+  - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
+    key: LaunchCommand
+    value: "\"%InstallDir%\\MyDesktopApp.exe\""
+    type: expand
+  - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
+    key: Version
+    value: "%Version%"
+    type: string
 
 folders:
   - name: bin
@@ -99,7 +128,7 @@ components:
   - id: post_setup_agent
     name: Post Setup Agent
     description: Fetch remote runtime config and apply environment setup.
-    required: true
+    required: false
     defaultSelected: true
     dependsOn:
       - main_app
@@ -131,6 +160,21 @@ ui:
             - chkPPt
 
 cleanup:
+  onUpgrade:
+    registry:
+      deleteFromManifest: true
+      legacyKeys:
+        - path: HKEY_CURRENT_USER\\Software\\MyDesktopAppLegacy
+          key: ""
+        - path: HKEY_LOCAL_MACHINE\\Software\\MyDesktopAppLegacy
+          key: ""
+    extraPaths:
+      - path: "%AppData%\\MyDesktopAppLegacy"
+        recursive: true
+        onlyIfEmpty: false
+      - path: "%LocalAppData%\\MyDesktopAppLegacy\\Cache"
+        recursive: true
+        onlyIfEmpty: false
   onUninstall:
     - path: "%LocalAppData%\\MyDesktopApp\\Cache"
       recursive: true

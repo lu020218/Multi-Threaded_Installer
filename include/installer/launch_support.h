@@ -27,7 +27,7 @@ enum class LaunchMode {
 struct LaunchContext {
     LaunchBinary binary = LaunchBinary::Installer;
     LaunchMode mode = LaunchMode::InstallGui;
-    ConsoleInterface::InstallerArgs args;
+    CliSupport::InstallerArgs args;
     std::vector<std::string> utf8Args;
 };
 

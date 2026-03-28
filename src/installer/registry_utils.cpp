@@ -187,6 +187,50 @@ bool deleteRegistryValue(const RegistryEntry& entry) {
 #endif
 }
 
+bool deleteRegistryPath(const std::string& path) {
+#ifdef _WIN32
+    if (path.empty()) {
+        return false;
+    }
+
+    std::string pathUpper = path;
+    std::transform(pathUpper.begin(), pathUpper.end(), pathUpper.begin(), ::toupper);
+
+    HKEY root = nullptr;
+    std::string subkey;
+    const std::string hkcu = "HKEY_CURRENT_USER\\";
+    const std::string hklm = "HKEY_LOCAL_MACHINE\\";
+    const std::string hkcuShort = "HKCU\\";
+    const std::string hklmShort = "HKLM\\";
+
+    if (pathUpper.rfind(hkcu, 0) == 0) {
+        root = HKEY_CURRENT_USER;
+        subkey = path.substr(hkcu.size());
+    } else if (pathUpper.rfind(hklm, 0) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        subkey = path.substr(hklm.size());
+    } else if (pathUpper.rfind(hkcuShort, 0) == 0) {
+        root = HKEY_CURRENT_USER;
+        subkey = path.substr(hkcuShort.size());
+    } else if (pathUpper.rfind(hklmShort, 0) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        subkey = path.substr(hklmShort.size());
+    } else {
+        return false;
+    }
+
+    subkey = normalizeRegistrySubkey(subkey);
+    if (subkey.empty()) {
+        return false;
+    }
+
+    return deleteRegistryTree(root, subkey);
+#else
+    (void)path;
+    return false;
+#endif
+}
+
 
 bool writeRegistryValue(const RegistryEntry& entry, const std::string& value, RegistryValueType type) {
 #ifdef _WIN32

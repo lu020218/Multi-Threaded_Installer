@@ -2,8 +2,10 @@
 
 #include "common/utf8_utils.h"
 #include "installer/installer_helpers.h"
+#include "installer/registry_utils.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <json.hpp>
@@ -86,13 +88,154 @@ std::vector<std::string> CollectManifestFiles(const json& manifest) {
     return files;
 }
 
+std::vector<RegistryEntry> CollectManifestRegistryEntries(const json& manifest) {
+    std::vector<RegistryEntry> entries;
+    if (!manifest.contains("registry") || !manifest["registry"].is_array()) {
+        return entries;
+    }
+    for (const auto& item : manifest["registry"]) {
+        if (!item.is_object()) {
+            continue;
+        }
+        RegistryEntry entry;
+        entry.path = item.value("path", "");
+        entry.key = item.value("key", "");
+        entry.value = item.value("value", "");
+        entry.type = static_cast<RegistryValueType>(item.value("type", static_cast<int>(RegistryValueType::STRING)));
+        if (!entry.path.empty()) {
+            entries.push_back(std::move(entry));
+        }
+    }
+    return entries;
+}
+
+std::string GetManifestDisplayName(const json& manifest) {
+    std::string displayName = manifest.value("displayName", "");
+    if (!displayName.empty()) {
+        return displayName;
+    }
+    return manifest.value("appName", "");
+}
+
+void AppendUniqueName(std::vector<std::string>& names,
+                      std::set<std::string>& seen,
+                      const std::string& value) {
+    if (value.empty()) {
+        return;
+    }
+    std::string lowered = value;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (seen.insert(lowered).second) {
+        names.push_back(value);
+    }
+}
+
+void AppendUniqueRegistryEntry(std::vector<RegistryEntry>& entries,
+                               std::set<std::string>& seen,
+                               const RegistryEntry& entry) {
+    if (entry.path.empty()) {
+        return;
+    }
+    std::string key = entry.path;
+    key.push_back('\n');
+    key += entry.key;
+    key.push_back('\n');
+    key += entry.value;
+    key.push_back('\n');
+    key += std::to_string(static_cast<int>(entry.type));
+    if (seen.insert(key).second) {
+        entries.push_back(entry);
+    }
+}
+
+std::string ExpandInstallDirTokenLocal(const std::string& text, const std::string& installDir) {
+    if (text.empty()) {
+        return text;
+    }
+    const std::string token = "%InstallDir%";
+    std::string expanded = text;
+    size_t position = 0;
+    while ((position = expanded.find(token, position)) != std::string::npos) {
+        expanded.replace(position, token.size(), installDir);
+        position += installDir.size();
+    }
+    return expanded;
+}
+
+bool IsSafeCleanupPath(const std::filesystem::path& path) {
+    if (path.empty() || !path.is_absolute()) {
+        return false;
+    }
+    const std::filesystem::path normalized = path.lexically_normal();
+    const std::filesystem::path rootPath = normalized.root_path();
+    if (rootPath.empty()) {
+        return false;
+    }
+    if (normalized == rootPath) {
+        return false;
+    }
+    const std::string normalizedUtf8 = Utf8FromPath(normalized);
+    const std::string rootUtf8 = Utf8FromPath(rootPath);
+    if (normalizedUtf8.size() <= rootUtf8.size()) {
+        return false;
+    }
+    if (normalized.filename().empty()) {
+        return false;
+    }
+    return true;
+}
+
+bool RemoveUpgradeCleanupPath(const UninstallCleanupRule& rule,
+                              const std::string& previousInstallDir,
+                              InstallerPathResolver& resolver,
+                              CliSupport& console) {
+    const std::string expanded =
+        resolver.expandEnvironmentVariables(ExpandInstallDirTokenLocal(rule.path, previousInstallDir));
+    if (expanded.empty()) {
+        console.showWarning("Upgrade cleanup skipped empty path rule.");
+        return false;
+    }
+
+    const std::filesystem::path cleanupPath = PathFromUtf8(expanded).lexically_normal();
+    if (!IsSafeCleanupPath(cleanupPath)) {
+        console.showWarning("Upgrade cleanup skipped unsafe path: " + Utf8FromPath(cleanupPath));
+        return false;
+    }
+
+    std::error_code existsEc;
+    if (!std::filesystem::exists(cleanupPath, existsEc)) {
+        return true;
+    }
+
+    if (rule.onlyIfEmpty &&
+        std::filesystem::is_directory(cleanupPath, existsEc) &&
+        !std::filesystem::is_empty(cleanupPath, existsEc)) {
+        console.showInfo("Upgrade cleanup skipped non-empty path: " + Utf8FromPath(cleanupPath));
+        return false;
+    }
+
+    std::error_code removeEc;
+    if (rule.recursive && std::filesystem::is_directory(cleanupPath, existsEc)) {
+        std::filesystem::remove_all(toLongPath(cleanupPath), removeEc);
+    } else {
+        std::filesystem::remove(toLongPath(cleanupPath), removeEc);
+    }
+    if (removeEc && std::filesystem::exists(cleanupPath)) {
+        console.showWarning("Upgrade cleanup failed to remove path: " + Utf8FromPath(cleanupPath));
+        return false;
+    }
+    console.showInfo("Upgrade cleanup removed path: " + Utf8FromPath(cleanupPath));
+    return true;
+}
+
 } // namespace
 
 bool cleanupPreviousInstallForUpgrade(
     const std::string& manifestPath,
     const std::string& previousInstallDir,
     const std::string& newInstallDir,
-    ConsoleInterface& console,
+    CliSupport& console,
     const UpgradeCleanupProgressCallback& progressCallback,
     const std::function<bool()>& cancellationCallback) {
     std::filesystem::path previousRoot = PathFromUtf8(previousInstallDir).lexically_normal();
@@ -228,6 +371,112 @@ bool cleanupPreviousInstallForUpgrade(
     }
 
     EmitProgress(progressCallback, 1.0f, "Upgrade cleanup completed");
+    return true;
+}
+
+bool cleanupUpgradeSystemArtifacts(
+    const std::string& manifestPath,
+    const std::string& previousInstallDir,
+    const ExtendedInstallationMetadata& metadata,
+    InstallerPathResolver& resolver,
+    CliSupport& console,
+    const UpgradeCleanupProgressCallback& progressCallback,
+    const std::function<bool()>& cancellationCallback) {
+    json manifest;
+    const bool hasManifest = ReadManifestJson(manifestPath, manifest);
+    if (!hasManifest && !manifestPath.empty()) {
+        console.showWarning("Upgrade cleanup: failed to read previous manifest for system cleanup.");
+    }
+
+    EmitProgress(progressCallback, 0.0f, "Preparing upgrade system cleanup");
+    if (IsCancelled(cancellationCallback)) {
+        console.showWarning("Upgrade system cleanup cancelled before start.");
+        return false;
+    }
+
+    std::vector<std::string> autoStartupNames;
+    std::set<std::string> seenNames;
+    if (hasManifest) {
+        AppendUniqueName(autoStartupNames, seenNames, GetManifestDisplayName(manifest));
+    }
+    for (const auto& legacyId : metadata.legacyAppIds) {
+        AppendUniqueName(autoStartupNames, seenNames, legacyId);
+    }
+    AppendUniqueName(autoStartupNames, seenNames, metadata.applicationName);
+
+    const size_t totalSteps = autoStartupNames.size() +
+                              metadata.upgradeCleanup.registry.legacyKeys.size() +
+                              metadata.upgradeCleanup.extraPaths.size() +
+                              (metadata.upgradeCleanup.registry.deleteFromManifest
+                                   ? CollectManifestRegistryEntries(manifest).size()
+                                   : 0);
+    size_t completedSteps = 0;
+    auto emitStep = [&](const std::string& item) {
+        ++completedSteps;
+        float progress = totalSteps == 0
+                             ? 1.0f
+                             : static_cast<float>(completedSteps) / static_cast<float>(totalSteps);
+        EmitProgress(progressCallback, progress, item);
+    };
+
+    for (const auto& name : autoStartupNames) {
+        if (IsCancelled(cancellationCallback)) {
+            console.showWarning("Upgrade system cleanup cancelled while removing auto startup.");
+            return false;
+        }
+        if (removeAutoStartup(name)) {
+            console.showInfo("Upgrade cleanup removed auto startup: " + name);
+        }
+        emitStep("Removing legacy auto startup: " + name);
+    }
+
+    std::vector<RegistryEntry> registryEntries;
+    std::set<std::string> seenRegistry;
+    if (metadata.upgradeCleanup.registry.deleteFromManifest && hasManifest) {
+        for (const auto& entry : CollectManifestRegistryEntries(manifest)) {
+            AppendUniqueRegistryEntry(registryEntries, seenRegistry, entry);
+        }
+    }
+    for (const auto& entry : metadata.upgradeCleanup.registry.legacyKeys) {
+        AppendUniqueRegistryEntry(registryEntries, seenRegistry, entry);
+    }
+
+    for (const auto& entry : registryEntries) {
+        if (IsCancelled(cancellationCallback)) {
+            console.showWarning("Upgrade system cleanup cancelled while removing registry.");
+            return false;
+        }
+        bool removed = false;
+        if (entry.key.empty()) {
+            removed = deleteRegistryPath(entry.path);
+            if (!removed) {
+                console.showWarning("Upgrade cleanup failed to remove registry path: " + entry.path);
+            }
+        } else {
+            removed = deleteRegistryValue(entry);
+            if (!removed) {
+                console.showWarning("Upgrade cleanup failed to remove registry value: " +
+                                    entry.path + "\\" + entry.key);
+            }
+        }
+        (void)removed;
+        emitStep("Removing legacy registry entry");
+    }
+
+    for (const auto& rule : metadata.upgradeCleanup.extraPaths) {
+        if (IsCancelled(cancellationCallback)) {
+            console.showWarning("Upgrade system cleanup cancelled while removing extra paths.");
+            return false;
+        }
+        RemoveUpgradeCleanupPath(rule, previousInstallDir, resolver, console);
+        emitStep("Removing upgrade cleanup path: " + rule.path);
+    }
+
+    if (totalSteps == 0) {
+        EmitProgress(progressCallback, 1.0f, "Upgrade system cleanup completed");
+    } else {
+        EmitProgress(progressCallback, 1.0f, "Upgrade system cleanup completed");
+    }
     return true;
 }
 

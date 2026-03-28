@@ -66,6 +66,11 @@ struct InstallServiceOptions {
     bool applyRegistryAfterInstall = true;
     bool writeUninstallRegistry = false;
     bool cleanupOldInstallRequested = false;
+    bool repairMode = false;
+    bool overrideAutoStartup = false;
+    bool autoStartupEnabled = false;
+    bool overrideDesktopIcons = false;
+    bool desktopIconsEnabled = false;
     std::function<bool()> cancellationCallback;
 };
 

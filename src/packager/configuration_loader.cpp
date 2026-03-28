@@ -170,6 +170,22 @@ bool JsonArrayToStringList(const json& arrayValue, std::vector<std::string>& out
     return true;
 }
 
+bool JsonObjectToStringMap(const json& objectValue,
+                           std::unordered_map<std::string, std::string>& outMap) {
+    if (!objectValue.is_object()) {
+        return false;
+    }
+    outMap.clear();
+    for (auto it = objectValue.begin(); it != objectValue.end(); ++it) {
+        std::string value;
+        if (!JsonValueToString(it.value(), value)) {
+            return false;
+        }
+        outMap[it.key()] = std::move(value);
+    }
+    return true;
+}
+
 bool IsStructuredConfigSchema(const json& root) {
     return root.is_object() &&
            (root.contains("package") || root.contains("install") || root.contains("folders"));
@@ -209,6 +225,9 @@ json NormalizeStructuredConfigSchema(const json& root) {
     if (normalized.contains("install") && normalized["install"].is_object()) {
         const json& install = normalized["install"];
         SetNormalizedFieldIfMissing(normalized, "InstallDir", install, "defaultInstallDir");
+        SetNormalizedFieldIfMissing(normalized, "DesktopShortcutName", install, "desktopShortcutName");
+        SetNormalizedFieldIfMissing(normalized, "DesktopShortcutNameI18n", install, "desktopShortcutNameI18n");
+        SetNormalizedFieldIfMissing(normalized, "LegacyDesktopShortcutNames", install, "legacyDesktopShortcutNames");
         SetNormalizedFieldIfMissing(normalized, "AutoStartup", install, "autoStartup");
         SetNormalizedFieldIfMissing(normalized, "DesktopIcons", install, "desktopIcons");
         SetNormalizedFieldIfMissing(normalized, "AutoCleanOldInstall", install, "autoCleanOldInstall");
@@ -250,9 +269,28 @@ json NormalizeStructuredConfigSchema(const json& root) {
     if (!normalized.contains("Cleanup") &&
         normalized.contains("cleanup") && normalized["cleanup"].is_object()) {
         const json& cleanup = normalized["cleanup"];
+        normalized["Cleanup"] = json::object();
         if (cleanup.contains("onUninstall")) {
-            normalized["Cleanup"] = json::object();
             normalized["Cleanup"]["OnUninstall"] = cleanup["onUninstall"];
+        }
+        if (cleanup.contains("onUpgrade") && cleanup["onUpgrade"].is_object()) {
+            const json& onUpgrade = cleanup["onUpgrade"];
+            json normalizedUpgrade = json::object();
+            if (onUpgrade.contains("extraPaths")) {
+                normalizedUpgrade["ExtraPaths"] = onUpgrade["extraPaths"];
+            }
+            if (onUpgrade.contains("registry") && onUpgrade["registry"].is_object()) {
+                const json& registry = onUpgrade["registry"];
+                json normalizedRegistry = json::object();
+                if (registry.contains("deleteFromManifest")) {
+                    normalizedRegistry["DeleteFromManifest"] = registry["deleteFromManifest"];
+                }
+                if (registry.contains("legacyKeys")) {
+                    normalizedRegistry["LegacyKeys"] = registry["legacyKeys"];
+                }
+                normalizedUpgrade["Registry"] = std::move(normalizedRegistry);
+            }
+            normalized["Cleanup"]["OnUpgrade"] = std::move(normalizedUpgrade);
         }
     }
 
@@ -374,24 +412,12 @@ std::optional<PackagerConfiguration> ConfigurationLoader::loadConfigurationFromP
         return parseYamlConfig(configPath);
     }
     if (extension == ".json") {
-        return parseJsonConfig(configPath);
+        lastError_ = "JSON configuration is no longer supported. Use packager.yaml or packager.yml: " +
+                     configPath;
+        return std::nullopt;
     }
-
-    auto jsonConfig = parseJsonConfig(configPath);
-    if (jsonConfig.has_value()) {
-        return jsonConfig;
-    }
-    std::string jsonError = lastError_;
-
-    auto yamlConfig = parseYamlConfig(configPath);
-    if (yamlConfig.has_value()) {
-        return yamlConfig;
-    }
-    std::string yamlError = lastError_;
-
-    lastError_ = "Unable to parse configuration file '" + configPath +
-                 "' as JSON or YAML.\n  JSON error: " + jsonError +
-                 "\n  YAML error: " + yamlError;
+    lastError_ = "Unsupported configuration file extension for '" + configPath +
+                 "'. Use packager.yaml or packager.yml.";
     return std::nullopt;
 }
 
@@ -400,9 +426,7 @@ std::optional<std::string> ConfigurationLoader::findConfigFile(
 
     const std::vector<std::string> configNames = {
         "packager.yaml",
-        "packager.yml",
-        "packager.json",
-        ".packager.json"
+        "packager.yml"
     };
 
     for (const auto& name : configNames) {
@@ -413,36 +437,6 @@ std::optional<std::string> ConfigurationLoader::findConfigFile(
     }
 
     return std::nullopt;
-}
-
-std::optional<PackagerConfiguration> ConfigurationLoader::parseJsonConfig(
-    const std::string& filePath) {
-    try {
-        std::ifstream file(PathFromUtf8(filePath));
-        if (!file.is_open()) {
-            lastError_ = "Failed to open configuration file: " + filePath;
-            return std::nullopt;
-        }
-
-        json parsed;
-        try {
-            file >> parsed;
-        } catch (const json::parse_error& e) {
-            lastError_ = "JSON parse error in " + filePath + ": " + e.what();
-            return std::nullopt;
-        }
-
-        if (!IsStructuredConfigSchema(parsed)) {
-            lastError_ = "Unsupported JSON config schema in " + filePath +
-                         ": only the structured package/install/folders schema is supported";
-            return std::nullopt;
-        }
-
-        return parseConfigObject(NormalizeStructuredConfigSchema(parsed), filePath, "JSON");
-    } catch (const std::exception& e) {
-        lastError_ = "Error parsing JSON configuration file: " + std::string(e.what());
-        return std::nullopt;
-    }
 }
 
 std::optional<PackagerConfiguration> ConfigurationLoader::parseYamlConfig(
@@ -565,6 +559,106 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
         return true;
     };
 
+    auto getOptionalStringMap =
+        [&](const char* key, std::unordered_map<std::string, std::string>& out) -> bool {
+        if (!configObject.contains(key)) {
+            return true;
+        }
+        if (!JsonObjectToStringMap(configObject[key], out)) {
+            lastError_ = "Invalid field '" + std::string(key) + "' in " + formatLabel +
+                         " config: expected object<string,string>";
+            return false;
+        }
+        return true;
+    };
+
+    auto parseRegistryEntryArray = [&](const json& arrayValue,
+                                       const std::string& fieldLabel,
+                                       std::vector<RegistryEntry>& out) -> bool {
+        if (!arrayValue.is_array()) {
+            lastError_ = "Invalid field '" + fieldLabel + "': expected array";
+            return false;
+        }
+        out.clear();
+        for (const auto& entry : arrayValue) {
+            if (!entry.is_object()) {
+                lastError_ = "Invalid field '" + fieldLabel + "[]': expected object";
+                return false;
+            }
+
+            RegistryEntry reg;
+            if (entry.contains("path") && !JsonValueToString(entry["path"], reg.path)) {
+                lastError_ = "Invalid field '" + fieldLabel + "[].path': expected string";
+                return false;
+            }
+            if (entry.contains("key") && !JsonValueToString(entry["key"], reg.key)) {
+                lastError_ = "Invalid field '" + fieldLabel + "[].key': expected string";
+                return false;
+            }
+            if (entry.contains("value")) {
+                if (entry["value"].is_number_integer() || entry["value"].is_number_unsigned()) {
+                    reg.type = RegistryValueType::DWORD;
+                    reg.value = std::to_string(entry["value"].get<uint32_t>());
+                } else if (!JsonValueToString(entry["value"], reg.value)) {
+                    lastError_ = "Invalid field '" + fieldLabel + "[].value': expected string or integer";
+                    return false;
+                }
+            }
+            if (entry.contains("type")) {
+                std::string type;
+                if (!JsonValueToString(entry["type"], type)) {
+                    lastError_ = "Invalid field '" + fieldLabel + "[].type': expected string";
+                    return false;
+                }
+                type = ToLowerCopy(type);
+                if (type == "dword") {
+                    reg.type = RegistryValueType::DWORD;
+                } else if (type == "expand" || type == "expand_string") {
+                    reg.type = RegistryValueType::EXPAND_STRING;
+                } else {
+                    reg.type = RegistryValueType::STRING;
+                }
+            }
+            out.push_back(std::move(reg));
+        }
+        return true;
+    };
+
+    auto parseCleanupRuleArray = [&](const json& arrayValue,
+                                     const std::string& fieldLabel,
+                                     std::vector<UninstallCleanupRule>& out) -> bool {
+        if (!arrayValue.is_array()) {
+            lastError_ = "Invalid field '" + fieldLabel + "': expected array";
+            return false;
+        }
+        out.clear();
+        for (const auto& item : arrayValue) {
+            if (!item.is_object()) {
+                lastError_ = "Invalid field '" + fieldLabel + "[]': expected object";
+                return false;
+            }
+            UninstallCleanupRule rule;
+            if (!item.contains("path") ||
+                !JsonValueToString(item["path"], rule.path) ||
+                rule.path.empty()) {
+                lastError_ = "Invalid field '" + fieldLabel + "[].path': expected non-empty string";
+                return false;
+            }
+            if (item.contains("recursive") &&
+                !JsonValueToBool(item["recursive"], rule.recursive)) {
+                lastError_ = "Invalid field '" + fieldLabel + "[].recursive': expected boolean";
+                return false;
+            }
+            if (item.contains("onlyIfEmpty") &&
+                !JsonValueToBool(item["onlyIfEmpty"], rule.onlyIfEmpty)) {
+                lastError_ = "Invalid field '" + fieldLabel + "[].onlyIfEmpty': expected boolean";
+                return false;
+            }
+            out.push_back(std::move(rule));
+        }
+        return true;
+    };
+
     PackagerConfiguration config;
     if (!getRequiredString("Version", config.version) ||
         !getRequiredString("AppName", config.applicationName) ||
@@ -575,6 +669,9 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
     if (!getOptionalString("AppId", config.appId) ||
         !getOptionalString("DirectoryName", config.directoryName) ||
         !getOptionalStringList("LegacyAppIds", config.legacyAppIds) ||
+        !getOptionalString("DesktopShortcutName", config.desktopShortcutName) ||
+        !getOptionalStringMap("DesktopShortcutNameI18n", config.desktopShortcutNameI18n) ||
+        !getOptionalStringList("LegacyDesktopShortcutNames", config.legacyDesktopShortcutNames) ||
         !getOptionalString("Icon", config.iconPath) ||
         !getOptionalString("WebPageUrl", config.webPageUrl) ||
         !getOptionalString("ProductName", config.productName) ||
@@ -680,49 +777,8 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
     }
 
     if (configObject.contains("Registry")) {
-        if (!configObject["Registry"].is_array()) {
-            lastError_ = "Invalid field 'Registry': expected array";
+        if (!parseRegistryEntryArray(configObject["Registry"], "Registry", config.registry)) {
             return std::nullopt;
-        }
-        for (const auto& entry : configObject["Registry"]) {
-            if (!entry.is_object()) {
-                continue;
-            }
-
-            RegistryEntry reg;
-            if (entry.contains("path") && !JsonValueToString(entry["path"], reg.path)) {
-                lastError_ = "Invalid field 'Registry[].path': expected string";
-                return std::nullopt;
-            }
-            if (entry.contains("key") && !JsonValueToString(entry["key"], reg.key)) {
-                lastError_ = "Invalid field 'Registry[].key': expected string";
-                return std::nullopt;
-            }
-            if (entry.contains("value")) {
-                if (entry["value"].is_number_integer() || entry["value"].is_number_unsigned()) {
-                    reg.type = RegistryValueType::DWORD;
-                    reg.value = std::to_string(entry["value"].get<uint32_t>());
-                } else if (!JsonValueToString(entry["value"], reg.value)) {
-                    lastError_ = "Invalid field 'Registry[].value': expected string or integer";
-                    return std::nullopt;
-                }
-            }
-            if (entry.contains("type")) {
-                std::string type;
-                if (!JsonValueToString(entry["type"], type)) {
-                    lastError_ = "Invalid field 'Registry[].type': expected string";
-                    return std::nullopt;
-                }
-                type = ToLowerCopy(type);
-                if (type == "dword") {
-                    reg.type = RegistryValueType::DWORD;
-                } else if (type == "expand" || type == "expand_string") {
-                    reg.type = RegistryValueType::EXPAND_STRING;
-                } else {
-                    reg.type = RegistryValueType::STRING;
-                }
-            }
-            config.registry.push_back(std::move(reg));
         }
     }
 
@@ -1022,49 +1078,10 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
             }
 
             if (item.contains("registry")) {
-                if (!item["registry"].is_array()) {
-                    lastError_ = "Invalid field 'components[].registry': expected array";
+                if (!parseRegistryEntryArray(item["registry"],
+                                             "components[].registry",
+                                             component.registry)) {
                     return std::nullopt;
-                }
-                for (const auto& regItem : item["registry"]) {
-                    if (!regItem.is_object()) {
-                        lastError_ = "Invalid field 'components[].registry[]': expected object";
-                        return std::nullopt;
-                    }
-                    RegistryEntry reg;
-                    if (regItem.contains("path") && !JsonValueToString(regItem["path"], reg.path)) {
-                        lastError_ = "Invalid field 'components[].registry[].path': expected string";
-                        return std::nullopt;
-                    }
-                    if (regItem.contains("key") && !JsonValueToString(regItem["key"], reg.key)) {
-                        lastError_ = "Invalid field 'components[].registry[].key': expected string";
-                        return std::nullopt;
-                    }
-                    if (regItem.contains("value")) {
-                        if (regItem["value"].is_number_integer() || regItem["value"].is_number_unsigned()) {
-                            reg.type = RegistryValueType::DWORD;
-                            reg.value = std::to_string(regItem["value"].get<uint32_t>());
-                        } else if (!JsonValueToString(regItem["value"], reg.value)) {
-                            lastError_ = "Invalid field 'components[].registry[].value': expected string or integer";
-                            return std::nullopt;
-                        }
-                    }
-                    if (regItem.contains("type")) {
-                        std::string regType;
-                        if (!JsonValueToString(regItem["type"], regType)) {
-                            lastError_ = "Invalid field 'components[].registry[].type': expected string";
-                            return std::nullopt;
-                        }
-                        regType = ToLowerCopy(regType);
-                        if (regType == "dword") {
-                            reg.type = RegistryValueType::DWORD;
-                        } else if (regType == "expand" || regType == "expand_string") {
-                            reg.type = RegistryValueType::EXPAND_STRING;
-                        } else {
-                            reg.type = RegistryValueType::STRING;
-                        }
-                    }
-                    component.registry.push_back(std::move(reg));
                 }
             }
 
@@ -1201,35 +1218,43 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
         }
         const auto& cleanup = configObject["Cleanup"];
         if (cleanup.contains("OnUninstall")) {
-            const auto& onUninstall = cleanup["OnUninstall"];
-            if (!onUninstall.is_array()) {
-                lastError_ = "Invalid field 'Cleanup.OnUninstall': expected array";
+            if (!parseCleanupRuleArray(cleanup["OnUninstall"],
+                                       "Cleanup.OnUninstall",
+                                       config.uninstallCleanupRules)) {
                 return std::nullopt;
             }
-            config.uninstallCleanupRules.clear();
-            for (const auto& item : onUninstall) {
-                if (!item.is_object()) {
-                    lastError_ = "Invalid field 'Cleanup.OnUninstall[]': expected object";
+        }
+        if (cleanup.contains("OnUpgrade")) {
+            const auto& onUpgrade = cleanup["OnUpgrade"];
+            if (!onUpgrade.is_object()) {
+                lastError_ = "Invalid field 'Cleanup.OnUpgrade': expected object";
+                return std::nullopt;
+            }
+            if (onUpgrade.contains("Registry")) {
+                const auto& registry = onUpgrade["Registry"];
+                if (!registry.is_object()) {
+                    lastError_ = "Invalid field 'Cleanup.OnUpgrade.Registry': expected object";
                     return std::nullopt;
                 }
-                UninstallCleanupRule rule;
-                if (!item.contains("path") ||
-                    !JsonValueToString(item["path"], rule.path) ||
-                    rule.path.empty()) {
-                    lastError_ = "Invalid field 'Cleanup.OnUninstall[].path': expected non-empty string";
+                if (registry.contains("DeleteFromManifest") &&
+                    !JsonValueToBool(registry["DeleteFromManifest"],
+                                     config.upgradeCleanup.registry.deleteFromManifest)) {
+                    lastError_ =
+                        "Invalid field 'Cleanup.OnUpgrade.Registry.DeleteFromManifest': expected boolean";
                     return std::nullopt;
                 }
-                if (item.contains("recursive") &&
-                    !JsonValueToBool(item["recursive"], rule.recursive)) {
-                    lastError_ = "Invalid field 'Cleanup.OnUninstall[].recursive': expected boolean";
+                if (registry.contains("LegacyKeys") &&
+                    !parseRegistryEntryArray(registry["LegacyKeys"],
+                                             "Cleanup.OnUpgrade.Registry.LegacyKeys",
+                                             config.upgradeCleanup.registry.legacyKeys)) {
                     return std::nullopt;
                 }
-                if (item.contains("onlyIfEmpty") &&
-                    !JsonValueToBool(item["onlyIfEmpty"], rule.onlyIfEmpty)) {
-                    lastError_ = "Invalid field 'Cleanup.OnUninstall[].onlyIfEmpty': expected boolean";
-                    return std::nullopt;
-                }
-                config.uninstallCleanupRules.push_back(std::move(rule));
+            }
+            if (onUpgrade.contains("ExtraPaths") &&
+                !parseCleanupRuleArray(onUpgrade["ExtraPaths"],
+                                       "Cleanup.OnUpgrade.ExtraPaths",
+                                       config.upgradeCleanup.extraPaths)) {
+                return std::nullopt;
             }
         }
     }

@@ -51,6 +51,7 @@ void AppendListEntry(std::vector<uint8_t>& installerTemplate,
 bool AppendEmbeddedResources(std::vector<uint8_t>& installerTemplate,
                              const std::filesystem::path& resourceDir,
                              const std::vector<uint8_t>& uninstallerBinary,
+                             const char* targetLabel,
                              std::string& error) {
     error.clear();
 
@@ -60,8 +61,12 @@ bool AppendEmbeddedResources(std::vector<uint8_t>& installerTemplate,
             return false;
         }
 
+        const char* resolvedTargetLabel =
+            (targetLabel != nullptr && targetLabel[0] != '\0') ? targetLabel : "template";
+
         if (HasEmbeddedResourceTable(installerTemplate)) {
-            std::cout << "Installer template already contains embedded resources; appending updated resources"
+            std::cout << resolvedTargetLabel
+                      << " already contains embedded resources; appending updated resources"
                       << std::endl;
         }
 
@@ -181,7 +186,7 @@ bool AppendEmbeddedResources(std::vector<uint8_t>& installerTemplate,
         }
 
         AppendEmbeddedResourceMagic(installerTemplate);
-        std::cout << "Embedded UI resources into installer template" << std::endl;
+        std::cout << "Embedded UI resources into " << resolvedTargetLabel << std::endl;
         return true;
     } catch (const std::exception& e) {
         error = std::string("Failed to embed UI resources: ") + e.what();

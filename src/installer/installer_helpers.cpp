@@ -1,6 +1,7 @@
 #include "installer/installer_helpers.h"
 #include "installer/file_system_operator.h"
 #include "installer/registry_utils.h"
+#include "installer/uninstall_manager.h"
 #include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
@@ -691,20 +692,6 @@ std::string getCurrentExecutablePath() {
 #endif
 }
 
-std::string getDefaultManifestPath(const std::string& identityKey, InstallerPathResolver& resolver) {
-    if (identityKey.empty()) {
-        return "";
-    }
-    std::string base = "%ProgramData%\\" + identityKey;
-    std::string expanded = resolver.expandEnvironmentVariables(base);
-    if (expanded.empty()) {
-        return "";
-    }
-    std::filesystem::path path = PathFromUtf8(expanded);
-    path /= "install.manifest.json";
-    return Utf8FromPath(path);
-}
-
 std::string getLocalManifestPath(const std::string& exePath) {
     if (exePath.empty()) {
         return "";
@@ -718,61 +705,6 @@ std::string getLocalManifestPath(const std::string& exePath) {
     return Utf8FromPath(parent);
 }
 
-std::string findInstalledManifestPath(const std::vector<std::string>& identityCandidates,
-                                      InstallerPathResolver& resolver) {
-    if (identityCandidates.empty()) {
-        return {};
-    }
-
-    for (const auto& identity : identityCandidates) {
-        if (identity.empty()) {
-            continue;
-        }
-
-        std::string keyName = sanitizeRegistryKeyName(identity);
-
-        const std::string hkcuPath =
-            "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
-        const std::string hklmPath =
-            "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
-
-        std::string installLocation;
-        if (!readRegistryStringValue(hkcuPath, "InstallLocation", installLocation)) {
-            readRegistryStringValue(hklmPath, "InstallLocation", installLocation);
-        }
-        if (!installLocation.empty()) {
-            std::filesystem::path manifestPath = PathFromUtf8(installLocation) / "install.manifest.json";
-            if (std::filesystem::exists(manifestPath)) {
-                return Utf8FromPath(manifestPath);
-            }
-        }
-
-        std::string uninstallString;
-        if (!readRegistryStringValue(hkcuPath, "UninstallString", uninstallString)) {
-            readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
-        }
-        if (!uninstallString.empty()) {
-            std::filesystem::path uninstallPath = PathFromUtf8(uninstallString);
-            if (std::filesystem::exists(uninstallPath)) {
-                std::filesystem::path baseDir = uninstallPath.parent_path();
-                if (!baseDir.empty()) {
-                    std::filesystem::path manifestPath = baseDir / "install.manifest.json";
-                    if (std::filesystem::exists(manifestPath)) {
-                        return Utf8FromPath(manifestPath);
-                    }
-                }
-            }
-        }
-
-        std::string defaultManifest = getDefaultManifestPath(identity, resolver);
-        if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
-            return defaultManifest;
-        }
-    }
-
-    return {};
-}
-
 std::string resolveInstalledManifestPath(const std::vector<std::string>& identityCandidates,
                                          const std::string& exePath,
                                          InstallerPathResolver& resolver) {
@@ -780,7 +712,17 @@ std::string resolveInstalledManifestPath(const std::vector<std::string>& identit
     if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
         return localManifest;
     }
-    return findInstalledManifestPath(identityCandidates, resolver);
+
+    std::string resolvedManifestPath;
+    std::string resolvedInstallDir;
+    if (resolveExistingInstallInfo(identityCandidates,
+                                   resolver,
+                                   resolvedManifestPath,
+                                   resolvedInstallDir,
+                                   nullptr)) {
+        return resolvedManifestPath;
+    }
+    return {};
 }
 
 bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath) {

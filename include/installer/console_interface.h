@@ -7,10 +7,10 @@
 
 namespace MultiThreadedInstaller {
 
-class ConsoleInterface {
+class CliSupport {
 public:
-    ConsoleInterface() = default;
-    ~ConsoleInterface() = default;
+    CliSupport() = default;
+    ~CliSupport() = default;
     
 
     void showPackagerMenu();
@@ -47,6 +47,10 @@ public:
         bool installAllComponents = false;
         bool silent = false;
         bool repair = false;
+        bool autoStartupSpecified = false;
+        bool autoStartupEnabled = false;
+        bool desktopIconSpecified = false;
+        bool desktopIconEnabled = false;
         bool showHelp = false;
     };
     

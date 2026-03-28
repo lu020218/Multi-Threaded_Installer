@@ -14,6 +14,7 @@
 namespace MultiThreadedInstaller {
 
 bool deleteRegistryValue(const RegistryEntry& entry);
+bool deleteRegistryPath(const std::string& path);
 bool writeRegistryValue(const RegistryEntry& entry, const std::string& value, RegistryValueType type);
 void applyRegistryEntries(const std::vector<RegistryEntry>& entries,
                           const std::string& installDir,

@@ -31,6 +31,7 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& appId,
                    const std::string& displayName,
                    const std::vector<std::string>& legacyAppIds,
+                   const std::vector<std::string>& legacyDesktopShortcutNames,
                    const std::string& configVersion,
                    const std::string& installDir,
                    const std::vector<std::string>& cleanupRoots,
@@ -40,6 +41,7 @@ bool writeManifest(const std::string& manifestPath,
                    const std::vector<std::string>& installKillProcesses,
                    bool autoStartup,
                    bool desktopIcons,
+                   const std::string& desktopShortcutDisplayName,
                    const InstallStateConfig& installState,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
@@ -52,10 +54,10 @@ bool resolveExistingInstallInfo(const std::vector<std::string>& identityCandidat
                                 std::string* matchedIdentity = nullptr);
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
-                           ConsoleInterface& console);
+                           CliSupport& console);
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
-                           ConsoleInterface& console,
+                           CliSupport& console,
                            const UninstallProgressCallback& progressCallback,
                            const std::function<bool()>& cancellationCallback = {});
 bool scheduleSelfDelete();

@@ -58,7 +58,7 @@ void UninstallWorker::WorkerThreadFunc(const std::vector<std::string>& identityC
 
     try {
         InstallerPathResolver resolver;
-        ConsoleInterface console;
+        CliSupport console;
         std::string exePath = getCurrentExecutablePath();
         std::string manifestPath = resolveInstalledManifestPath(identityCandidates, exePath, resolver);
 

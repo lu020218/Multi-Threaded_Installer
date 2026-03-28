@@ -12,6 +12,7 @@
 #include <iostream>
 #include <chrono>
 #include <limits>
+#include <unordered_set>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -106,6 +107,19 @@ static std::vector<std::string> GetManifestLegacyAppIds(const json& manifest) {
     return legacyAppIds;
 }
 
+static std::vector<std::string> GetManifestLegacyDesktopShortcutNames(const json& manifest) {
+    std::vector<std::string> names;
+    if (manifest.contains("legacyDesktopShortcutNames") &&
+        manifest["legacyDesktopShortcutNames"].is_array()) {
+        for (const auto& item : manifest["legacyDesktopShortcutNames"]) {
+            if (item.is_string()) {
+                names.push_back(item.get<std::string>());
+            }
+        }
+    }
+    return names;
+}
+
 static std::vector<UninstallCleanupRule> GetManifestCleanupRules(const json& manifest) {
     std::vector<UninstallCleanupRule> rules;
     if (!manifest.contains("uninstallCleanupRules") || !manifest["uninstallCleanupRules"].is_array()) {
@@ -158,6 +172,23 @@ static bool IsDirectoryEmptySafe(const std::filesystem::path& path) {
     return std::filesystem::is_directory(path, ec) && std::filesystem::is_empty(path, ec);
 }
 
+static std::string ExtractExecutablePathFromCommandLocal(const std::string& command) {
+    std::string trimmed = command;
+    trimmed.erase(trimmed.begin(), std::find_if(trimmed.begin(), trimmed.end(),
+                                                [](unsigned char c) { return !std::isspace(c); }));
+    if (trimmed.empty()) {
+        return {};
+    }
+    if (trimmed.front() == '"') {
+        size_t endQuote = trimmed.find('"', 1);
+        if (endQuote != std::string::npos) {
+            return trimmed.substr(1, endQuote - 1);
+        }
+    }
+    size_t firstSpace = trimmed.find_first_of(" \t");
+    return firstSpace == std::string::npos ? trimmed : trimmed.substr(0, firstSpace);
+}
+
 static std::string ExpandCleanupRulePath(const UninstallCleanupRule& rule,
                                          const std::string& installDir,
                                          InstallerPathResolver& resolver) {
@@ -169,6 +200,7 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& appId,
                    const std::string& displayName,
                    const std::vector<std::string>& legacyAppIds,
+                   const std::vector<std::string>& legacyDesktopShortcutNames,
                    const std::string& configVersion,
                    const std::string& installDir,
                    const std::vector<std::string>& cleanupRoots,
@@ -178,6 +210,7 @@ bool writeManifest(const std::string& manifestPath,
                    const std::vector<std::string>& installKillProcesses,
                    bool autoStartup,
                    bool desktopIcons,
+                   const std::string& desktopShortcutDisplayName,
                    const InstallStateConfig& installState,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
@@ -192,6 +225,7 @@ bool writeManifest(const std::string& manifestPath,
         root["appId"] = ensureUtf8(appId);
         root["displayName"] = ensureUtf8(displayName);
         root["legacyAppIds"] = EnsureUtf8List(legacyAppIds);
+        root["legacyDesktopShortcutNames"] = EnsureUtf8List(legacyDesktopShortcutNames);
         root["appName"] = ensureUtf8(displayName);
         root["configVersion"] = ensureUtf8(configVersion);
         root["installDir"] = ensureUtf8(installDir);
@@ -215,6 +249,7 @@ bool writeManifest(const std::string& manifestPath,
         root["files"] = safeFiles;
         root["autoStartup"] = autoStartup;
         root["desktopIcons"] = desktopIcons;
+        root["desktopShortcutDisplayName"] = ensureUtf8(desktopShortcutDisplayName);
         root["language"] = ensureUtf8(languageCode);
 
         json reg = json::array();
@@ -301,6 +336,7 @@ bool resolveExistingInstallInfo(const std::vector<std::string>& identityCandidat
                                 std::string& manifestPath,
                                 std::string& installDir,
                                 std::string* matchedIdentity) {
+    (void)resolver;
     manifestPath.clear();
     installDir.clear();
     if (matchedIdentity) {
@@ -368,7 +404,8 @@ bool resolveExistingInstallInfo(const std::vector<std::string>& identityCandidat
                 readRegistryStringValue(hklmPath, "UninstallString", uninstallString);
             }
             if (!uninstallString.empty()) {
-                std::filesystem::path uninstallPath = PathFromUtf8(uninstallString);
+                std::filesystem::path uninstallPath =
+                    PathFromUtf8(ExtractExecutablePathFromCommandLocal(uninstallString));
                 if (std::filesystem::exists(uninstallPath)) {
                     std::filesystem::path baseDir = uninstallPath.parent_path();
                     if (!baseDir.empty()) {
@@ -381,13 +418,6 @@ bool resolveExistingInstallInfo(const std::vector<std::string>& identityCandidat
                         }
                     }
                 }
-            }
-        }
-
-        if (candidateManifest.empty()) {
-            std::string defaultManifest = getDefaultManifestPath(identity, resolver);
-            if (!defaultManifest.empty() && std::filesystem::exists(PathFromUtf8(defaultManifest))) {
-                candidateManifest = defaultManifest;
             }
         }
 
@@ -651,13 +681,13 @@ static bool executeShellCommandWithTimeout(const std::string& command,
 
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
-                           ConsoleInterface& console) {
+                           CliSupport& console) {
     return uninstallFromManifest(manifestPath, resolver, console, {}, {});
 }
 
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
-                           ConsoleInterface& console,
+                           CliSupport& console,
                            const UninstallProgressCallback& progressCallback,
                            const std::function<bool()>& cancellationCallback) {
     auto isCancelled = [&]() {
@@ -711,11 +741,14 @@ bool uninstallFromManifest(const std::string& manifestPath,
     std::string appId = GetManifestAppId(manifest);
     std::string displayName = GetManifestDisplayName(manifest);
     std::vector<std::string> legacyAppIds = GetManifestLegacyAppIds(manifest);
+    std::vector<std::string> legacyDesktopShortcutNames =
+        GetManifestLegacyDesktopShortcutNames(manifest);
     std::vector<std::string> identityCandidates =
         buildIdentityCandidates(appId, legacyAppIds, displayName);
     std::string installDir = manifest.value("installDir", "");
     bool autoStartup = manifest.value("autoStartup", false);
     bool desktopIcons = manifest.value("desktopIcons", false);
+    std::string desktopShortcutDisplayName = manifest.value("desktopShortcutDisplayName", "");
     bool removedUninstall = false;
     std::string uninstallPath = manifest.value("uninstallPath", "");
     std::vector<std::string> installKillProcesses;
@@ -833,8 +866,17 @@ bool uninstallFromManifest(const std::string& manifestPath,
     if (autoStartup && !displayName.empty()) {
         addWorkUnits(1);
     }
-    if (desktopIcons && !displayName.empty()) {
-        addWorkUnits(1);
+    size_t desktopShortcutRemovalCount = 0;
+    if (desktopIcons) {
+        if (!desktopShortcutDisplayName.empty()) {
+            ++desktopShortcutRemovalCount;
+        } else if (!displayName.empty()) {
+            ++desktopShortcutRemovalCount;
+        }
+        desktopShortcutRemovalCount += legacyDesktopShortcutNames.size();
+    }
+    if (desktopShortcutRemovalCount > 0) {
+        addWorkUnits(desktopShortcutRemovalCount);
     }
     addWorkUnits(componentActions.size());
     addWorkUnits(manifestRegistryEntries.size());
@@ -937,9 +979,33 @@ bool uninstallFromManifest(const std::string& manifestPath,
         removeAutoStartup(displayName);
         completeWorkUnit("Removing auto startup entry");
     }
-    if (desktopIcons && !displayName.empty()) {
-        deleteDesktopShortcut(displayName);
-        completeWorkUnit("Removing desktop shortcut");
+    if (desktopIcons) {
+        std::vector<std::string> shortcutNames;
+        std::unordered_set<std::string> seenShortcutNames;
+        auto appendShortcutName = [&](const std::string& name) {
+            if (name.empty()) {
+                return;
+            }
+            std::string lowered = name;
+            std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (seenShortcutNames.insert(lowered).second) {
+                shortcutNames.push_back(name);
+            }
+        };
+
+        appendShortcutName(desktopShortcutDisplayName);
+        for (const auto& name : legacyDesktopShortcutNames) {
+            appendShortcutName(name);
+        }
+        if (shortcutNames.empty()) {
+            appendShortcutName(displayName);
+        }
+
+        for (const auto& shortcutName : shortcutNames) {
+            deleteDesktopShortcut(shortcutName);
+            completeWorkUnit("Removing desktop shortcut: " + shortcutName);
+        }
     }
 
     for (const auto& entry : manifestRegistryEntries) {
@@ -1162,18 +1228,6 @@ bool uninstallFromManifest(const std::string& manifestPath,
         }
         completeWorkUnit("Removing uninstall manifest");
     }
-
-    for (const auto& identity : identityCandidates) {
-        std::string defaultPath = getDefaultManifestPath(identity, resolver);
-        if (!defaultPath.empty() && defaultPath != manifestPath) {
-            std::error_code removeEc;
-            std::filesystem::remove(toLongPath(PathFromUtf8(defaultPath)), removeEc);
-            if (removeEc && std::filesystem::exists(PathFromUtf8(defaultPath))) {
-                console.showWarning("Failed to remove legacy default manifest: " + defaultPath);
-            }
-        }
-    }
-    completeWorkUnit("Removing default manifest pointer");
 
     std::filesystem::path exePath = PathFromUtf8(getCurrentExecutablePath());
     std::string exeName = Utf8FromPath(exePath.filename());

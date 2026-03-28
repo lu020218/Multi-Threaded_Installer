@@ -66,9 +66,6 @@ private:
     std::optional<PackagerConfiguration> parseYamlConfig(
         const std::string& filePath);
 
-    std::optional<PackagerConfiguration> parseJsonConfig(
-        const std::string& filePath);
-
     std::optional<PackagerConfiguration> parseConfigObject(
         const nlohmann::json& configObject,
         const std::string& filePath,

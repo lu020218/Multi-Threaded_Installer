@@ -75,6 +75,28 @@ bool ReadStringList(const std::vector<uint8_t>& data,
     return true;
 }
 
+bool ReadStringMap(const std::vector<uint8_t>& data,
+                   size_t& offset,
+                   std::unordered_map<std::string, std::string>& out,
+                   const char* label) {
+    uint32_t count = 0;
+    if (!ReadPod<uint32_t>(data, offset, count)) {
+        META_LOG();
+        return false;
+    }
+    out.clear();
+    for (uint32_t i = 0; i < count; ++i) {
+        std::string key;
+        std::string value;
+        if (!ReadString(data, offset, key, label) ||
+            !ReadString(data, offset, value, label)) {
+            return false;
+        }
+        out.emplace(std::move(key), std::move(value));
+    }
+    return true;
+}
+
 bool ReadRegistryList(const std::vector<uint8_t>& data,
                       size_t& offset,
                       std::vector<RegistryEntry>& out,
@@ -483,10 +505,24 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
             !ReadStringList(data, offset, metadata.legacyAppIds, "legacyAppIds")) {
             return metadata;
         }
+        if (header->version >= 19) {
+            if (!ReadString(data, offset, metadata.desktopShortcutName, "desktopShortcutName") ||
+                !ReadStringMap(data, offset, metadata.desktopShortcutNameI18n, "desktopShortcutNameI18n") ||
+                !ReadStringList(data, offset, metadata.legacyDesktopShortcutNames, "legacyDesktopShortcutNames")) {
+                return metadata;
+            }
+        } else {
+            metadata.desktopShortcutName.clear();
+            metadata.desktopShortcutNameI18n.clear();
+            metadata.legacyDesktopShortcutNames.clear();
+        }
     } else {
         metadata.appId.clear();
         metadata.directoryName.clear();
         metadata.legacyAppIds.clear();
+        metadata.desktopShortcutName.clear();
+        metadata.desktopShortcutNameI18n.clear();
+        metadata.legacyDesktopShortcutNames.clear();
     }
     if (!ReadString(data, offset, metadata.defaultInstallDir, "defaultInstallDir") ||
         !ReadString(data, offset, metadata.configVersion, "configVersion")) {
@@ -515,6 +551,9 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     }
     if (metadata.directoryName.empty()) {
         metadata.directoryName = metadata.applicationName;
+    }
+    if (metadata.desktopShortcutName.empty()) {
+        metadata.desktopShortcutName = metadata.applicationName;
     }
 
     if (header->version >= 7) {
@@ -733,11 +772,29 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         } else {
             metadata.uninstallCleanupRules.clear();
         }
+        if (header->version >= 20) {
+            uint8_t deleteFromManifest = 0;
+            if (!ReadPod<uint8_t>(data, offset, deleteFromManifest)) {
+                META_LOG();
+                return metadata;
+            }
+            metadata.upgradeCleanup.registry.deleteFromManifest = deleteFromManifest != 0;
+            if (!ReadRegistryList(data,
+                                  offset,
+                                  metadata.upgradeCleanup.registry.legacyKeys,
+                                  "upgradeCleanup.registry.legacyKeys") ||
+                !ReadCleanupRules(data, offset, metadata.upgradeCleanup.extraPaths)) {
+                return metadata;
+            }
+        } else {
+            metadata.upgradeCleanup = UpgradeCleanupConfig{};
+        }
     } else {
         metadata.components.clear();
         metadata.componentUi = UiComponentSelectionConfig();
         metadata.uiLinks.clear();
         metadata.uninstallCleanupRules.clear();
+        metadata.upgradeCleanup = UpgradeCleanupConfig{};
     }
 
     for (uint32_t i = 0; i < header->folderCount; ++i) {

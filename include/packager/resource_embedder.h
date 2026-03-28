@@ -9,6 +9,7 @@ namespace MultiThreadedInstaller {
 bool AppendEmbeddedResources(std::vector<uint8_t>& installerTemplate,
                              const std::filesystem::path& resourceDir,
                              const std::vector<uint8_t>& uninstallerBinary,
+                             const char* targetLabel,
                              std::string& error);
 
 } // namespace MultiThreadedInstaller

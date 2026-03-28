@@ -60,10 +60,7 @@ std::string resolveEffectiveDirectoryName(const std::string& directoryName,
 std::vector<std::string> buildIdentityCandidates(const std::string& appId,
                                                  const std::vector<std::string>& legacyAppIds,
                                                  const std::string& applicationName);
-std::string getDefaultManifestPath(const std::string& identityKey, InstallerPathResolver& resolver);
 std::string getLocalManifestPath(const std::string& exePath);
-std::string findInstalledManifestPath(const std::vector<std::string>& identityCandidates,
-                                      InstallerPathResolver& resolver);
 std::string resolveInstalledManifestPath(const std::vector<std::string>& identityCandidates,
                                          const std::string& exePath,
                                          InstallerPathResolver& resolver);

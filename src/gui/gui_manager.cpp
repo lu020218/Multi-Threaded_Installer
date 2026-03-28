@@ -1160,6 +1160,7 @@ void GUIManager::OnInstallButtonClick() {
                                  request.autoRun,
                                  request.desktopIcons,
                                  request.languageCode,
+                                 m_repairMode,
                                  cleanupOldInstall,
                                  selectedComponents);
 

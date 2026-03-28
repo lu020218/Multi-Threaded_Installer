@@ -78,6 +78,9 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::string appId;
     std::string directoryName;
     std::vector<std::string> legacyAppIds;
+    std::string desktopShortcutName;
+    std::unordered_map<std::string, std::string> desktopShortcutNameI18n;
+    std::vector<std::string> legacyDesktopShortcutNames;
     std::string configVersion;
     std::string defaultInstallDir;
     std::string webPageUrl;
@@ -97,12 +100,14 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     UiComponentSelectionConfig componentUi;
     std::vector<UiLinkBinding> uiLinks;
     std::vector<UninstallCleanupRule> uninstallCleanupRules;
+    UpgradeCleanupConfig upgradeCleanup;
 
     ExtendedInstallationMetadata()
         : InstallationMetadata(),
           applicationName("MyApplication"),
           appId(""),
           directoryName(""),
+          desktopShortcutName(""),
           configVersion("1.0"),
           defaultInstallDir("%ProgramFiles%"),
           webPageUrl(""),
@@ -149,7 +154,7 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;
-    constexpr uint32_t VERSION = 18;
+    constexpr uint32_t VERSION = 20;
 
     constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;
     constexpr size_t MIN_BLOCK_SIZE = 4 * 1024 * 1024;

@@ -295,6 +295,12 @@ set(INSTALLER_SOURCES
     src/installer/installer_helpers.cpp
     src/installer/registry_utils.cpp
     src/installer/install_state_utils.cpp
+    src/installer/install_progress_reporter.cpp
+    src/installer/install_plan_builder.cpp
+    src/installer/install_precheck.cpp
+    src/installer/install_cleanup_executor.cpp
+    src/installer/install_execution.cpp
+    src/installer/install_finalize.cpp
     src/installer/install_service.cpp
     src/installer/upgrade_cleanup.cpp
     src/installer/uninstall_manager.cpp
@@ -315,6 +321,12 @@ set(UNINSTALLER_SOURCES
     src/installer/installer_helpers.cpp
     src/installer/registry_utils.cpp
     src/installer/install_state_utils.cpp
+    src/installer/install_progress_reporter.cpp
+    src/installer/install_plan_builder.cpp
+    src/installer/install_precheck.cpp
+    src/installer/install_cleanup_executor.cpp
+    src/installer/install_execution.cpp
+    src/installer/install_finalize.cpp
     src/installer/install_service.cpp
     src/installer/upgrade_cleanup.cpp
     src/installer/uninstall_manager.cpp

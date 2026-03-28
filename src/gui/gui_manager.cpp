@@ -623,6 +623,15 @@ void GUIManager::SetInstallConfig(const InstallConfig& config) {
     m_repairMode = config.repairMode;
 }
 
+void GUIManager::PrepareInitialDpi(unsigned int dpi) {
+    if (dpi == 0) {
+        return;
+    }
+    if (m_pm.GetDPIObj()->GetScale() != dpi) {
+        m_pm.GetDPIObj()->SetScale(dpi);
+    }
+}
+
 CDuiString GUIManager::GetSkinFolder() {
     return _T("skins\\");
 }
@@ -976,15 +985,7 @@ void GUIManager::Notify(TNotifyUI& msg) {
 LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 #ifdef _WIN32
     if (uMsg == WM_DPICHANGED) {
-        const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
-        if (suggested) {
-            ::SetWindowPos(m_hWnd, NULL,
-                           suggested->left,
-                           suggested->top,
-                           suggested->right - suggested->left,
-                           suggested->bottom - suggested->top,
-                           SWP_NOZORDER | SWP_NOACTIVATE);
-        }
+        (void)lParam;
         UINT dpi = LOWORD(wParam);
         if (dpi == 0) {
             dpi = GetDpiForWindowSafe(m_hWnd);
@@ -993,7 +994,6 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         logInstallerInfo(std::string("[GUI][DPI] WM_DPICHANGED begin old_dpi=") +
                          std::to_string(oldDpi) + " new_dpi=" + std::to_string(dpi));
         m_pm.SetDPI(static_cast<int>(dpi));
-        m_pm.ResetDPIAssets();
         const std::vector<std::string> xmlScope = BuildCurrentGuiXmlScope(m_pTabPages, m_uninstallMode);
         LogActiveGuiResourceDiagnosticsForXmlEntries(dpi, "GUIManager::WM_DPICHANGED", xmlScope);
         LogCurrentPageControlImageSnapshot(m_pTabPages, m_uninstallMode, "GUIManager::WM_DPICHANGED");

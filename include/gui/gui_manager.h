@@ -94,6 +94,7 @@ public:
     
 
     void SetInstallConfig(const InstallConfig& config);
+    void PrepareInitialDpi(unsigned int dpi);
     
 
     const InstallConfig& GetInstallConfig() const { return m_config; }

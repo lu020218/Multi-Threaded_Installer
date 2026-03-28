@@ -296,18 +296,6 @@ UINT GetDpiForWindowSafe(HWND hwnd) {
     return dpi > 0 ? static_cast<UINT>(dpi) : 96U;
 }
 
-void AdjustWindowForDpi(HWND hwnd, int baseWidth, int baseHeight) {
-    if (!hwnd) {
-        return;
-    }
-    const UINT dpi = GetDpiForWindowSafe(hwnd);
-    const float scale = static_cast<float>(dpi) / 96.0f;
-    const int width = static_cast<int>(baseWidth * scale);
-    const int height = static_cast<int>(baseHeight * scale);
-    ::SetWindowPos(hwnd, nullptr, 0, 0, width, height,
-                   SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE);
-}
-
 int RunGuiWindow(GUIManager& frame,
                  const std::wstring& title,
                  const GuiResourceContext& context,
@@ -316,10 +304,15 @@ int RunGuiWindow(GUIManager& frame,
     HWND hwnd = nullptr;
     WindowSize baseSize = GetWindowSizeFromResources(
         context.useZip, context.resourcePath, context.skinsPath, uninstallMode, fallbackSize);
+    const UINT startupDpi = GetDpiForWindowSafe(nullptr);
+    const float startupScale = static_cast<float>(startupDpi) / 96.0f;
+    const int scaledWidth = static_cast<int>(baseSize.width * startupScale);
+    const int scaledHeight = static_cast<int>(baseSize.height * startupScale);
+    frame.PrepareInitialDpi(startupDpi);
 
     try {
         logInstallerInfo("[GUI] About to call Create().");
-        hwnd = frame.Create(nullptr, title.c_str(), UI_WNDSTYLE_FRAME, 0L, 0, 0, baseSize.width, baseSize.height);
+        hwnd = frame.Create(nullptr, title.c_str(), UI_WNDSTYLE_FRAME, 0L, 0, 0, scaledWidth, scaledHeight);
     } catch (const std::exception& e) {
         logInstallerError(std::string("[GUI] Exception during Create(): ") + e.what());
         return 1;
@@ -332,8 +325,6 @@ int RunGuiWindow(GUIManager& frame,
         logInstallerError(std::string("[GUI] Create() returned NULL. GetLastError()=") + std::to_string(GetLastError()));
         return 1;
     }
-
-    AdjustWindowForDpi(hwnd, baseSize.width, baseSize.height);
     frame.CenterWindow();
     logInstallerInfo("[GUI] Centered window.");
     frame.ShowWindow(true);

@@ -70,13 +70,6 @@ private:
         const nlohmann::json& configObject,
         const std::string& filePath,
         const std::string& formatLabel);
-    
-    /**
-     *
-     *
-     *
-     */
-    SpecialDirectoryType parseDirectoryType(const std::string& dirStr);
 };
 
 } // namespace MultiThreadedInstaller

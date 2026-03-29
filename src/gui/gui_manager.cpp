@@ -2,8 +2,13 @@
 #include "../../include/gui/page_controller.h"
 #include "../../include/gui/gui_helpers.h"
 #include "../../include/gui/gui_install_actions.h"
+#include "../../include/gui/gui_component_binding.h"
+#include "../../include/gui/gui_diagnostics.h"
+#include "../../include/gui/gui_event_router.h"
 #include "../../include/gui/gui_install_flow_utils.h"
+#include "../../include/gui/gui_interaction_helpers.h"
 #include "../../include/gui/gui_runtime_utils.h"
+#include "../../include/gui/gui_startup_initializer.h"
 #include "../../include/gui/gui_status_presenter.h"
 #include "../../include/gui/gui_text_presenter.h"
 #include "../../include/gui/license_text_loader.h"
@@ -43,29 +48,6 @@ static constexpr int kPageProgress = static_cast<int>(PageType::Progress);
 static constexpr int kPageCompletion = static_cast<int>(PageType::Completion);
 static constexpr UINT_PTR kProgressTimerId = 1001;
 static constexpr UINT kProgressTimerIntervalMs = 33;
-struct ComponentControlBinding {
-    CCheckBoxUI* checkBox = nullptr;
-    std::string componentId;
-    std::string controlName;
-};
-
-struct ComponentPageScope {
-    CControlUI* root = nullptr;
-    std::unordered_set<std::string> allowedControls;
-};
-
-static std::string TrimAsciiCopy(const std::string& text) {
-    size_t start = 0;
-    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start])) != 0) {
-        ++start;
-    }
-    size_t end = text.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
-        --end;
-    }
-    return text.substr(start, end - start);
-}
-
 static std::string ToLowerAsciiCopy(const std::string& text) {
     std::string lowered = text;
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),
@@ -100,45 +82,6 @@ static int ResolveInstallPageIndex(const std::string& skin) {
     return -1;
 }
 
-static void CollectControlsRecursive(CControlUI* root, std::vector<CControlUI*>& controls) {
-    if (!root) {
-        return;
-    }
-    controls.push_back(root);
-    CContainerUI* container = static_cast<CContainerUI*>(root->GetInterface(_T("Container")));
-    if (!container) {
-        return;
-    }
-    const int count = container->GetCount();
-    for (int i = 0; i < count; ++i) {
-        CollectControlsRecursive(container->GetItemAt(i), controls);
-    }
-}
-
-static std::string NormalizeXmlEntryPath(const std::string& entry) {
-    std::string normalized = entry;
-    std::replace(normalized.begin(), normalized.end(), '\\', '/');
-    return normalized;
-}
-
-static std::string JoinSampleListLocal(const std::vector<std::string>& values, size_t limit) {
-    if (values.empty()) {
-        return "(none)";
-    }
-    std::ostringstream oss;
-    const size_t count = (std::min)(values.size(), limit);
-    for (size_t i = 0; i < count; ++i) {
-        if (i > 0) {
-            oss << " | ";
-        }
-        oss << values[i];
-    }
-    if (values.size() > limit) {
-        oss << " | ... +" << (values.size() - limit) << " more";
-    }
-    return oss.str();
-}
-
 static const char* GetInstallPageSkinByIndex(int index) {
     switch (index) {
         case kPageWelcome:
@@ -165,400 +108,6 @@ static const char* GetUninstallPageSkinByIndex(int index) {
         default:
             return nullptr;
     }
-}
-
-static std::vector<std::string> BuildCurrentGuiXmlScope(const CTabLayoutUI* tabPages,
-                                                        bool uninstallMode) {
-    std::vector<std::string> xmlEntries;
-    xmlEntries.push_back(uninstallMode ? "skins/uninstall_main.xml" : "skins/main.xml");
-
-    if (!tabPages) {
-        return xmlEntries;
-    }
-
-    const int currentIndex = tabPages->GetCurSel();
-    const char* currentPage = uninstallMode ? GetUninstallPageSkinByIndex(currentIndex)
-                                            : GetInstallPageSkinByIndex(currentIndex);
-    if (currentPage) {
-        xmlEntries.push_back(currentPage);
-    }
-
-    std::sort(xmlEntries.begin(), xmlEntries.end());
-    xmlEntries.erase(std::unique(xmlEntries.begin(), xmlEntries.end()), xmlEntries.end());
-    return xmlEntries;
-}
-
-static void AppendImageProperty(std::vector<std::string>& images,
-                                const std::string& key,
-                                LPCTSTR value) {
-    if (!value || value[0] == _T('\0')) {
-        return;
-    }
-    images.push_back(key + "=" + WideToUtf8(TCharToWide(value)));
-}
-
-static void LogCurrentPageControlImageSnapshot(CTabLayoutUI* tabPages,
-                                               bool uninstallMode,
-                                               const char* stage) {
-    if (!tabPages) {
-        logInstallerWarning(std::string("[GUI][CTRLIMG] stage=") + (stage ? stage : "unknown") +
-                            " pages=null");
-        return;
-    }
-
-    const int currentIndex = tabPages->GetCurSel();
-    CControlUI* pageRoot = tabPages->GetItemAt(currentIndex);
-    if (!pageRoot) {
-        logInstallerWarning(std::string("[GUI][CTRLIMG] stage=") + (stage ? stage : "unknown") +
-                            " page_root=null index=" + std::to_string(currentIndex));
-        return;
-    }
-
-    std::vector<CControlUI*> controls;
-    CollectControlsRecursive(pageRoot, controls);
-
-    size_t controlsWithImages = 0;
-    std::vector<std::string> samples;
-    for (CControlUI* control : controls) {
-        if (!control) {
-            continue;
-        }
-
-        std::vector<std::string> images;
-        AppendImageProperty(images, "bk", control->GetBkImage());
-        AppendImageProperty(images, "fore", control->GetForeImage());
-
-        if (auto* button = static_cast<CButtonUI*>(control->GetInterface(_T("Button")))) {
-            AppendImageProperty(images, "normal", button->GetNormalImage());
-            AppendImageProperty(images, "hot", button->GetHotImage());
-            AppendImageProperty(images, "pushed", button->GetPushedImage());
-            AppendImageProperty(images, "disabled", button->GetDisabledImage());
-        }
-        if (auto* option = static_cast<COptionUI*>(control->GetInterface(_T("Option")))) {
-            AppendImageProperty(images, "selected", option->GetSelectedImage());
-        }
-        if (auto* combo = static_cast<CComboUI*>(control->GetInterface(_T("Combo")))) {
-            AppendImageProperty(images, "combo_normal", combo->GetNormalImage());
-            AppendImageProperty(images, "combo_hot", combo->GetHotImage());
-            AppendImageProperty(images, "combo_pushed", combo->GetPushedImage());
-            AppendImageProperty(images, "combo_disabled", combo->GetDisabledImage());
-        }
-        if (auto* edit = static_cast<CEditUI*>(control->GetInterface(_T("Edit")))) {
-            AppendImageProperty(images, "edit_normal", edit->GetNormalImage());
-            AppendImageProperty(images, "edit_hot", edit->GetHotImage());
-            AppendImageProperty(images, "edit_disabled", edit->GetDisabledImage());
-        }
-        if (auto* rich = static_cast<CRichEditUI*>(control->GetInterface(_T("RichEdit")))) {
-            AppendImageProperty(images, "rich_normal", rich->GetNormalImage());
-            AppendImageProperty(images, "rich_hot", rich->GetHotImage());
-            AppendImageProperty(images, "rich_disabled", rich->GetDisabledImage());
-        }
-
-        if (images.empty()) {
-            continue;
-        }
-
-        ++controlsWithImages;
-        std::ostringstream sample;
-        sample << "name=" << WideToUtf8(TCharToWide(control->GetName().GetData()))
-               << " class=" << WideToUtf8(TCharToWide(control->GetClass()))
-               << " images=";
-        for (size_t i = 0; i < images.size(); ++i) {
-            if (i > 0) {
-                sample << " | ";
-            }
-            sample << images[i];
-        }
-        samples.push_back(sample.str());
-    }
-
-    const std::vector<std::string> xmlScope = BuildCurrentGuiXmlScope(tabPages, uninstallMode);
-    logInstallerInfo(std::string("[GUI][CTRLIMG] stage=") + (stage ? stage : "unknown") +
-                     " uninstall=" + (uninstallMode ? "true" : "false") +
-                     " page_index=" + std::to_string(currentIndex) +
-                     " controls=" + std::to_string(controls.size()) +
-                     " controls_with_images=" + std::to_string(controlsWithImages) +
-                     " xml_scope=" + JoinSampleListLocal(xmlScope, 4));
-    if (!samples.empty()) {
-        logInstallerDebug(std::string("[GUI][CTRLIMG] sample: ") + JoinSampleListLocal(samples, 10));
-    }
-}
-
-static bool IsEmbeddedSelectionMode(const std::string& mode) {
-    if (mode.empty()) {
-        return false;
-    }
-    const std::string lowered = ToLowerAsciiCopy(mode);
-    return lowered == "embeddedinexistingpages" || lowered == "hybrid";
-}
-
-static std::vector<ComponentControlBinding> CollectComponentBindings(CTabLayoutUI* tabPages,
-                                                                     const ExtendedInstallationMetadata& metadata,
-                                                                     std::vector<std::string>* warnings) {
-    std::vector<ComponentControlBinding> bindings;
-    if (!tabPages || metadata.components.empty()) {
-        return bindings;
-    }
-
-    const UiComponentSelectionConfig& ui = metadata.componentUi;
-    if (!IsEmbeddedSelectionMode(ui.mode)) {
-        return bindings;
-    }
-
-    const std::string strategy = ToLowerAsciiCopy(ui.strategy);
-    if (!strategy.empty() && strategy != "xml_userdata") {
-        if (warnings) {
-            warnings->push_back("Unsupported component selection strategy: " + ui.strategy);
-        }
-        return bindings;
-    }
-
-    std::string tokenPrefix = ui.tokenPrefix;
-    if (tokenPrefix.empty()) {
-        tokenPrefix = "component:";
-    }
-
-    std::vector<ComponentPageScope> scopes;
-    if (!ui.pages.empty()) {
-        for (const auto& page : ui.pages) {
-            const int index = ResolveInstallPageIndex(page.skin);
-            if (index < 0 || index >= tabPages->GetCount()) {
-                if (warnings) {
-                    warnings->push_back("Component binding page not found in installer tabs: " + page.skin);
-                }
-                continue;
-            }
-            CControlUI* root = tabPages->GetItemAt(index);
-            if (!root) {
-                continue;
-            }
-            ComponentPageScope scope;
-            scope.root = root;
-            for (const auto& controlName : page.controls) {
-                if (!controlName.empty()) {
-                    scope.allowedControls.insert(ToLowerAsciiCopy(controlName));
-                }
-            }
-            scopes.push_back(std::move(scope));
-        }
-    } else {
-        const int maxIndex = (std::min)(tabPages->GetCount(), kPageCompletion + 1);
-        for (int i = kPageWelcome; i < maxIndex; ++i) {
-            ComponentPageScope scope;
-            scope.root = tabPages->GetItemAt(i);
-            scopes.push_back(std::move(scope));
-        }
-    }
-
-    std::unordered_set<CCheckBoxUI*> seenControls;
-    for (const auto& scope : scopes) {
-        if (!scope.root) {
-            continue;
-        }
-
-        std::vector<CControlUI*> controls;
-        controls.reserve(64);
-        CollectControlsRecursive(scope.root, controls);
-
-        for (CControlUI* control : controls) {
-            if (!control) {
-                continue;
-            }
-            CCheckBoxUI* checkBox = static_cast<CCheckBoxUI*>(control->GetInterface(_T("CheckBox")));
-            if (!checkBox || !seenControls.insert(checkBox).second) {
-                continue;
-            }
-
-            const std::string controlName =
-                ToLowerAsciiCopy(WideToUtf8(TCharToWide(control->GetName().GetData())));
-            if (!scope.allowedControls.empty() &&
-                scope.allowedControls.find(controlName) == scope.allowedControls.end()) {
-                continue;
-            }
-
-            const std::string userData = WideToUtf8(TCharToWide(checkBox->GetUserData().GetData()));
-            if (userData.size() < tokenPrefix.size() ||
-                userData.compare(0, tokenPrefix.size(), tokenPrefix) != 0) {
-                continue;
-            }
-
-            std::string componentId = TrimAsciiCopy(userData.substr(tokenPrefix.size()));
-            if (componentId.empty()) {
-                if (warnings) {
-                    warnings->push_back("Empty component id in checkbox userdata: " +
-                                        WideToUtf8(TCharToWide(checkBox->GetName().GetData())));
-                }
-                continue;
-            }
-
-            ComponentControlBinding binding;
-            binding.checkBox = checkBox;
-            binding.componentId = componentId;
-            binding.controlName = controlName;
-            bindings.push_back(std::move(binding));
-        }
-    }
-
-    return bindings;
-}
-
-static void ApplyComponentBindingConstraints(const ExtendedInstallationMetadata& metadata,
-                                             const std::vector<ComponentControlBinding>& bindings,
-                                             bool applyDefaults,
-                                             std::vector<std::string>* warnings) {
-    std::unordered_map<std::string, const ComponentConfig*> componentIndex;
-    componentIndex.reserve(metadata.components.size());
-    for (const auto& component : metadata.components) {
-        componentIndex[component.id] = &component;
-    }
-
-    for (const auto& binding : bindings) {
-        auto it = componentIndex.find(binding.componentId);
-        if (it == componentIndex.end()) {
-            if (warnings) {
-                warnings->push_back("UI checkbox references unknown component id: " + binding.componentId);
-            }
-            continue;
-        }
-        const ComponentConfig* component = it->second;
-        if (!component) {
-            continue;
-        }
-        if (component->required) {
-            binding.checkBox->SetCheck(true);
-            binding.checkBox->SetEnabled(false);
-            binding.checkBox->SetMouseEnabled(false);
-            continue;
-        }
-        if (applyDefaults) {
-            binding.checkBox->SetCheck(component->defaultSelected);
-        }
-    }
-}
-
-static std::vector<std::string> CollectSelectedComponentIds(
-    const ExtendedInstallationMetadata& metadata,
-    const std::vector<ComponentControlBinding>& bindings,
-    std::vector<std::string>* warnings) {
-    std::unordered_map<std::string, const ComponentConfig*> componentIndex;
-    componentIndex.reserve(metadata.components.size());
-    for (const auto& component : metadata.components) {
-        componentIndex[component.id] = &component;
-    }
-
-    std::unordered_set<std::string> selected;
-    selected.reserve(metadata.components.size());
-    for (const auto& component : metadata.components) {
-        if (component.required) {
-            selected.insert(component.id);
-        }
-    }
-
-    for (const auto& binding : bindings) {
-        if (componentIndex.find(binding.componentId) == componentIndex.end()) {
-            if (warnings) {
-                warnings->push_back("Skipping unknown component id from UI: " + binding.componentId);
-            }
-            continue;
-        }
-        if (binding.checkBox->GetCheck()) {
-            selected.insert(binding.componentId);
-        }
-    }
-
-    std::vector<std::string> ordered;
-    ordered.reserve(selected.size());
-    for (const auto& component : metadata.components) {
-        if (selected.find(component.id) != selected.end()) {
-            ordered.push_back(component.id);
-        }
-    }
-    return ordered;
-}
-
-static bool HandleRunningApplicationDialog(HWND hWnd, const std::vector<std::string>& processNames) {
-    (void)hWnd;
-    if (processNames.empty()) {
-        return true;
-    }
-
-    std::vector<std::string> running = getRunningProcessesByName(processNames);
-    if (running.empty()) {
-        return true;
-    }
-
-    auto joinNames = [](const std::vector<std::string>& names) {
-        std::string joined;
-        for (size_t i = 0; i < names.size(); ++i) {
-            if (i > 0) {
-                joined += ", ";
-            }
-            joined += names[i];
-        }
-        return joined;
-    };
-
-    logInstallerInfo(std::string("[GUI] Terminating processes: ") + joinNames(running));
-    terminateProcessesByName(running);
-    Sleep(500);
-
-    std::vector<std::string> remaining = getRunningProcessesByName(processNames);
-    if (!remaining.empty()) {
-        std::wstring title = GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L"");
-        std::wstring message = GUIHelpers::GetLocalizedText(L"msg.dialog.running_app.failed", L"");
-        GUIHelpers::ShowErrorDialog(hWnd, title, message);
-        return false;
-    }
-
-    return true;
-}
-
-static std::wstring ExpandEnvVars(const std::wstring& value) {
-#ifdef _WIN32
-    if (value.find(L'%') == std::wstring::npos) {
-        return value;
-    }
-    wchar_t buffer[MAX_PATH];
-    DWORD len = ExpandEnvironmentStringsW(value.c_str(), buffer, MAX_PATH);
-    if (len == 0 || len > MAX_PATH) {
-        return value;
-    }
-    return std::wstring(buffer);
-#else
-    return value;
-#endif
-}
-
-static std::wstring NormalizeInstallPath(const std::wstring& basePath,
-                                         const std::wstring& appName) {
-    if (basePath.empty() || appName.empty()) {
-        return basePath;
-    }
-
-    std::filesystem::path selectedFs = basePath;
-    std::wstring appNameLower = ToLowerString(appName);
-    std::wstring selectedNameLower = ToLowerString(selectedFs.filename().wstring());
-
-    if (selectedNameLower == appNameLower) {
-        return selectedFs.wstring();
-    }
-
-    std::filesystem::path childPath = selectedFs / appName;
-    return childPath.wstring();
-}
-
-static std::wstring ResolveEffectiveDirectoryNameFromConfig(const InstallConfig& config) {
-    const std::string directoryName = resolveEffectiveDirectoryName(
-        WideToUtf8(config.directoryName),
-        WideToUtf8(config.applicationName));
-    return Utf8ToWide(directoryName);
-}
-
-static std::wstring ApplyInstallDirectoryRule(const std::wstring& basePath, const InstallConfig& config) {
-    if (!config.installDirectoryAppendName) {
-        return basePath;
-    }
-    return NormalizeInstallPath(basePath, ResolveEffectiveDirectoryNameFromConfig(config));
 }
 
 int GUIManager::GetWelcomePageIndex() const {
@@ -670,61 +219,9 @@ void GUIManager::InitWindow() {
 
     logInstallerInfo(std::string("[GUI] GUI mode uninstall=") +
                      (m_uninstallMode ? "true" : "false"));
-    
-    std::wstring installPath = ExpandEnvVars(m_config.defaultInstallPath);
-#ifdef _WIN32
-    wchar_t envPath[MAX_PATH];
-    DWORD envLen = GetEnvironmentVariableW(L"MTINSTALLER_INSTALL_PATH", envPath, MAX_PATH);
-    if (envLen > 0 && envLen < MAX_PATH) {
-        installPath = envPath;
-        SetEnvironmentVariableW(L"MTINSTALLER_INSTALL_PATH", nullptr);
-    }
-#endif
-    if (!m_config.registryPath.empty() && !m_config.registryKey.empty()) {
-        std::string regPath = WideToUtf8(m_config.registryPath);
-        std::string regKey = WideToUtf8(m_config.registryKey);
-        std::string regValue;
-        if (readRegistryStringValue(regPath, regKey, regValue)) {
-            std::wstring regPathW = Utf8ToWide(regValue);
-            if (!regPathW.empty()) {
-                installPath = regPathW;
-            }
-        }
-    }
 
-    InstallerPathResolver identityResolver;
-    std::string previousManifest;
-    std::string previousInstallDir;
-    std::vector<std::string> identityCandidates =
-        GUIInstallActions::BuildIdentityCandidatesFromConfig(m_config);
-    if (resolveExistingInstallInfo(identityCandidates,
-                                   identityResolver,
-                                   previousManifest,
-                                   previousInstallDir) &&
-        !previousInstallDir.empty()) {
-        installPath = Utf8ToWide(previousInstallDir);
-    } else {
-        installPath = ApplyInstallDirectoryRule(installPath, m_config);
-    }
-
-    if (m_pInstallPathEdit) {
-        m_pInstallPathEdit->SetText(WStringToTStr(installPath));
-        if (m_repairMode) {
-            m_pInstallPathEdit->SetReadOnly(true);
-            m_pInstallPathEdit->SetEnabled(false);
-        }
-    }
-
-    if (m_repairMode) {
-        if (CControlUI* browseButton = m_pm.FindControl(_T("browse_button"))) {
-            browseButton->SetEnabled(false);
-            browseButton->SetVisible(false);
-        }
-        if (CControlUI* browseButton = m_pm.FindControl(_T("btnSelectDir"))) {
-            browseButton->SetEnabled(false);
-            browseButton->SetVisible(false);
-        }
-    }
+    std::wstring installPath = ResolveInitialInstallPath(m_config);
+    ApplyInitialInstallPathUi(m_pm, m_pInstallPathEdit, installPath, m_repairMode);
 
     UpdateDiskSpaceInfo(installPath);
     
@@ -865,9 +362,7 @@ void GUIManager::InitializeComponentSelectionUi() {
     }
 
     std::vector<std::string> warnings;
-    std::vector<ComponentControlBinding> bindings =
-        CollectComponentBindings(m_pTabPages, m_installMetadata, &warnings);
-    ApplyComponentBindingConstraints(m_installMetadata, bindings, true, &warnings);
+    InitializeComponentBindingsUI(m_pTabPages, m_installMetadata, warnings);
 
     for (const auto& warning : warnings) {
         if (!warning.empty()) {
@@ -883,10 +378,7 @@ std::vector<std::string> GUIManager::CollectSelectedComponentsFromUi() {
     }
 
     std::vector<std::string> warnings;
-    std::vector<ComponentControlBinding> bindings =
-        CollectComponentBindings(m_pTabPages, m_installMetadata, &warnings);
-    ApplyComponentBindingConstraints(m_installMetadata, bindings, false, &warnings);
-    selected = CollectSelectedComponentIds(m_installMetadata, bindings, &warnings);
+    selected = CollectSelectedComponentIdsFromUI(m_pTabPages, m_installMetadata, warnings);
 
     for (const auto& warning : warnings) {
         if (!warning.empty()) {
@@ -898,88 +390,25 @@ std::vector<std::string> GUIManager::CollectSelectedComponentsFromUi() {
 }
 
 void GUIManager::Notify(TNotifyUI& msg) {
-    if (msg.sType == _T("click")) {
-        CDuiString senderName = msg.pSender->GetName();
-        
-        if (senderName == _T("install_button") || senderName == _T("btnInstall")) {
-            OnInstallButtonClick();
-        }
-        else if (senderName == _T("cancel_button")) {
-            OnCancelButtonClick();
-        }
-        else if (senderName == _T("browse_button")) {
-            OnBrowseButtonClick();
-        }
-        else if (senderName == _T("btnSelectDir")) {
-            OnBrowseButtonClick();
-        }
-        else if (senderName == _T("finish_button")) {
-            OnFinishButtonClick();
-        }
-        else if (senderName == _T("btnRun")) {
-            OnFinishButtonClick();
-        }
-        else if (senderName == _T("btnClose")) {
-            OnCancelButtonClick();
-        }
-        else if (senderName == _T("cancel_progress_button")) {
-            OnCancelProgressButtonClick();
-        }
-        else if (senderName == _T("closebtn") || senderName == _T("close_button")) {
-            OnCancelButtonClick();
-        }
-        else if (senderName == _T("minbtn")) {
-            SendMessage(WM_SYSCOMMAND, SC_MINIMIZE, 0);
-        }
-        else if (senderName == _T("btnShowMore")) {
-            OnShowMoreClick();
-        }
-        else if (senderName == _T("btnAgreement")) {
-            OnLicenseLinkClick();
-        }
-        else if (senderName == _T("btnBack")) {
-            OnLicenseBackClick();
-        }
-        else if (senderName == _T("btnUninstallConfirm")) {
-            OnUninstallConfirmClick();
-        }
-        else if (senderName == _T("btnUninstallCancel")) {
-            Close();
-        }
-        else if (senderName == _T("btnUninstallFinish")) {
-            Close();
-        }
-        else {
-            std::string controlName = WideToUtf8(TCharToWide(senderName.GetData()));
-            auto it = m_uiLinks.find(controlName);
-            if (it != m_uiLinks.end() && !it->second.empty()) {
-                GUIHelpers::OpenWebPage(it->second);
-            }
-        }
-    }
-    else if (msg.sType == _T("selectchanged")) {
-        CDuiString senderName = msg.pSender->GetName();
-        
-        if (senderName == _T("license_checkbox")) {
-            OnLicenseCheckboxChanged();
-        } else if (senderName == _T("chkAgree1")) {
-            SyncLicenseAgreementFromPage();
-        }
-    }
-    else if (msg.sType == _T("itemselect")) {
-        CDuiString senderName = msg.pSender->GetName();
-        if (senderName == _T("comboLanguageSelect")) {
-            int index = static_cast<int>(msg.wParam);
-            ApplyLanguageByIndex(index);
-        }
-    }
-    else if (msg.sType == _T("link")) {
-        CDuiString senderName = msg.pSender->GetName();
-        
-        if (senderName == _T("license_link")) {
-            OnLicenseLinkClick();
-        }
-    }
+    RouteGuiNotify(
+        msg,
+        m_uiLinks,
+        GuiNotifyCallbacks{
+            [this]() { OnInstallButtonClick(); },
+            [this]() { OnCancelButtonClick(); },
+            [this]() { OnBrowseButtonClick(); },
+            [this]() { OnFinishButtonClick(); },
+            [this]() { OnCancelProgressButtonClick(); },
+            [this]() { SendMessage(WM_SYSCOMMAND, SC_MINIMIZE, 0); },
+            [this]() { OnShowMoreClick(); },
+            [this]() { OnLicenseLinkClick(); },
+            [this]() { OnLicenseBackClick(); },
+            [this]() { OnUninstallConfirmClick(); },
+            [this]() { Close(); },
+            [this]() { OnLicenseCheckboxChanged(); },
+            [this]() { SyncLicenseAgreementFromPage(); },
+            [this](int index) { ApplyLanguageByIndex(index); },
+            [](const std::wstring& url) { GUIHelpers::OpenWebPage(url); }});
 }
 
 LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -1056,60 +485,23 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         if (m_pTabPages) {
             currentPage = m_pTabPages->GetCurSel();
         }
-        
-        bool altPressed = (GetKeyState(VK_MENU) & 0x8000) != 0;
-        
-        if (altPressed) {
-            if (wParam == 'I' && currentPage == GetWelcomePageIndex()) {
-                if (m_pInstallButton && m_pInstallButton->IsEnabled()) {
-                    OnInstallButtonClick();
-                    return 0;
-                }
-            }
-            else if (wParam == 'C' && (currentPage == GetWelcomePageIndex() ||
-                                       (!m_uninstallMode && currentPage == kPageLicense) ||
-                                       currentPage == GetProgressPageIndex())) {
-                if (currentPage == GetWelcomePageIndex() ||
-                    (!m_uninstallMode && currentPage == kPageLicense)) {
-                    OnCancelButtonClick();
-                } else {
-                    OnCancelProgressButtonClick();
-                }
-                return 0;
-            }
-            else if (wParam == 'F' && currentPage == GetCompletionPageIndex()) {
-                OnFinishButtonClick();
-                return 0;
-            }
-        }
-        else {
-            if (wParam == VK_RETURN) {
-                if (currentPage == GetWelcomePageIndex()) {
-                    if (m_pInstallButton && m_pInstallButton->IsEnabled()) {
-                        OnInstallButtonClick();
-                        return 0;
-                    }
-                }
-                else if (currentPage == GetCompletionPageIndex()) {
-                    OnFinishButtonClick();
-                    return 0;
-                }
-            }
-            else if (wParam == VK_ESCAPE) {
-                if (currentPage == GetWelcomePageIndex() ||
-                    (!m_uninstallMode && currentPage == kPageLicense)) {
-                    OnCancelButtonClick();
-                    return 0;
-                }
-                else if (currentPage == GetProgressPageIndex()) {
-                    OnCancelProgressButtonClick();
-                    return 0;
-                }
-                else if (currentPage == GetCompletionPageIndex()) {
-                    OnFinishButtonClick();
-                    return 0;
-                }
-            }
+
+        const bool installEnabled = m_pInstallButton && m_pInstallButton->IsEnabled();
+        if (RouteGuiKeyDown(
+                wParam,
+                currentPage,
+                m_uninstallMode,
+                installEnabled,
+                GetWelcomePageIndex(),
+                GetProgressPageIndex(),
+                GetCompletionPageIndex(),
+                kPageLicense,
+                GuiKeydownCallbacks{
+                    [this]() { OnInstallButtonClick(); },
+                    [this]() { OnCancelButtonClick(); },
+                    [this]() { OnCancelProgressButtonClick(); },
+                    [this]() { OnFinishButtonClick(); }})) {
+            return 0;
         }
     }
     
@@ -1233,70 +625,34 @@ void GUIManager::OnBrowseButtonClick() {
 }
 
 void GUIManager::OnLicenseLinkClick() {
-    ShowLicensePage();
+    MultiThreadedInstaller::ShowLicensePage(m_pm, m_pTabPages, m_pLicenseCheckbox, m_config, kPageLicense);
 }
 
 void GUIManager::OnLicenseBackClick() {
-    SyncLicenseAgreementFromPage();
+    MultiThreadedInstaller::SyncLicenseAgreementFromPage(m_pm,
+                                                         m_pLicenseCheckbox,
+                                                         m_pInstallButton,
+                                                         m_config.requiredDiskSpace,
+                                                         m_pInstallPathEdit);
     if (m_pTabPages) {
         m_pTabPages->SelectItem(kPageWelcome);
     }
 }
 
 void GUIManager::ShowLicensePage() {
-    if (!m_pTabPages) {
-        return;
-    }
-
-    RefreshLicenseText();
-
-    CCheckBoxUI* pAgreeInline = static_cast<CCheckBoxUI*>(
-        m_pm.FindControl(_T("chkAgree1")));
-    if (pAgreeInline) {
-        bool checked = false;
-        if (auto* pAgree = static_cast<CCheckBoxUI*>(m_pm.FindControl(_T("chkAgree")))) {
-            checked = pAgree->GetCheck();
-        } else if (m_pLicenseCheckbox) {
-            checked = m_pLicenseCheckbox->GetCheck();
-        }
-        pAgreeInline->SetCheck(checked);
-    }
-
-    m_pTabPages->SelectItem(kPageLicense);
+    MultiThreadedInstaller::ShowLicensePage(m_pm, m_pTabPages, m_pLicenseCheckbox, m_config, kPageLicense);
 }
 
 void GUIManager::RefreshLicenseText() {
-    CRichEditUI* pLicenseText = static_cast<CRichEditUI*>(
-        m_pm.FindControl(_T("editLicense")));
-    if (!pLicenseText) {
-        return;
-    }
-
-    std::wstring languageCode = m_config.languageCode;
-    if (languageCode.empty()) {
-        languageCode = GetLanguageCodeForIndex(GetDefaultLanguageComboIndex());
-    }
-
-    const std::wstring text = LoadLocalizedLicenseText(languageCode);
-    pLicenseText->SetText(WStringToTStr(text));
-    pLicenseText->SetReadOnly(true);
+    MultiThreadedInstaller::RefreshLicenseText(m_pm, m_config);
 }
 
 void GUIManager::SyncLicenseAgreementFromPage() {
-    CCheckBoxUI* pAgreeInline = static_cast<CCheckBoxUI*>(
-        m_pm.FindControl(_T("chkAgree1")));
-    if (!pAgreeInline) {
-        return;
-    }
-
-    bool checked = pAgreeInline->GetCheck();
-    if (auto* pAgree = static_cast<CCheckBoxUI*>(m_pm.FindControl(_T("chkAgree")))) {
-        pAgree->SetCheck(checked);
-    }
-    if (m_pLicenseCheckbox) {
-        m_pLicenseCheckbox->SetCheck(checked);
-    }
-    UpdateInstallButtonState();
+    MultiThreadedInstaller::SyncLicenseAgreementFromPage(m_pm,
+                                                         m_pLicenseCheckbox,
+                                                         m_pInstallButton,
+                                                         m_config.requiredDiskSpace,
+                                                         m_pInstallPathEdit);
 }
 
 void GUIManager::OnFinishButtonClick() {
@@ -1551,9 +907,3 @@ void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) 
 }
 
 } // namespace MultiThreadedInstaller
-
-
-
-
-
-

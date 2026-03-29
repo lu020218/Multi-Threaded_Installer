@@ -276,6 +276,8 @@ set(PACKAGER_SOURCES
     src/packager/resource_embedder.cpp
     src/packager/resource_zip_builder.cpp
     src/packager/embedded_resource_table.cpp
+    src/packager/config_value_reader.cpp
+    src/packager/config_parse_collections.cpp
     src/packager/configuration_loader.cpp
     src/packager/configuration_validator.cpp
     src/packager/configuration_manager.cpp
@@ -286,6 +288,7 @@ set(PACKAGER_SOURCES
 # Source files for installer
 set(INSTALLER_SOURCES
     src/installer/metadata_parser.cpp
+    src/installer/metadata_binary_reader.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp
     src/installer/tar_stream_extractor.cpp
@@ -293,6 +296,8 @@ set(INSTALLER_SOURCES
     src/installer/console_interface.cpp
     src/installer/path_resolver.cpp
     src/installer/installer_helpers.cpp
+    src/installer/file_io_utils.cpp
+    src/installer/shortcut_startup_utils.cpp
     src/installer/registry_utils.cpp
     src/installer/install_state_utils.cpp
     src/installer/install_progress_reporter.cpp
@@ -302,6 +307,9 @@ set(INSTALLER_SOURCES
     src/installer/install_execution.cpp
     src/installer/install_finalize.cpp
     src/installer/install_service.cpp
+    src/installer/install_manifest_store.cpp
+    src/installer/installed_instance_resolver.cpp
+    src/installer/self_delete_scheduler.cpp
     src/installer/upgrade_cleanup.cpp
     src/installer/uninstall_manager.cpp
     src/installer/gui_resource_loader.cpp
@@ -312,6 +320,7 @@ set(INSTALLER_SOURCES
 
 set(UNINSTALLER_SOURCES
     src/installer/metadata_parser.cpp
+    src/installer/metadata_binary_reader.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp
     src/installer/tar_stream_extractor.cpp
@@ -319,6 +328,8 @@ set(UNINSTALLER_SOURCES
     src/installer/console_interface.cpp
     src/installer/path_resolver.cpp
     src/installer/installer_helpers.cpp
+    src/installer/file_io_utils.cpp
+    src/installer/shortcut_startup_utils.cpp
     src/installer/registry_utils.cpp
     src/installer/install_state_utils.cpp
     src/installer/install_progress_reporter.cpp
@@ -328,6 +339,9 @@ set(UNINSTALLER_SOURCES
     src/installer/install_execution.cpp
     src/installer/install_finalize.cpp
     src/installer/install_service.cpp
+    src/installer/install_manifest_store.cpp
+    src/installer/installed_instance_resolver.cpp
+    src/installer/self_delete_scheduler.cpp
     src/installer/upgrade_cleanup.cpp
     src/installer/uninstall_manager.cpp
     src/installer/gui_resource_loader.cpp
@@ -341,6 +355,11 @@ set(GUI_SOURCES
     src/gui/gui_runtime_utils.cpp
     src/gui/gui_text_presenter.cpp
     src/gui/gui_status_presenter.cpp
+    src/gui/gui_diagnostics.cpp
+    src/gui/gui_event_router.cpp
+    src/gui/gui_startup_initializer.cpp
+    src/gui/gui_component_binding.cpp
+    src/gui/gui_interaction_helpers.cpp
     src/gui/gui_install_flow_utils.cpp
     src/gui/gui_install_actions.cpp
     src/gui/page_controller.cpp

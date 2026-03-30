@@ -37,6 +37,7 @@ struct InstallConfig {
     std::wstring webPageUrl;
     std::wstring executableName;
     std::wstring languageCode;
+    std::wstring postSetupStatePath;
     uint64_t requiredDiskSpace;
     
     InstallConfig()
@@ -55,6 +56,7 @@ struct InstallConfig {
           webPageUrl(L"https://example.com"),
           executableName(L"app.exe"),
           languageCode(L""),
+          postSetupStatePath(L""),
           requiredDiskSpace(100 * 1024 * 1024) {} // 100 MB default
 };
 

@@ -71,6 +71,58 @@ std::vector<char*> BuildArgv(std::vector<std::string>& args) {
     return argv;
 }
 
+std::wstring ExtractArgValueFromCommandLine(const std::string& argsUtf8, const std::wstring& flag) {
+    if (argsUtf8.empty()) {
+        return {};
+    }
+
+    std::wstring synthetic = L"placeholder.exe ";
+    synthetic += Utf8ToWide(argsUtf8);
+
+    int argc = 0;
+    LPWSTR* argvW = CommandLineToArgvW(synthetic.c_str(), &argc);
+    if (!argvW) {
+        return {};
+    }
+
+    std::wstring value;
+    for (int i = 1; i + 1 < argc; ++i) {
+        std::wstring current = argvW[i] ? argvW[i] : L"";
+        std::transform(current.begin(), current.end(), current.begin(),
+                       [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+        if (current == flag) {
+            value = argvW[i + 1] ? argvW[i + 1] : L"";
+            break;
+        }
+    }
+    LocalFree(argvW);
+    return value;
+}
+
+bool IsPostSetupAgentComponent(const ComponentConfig& component) {
+    if (component.source.type != ComponentSourceType::LOCAL) {
+        return false;
+    }
+    std::wstring installer = Utf8ToWide(component.source.local.installer);
+    std::transform(installer.begin(), installer.end(), installer.begin(),
+                   [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    return installer.find(L"post_setup_agent.exe") != std::wstring::npos;
+}
+
+std::wstring ResolvePostSetupStatePathTemplate(const ExtendedInstallationMetadata& metadata) {
+    for (const auto& component : metadata.components) {
+        if (!IsPostSetupAgentComponent(component)) {
+            continue;
+        }
+        std::wstring statePath =
+            ExtractArgValueFromCommandLine(component.source.local.args, L"--state-path");
+        if (!statePath.empty()) {
+            return statePath;
+        }
+    }
+    return {};
+}
+
 int RunCleanupHelper(const std::vector<std::wstring>& wideArgs) {
     auto getValue = [&](const std::wstring& flag) -> std::wstring {
         for (size_t i = 1; i + 1 < wideArgs.size(); ++i) {
@@ -263,6 +315,7 @@ InstallConfig CreateInstallConfigFromMetadata(const ExtendedInstallationMetadata
     config.autoStartup = metadata.autoStartup;
     config.desktopIcons = metadata.desktopIcons;
     config.repairMode = false;
+    config.postSetupStatePath = ResolvePostSetupStatePathTemplate(metadata);
 
     uint64_t totalSize = 0;
     for (const auto& mapping : metadata.extendedMappings) {

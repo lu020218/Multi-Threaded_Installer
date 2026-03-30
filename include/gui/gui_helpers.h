@@ -3,6 +3,8 @@
 #include <Windows.h>
 #include <string>
 #include <cstdint>
+#include <utility>
+#include <vector>
 #include "message_box_dialog.h"
 
 namespace MultiThreadedInstaller {
@@ -72,6 +74,11 @@ public:
     static bool LaunchApplication(
         const std::wstring& executablePath,
         const std::wstring& workingDirectory = L"");
+
+    static bool LaunchApplicationWithEnvironment(
+        const std::wstring& executablePath,
+        const std::wstring& workingDirectory,
+        const std::vector<std::pair<std::wstring, std::wstring>>& environment);
     
     /**
      *

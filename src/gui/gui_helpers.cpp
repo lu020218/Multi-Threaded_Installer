@@ -5,9 +5,12 @@
 #include "Utils/unzip.h"
 #include <shlobj.h>
 #include <shellapi.h>
+#include <cwctype>
+#include <map>
 #include <sstream>
 #include <iomanip>
 #include <filesystem>
+#include <vector>
 
 namespace MultiThreadedInstaller {
 using namespace DuiLib;
@@ -85,6 +88,52 @@ DialogResult ShowCustomDialogInternal(HWND hParent,
         return dialog.ShowModal(hParent);
     }
     return ShowFallbackMessageBox(hParent, title, message, fallbackFlags);
+}
+
+std::wstring NormalizeEnvironmentKey(const std::wstring& key) {
+    std::wstring normalized = key;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](wchar_t ch) { return static_cast<wchar_t>(std::towupper(ch)); });
+    return normalized;
+}
+
+std::vector<wchar_t> BuildEnvironmentBlock(
+    const std::vector<std::pair<std::wstring, std::wstring>>& environment) {
+    std::map<std::wstring, std::pair<std::wstring, std::wstring>> merged;
+
+    LPWCH currentEnv = GetEnvironmentStringsW();
+    if (currentEnv) {
+        for (LPWCH current = currentEnv; *current; ) {
+            std::wstring entry = current;
+            size_t separator = entry.find(L'=');
+            if (separator != std::wstring::npos && separator > 0) {
+                std::wstring key = entry.substr(0, separator);
+                std::wstring value = entry.substr(separator + 1);
+                merged[NormalizeEnvironmentKey(key)] = { key, value };
+            }
+            current += entry.size() + 1;
+        }
+        FreeEnvironmentStringsW(currentEnv);
+    }
+
+    for (const auto& item : environment) {
+        if (item.first.empty()) {
+            continue;
+        }
+        merged[NormalizeEnvironmentKey(item.first)] = item;
+    }
+
+    std::vector<wchar_t> block;
+    for (const auto& item : merged) {
+        const std::wstring& key = item.second.first;
+        const std::wstring& value = item.second.second;
+        block.insert(block.end(), key.begin(), key.end());
+        block.push_back(L'=');
+        block.insert(block.end(), value.begin(), value.end());
+        block.push_back(L'\0');
+    }
+    block.push_back(L'\0');
+    return block;
 }
 } // namespace
 
@@ -269,6 +318,52 @@ bool GUIHelpers::LaunchApplication(
     
 
     return reinterpret_cast<INT_PTR>(result) > 32;
+}
+
+bool GUIHelpers::LaunchApplicationWithEnvironment(
+    const std::wstring& executablePath,
+    const std::wstring& workingDirectory,
+    const std::vector<std::pair<std::wstring, std::wstring>>& environment) {
+
+    if (executablePath.empty()) {
+        return false;
+    }
+
+    if (!std::filesystem::exists(executablePath)) {
+        return false;
+    }
+
+    std::wstring workDir = workingDirectory;
+    if (workDir.empty()) {
+        std::filesystem::path exePath(executablePath);
+        workDir = exePath.parent_path().wstring();
+    }
+
+    std::wstring commandLine = L"\"" + executablePath + L"\"";
+    std::vector<wchar_t> commandLineBuffer(commandLine.begin(), commandLine.end());
+    commandLineBuffer.push_back(L'\0');
+    std::vector<wchar_t> envBlock = BuildEnvironmentBlock(environment);
+
+    STARTUPINFOW startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
+    PROCESS_INFORMATION processInfo{};
+    BOOL started = CreateProcessW(nullptr,
+                                  commandLineBuffer.data(),
+                                  nullptr,
+                                  nullptr,
+                                  FALSE,
+                                  CREATE_UNICODE_ENVIRONMENT,
+                                  envBlock.data(),
+                                  workDir.empty() ? nullptr : workDir.c_str(),
+                                  &startupInfo,
+                                  &processInfo);
+    if (!started) {
+        return false;
+    }
+
+    CloseHandle(processInfo.hThread);
+    CloseHandle(processInfo.hProcess);
+    return true;
 }
 
 bool GUIHelpers::OpenWebPage(const std::wstring& url) {

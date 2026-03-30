@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -121,6 +122,8 @@ bool WriteRegistryString(HKEY root,
                          const std::wstring& value);
 std::vector<std::wstring> SplitPathList(const std::wstring& value);
 std::wstring JoinPathList(const std::vector<std::wstring>& parts);
+std::vector<wchar_t> BuildCurrentEnvironmentBlock(
+    const std::vector<std::pair<std::wstring, std::wstring>>& extraEntries);
 bool ApplyEnvironmentEntries(const std::vector<EnvironmentEntry>& entries,
                              const ExpansionContext& context,
                              std::vector<EnvironmentEntry>& applied,
@@ -694,13 +697,58 @@ std::wstring JoinPathList(const std::vector<std::wstring>& parts) {
     return joined;
 }
 
+std::vector<wchar_t> BuildCurrentEnvironmentBlock(
+    const std::vector<std::pair<std::wstring, std::wstring>>& extraEntries) {
+    std::map<std::wstring, std::pair<std::wstring, std::wstring>> merged;
+
+    auto normalizeKey = [](std::wstring key) {
+        std::transform(key.begin(), key.end(), key.begin(),
+                       [](wchar_t ch) { return static_cast<wchar_t>(std::towupper(ch)); });
+        return key;
+    };
+
+    LPWCH existingEnv = GetEnvironmentStringsW();
+    if (existingEnv) {
+        for (LPWCH current = existingEnv; *current; ) {
+            std::wstring entry = current;
+            size_t separator = entry.find(L'=');
+            if (separator != std::wstring::npos && separator > 0) {
+                std::wstring key = entry.substr(0, separator);
+                std::wstring value = entry.substr(separator + 1);
+                merged[normalizeKey(key)] = { key, value };
+            }
+            current += entry.size() + 1;
+        }
+        FreeEnvironmentStringsW(existingEnv);
+    }
+
+    for (const auto& entry : extraEntries) {
+        if (entry.first.empty()) {
+            continue;
+        }
+        merged[normalizeKey(entry.first)] = entry;
+    }
+
+    std::vector<wchar_t> envBlock;
+    for (const auto& item : merged) {
+        const std::wstring& key = item.second.first;
+        const std::wstring& value = item.second.second;
+        envBlock.insert(envBlock.end(), key.begin(), key.end());
+        envBlock.push_back(L'=');
+        envBlock.insert(envBlock.end(), value.begin(), value.end());
+        envBlock.push_back(L'\0');
+    }
+    envBlock.push_back(L'\0');
+    return envBlock;
+}
+
 bool ApplyEnvironmentEntries(const std::vector<EnvironmentEntry>& entries,
                              const ExpansionContext& context,
                              std::vector<EnvironmentEntry>& applied,
                              std::string& error) {
-    const std::wstring envKey = L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
+    const std::wstring envKey = L"Environment";
     std::wstring currentPath;
-    ReadRegistryString(HKEY_LOCAL_MACHINE, envKey, L"Path", currentPath);
+    ReadRegistryString(HKEY_CURRENT_USER, envKey, L"Path", currentPath);
     std::vector<std::wstring> pathParts = SplitPathList(currentPath);
     std::unordered_set<std::string> seen;
     for (const auto& part : pathParts) {
@@ -724,23 +772,26 @@ bool ApplyEnvironmentEntries(const std::vector<EnvironmentEntry>& entries,
                 }
             }
         } else {
-            if (!WriteRegistryString(HKEY_LOCAL_MACHINE,
+            if (!WriteRegistryString(HKEY_CURRENT_USER,
                                      envKey,
                                      Utf8ToWide(entry.key),
                                      Utf8ToWide(expandedValue))) {
                 error = "Failed to write environment variable: " + entry.key;
                 return false;
             }
+            SetEnvironmentVariableW(Utf8ToWide(entry.key).c_str(), Utf8ToWide(expandedValue).c_str());
         }
         EnvironmentEntry appliedEntry = entry;
         appliedEntry.value = expandedValue;
         applied.push_back(std::move(appliedEntry));
     }
 
-    if (!WriteRegistryString(HKEY_LOCAL_MACHINE, envKey, L"Path", JoinPathList(pathParts))) {
+    const std::wstring joinedPath = JoinPathList(pathParts);
+    if (!WriteRegistryString(HKEY_CURRENT_USER, envKey, L"Path", joinedPath)) {
         error = "Failed to update system PATH.";
         return false;
     }
+    SetEnvironmentVariableW(L"Path", joinedPath.c_str());
 
     SendMessageTimeoutW(HWND_BROADCAST,
                         WM_SETTINGCHANGE,
@@ -769,21 +820,8 @@ bool ExecuteComponentInstaller(const fs::path& executablePath,
 
     std::wstring workingDir = executablePath.parent_path().wstring();
     std::wstring installDirW = Utf8ToWide(componentInstallDir);
-    LPWCH existingEnv = GetEnvironmentStringsW();
-    std::vector<wchar_t> env;
-    if (existingEnv) {
-        LPWCH current = existingEnv;
-        while (*current) {
-            size_t len = wcslen(current);
-            env.insert(env.end(), current, current + len + 1);
-            current += len + 1;
-        }
-        FreeEnvironmentStringsW(existingEnv);
-    }
-    std::wstring extra = L"POST_SETUP_COMPONENT_INSTALL_DIR=" + installDirW;
-    env.insert(env.end(), extra.begin(), extra.end());
-    env.push_back(L'\0');
-    env.push_back(L'\0');
+    std::vector<wchar_t> env = BuildCurrentEnvironmentBlock(
+        { { L"POST_SETUP_COMPONENT_INSTALL_DIR", installDirW } });
 
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(startupInfo);

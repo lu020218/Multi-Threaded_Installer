@@ -20,6 +20,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <Windows.h>
 #undef min
 #undef max
 #endif
@@ -34,6 +35,67 @@ struct BlockMeta {
     uint32_t originalSize;
     uint32_t checksum;
 };
+
+constexpr uint64_t kMemorySafetyReserveBytes = 512ull * 1024ull * 1024ull;
+constexpr uint64_t kPerBlockOverheadBytes = 8ull * 1024ull * 1024ull;
+
+uint64_t QueryAvailablePhysicalMemoryBytes() {
+#ifdef _WIN32
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status)) {
+        return static_cast<uint64_t>(status.ullAvailPhys);
+    }
+#endif
+    return 0;
+}
+
+std::string BuildMemorySnapshotText() {
+#ifdef _WIN32
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status)) {
+        return "availPhysMB=" + std::to_string(status.ullAvailPhys / (1024ull * 1024ull)) +
+               " totalPhysMB=" + std::to_string(status.ullTotalPhys / (1024ull * 1024ull)) +
+               " availPageMB=" + std::to_string(status.ullAvailPageFile / (1024ull * 1024ull)) +
+               " memoryLoad=" + std::to_string(status.dwMemoryLoad) + "%";
+    }
+#endif
+    return "memorySnapshot=unavailable";
+}
+
+size_t ResolveBlockConcurrencyLimit(size_t requestedLimit,
+                                    uint64_t estimatedBytesPerTask,
+                                    const std::string& targetPath) {
+    if (requestedLimit <= 1 || estimatedBytesPerTask == 0) {
+        return requestedLimit <= 1 ? requestedLimit : 1;
+    }
+
+    const uint64_t availableBytes = QueryAvailablePhysicalMemoryBytes();
+    if (availableBytes == 0) {
+        return requestedLimit;
+    }
+
+    const uint64_t usableBytes =
+        availableBytes > kMemorySafetyReserveBytes ? (availableBytes - kMemorySafetyReserveBytes) : 0;
+    if (usableBytes == 0) {
+        logInstallerWarning("[DECOMP][Memory] forcing sequential block decompression for " +
+                            targetPath + " due to low available memory. " +
+                            BuildMemorySnapshotText());
+        return 1;
+    }
+
+    size_t memoryLimited =
+        static_cast<size_t>(std::max<uint64_t>(1, usableBytes / estimatedBytesPerTask));
+    if (memoryLimited < requestedLimit) {
+        logInstallerInfo("[DECOMP][Memory] limiting block decompression concurrency for " +
+                         targetPath + " from " + std::to_string(requestedLimit) +
+                         " to " + std::to_string(memoryLimited) +
+                         " availableMB=" + std::to_string(availableBytes / (1024ull * 1024ull)) +
+                         " perTaskMB=" + std::to_string(estimatedBytesPerTask / (1024ull * 1024ull)));
+    }
+    return std::max<size_t>(1, std::min(requestedLimit, memoryLimited));
+}
 
 bool decompressLzmaBlock(const uint8_t* data, size_t dataSize, const BlockMeta& block,
                          std::vector<uint8_t>& output) {
@@ -148,6 +210,8 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSi
     }
     
     if (useBlockDecompression) {
+        logInstallerInfo("[DECOMP] Block decompression enabled for " + task.targetPath +
+                         " " + BuildMemorySnapshotText());
         return decompressLzmaBlocks(task, sink, checksum, timing);
     }
     
@@ -264,61 +328,70 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
     if (threadPool && threadPool->getTotalThreadCount() > 1) {
         std::atomic<long long> decompressNs(0);
         std::atomic<long long> writeNs(0);
-        size_t totalThreads = threadPool->getTotalThreadCount();
-        size_t blocksPerThreadMin = 4;
-        size_t optimalThreads = (blocks.size() + blocksPerThreadMin - 1) / blocksPerThreadMin;
-        if (optimalThreads > totalThreads) optimalThreads = totalThreads;
-        if (optimalThreads < 1) optimalThreads = 1;
-        
-        size_t blocksPerThread = (blocks.size() + optimalThreads - 1) / optimalThreads;
-        std::vector<std::future<std::vector<uint8_t>>> futures;
-        
-        for (size_t t = 0; t < optimalThreads; ++t) {
-            size_t startBlock = t * blocksPerThread;
-            size_t endBlock = std::min(startBlock + blocksPerThread, blocks.size());
-            if (startBlock >= blocks.size()) break;
-            
-            futures.push_back(threadPool->enqueue([&task, &blocks, startBlock, endBlock, &decompressNs]() -> std::vector<uint8_t> {
-                std::vector<uint8_t> chunk;
-                for (size_t i = startBlock; i < endBlock; ++i) {
+        uint64_t estimatedBytesPerTask = 0;
+        for (const auto& block : blocks) {
+            uint64_t estimate =
+                static_cast<uint64_t>(block.compressedSize) +
+                (static_cast<uint64_t>(block.originalSize) * 2ull) +
+                kPerBlockOverheadBytes;
+            if (estimate > estimatedBytesPerTask) {
+                estimatedBytesPerTask = estimate;
+            }
+        }
+
+        const size_t maxInflight = ResolveBlockConcurrencyLimit(
+            threadPool->getTotalThreadCount(),
+            estimatedBytesPerTask,
+            task.targetPath);
+
+        for (size_t batchStart = 0; batchStart < blocks.size(); batchStart += maxInflight) {
+            const size_t batchEnd = std::min(batchStart + maxInflight, blocks.size());
+            std::vector<std::future<std::vector<uint8_t>>> futures;
+            futures.reserve(batchEnd - batchStart);
+
+            for (size_t i = batchStart; i < batchEnd; ++i) {
+                futures.push_back(threadPool->enqueue([&task, &blocks, i, &decompressNs]() -> std::vector<uint8_t> {
                     auto decompressStart = std::chrono::steady_clock::now();
                     std::vector<uint8_t> blockOut;
                     if (!decompressLzmaBlock(task.compressedData.data(), task.compressedData.size(), blocks[i], blockOut)) {
-                        throw std::runtime_error("LZMA block decompression failed");
+                        throw std::runtime_error(
+                            "LZMA block decompression failed block=" + std::to_string(i) +
+                            " compressedSize=" + std::to_string(blocks[i].compressedSize) +
+                            " originalSize=" + std::to_string(blocks[i].originalSize) +
+                            " " + BuildMemorySnapshotText());
                     }
                     auto decompressEnd = std::chrono::steady_clock::now();
                     decompressNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count());
-                    chunk.insert(chunk.end(), blockOut.begin(), blockOut.end());
-                }
-                return chunk;
-            }));
-        }
-        
-        for (auto& future : futures) {
-            std::vector<uint8_t> chunk;
-            try {
-                chunk = future.get();
-            } catch (const std::exception& e) {
-                logInstallerError(std::string("[DECOMP] LZMA block decompression failed: ") + e.what());
-                return false;
+                    return blockOut;
+                }));
             }
-            
-            if (!chunk.empty()) {
-                auto writeStart = std::chrono::steady_clock::now();
-                if (!sink.write(chunk.data(), chunk.size())) {
+
+            for (auto& future : futures) {
+                std::vector<uint8_t> chunk;
+                try {
+                    chunk = future.get();
+                } catch (const std::exception& e) {
+                    logInstallerError(std::string("[DECOMP] LZMA block decompression failed: ") + e.what());
                     return false;
                 }
-                auto writeEnd = std::chrono::steady_clock::now();
-                writeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count());
-                
-                if (checksum) {
-                    checksum->update(chunk.data(), chunk.size());
-                }
-                
-                totalOut += chunk.size();
-                if (task.originalSize > 0) {
-                    float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
-                    reportProgress(task.targetPath, std::string(), progress);
+
+                if (!chunk.empty()) {
+                    auto writeStart = std::chrono::steady_clock::now();
+                    if (!sink.write(chunk.data(), chunk.size())) {
+                        return false;
+                    }
+                    auto writeEnd = std::chrono::steady_clock::now();
+                    writeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count());
+
+                    if (checksum) {
+                        checksum->update(chunk.data(), chunk.size());
+                    }
+
+                    totalOut += chunk.size();
+                    if (task.originalSize > 0) {
+                        float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
+                        reportProgress(task.targetPath, std::string(), progress);
+                    }
                 }
             }
         }
@@ -333,7 +406,10 @@ bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, St
             std::vector<uint8_t> blockOut;
             if (!decompressLzmaBlock(task.compressedData.data(), task.compressedData.size(), blocks[i], blockOut)) {
                 logInstallerError(std::string("[DECOMP] Block ") + std::to_string(i) +
-                                  " LZMA decompression failed");
+                                  " LZMA decompression failed compressedSize=" +
+                                  std::to_string(blocks[i].compressedSize) +
+                                  " originalSize=" + std::to_string(blocks[i].originalSize) +
+                                  " " + BuildMemorySnapshotText());
                 return false;
             }
             auto decompressEnd = std::chrono::steady_clock::now();

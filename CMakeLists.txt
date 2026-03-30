@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+﻿cmake_minimum_required(VERSION 3.16)
 project(MultiThreadedInstaller VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -37,7 +37,7 @@ find_package(Threads REQUIRED)
 # Set paths for local third-party libraries
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/third_party")
 set(EXPECTED_LIBLZMA_SHA256 "229209de2a901b987543e1496a02d4874260c3b6f2f2f459bcd6fa2e7bc6f746")
-set(EXPECTED_DUILIB_SHA256 "6f7a28965d57daee3a213bd134ba2112f9f2cfdd842bef4b71ec028f8eb7bc54")
+set(EXPECTED_DUILIB_SHA256 "2cee3d1c6481c849a3dda169050a7f7dcc3a13c4160d55803c0f4890b127b3b1")
 set(EXPECTED_YAML_CPP_SHA256 "1cf6fa319e7529afb38e4ab55e3b0cca7a901f3ee3351b7f525fe682a5b5392e")
 
 # Try to find zstd (local installation first, then system)
@@ -495,3 +495,4 @@ message(STATUS "GUI support enabled for installer")
 message(STATUS "  - DuiLib library: ${DUILIB_LIB}")
 message(STATUS "  - Windows GUI libraries: ${GUI_WINDOWS_LIBS}")
 message(STATUS "  - Resources will be copied from: ${CMAKE_SOURCE_DIR}/resources")
+

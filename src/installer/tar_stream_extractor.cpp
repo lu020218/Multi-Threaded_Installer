@@ -1,11 +1,22 @@
 #include "installer/tar_stream_extractor.h"
 #include "installer/file_system_operator.h"
+#include "installer/installer_helpers.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <filesystem>
 #include <algorithm>
+#include <cwctype>
+#include <exception>
 #include <cstring>
 
 namespace MultiThreadedInstaller {
+
+namespace {
+
+constexpr uint32_t kMaxTarPathLength = 32 * 1024;
+constexpr uint32_t kMaxTarFileSize = 2u * 1024u * 1024u * 1024u;
+
+} // namespace
 
 TarStreamExtractor::TarStreamExtractor(const std::string& targetRoot)
     : targetRoot_(targetRoot)
@@ -35,6 +46,12 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                 }
                 
                 std::memcpy(&pathLength_, bufferData(), sizeof(uint32_t));
+                if (!validatePathLength(pathLength_)) {
+                    logInstallerError("[DECOMP][LegacyWrite] invalid path length=" +
+                                      std::to_string(pathLength_) +
+                                      " targetRoot=" + targetRoot_);
+                    return false;
+                }
                 consumeBytes(sizeof(uint32_t));
                 state_ = State::ReadFileSize;
                 break;
@@ -45,6 +62,13 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                 }
                 
                 std::memcpy(&fileSize_, bufferData(), sizeof(uint32_t));
+                if (!validateFileSize(fileSize_)) {
+                    logInstallerError("[DECOMP][LegacyWrite] invalid file size=" +
+                                      std::to_string(fileSize_) +
+                                      " currentPathLength=" + std::to_string(pathLength_) +
+                                      " targetRoot=" + targetRoot_);
+                    return false;
+                }
                 remaining_ = fileSize_;
                 consumeBytes(sizeof(uint32_t));
                 state_ = State::ReadPath;
@@ -81,6 +105,10 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                 size_t toWrite = std::min(static_cast<size_t>(remaining_), available);
                 currentFile_.write(reinterpret_cast<const char*>(bufferData()), static_cast<std::streamsize>(toWrite));
                 if (!currentFile_) {
+                    logInstallerError("[DECOMP][LegacyWrite] file write failed targetRoot=" + targetRoot_ +
+                                      " relativePath=" + currentPath_ +
+                                      " remaining=" + std::to_string(remaining_) +
+                                      " writeSize=" + std::to_string(toWrite));
                     return false;
                 }
                 
@@ -108,20 +136,76 @@ void TarStreamExtractor::flush() {
 }
 
 bool TarStreamExtractor::openCurrentFile() {
-    std::filesystem::path root = PathFromUtf8(targetRoot_);
-    std::filesystem::path rel = PathFromUtf8(currentPath_);
-    std::filesystem::path fullPath = root / rel;
-    
-    FileSystemOperator fsOperator;
-    std::filesystem::path parent = fullPath.parent_path();
-    if (!parent.empty()) {
-        if (!fsOperator.createDirectoryRecursive(Utf8FromPath(parent))) {
+    try {
+        std::filesystem::path root = PathFromUtf8(targetRoot_);
+        std::filesystem::path rel = PathFromUtf8(currentPath_);
+        if (!validateCurrentPath(rel)) {
+            logInstallerError("[DECOMP][LegacyWrite] rejected unsafe relative path currentPath=" +
+                              currentPath_ + " targetRoot=" + targetRoot_);
+            return false;
+        }
+        std::filesystem::path fullPath = root / rel;
+
+        FileSystemOperator fsOperator;
+        std::filesystem::path parent = fullPath.parent_path();
+        if (!parent.empty()) {
+            if (!fsOperator.createDirectoryRecursive(Utf8FromPath(parent))) {
+                logInstallerError("[DECOMP][LegacyWrite] failed to create parent directory path=" +
+                                  Utf8FromPath(parent) + " currentPath=" + currentPath_);
+                return false;
+            }
+        }
+
+        currentFile_.open(toLongPath(fullPath), std::ios::binary);
+        if (!currentFile_.is_open()) {
+            logInstallerError("[DECOMP][LegacyWrite] failed to open file path=" +
+                              Utf8FromPath(fullPath) + " currentPath=" + currentPath_);
+            return false;
+        }
+        return true;
+    } catch (const std::exception& e) {
+        logInstallerError(std::string("[DECOMP][LegacyWrite] exception opening current file currentPath=") +
+                          currentPath_ + " error=" + e.what());
+        return false;
+    } catch (...) {
+        logInstallerError(std::string("[DECOMP][LegacyWrite] unknown exception opening current file currentPath=") +
+                          currentPath_);
+        return false;
+    }
+}
+
+bool TarStreamExtractor::validatePathLength(uint32_t pathLength) const {
+    return pathLength > 0 && pathLength <= kMaxTarPathLength;
+}
+
+bool TarStreamExtractor::validateFileSize(uint32_t fileSize) const {
+    return fileSize <= kMaxTarFileSize;
+}
+
+bool TarStreamExtractor::validateCurrentPath(const std::filesystem::path& relativePath) const {
+    if (relativePath.empty() || relativePath.is_absolute()) {
+        return false;
+    }
+
+    const std::filesystem::path normalized = relativePath.lexically_normal();
+    if (normalized.empty() || normalized == ".") {
+        return false;
+    }
+
+#ifdef _WIN32
+    const std::wstring native = normalized.native();
+    if (native.size() >= 2 && std::iswalpha(native[0]) && native[1] == L':') {
+        return false;
+    }
+#endif
+
+    for (const auto& part : normalized) {
+        if (part == "..") {
             return false;
         }
     }
-    
-    currentFile_.open(fullPath, std::ios::binary);
-    return currentFile_.is_open();
+
+    return true;
 }
 
 bool TarStreamExtractor::consumeBytes(size_t count) {

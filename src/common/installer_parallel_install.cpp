@@ -6,6 +6,7 @@
 #include "installer/file_system_operator.h"
 #include "installer/installer_helpers.h"
 #include "installer/path_resolver.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 
 #include <algorithm>
@@ -19,6 +20,13 @@
 #include <unordered_set>
 #include <thread>
 #include <stdexcept>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace MultiThreadedInstaller {
 
@@ -62,6 +70,66 @@ struct FolderTask {
     double legacyReadSec = 0.0;
     DecompressionEngine::LegacyStageTiming legacyStage;
 };
+
+constexpr uint64_t kMemorySafetyReserveBytes = 512ull * 1024ull * 1024ull;
+constexpr uint64_t kPerBlockOverheadBytes = 8ull * 1024ull * 1024ull;
+
+uint64_t QueryAvailablePhysicalMemoryBytes() {
+#ifdef _WIN32
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status)) {
+        return static_cast<uint64_t>(status.ullAvailPhys);
+    }
+#endif
+    return 0;
+}
+
+std::string BuildMemorySnapshotText() {
+#ifdef _WIN32
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status)) {
+        return "availPhysMB=" + std::to_string(status.ullAvailPhys / (1024ull * 1024ull)) +
+               " totalPhysMB=" + std::to_string(status.ullTotalPhys / (1024ull * 1024ull)) +
+               " availPageMB=" + std::to_string(status.ullAvailPageFile / (1024ull * 1024ull)) +
+               " memoryLoad=" + std::to_string(status.dwMemoryLoad) + "%";
+    }
+#endif
+    return "memorySnapshot=unavailable";
+}
+
+size_t ResolveBlockConcurrencyLimit(size_t requestedLimit,
+                                    uint64_t estimatedBytesPerTask,
+                                    const std::string& contextLabel) {
+    if (requestedLimit <= 1 || estimatedBytesPerTask == 0) {
+        return requestedLimit <= 1 ? requestedLimit : 1;
+    }
+
+    const uint64_t availableBytes = QueryAvailablePhysicalMemoryBytes();
+    if (availableBytes == 0) {
+        return requestedLimit;
+    }
+
+    const uint64_t usableBytes =
+        availableBytes > kMemorySafetyReserveBytes ? (availableBytes - kMemorySafetyReserveBytes) : 0;
+    if (usableBytes == 0) {
+        logInstallerWarning("[InstallFlow][Memory] " + contextLabel +
+                            " forcing sequential execution due to low available memory.");
+        return 1;
+    }
+
+    size_t memoryLimited =
+        static_cast<size_t>(std::max<uint64_t>(1, usableBytes / estimatedBytesPerTask));
+    if (memoryLimited < requestedLimit) {
+        logInstallerInfo("[InstallFlow][Memory] " + contextLabel +
+                         " limiting block concurrency from " + std::to_string(requestedLimit) +
+                         " to " + std::to_string(memoryLimited) +
+                         " availableMB=" + std::to_string(availableBytes / (1024ull * 1024ull)) +
+                         " perTaskMB=" + std::to_string(estimatedBytesPerTask / (1024ull * 1024ull)));
+    }
+    return std::max<size_t>(1, std::min(requestedLimit, memoryLimited));
+}
 
 std::string BuildDisplayPath(const std::string& folderName, const std::string& relativePath) {
     if (relativePath.empty()) {
@@ -109,6 +177,8 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     auto threadPool = std::make_shared<ThreadPoolManager>(
         ResolveThreadPoolWorkerCount(threadCount > 0 ? static_cast<size_t>(threadCount) : 0)
     );
+    logInstallerInfo("[InstallFlow][Memory] parallel install start " + BuildMemorySnapshotText() +
+                     " threadCount=" + std::to_string(threadPool->getTotalThreadCount()));
 
     DecompressionEngine decompressor;
     if (progressCallback) {
@@ -478,120 +548,147 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         constexpr uint64_t kProgressChunkBytes = 8 * 1024 * 1024;
         if (threadPool && threadPool->getTotalThreadCount() > 1) {
             std::atomic<bool> blockFailed(false);
-            std::vector<std::future<bool>> futures;
-            futures.reserve(blocks.size());
+            uint64_t estimatedBytesPerTask = 0;
+            for (const auto& block : blocks) {
+                uint64_t estimate = block.compressedSize + (block.originalSize * 2ull) + kPerBlockOverheadBytes;
+                if (estimate > estimatedBytesPerTask) {
+                    estimatedBytesPerTask = estimate;
+                }
+            }
+            const size_t maxInflight = ResolveBlockConcurrencyLimit(
+                threadPool->getTotalThreadCount(),
+                estimatedBytesPerTask,
+                "indexed install for folder '" + folderTask.folderName + "'");
 
-            for (size_t i = 0; i < blocks.size(); ++i) {
+            for (size_t batchStart = 0; batchStart < blocks.size(); batchStart += maxInflight) {
                 if (isCancellationRequested()) {
                     return false;
                 }
-                futures.push_back(threadPool->enqueue([&, i]() -> bool {
-                    if (blockFailed.load() || isCancellationRequested()) {
-                        return true;
-                    }
 
-                    const auto& block = blocks[i];
-                    auto readStart = std::chrono::steady_clock::now();
-                    std::vector<uint8_t> compressedData = parser.readCompressedData(
-                        mapping.offset + block.compressedOffset,
-                        block.compressedSize
-                    );
-                    auto readEnd = std::chrono::steady_clock::now();
-                    readNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(readEnd - readStart).count());
+                const size_t batchEnd = std::min(batchStart + maxInflight, blocks.size());
+                std::vector<std::future<bool>> futures;
+                futures.reserve(batchEnd - batchStart);
+
+                for (size_t i = batchStart; i < batchEnd; ++i) {
+                    futures.push_back(threadPool->enqueue([&, i]() -> bool {
+                        if (blockFailed.load() || isCancellationRequested()) {
+                            return true;
+                        }
+
+                        const auto& block = blocks[i];
+                        auto readStart = std::chrono::steady_clock::now();
+                        std::vector<uint8_t> compressedData = parser.readCompressedData(
+                            mapping.offset + block.compressedOffset,
+                            block.compressedSize
+                        );
+                        auto readEnd = std::chrono::steady_clock::now();
+                        readNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(readEnd - readStart).count());
                     if (compressedData.empty()) {
                         logError("Indexed read failed for '" + folderTask.folderName +
-                                 "': block " + std::to_string(block.blockId));
+                                 "': block " + std::to_string(block.blockId) +
+                                 " compressedSize=" + std::to_string(block.compressedSize) +
+                                 " originalSize=" + std::to_string(block.originalSize) + " " +
+                                 BuildMemorySnapshotText());
                         blockFailed.store(true);
                         return false;
                     }
 
-                    auto decompressStart = std::chrono::steady_clock::now();
-                    std::vector<uint8_t> decompressed;
-                    if (!decompressor.decompressLzmaBlockData(compressedData, block.originalSize, decompressed)) {
-                        logError("Indexed decompress failed for '" + folderTask.folderName +
-                                 "': block " + std::to_string(block.blockId));
-                        blockFailed.store(true);
-                        return false;
-                    }
-                    auto decompressEnd = std::chrono::steady_clock::now();
-                    decompressNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count());
-
-                    uint64_t blockWritten = 0;
-                    uint64_t progressChunk = 0;
-                    auto writeStart = std::chrono::steady_clock::now();
-                    const auto& segs = segments[i];
-                    size_t currentFileIndex = static_cast<size_t>(-1);
-                    std::string currentDisplayName;
-                    std::fstream stream;
-                    std::unique_lock<std::mutex> fileLock;
-                    for (const auto& seg : segs) {
-                        if (seg.fileIndex != currentFileIndex) {
-                            if (stream.is_open()) {
-                                stream.close();
-                            }
-                            if (fileLock.owns_lock()) {
-                                fileLock.unlock();
-                            }
-                            currentFileIndex = seg.fileIndex;
-                            if (currentFileIndex < displayNames.size()) {
-                                currentDisplayName = displayNames[currentFileIndex];
-                            } else {
-                                currentDisplayName.clear();
-                            }
-                            FileWriter* writer = writerPtrs[currentFileIndex];
-                            fileLock = std::unique_lock<std::mutex>(writer->mutex);
-                            if (!openFileForWrite(writer->path, stream)) {
-                                logError("Indexed write failed for '" + folderTask.folderName +
-                                         "': block " + std::to_string(block.blockId));
-                                blockFailed.store(true);
-                                return false;
-                            }
-                        }
-                        stream.seekp(static_cast<std::streamoff>(seg.fileOffset));
-                        stream.write(reinterpret_cast<const char*>(decompressed.data() + seg.blockOffset),
-                                     static_cast<std::streamsize>(seg.size));
-                        if (!stream) {
-                            logError("Indexed write failed for '" + folderTask.folderName +
-                                     "': block " + std::to_string(block.blockId));
+                        auto decompressStart = std::chrono::steady_clock::now();
+                        std::vector<uint8_t> decompressed;
+                        if (!decompressor.decompressLzmaBlockData(compressedData, block.originalSize, decompressed)) {
+                            logError("Indexed decompress failed for '" + folderTask.folderName +
+                                     "': block " + std::to_string(block.blockId) +
+                                     " compressedSize=" + std::to_string(block.compressedSize) +
+                                     " originalSize=" + std::to_string(block.originalSize) + " " +
+                                     BuildMemorySnapshotText());
                             blockFailed.store(true);
                             return false;
                         }
-                        blockWritten += seg.size;
-                        progressChunk += seg.size;
-                        if (totalBytes > 0 && progressChunk >= kProgressChunkBytes && progressCallback) {
+                        auto decompressEnd = std::chrono::steady_clock::now();
+                        decompressNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count());
+
+                        uint64_t progressChunk = 0;
+                        auto writeStart = std::chrono::steady_clock::now();
+                        const auto& segs = segments[i];
+                        size_t currentFileIndex = static_cast<size_t>(-1);
+                        std::string currentDisplayName;
+                        std::fstream stream;
+                        std::unique_lock<std::mutex> fileLock;
+                        for (const auto& seg : segs) {
+                            if (seg.fileIndex != currentFileIndex) {
+                                if (stream.is_open()) {
+                                    stream.close();
+                                }
+                                if (fileLock.owns_lock()) {
+                                    fileLock.unlock();
+                                }
+                                currentFileIndex = seg.fileIndex;
+                                if (currentFileIndex < displayNames.size()) {
+                                    currentDisplayName = displayNames[currentFileIndex];
+                                } else {
+                                    currentDisplayName.clear();
+                                }
+                                FileWriter* writer = writerPtrs[currentFileIndex];
+                                fileLock = std::unique_lock<std::mutex>(writer->mutex);
+                                if (!openFileForWrite(writer->path, stream)) {
+                                    logError("Indexed write failed for '" + folderTask.folderName +
+                                             "': block " + std::to_string(block.blockId) +
+                                             " file=" + Utf8FromPath(writer->path) +
+                                             " fileOffset=" + std::to_string(seg.fileOffset) +
+                                             " segSize=" + std::to_string(seg.size) + " " +
+                                             BuildMemorySnapshotText());
+                                    blockFailed.store(true);
+                                    return false;
+                                }
+                            }
+                            stream.seekp(static_cast<std::streamoff>(seg.fileOffset));
+                            stream.write(reinterpret_cast<const char*>(decompressed.data() + seg.blockOffset),
+                                         static_cast<std::streamsize>(seg.size));
+                            if (!stream) {
+                                logError("Indexed write failed for '" + folderTask.folderName +
+                                         "': block " + std::to_string(block.blockId) +
+                                         " file=" + Utf8FromPath(writerPtrs[currentFileIndex]->path) +
+                                         " fileOffset=" + std::to_string(seg.fileOffset) +
+                                         " segSize=" + std::to_string(seg.size) + " " +
+                                         BuildMemorySnapshotText());
+                                blockFailed.store(true);
+                                return false;
+                            }
+                            progressChunk += seg.size;
+                            if (totalBytes > 0 && progressChunk >= kProgressChunkBytes && progressCallback) {
+                                uint64_t current = writtenBytes.fetch_add(progressChunk) + progressChunk;
+                                float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
+                                {
+                                    std::lock_guard<std::mutex> lock(progressMutex);
+                                    progressCallback(folderTask.folderName, currentDisplayName, progress);
+                                }
+                                progressChunk = 0;
+                            }
+                        }
+                        if (stream.is_open()) {
+                            stream.close();
+                        }
+                        if (fileLock.owns_lock()) {
+                            fileLock.unlock();
+                        }
+                        auto writeEnd = std::chrono::steady_clock::now();
+                        writeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count());
+
+                        if (totalBytes > 0 && progressChunk > 0 && progressCallback) {
                             uint64_t current = writtenBytes.fetch_add(progressChunk) + progressChunk;
                             float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
-                            {
-                                std::lock_guard<std::mutex> lock(progressMutex);
-                                progressCallback(folderTask.folderName, currentDisplayName, progress);
-                            }
-                            progressChunk = 0;
+                            std::lock_guard<std::mutex> lock(progressMutex);
+                            progressCallback(folderTask.folderName, currentDisplayName, progress);
                         }
-                    }
-                    if (stream.is_open()) {
-                        stream.close();
-                    }
-                    if (fileLock.owns_lock()) {
-                        fileLock.unlock();
-                    }
-                    auto writeEnd = std::chrono::steady_clock::now();
-                    writeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count());
 
-                    if (totalBytes > 0 && progressChunk > 0 && progressCallback) {
-                        uint64_t toAdd = progressChunk;
-                        uint64_t current = writtenBytes.fetch_add(toAdd) + toAdd;
-                        float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
-                        std::lock_guard<std::mutex> lock(progressMutex);
-                        progressCallback(folderTask.folderName, currentDisplayName, progress);
+                        return true;
+                    }));
+                }
+
+                for (auto& future : futures) {
+                    if (!future.get()) {
+                        return false;
                     }
-
-                    return true;
-                }));
-            }
-
-            for (auto& future : futures) {
-                if (!future.get()) {
-                    return false;
                 }
             }
         } else {
@@ -609,7 +706,10 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                 readNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(readEnd - readStart).count());
                 if (compressedData.empty()) {
                     logError("Indexed read failed for '" + folderTask.folderName +
-                             "': block " + std::to_string(block.blockId));
+                             "': block " + std::to_string(block.blockId) +
+                             " compressedSize=" + std::to_string(block.compressedSize) +
+                             " originalSize=" + std::to_string(block.originalSize) + " " +
+                             BuildMemorySnapshotText());
                     return false;
                 }
 
@@ -617,7 +717,10 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                 std::vector<uint8_t> decompressed;
                 if (!decompressor.decompressLzmaBlockData(compressedData, block.originalSize, decompressed)) {
                     logError("Indexed decompress failed for '" + folderTask.folderName +
-                             "': block " + std::to_string(block.blockId));
+                             "': block " + std::to_string(block.blockId) +
+                             " compressedSize=" + std::to_string(block.compressedSize) +
+                             " originalSize=" + std::to_string(block.originalSize) + " " +
+                             BuildMemorySnapshotText());
                     return false;
                 }
                 auto decompressEnd = std::chrono::steady_clock::now();
@@ -649,7 +752,11 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                         fileLock = std::unique_lock<std::mutex>(writer->mutex);
                         if (!openFileForWrite(writer->path, stream)) {
                             logError("Indexed write failed for '" + folderTask.folderName +
-                                     "': block " + std::to_string(block.blockId));
+                                     "': block " + std::to_string(block.blockId) +
+                                     " file=" + Utf8FromPath(writer->path) +
+                                     " fileOffset=" + std::to_string(seg.fileOffset) +
+                                     " segSize=" + std::to_string(seg.size) + " " +
+                                     BuildMemorySnapshotText());
                             return false;
                         }
                     }
@@ -658,7 +765,11 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                                  static_cast<std::streamsize>(seg.size));
                     if (!stream) {
                         logError("Indexed write failed for '" + folderTask.folderName +
-                                 "': block " + std::to_string(block.blockId));
+                                 "': block " + std::to_string(block.blockId) +
+                                 " file=" + Utf8FromPath(writerPtrs[currentFileIndex]->path) +
+                                 " fileOffset=" + std::to_string(seg.fileOffset) +
+                                 " segSize=" + std::to_string(seg.size) + " " +
+                                 BuildMemorySnapshotText());
                         return false;
                     }
                     blockWritten += seg.size;

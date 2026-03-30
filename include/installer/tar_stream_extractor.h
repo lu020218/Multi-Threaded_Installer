@@ -34,6 +34,9 @@ private:
     std::string currentPath_;
     std::ofstream currentFile_;
     
+    bool validatePathLength(uint32_t pathLength) const;
+    bool validateFileSize(uint32_t fileSize) const;
+    bool validateCurrentPath(const std::filesystem::path& relativePath) const;
     bool openCurrentFile();
     bool consumeBytes(size_t count);
     const uint8_t* bufferData() const;

@@ -1,480 +1,270 @@
 #include "installer/decompression_engine.h"
-#include "installer/tar_stream_extractor.h"
+
 #include "common/installer_logger.h"
-#ifdef LibLZMA_FOUND
-#include <lzma.h>
-#endif
+#include "installer/tar_stream_extractor.h"
 #ifdef ZSTD_FOUND
 #include <zstd.h>
 #endif
-#include <iostream>
-#include <vector>
-#include <future>
-#include <algorithm>
-#include <cstring>
-#include <cstdint>
-#include <stdexcept>
-#include <chrono>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <Windows.h>
-#undef min
-#undef max
-#endif
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <sstream>
+#include <thread>
+#include <vector>
 
 namespace MultiThreadedInstaller {
 
 namespace {
 
-struct BlockMeta {
-    uint32_t offset;
-    uint32_t compressedSize;
-    uint32_t originalSize;
-    uint32_t checksum;
-};
-
-constexpr uint64_t kMemorySafetyReserveBytes = 512ull * 1024ull * 1024ull;
-constexpr uint64_t kPerBlockOverheadBytes = 8ull * 1024ull * 1024ull;
-
-uint64_t QueryAvailablePhysicalMemoryBytes() {
-#ifdef _WIN32
-    MEMORYSTATUSEX status{};
-    status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status)) {
-        return static_cast<uint64_t>(status.ullAvailPhys);
-    }
-#endif
-    return 0;
-}
-
-std::string BuildMemorySnapshotText() {
-#ifdef _WIN32
-    MEMORYSTATUSEX status{};
-    status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status)) {
-        return "availPhysMB=" + std::to_string(status.ullAvailPhys / (1024ull * 1024ull)) +
-               " totalPhysMB=" + std::to_string(status.ullTotalPhys / (1024ull * 1024ull)) +
-               " availPageMB=" + std::to_string(status.ullAvailPageFile / (1024ull * 1024ull)) +
-               " memoryLoad=" + std::to_string(status.dwMemoryLoad) + "%";
-    }
-#endif
-    return "memorySnapshot=unavailable";
-}
-
-size_t ResolveBlockConcurrencyLimit(size_t requestedLimit,
-                                    uint64_t estimatedBytesPerTask,
-                                    const std::string& targetPath) {
-    if (requestedLimit <= 1 || estimatedBytesPerTask == 0) {
-        return requestedLimit <= 1 ? requestedLimit : 1;
-    }
-
-    const uint64_t availableBytes = QueryAvailablePhysicalMemoryBytes();
-    if (availableBytes == 0) {
-        return requestedLimit;
-    }
-
-    const uint64_t usableBytes =
-        availableBytes > kMemorySafetyReserveBytes ? (availableBytes - kMemorySafetyReserveBytes) : 0;
-    if (usableBytes == 0) {
-        logInstallerWarning("[DECOMP][Memory] forcing sequential block decompression for " +
-                            targetPath + " due to low available memory. " +
-                            BuildMemorySnapshotText());
-        return 1;
-    }
-
-    size_t memoryLimited =
-        static_cast<size_t>(std::max<uint64_t>(1, usableBytes / estimatedBytesPerTask));
-    if (memoryLimited < requestedLimit) {
-        logInstallerInfo("[DECOMP][Memory] limiting block decompression concurrency for " +
-                         targetPath + " from " + std::to_string(requestedLimit) +
-                         " to " + std::to_string(memoryLimited) +
-                         " availableMB=" + std::to_string(availableBytes / (1024ull * 1024ull)) +
-                         " perTaskMB=" + std::to_string(estimatedBytesPerTask / (1024ull * 1024ull)));
-    }
-    return std::max<size_t>(1, std::min(requestedLimit, memoryLimited));
-}
-
-bool decompressLzmaBlock(const uint8_t* data, size_t dataSize, const BlockMeta& block,
-                         std::vector<uint8_t>& output) {
 #ifdef LibLZMA_FOUND
-    (void)dataSize;
-    
-    lzma_stream stream = LZMA_STREAM_INIT;
-    lzma_ret ret = lzma_auto_decoder(&stream, UINT64_MAX, 0);
-    
-    if (ret != LZMA_OK) {
-        return false;
-    }
-    
-    stream.next_in = data + block.offset;
-    stream.avail_in = block.compressedSize;
-    output.resize(block.originalSize);
-    stream.next_out = output.data();
-    stream.avail_out = output.size();
-    
-    ret = lzma_code(&stream, LZMA_FINISH);
-    lzma_end(&stream);
-    
-    return ret == LZMA_STREAM_END && stream.avail_out == 0;
-#else
-    (void)data;
-    (void)dataSize;
-    (void)block;
-    (void)output;
-    return false;
-#endif
+constexpr uint64_t kMinMultiThreadedLzmaPayloadSize = 64u * 1024u * 1024u;
+constexpr uint64_t kMinDecoderMemlimitThreading = 256ull * 1024ull * 1024ull;
+constexpr uint64_t kMaxDecoderMemlimitThreading = 768ull * 1024ull * 1024ull;
+constexpr uint64_t kDecoderMemlimitStop = 2ull * 1024ull * 1024ull * 1024ull;
+
+uint32_t ComputeRecommendedDecoderThreads(unsigned int hardwareThreads,
+                                         unsigned int schedulerConcurrencyHint) {
+    const unsigned int safeHardwareThreads = (std::max)(1u, hardwareThreads);
+    const unsigned int safeSchedulerConcurrency = (std::max)(1u, schedulerConcurrencyHint);
+    const unsigned int perPayloadBudget =
+        (std::max)(1u, safeHardwareThreads / safeSchedulerConcurrency);
+    return (std::min)(4u, perPayloadBudget);
 }
+
+std::string BuildMultiThreadedDecoderDecision(const LzmaLoader& loader,
+                                              const DecompressionTask& task,
+                                              unsigned int threadCount,
+                                              uint32_t recommendedThreads,
+                                              bool* shouldUseMt) {
+    std::ostringstream oss;
+    const bool loaderReady = loader.isLoaded();
+    const bool mtSupported = loader.supportsMultiThreadedDecompression();
+    const bool hasEnoughThreads = recommendedThreads >= 2;
+    const bool payloadLargeEnough = task.originalSize >= kMinMultiThreadedLzmaPayloadSize;
+    *shouldUseMt = loaderReady && mtSupported && hasEnoughThreads && payloadLargeEnough;
+
+    oss << "[DECOMP] XZ decoder decision folder=" << task.folderName
+        << " original_size=" << task.originalSize
+        << " compressed_size=" << task.compressedData.size()
+        << " hw_threads=" << threadCount
+        << " scheduler_concurrency=" << task.schedulerConcurrencyHint
+        << " recommended_threads=" << recommendedThreads
+        << " loader_ready=" << (loaderReady ? "true" : "false")
+        << " mt_supported=" << (mtSupported ? "true" : "false")
+        << " payload_large_enough=" << (payloadLargeEnough ? "true" : "false")
+        << " use_mt=" << (*shouldUseMt ? "true" : "false");
+
+    if (!*shouldUseMt) {
+        oss << " reason=";
+        if (!loaderReady) {
+            oss << "loader_unavailable";
+        } else if (!mtSupported) {
+            oss << "decoder_mt_not_supported";
+        } else if (!hasEnoughThreads) {
+            oss << "insufficient_thread_budget";
+        } else {
+            oss << "payload_below_threshold";
+        }
+    }
+
+    return oss.str();
+}
+
+lzma_ret InitializeLzmaDecoder(const LzmaLoader& loader,
+                               lzma_stream& stream,
+                               const DecompressionTask& task) {
+    if (!loader.isLoaded()) {
+        return LZMA_PROG_ERROR;
+    }
+
+    const unsigned int threadCount = std::thread::hardware_concurrency();
+    const uint32_t recommendedThreads =
+        ComputeRecommendedDecoderThreads(threadCount, task.schedulerConcurrencyHint);
+    bool shouldUseMt = false;
+    logInstallerInfo(BuildMultiThreadedDecoderDecision(
+        loader, task, threadCount, recommendedThreads, &shouldUseMt));
+
+    if (shouldUseMt) {
+        lzma_mt options{};
+        options.flags = 0;
+        options.threads = recommendedThreads;
+        options.timeout = 300;
+        options.memlimit_threading = (std::min)(
+            kMaxDecoderMemlimitThreading,
+            (std::max)(kMinDecoderMemlimitThreading,
+                       static_cast<uint64_t>(task.originalSize) / 2ull));
+        options.memlimit_stop = kDecoderMemlimitStop;
+        logInstallerInfo("[DECOMP] Using multi-threaded XZ decoder for folder=" + task.folderName +
+                         " threads=" + std::to_string(options.threads) +
+                         " memlimit_threading=" + std::to_string(options.memlimit_threading) +
+                         " memlimit_stop=" + std::to_string(options.memlimit_stop));
+        lzma_ret ret = loader.lzma_stream_decoder_mt_ptr(&stream, &options);
+        if (ret == LZMA_OK) {
+            return ret;
+        }
+        logInstallerWarning("[DECOMP] Falling back to single-threaded XZ decoder for folder=" +
+                            task.folderName + " ret=" + std::to_string(ret));
+    }
+
+    logInstallerInfo("[DECOMP] Using single-threaded XZ decoder for folder=" + task.folderName);
+    return loader.lzma_auto_decoder_ptr(&stream, UINT64_MAX, 0);
+}
+#endif
 
 } // namespace
 
 DecompressionEngine::DecompressionEngine() = default;
-
 DecompressionEngine::~DecompressionEngine() = default;
 
-bool DecompressionEngine::decompressFolder(const DecompressionTask& task, LegacyStageTiming* timing) {
+bool DecompressionEngine::decompressFolder(const DecompressionTask& task, DecompressionTiming* timing) {
     TarStreamExtractor extractor(task.targetPath);
     Crc32Stream checksum;
     return decompressToStream(task, extractor, &checksum, timing);
 }
 
-void DecompressionEngine::setThreadPool(std::shared_ptr<ThreadPoolManager> threadPool) {
-    this->threadPool = threadPool;
+bool DecompressionEngine::decompressToStream(const DecompressionTask& task,
+                                             StreamSink& sink,
+                                             Crc32Stream* checksum,
+                                             DecompressionTiming* timing) {
+    switch (task.algorithm) {
+    case CompressionAlgorithm::LZMA2_XZ:
+        return decompressLzma(task, sink, checksum, timing);
+    case CompressionAlgorithm::ZSTD:
+        return decompressZstd(task, sink, checksum, timing);
+    default:
+        logInstallerError("[DECOMP] Unsupported payload compression algorithm for folder: " +
+                          task.folderName);
+        return false;
+    }
 }
 
 void DecompressionEngine::registerProgressCallback(ProgressCallback callback) {
-    this->progressCallback = callback;
+    progressCallback_ = std::move(callback);
 }
 
-bool DecompressionEngine::decompressToStream(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
-                                             LegacyStageTiming* timing) {
-    if (task.algorithm == CompressionAlgorithm::LZMA_HIGH) {
-        return decompressLzma(task, sink, checksum, timing);
-    }
-    if (task.algorithm == CompressionAlgorithm::ZSTD) {
-        return decompressZstd(task, sink, checksum, timing);
-    }
-    logInstallerError(std::string("[DECOMP] Unsupported compression algorithm for ") +
-                      task.targetPath);
-    return false;
-}
-
-bool DecompressionEngine::decompressLzmaBlockData(const std::vector<uint8_t>& compressedData,
-                                                  size_t originalSize,
-                                                  std::vector<uint8_t>& output) {
+bool DecompressionEngine::decompressLzma(const DecompressionTask& task,
+                                         StreamSink& sink,
+                                         Crc32Stream* checksum,
+                                         DecompressionTiming* timing) {
 #ifdef LibLZMA_FOUND
-    lzma_stream stream = LZMA_STREAM_INIT;
-    lzma_ret ret = lzma_auto_decoder(&stream, UINT64_MAX, 0);
-    
-    if (ret != LZMA_OK) {
+    if (!lzmaLoader_.isLoaded()) {
+        logInstallerError("[DECOMP] LZMA loader is not available for folder: " + task.folderName);
         return false;
     }
-    
-    stream.next_in = compressedData.data();
-    stream.avail_in = compressedData.size();
-    output.resize(originalSize);
-    stream.next_out = output.data();
-    stream.avail_out = output.size();
-    
-    ret = lzma_code(&stream, LZMA_FINISH);
-    lzma_end(&stream);
-    
-    return ret == LZMA_STREAM_END && stream.avail_out == 0;
-#else
-    (void)compressedData;
-    (void)originalSize;
-    (void)output;
-    return false;
-#endif
-}
-
-bool DecompressionEngine::decompressLzma(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
-                                         LegacyStageTiming* timing) {
-#ifdef LibLZMA_FOUND
     if (task.compressedData.empty()) {
-        logInstallerError("[DECOMP] No compressed data provided for LZMA decompression.");
+        logInstallerError("[DECOMP] No XZ/LZMA2 payload provided for folder: " + task.folderName);
         return false;
     }
-    
-    reportProgress(task.targetPath, std::string(), 0.0f);
-    
-    bool useBlockDecompression = false;
-    if (task.compressedData.size() >= sizeof(uint32_t)) {
-        uint32_t firstWord = *reinterpret_cast<const uint32_t*>(task.compressedData.data());
-        size_t expectedMetadataSize = sizeof(uint32_t) + static_cast<size_t>(firstWord) * sizeof(BlockMeta);
-        if (firstWord > 0 && firstWord < 100000 && expectedMetadataSize < task.compressedData.size()) {
-            useBlockDecompression = true;
-        }
-    }
-    
-    if (useBlockDecompression) {
-        logInstallerInfo("[DECOMP] Block decompression enabled for " + task.targetPath +
-                         " " + BuildMemorySnapshotText());
-        return decompressLzmaBlocks(task, sink, checksum, timing);
-    }
-    
+
+    reportProgress(task.folderName, std::string(), 0.0f);
+
     lzma_stream stream = LZMA_STREAM_INIT;
-    lzma_ret ret = lzma_auto_decoder(&stream, UINT64_MAX, 0);
-    
+    lzma_ret ret = InitializeLzmaDecoder(lzmaLoader_, stream, task);
     if (ret != LZMA_OK) {
-        logInstallerError(std::string("[DECOMP] LZMA decoder init failed: ") + std::to_string(ret));
+        logInstallerError("[DECOMP] Failed to initialize XZ decoder for folder '" +
+                          task.folderName + "': " + std::to_string(ret));
         return false;
     }
-    
+
     stream.next_in = task.compressedData.data();
     stream.avail_in = task.compressedData.size();
-    
+
     std::vector<uint8_t> outBuffer(64 * 1024);
     size_t totalOut = 0;
-    
+
     while (true) {
         stream.next_out = outBuffer.data();
         stream.avail_out = outBuffer.size();
-        
-        auto decompressStart = std::chrono::steady_clock::now();
-        ret = lzma_code(&stream, LZMA_FINISH);
-        auto decompressEnd = std::chrono::steady_clock::now();
+
+        const auto decompressStart = std::chrono::steady_clock::now();
+        ret = lzmaLoader_.lzma_code_ptr(&stream, LZMA_FINISH);
+        const auto decompressEnd = std::chrono::steady_clock::now();
         if (timing) {
-            timing->decompressNs += std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count();
+            timing->decompressNs +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count();
         }
-        
-        size_t produced = outBuffer.size() - stream.avail_out;
+
+        const size_t produced = outBuffer.size() - stream.avail_out;
         if (produced > 0) {
-            auto writeStart = std::chrono::steady_clock::now();
+            const auto writeStart = std::chrono::steady_clock::now();
             if (!sink.write(outBuffer.data(), produced)) {
-                lzma_end(&stream);
+                lzmaLoader_.lzma_end_ptr(&stream);
                 return false;
             }
-            auto writeEnd = std::chrono::steady_clock::now();
+            const auto writeEnd = std::chrono::steady_clock::now();
             if (timing) {
-                timing->writeNs += std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count();
+                timing->writeNs +=
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count();
             }
-            
+
             if (checksum) {
                 checksum->update(outBuffer.data(), produced);
             }
-            
+
             totalOut += produced;
             if (task.originalSize > 0) {
-                float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
-                reportProgress(task.targetPath, std::string(), progress);
+                const float progress = (std::min)(
+                    0.99f,
+                    static_cast<float>(totalOut) / static_cast<float>(task.originalSize));
+                reportProgress(task.folderName, std::string(), progress);
             }
         }
-        
+
         if (ret == LZMA_STREAM_END) {
             break;
         }
         if (ret != LZMA_OK) {
-            logInstallerError(std::string("[DECOMP] LZMA decompression failed: ") + std::to_string(ret));
-            lzma_end(&stream);
+            logInstallerError("[DECOMP] XZ decompression failed for folder '" + task.folderName +
+                              "': " + std::to_string(ret));
+            lzmaLoader_.lzma_end_ptr(&stream);
             return false;
         }
     }
-    
-    lzma_end(&stream);
+
+    lzmaLoader_.lzma_end_ptr(&stream);
     sink.flush();
-    
+
     if (checksum && checksum->finalize() != task.expectedChecksum) {
-        std::cerr << "Checksum verification failed for: " << task.targetPath << std::endl;
+        logInstallerError("[DECOMP] Payload checksum verification failed for folder: " +
+                          task.folderName);
         return false;
     }
-    
-    reportProgress(task.targetPath, std::string(), 1.0f);
+
+    reportProgress(task.folderName, std::string(), 1.0f);
     return true;
 #else
     (void)task;
     (void)sink;
     (void)checksum;
-    logInstallerError("[DECOMP] LZMA support not compiled in.");
+    (void)timing;
+    logInstallerError("[DECOMP] XZ/LZMA2 support not compiled in.");
     return false;
 #endif
 }
 
-bool DecompressionEngine::decompressLzmaBlocks(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
-                                               LegacyStageTiming* timing) {
-#ifdef LibLZMA_FOUND
-    if (task.compressedData.size() < sizeof(uint32_t)) {
-        logInstallerError("[DECOMP] Invalid block format: cannot read block count.");
-        return false;
-    }
-    
-    size_t offset = 0;
-    uint32_t blockCount = *reinterpret_cast<const uint32_t*>(task.compressedData.data() + offset);
-    offset += sizeof(uint32_t);
-    
-    if (offset + blockCount * sizeof(BlockMeta) > task.compressedData.size()) {
-        logInstallerError("[DECOMP] Invalid block format: cannot read block metadata.");
-        return false;
-    }
-    
-    std::vector<BlockMeta> blocks(blockCount);
-    std::memcpy(blocks.data(), task.compressedData.data() + offset, blockCount * sizeof(BlockMeta));
-    
-    for (size_t i = 0; i < blocks.size(); ++i) {
-        const auto& block = blocks[i];
-        if (block.offset + block.compressedSize > task.compressedData.size()) {
-            logInstallerError(std::string("[DECOMP] Invalid block ") + std::to_string(i) +
-                              ": offset " + std::to_string(block.offset) +
-                              " + size " + std::to_string(block.compressedSize) +
-                              " exceeds data size " + std::to_string(task.compressedData.size()));
-            return false;
-        }
-    }
-    
-    size_t totalOut = 0;
-    
-    if (threadPool && threadPool->getTotalThreadCount() > 1) {
-        std::atomic<long long> decompressNs(0);
-        std::atomic<long long> writeNs(0);
-        uint64_t estimatedBytesPerTask = 0;
-        for (const auto& block : blocks) {
-            uint64_t estimate =
-                static_cast<uint64_t>(block.compressedSize) +
-                (static_cast<uint64_t>(block.originalSize) * 2ull) +
-                kPerBlockOverheadBytes;
-            if (estimate > estimatedBytesPerTask) {
-                estimatedBytesPerTask = estimate;
-            }
-        }
-
-        const size_t maxInflight = ResolveBlockConcurrencyLimit(
-            threadPool->getTotalThreadCount(),
-            estimatedBytesPerTask,
-            task.targetPath);
-
-        for (size_t batchStart = 0; batchStart < blocks.size(); batchStart += maxInflight) {
-            const size_t batchEnd = std::min(batchStart + maxInflight, blocks.size());
-            std::vector<std::future<std::vector<uint8_t>>> futures;
-            futures.reserve(batchEnd - batchStart);
-
-            for (size_t i = batchStart; i < batchEnd; ++i) {
-                futures.push_back(threadPool->enqueue([&task, &blocks, i, &decompressNs]() -> std::vector<uint8_t> {
-                    auto decompressStart = std::chrono::steady_clock::now();
-                    std::vector<uint8_t> blockOut;
-                    if (!decompressLzmaBlock(task.compressedData.data(), task.compressedData.size(), blocks[i], blockOut)) {
-                        throw std::runtime_error(
-                            "LZMA block decompression failed block=" + std::to_string(i) +
-                            " compressedSize=" + std::to_string(blocks[i].compressedSize) +
-                            " originalSize=" + std::to_string(blocks[i].originalSize) +
-                            " " + BuildMemorySnapshotText());
-                    }
-                    auto decompressEnd = std::chrono::steady_clock::now();
-                    decompressNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count());
-                    return blockOut;
-                }));
-            }
-
-            for (auto& future : futures) {
-                std::vector<uint8_t> chunk;
-                try {
-                    chunk = future.get();
-                } catch (const std::exception& e) {
-                    logInstallerError(std::string("[DECOMP] LZMA block decompression failed: ") + e.what());
-                    return false;
-                }
-
-                if (!chunk.empty()) {
-                    auto writeStart = std::chrono::steady_clock::now();
-                    if (!sink.write(chunk.data(), chunk.size())) {
-                        return false;
-                    }
-                    auto writeEnd = std::chrono::steady_clock::now();
-                    writeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count());
-
-                    if (checksum) {
-                        checksum->update(chunk.data(), chunk.size());
-                    }
-
-                    totalOut += chunk.size();
-                    if (task.originalSize > 0) {
-                        float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
-                        reportProgress(task.targetPath, std::string(), progress);
-                    }
-                }
-            }
-        }
-        
-        if (timing) {
-            timing->decompressNs += decompressNs.load();
-            timing->writeNs += writeNs.load();
-        }
-    } else {
-        for (size_t i = 0; i < blocks.size(); ++i) {
-            auto decompressStart = std::chrono::steady_clock::now();
-            std::vector<uint8_t> blockOut;
-            if (!decompressLzmaBlock(task.compressedData.data(), task.compressedData.size(), blocks[i], blockOut)) {
-                logInstallerError(std::string("[DECOMP] Block ") + std::to_string(i) +
-                                  " LZMA decompression failed compressedSize=" +
-                                  std::to_string(blocks[i].compressedSize) +
-                                  " originalSize=" + std::to_string(blocks[i].originalSize) +
-                                  " " + BuildMemorySnapshotText());
-                return false;
-            }
-            auto decompressEnd = std::chrono::steady_clock::now();
-            if (timing) {
-                timing->decompressNs += std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count();
-            }
-            
-            auto writeStart = std::chrono::steady_clock::now();
-            if (!sink.write(blockOut.data(), blockOut.size())) {
-                return false;
-            }
-            auto writeEnd = std::chrono::steady_clock::now();
-            if (timing) {
-                timing->writeNs += std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count();
-            }
-            
-            if (checksum) {
-                checksum->update(blockOut.data(), blockOut.size());
-            }
-            
-            totalOut += blockOut.size();
-            if (task.originalSize > 0) {
-                float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
-                reportProgress(task.targetPath, std::string(), progress);
-            }
-        }
-    }
-    
-    sink.flush();
-    
-    if (checksum && checksum->finalize() != task.expectedChecksum) {
-        logInstallerError(std::string("[DECOMP] Checksum verification failed for: ") + task.targetPath);
-        return false;
-    }
-    
-    reportProgress(task.targetPath, std::string(), 1.0f);
-    return true;
-#else
-    (void)task;
-    (void)sink;
-    (void)checksum;
-    logInstallerError("[DECOMP] LZMA support not compiled in.");
-    return false;
-#endif
-}
-
-bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSink& sink, Crc32Stream* checksum,
-                                         LegacyStageTiming* timing) {
+bool DecompressionEngine::decompressZstd(const DecompressionTask& task,
+                                         StreamSink& sink,
+                                         Crc32Stream* checksum,
+                                         DecompressionTiming* timing) {
 #ifdef ZSTD_FOUND
     if (task.compressedData.empty()) {
-        logInstallerError("[DECOMP] No compressed data provided for ZSTD decompression.");
+        logInstallerError("[DECOMP] No ZSTD payload provided for folder: " + task.folderName);
         return false;
     }
 
-    reportProgress(task.targetPath, std::string(), 0.0f);
+    reportProgress(task.folderName, std::string(), 0.0f);
 
     ZSTD_DStream* stream = ZSTD_createDStream();
     if (!stream) {
-        logInstallerError("[DECOMP] ZSTD stream allocation failed.");
+        logInstallerError("[DECOMP] ZSTD stream allocation failed for folder: " + task.folderName);
         return false;
     }
 
     size_t ret = ZSTD_initDStream(stream);
     if (ZSTD_isError(ret)) {
-        logInstallerError(std::string("[DECOMP] ZSTD decoder init failed: ") + ZSTD_getErrorName(ret));
+        logInstallerError(std::string("[DECOMP] ZSTD decoder init failed for folder '") +
+                          task.folderName + "': " + ZSTD_getErrorName(ret));
         ZSTD_freeDStream(stream);
         return false;
     }
@@ -486,29 +276,31 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSi
     while (input.pos < input.size) {
         ZSTD_outBuffer output{outBuffer.data(), outBuffer.size(), 0};
 
-        auto decompressStart = std::chrono::steady_clock::now();
+        const auto decompressStart = std::chrono::steady_clock::now();
         ret = ZSTD_decompressStream(stream, &output, &input);
-        auto decompressEnd = std::chrono::steady_clock::now();
+        const auto decompressEnd = std::chrono::steady_clock::now();
         if (timing) {
             timing->decompressNs +=
                 std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count();
         }
 
         if (ZSTD_isError(ret)) {
-            logInstallerError(std::string("[DECOMP] ZSTD decompression failed: ") + ZSTD_getErrorName(ret));
+            logInstallerError(std::string("[DECOMP] ZSTD decompression failed for folder '") +
+                              task.folderName + "': " + ZSTD_getErrorName(ret));
             ZSTD_freeDStream(stream);
             return false;
         }
 
         if (output.pos > 0) {
-            auto writeStart = std::chrono::steady_clock::now();
+            const auto writeStart = std::chrono::steady_clock::now();
             if (!sink.write(outBuffer.data(), output.pos)) {
                 ZSTD_freeDStream(stream);
                 return false;
             }
-            auto writeEnd = std::chrono::steady_clock::now();
+            const auto writeEnd = std::chrono::steady_clock::now();
             if (timing) {
-                timing->writeNs += std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count();
+                timing->writeNs +=
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count();
             }
 
             if (checksum) {
@@ -517,8 +309,10 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSi
 
             totalOut += output.pos;
             if (task.originalSize > 0) {
-                float progress = std::min(0.99f, static_cast<float>(totalOut) / task.originalSize);
-                reportProgress(task.targetPath, std::string(), progress);
+                const float progress = (std::min)(
+                    0.99f,
+                    static_cast<float>(totalOut) / static_cast<float>(task.originalSize));
+                reportProgress(task.folderName, std::string(), progress);
             }
         }
     }
@@ -527,11 +321,12 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSi
     sink.flush();
 
     if (checksum && checksum->finalize() != task.expectedChecksum) {
-        logInstallerError(std::string("[DECOMP] Checksum verification failed for: ") + task.targetPath);
+        logInstallerError("[DECOMP] Payload checksum verification failed for folder: " +
+                          task.folderName);
         return false;
     }
 
-    reportProgress(task.targetPath, std::string(), 1.0f);
+    reportProgress(task.folderName, std::string(), 1.0f);
     return true;
 #else
     (void)task;
@@ -543,9 +338,11 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task, StreamSi
 #endif
 }
 
-void DecompressionEngine::reportProgress(const std::string& folderName, const std::string& currentFile, float progress) {
-    if (progressCallback) {
-        progressCallback(folderName, currentFile, progress);
+void DecompressionEngine::reportProgress(const std::string& folderName,
+                                         const std::string& currentFile,
+                                         float progress) {
+    if (progressCallback_) {
+        progressCallback_(folderName, currentFile, progress);
     }
 }
 

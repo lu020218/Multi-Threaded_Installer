@@ -22,6 +22,7 @@ public:
     // LZMA function pointers
     typedef lzma_ret (*lzma_easy_encoder_func)(lzma_stream *strm, uint32_t preset, lzma_check check);
     typedef lzma_ret (*lzma_stream_decoder_func)(lzma_stream *strm, uint64_t memlimit, uint32_t flags);
+    typedef lzma_ret (*lzma_stream_decoder_mt_func)(lzma_stream *strm, const lzma_mt *options);
     typedef lzma_ret (*lzma_auto_decoder_func)(lzma_stream *strm, uint64_t memlimit, uint32_t flags);
     typedef lzma_ret (*lzma_alone_decoder_func)(lzma_stream *strm, uint64_t memlimit);
     typedef lzma_ret (*lzma_code_func)(lzma_stream *strm, lzma_action action);
@@ -36,15 +37,12 @@ public:
     typedef lzma_ret (*lzma_stream_encoder_mt_func)(lzma_stream *strm, const lzma_mt *options);
     typedef uint64_t (*lzma_stream_encoder_mt_memusage_func)(const lzma_mt *options);
     
-    // Block compression support
-    typedef lzma_ret (*lzma_block_encoder_func)(lzma_stream *strm, lzma_block *block);
-    typedef lzma_ret (*lzma_block_decoder_func)(lzma_stream *strm, lzma_block *block);
-    
     // Compression function pointers
     lzma_easy_encoder_func lzma_easy_encoder_ptr;
     
     // Decompression function pointers
     lzma_stream_decoder_func lzma_stream_decoder_ptr;
+    lzma_stream_decoder_mt_func lzma_stream_decoder_mt_ptr;
     lzma_auto_decoder_func lzma_auto_decoder_ptr;
     lzma_alone_decoder_func lzma_alone_decoder_ptr;
     lzma_stream_buffer_decode_func lzma_stream_buffer_decode_ptr;
@@ -53,10 +51,6 @@ public:
     lzma_stream_encoder_mt_func lzma_stream_encoder_mt_ptr;
     lzma_stream_encoder_mt_memusage_func lzma_stream_encoder_mt_memusage_ptr;
     
-    // Block compression function pointers (optional)
-    lzma_block_encoder_func lzma_block_encoder_ptr;
-    lzma_block_decoder_func lzma_block_decoder_ptr;
-    
     // Common function pointers
     lzma_code_func lzma_code_ptr;
     lzma_end_func lzma_end_ptr;
@@ -64,7 +58,7 @@ public:
     
     // Capability flags
     bool supportsMultiThreadedCompression() const { return lzma_stream_encoder_mt_ptr != nullptr; }
-    bool supportsBlockCompression() const { return lzma_block_encoder_ptr != nullptr && lzma_block_decoder_ptr != nullptr; }
+    bool supportsMultiThreadedDecompression() const { return lzma_stream_decoder_mt_ptr != nullptr; }
     
     // Get LZMA version
     struct Version {

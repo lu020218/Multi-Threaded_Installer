@@ -17,7 +17,7 @@ namespace {
 }  // namespace
 
 bool IsSupportedMetadataVersion(uint32_t version) {
-    return version >= 5 && version <= Constants::VERSION;
+    return version == Constants::VERSION;
 }
 
 bool ReadString(const std::vector<uint8_t>& data,

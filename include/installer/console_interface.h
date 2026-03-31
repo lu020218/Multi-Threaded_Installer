@@ -33,7 +33,7 @@ public:
         std::string inputPath;
         std::string outputPath;
         std::string dataPackagePath;
-        CompressionAlgorithm algorithm = CompressionAlgorithm::LZMA_HIGH;
+        CompressionAlgorithm algorithm = CompressionAlgorithm::LZMA2_XZ;
         bool algorithmExplicitlySet = false;
         int compressionLevel = -1;
         int threadCount = -1;

@@ -24,12 +24,9 @@ public:
     
 
     ExtendedInstallationMetadata deserializeExtendedMetadata(const std::vector<uint8_t>& data);
-    
-
-    std::vector<uint8_t> readCompressedData(uint64_t offset, uint64_t size);
-    
 
     void setDataPackagePath(const std::string& dataPackagePath) { dataPackagePath_ = dataPackagePath; }
+    const std::string& getDataPackagePath() const { return dataPackagePath_; }
     
 private:
 
@@ -49,10 +46,6 @@ private:
     
 
     std::vector<uint8_t> readExternalMetadata();
-    
-
-    std::vector<uint8_t> readExternalCompressedData(uint64_t offset, uint64_t size);
-    
     bool readEmbeddedLocator(std::ifstream& file,
                              uint64_t fileSize,
                              uint64_t& logicalEnd,

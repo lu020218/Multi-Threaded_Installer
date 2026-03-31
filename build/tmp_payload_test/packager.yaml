@@ -1,0 +1,7 @@
+﻿Version: "1.0"
+AppName: "PayloadTestApp"
+InstallDir: "%ProgramFiles%\\PayloadTestApp"
+compressionAlgorithm: "xz"
+folders:
+  - name: "app"
+    target: "installDirectory"

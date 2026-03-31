@@ -1,14 +1,14 @@
 #pragma once
 
+#include "common/archive_types.h"
+
+#include <functional>
 #include <string>
 #include <vector>
-#include <functional>
-
-#include "common/archive_types.h"
 
 namespace MultiThreadedInstaller {
 
-class MetadataParser;
+class FolderPayloadReader;
 class InstallerPathResolver;
 
 struct FolderTiming {
@@ -16,16 +16,14 @@ struct FolderTiming {
     double readSec = 0.0;
     double decompressSec = 0.0;
     double writeSec = 0.0;
-    double processSec = 0.0;
-    bool indexed = false;
     std::string folderName;
 };
 
 struct ParallelInstallSummary {
-    double indexedReadSec = 0.0;
-    double indexedDecompressSec = 0.0;
-    double indexedWriteSec = 0.0;
-    double legacyTotalSec = 0.0;
+    double payloadReadSec = 0.0;
+    double decompressSec = 0.0;
+    double writeSec = 0.0;
+    double totalSec = 0.0;
     std::vector<FolderTiming> folderTimings;
 };
 
@@ -43,7 +41,7 @@ using LogCallback = std::function<void(const std::string&)>;
 using CancellationCallback = std::function<bool()>;
 
 ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& metadata,
-                                         MetadataParser& parser,
+                                         FolderPayloadReader& payloadReader,
                                          InstallerPathResolver& pathResolver,
                                          const std::string& userSelectedPath,
                                          const std::vector<std::pair<std::string, std::string>>& folderMappings,
@@ -56,4 +54,3 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                                          const CancellationCallback& cancellationCallback = {});
 
 } // namespace MultiThreadedInstaller
-

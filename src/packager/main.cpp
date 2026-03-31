@@ -33,8 +33,8 @@ namespace {
 
 const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
     switch (algorithm) {
-        case CompressionAlgorithm::LZMA_HIGH:
-            return "LZMA";
+        case CompressionAlgorithm::LZMA2_XZ:
+            return "XZ/LZMA2";
         case CompressionAlgorithm::ZSTD:
             return "ZSTD";
         default:

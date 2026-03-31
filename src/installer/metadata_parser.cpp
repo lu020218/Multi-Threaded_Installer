@@ -23,6 +23,16 @@ namespace {
         logInstallerError(std::string("[Metadata] Parse/read error at line ") + std::to_string(__LINE__)); \
     } while (0)
 
+bool IsSupportedPayloadAlgorithm(CompressionAlgorithm algorithm) {
+    switch (algorithm) {
+    case CompressionAlgorithm::LZMA2_XZ:
+    case CompressionAlgorithm::ZSTD:
+        return true;
+    default:
+        return false;
+    }
+}
+
 } // namespace
 
 InstallationMetadata MetadataParser::parseEmbeddedMetadata() {
@@ -143,6 +153,10 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         
         mapping.algorithm = *reinterpret_cast<const CompressionAlgorithm*>(data.data() + offset);
         offset += sizeof(CompressionAlgorithm);
+        if (!IsSupportedPayloadAlgorithm(mapping.algorithm)) {
+            META_LOG();
+            break;
+        }
         
 
         if (offset + sizeof(uint32_t) > data.size()) {
@@ -498,7 +512,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         } else {
             metadata.uninstallCleanupRules.clear();
         }
-        if (header->version >= 20) {
+        if (header->version >= 21) {
             uint8_t deleteFromManifest = 0;
             if (!ReadPod<uint8_t>(data, offset, deleteFromManifest)) {
                 META_LOG();
@@ -541,6 +555,10 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         offset += sizeof(uint32_t);
         mapping.algorithm = *reinterpret_cast<const CompressionAlgorithm*>(data.data() + offset);
         offset += sizeof(CompressionAlgorithm);
+        if (!IsSupportedPayloadAlgorithm(mapping.algorithm)) {
+            META_LOG();
+            return metadata;
+        }
         
         if (offset + sizeof(uint32_t) > data.size()) {
             META_LOG();
@@ -631,32 +649,6 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
             mapping.fileIndex.push_back(std::move(fileEntry));
         }
         
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        uint32_t blockCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        mapping.blockIndex.reserve(blockCount);
-        for (uint32_t b = 0; b < blockCount; ++b) {
-            if (offset + sizeof(uint32_t) + sizeof(uint64_t) * 3 + sizeof(uint32_t) > data.size()) {
-                META_LOG();
-                return metadata;
-            }
-            BlockIndexEntry blockEntry;
-            blockEntry.blockId = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-            offset += sizeof(uint32_t);
-            blockEntry.offset = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-            offset += sizeof(uint64_t);
-            blockEntry.compressedSize = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-            offset += sizeof(uint64_t);
-            blockEntry.originalSize = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-            offset += sizeof(uint64_t);
-            blockEntry.checksum = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-            offset += sizeof(uint32_t);
-            mapping.blockIndex.push_back(std::move(blockEntry));
-        }
-        
         metadata.extendedMappings.push_back(mapping);
         
         FolderMapping baseMapping;
@@ -676,55 +668,6 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     }
     
     return metadata;
-}
-
-std::vector<uint8_t> MetadataParser::readCompressedData(uint64_t offset, uint64_t size) {
-    if (!dataPackagePath_.empty()) {
-        return readExternalCompressedData(offset, size);
-    }
-    
-    std::string executablePath = getCurrentExecutablePath();
-    if (executablePath.empty()) {
-        return {};
-    }
-    
-    std::ifstream file(PathFromUtf8(executablePath), std::ios::binary);
-    if (!file) {
-        META_LOG();
-        return {};
-    }
-    
-
-    file.seekg(0, std::ios::end);
-    uint64_t fileSize = static_cast<uint64_t>(file.tellg());
-
-    uint64_t logicalEnd = fileSize;
-    DataLocator locator;
-    if (!readEmbeddedLocator(file, fileSize, logicalEnd, locator)) {
-        return {};
-    }
-    
-
-    uint64_t absoluteOffset = locator.dataOffset + offset;
-    
-
-    if (absoluteOffset >= logicalEnd ||
-        absoluteOffset + size > logicalEnd) {
-        META_LOG();
-        return {};
-    }
-    
-
-    file.seekg(absoluteOffset);
-    std::vector<uint8_t> compressedData(size);
-    file.read(reinterpret_cast<char*>(compressedData.data()), size);
-    
-    if (file.gcount() != static_cast<std::streamsize>(size)) {
-        META_LOG();
-        return {};
-    }
-    
-    return compressedData;
 }
 
 std::vector<uint8_t> MetadataParser::readExternalMetadata() {
@@ -751,38 +694,6 @@ std::vector<uint8_t> MetadataParser::readExternalMetadata() {
     }
     
     return metadata;
-}
-
-std::vector<uint8_t> MetadataParser::readExternalCompressedData(uint64_t offset, uint64_t size) {
-    std::ifstream file(PathFromUtf8(dataPackagePath_), std::ios::binary);
-    if (!file) {
-        META_LOG();
-        return {};
-    }
-    
-    DataPackageHeader header;
-    file.read(reinterpret_cast<char*>(&header), sizeof(DataPackageHeader));
-    if (!file || header.magic != Constants::DATA_MAGIC_NUMBER) {
-        META_LOG();
-        return {};
-    }
-    
-    uint64_t absoluteOffset = header.dataOffset + offset;
-    if (absoluteOffset + size > header.dataOffset + header.dataSize) {
-        META_LOG();
-        return {};
-    }
-    
-    file.seekg(static_cast<std::streamoff>(absoluteOffset));
-    std::vector<uint8_t> compressedData(size);
-    file.read(reinterpret_cast<char*>(compressedData.data()), size);
-    
-    if (file.gcount() != static_cast<std::streamsize>(size)) {
-        META_LOG();
-        return {};
-    }
-    
-    return compressedData;
 }
 
 bool MetadataParser::validateHeader(const BinaryMetadata& header) {

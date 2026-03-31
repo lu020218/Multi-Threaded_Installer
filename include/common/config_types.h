@@ -10,7 +10,7 @@
 namespace MultiThreadedInstaller {
 
 enum class CompressionAlgorithm {
-    LZMA_HIGH,
+    LZMA2_XZ,
     ZSTD
 };
 
@@ -233,7 +233,7 @@ struct PackagerConfiguration {
           directoryName(""),
           defaultInstallDir("%ProgramFiles%"),
           desktopShortcutName(""),
-          compressionAlgorithm(CompressionAlgorithm::LZMA_HIGH),
+          compressionAlgorithm(CompressionAlgorithm::LZMA2_XZ),
           compressionLevel(-1),
           autoStartup(false),
           desktopIcons(false),

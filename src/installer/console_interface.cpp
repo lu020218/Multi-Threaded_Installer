@@ -30,9 +30,9 @@ bool CliSupport::getPackagerInput(std::string& inputPath, std::string& outputPat
         return false;
     }
     
-    std::string algorithmStr = getUserInput("Choose compression algorithm (lzma|zstd) [lzma]: ");
+    std::string algorithmStr = getUserInput("Choose compression algorithm (xz|zstd) [xz]: ");
     if (algorithmStr.empty()) {
-        algorithmStr = "lzma";
+        algorithmStr = "xz";
     }
     
     algorithm = parseCompressionAlgorithm(algorithmStr);
@@ -210,15 +210,15 @@ void CliSupport::showPackagerHelp() {
     std::cout << "Usage: packager [options] <input_directory> <output_file>" << std::endl;
     std::cout << std::endl;
     std::cout << "Options:" << std::endl;
-    std::cout << "  -a, --algorithm <lzma|zstd>    Choose compression algorithm (default: lzma)" << std::endl;
-    std::cout << "  -l, --level <level>            Compression level (lzma: 0-9, zstd: 1-22)" << std::endl;
+    std::cout << "  -a, --algorithm <xz|zstd>      Choose compression algorithm (default: xz)" << std::endl;
+    std::cout << "  -l, --level <level>            Compression level (xz/lzma2: 0-9, zstd: 1-22)" << std::endl;
     std::cout << "  -p, --data-out <file>          Write external data package" << std::endl;
     std::cout << "  -t, --threads <count>          Number of compression threads (default: CPU cores)" << std::endl;
     std::cout << "  -v, --verbose                  Show detailed information" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
-    std::cout << "  packager -a lzma -l 5 ./input ./output/installer.exe" << std::endl;
+    std::cout << "  packager -a xz -l 5 ./input ./output/installer.exe" << std::endl;
     std::cout << "  packager -a zstd -l 3 ./input ./output/installer.exe" << std::endl;
 }
 
@@ -308,20 +308,20 @@ CompressionAlgorithm CliSupport::parseCompressionAlgorithm(const std::string& al
     std::string lower = algorithmStr;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
     
-    if (lower == "lzma" || lower == "7z") {
-        return CompressionAlgorithm::LZMA_HIGH;
+    if (lower == "xz" || lower == "lzma2" || lower == "xz_lzma2" || lower == "lzma2_xz") {
+        return CompressionAlgorithm::LZMA2_XZ;
     }
     if (lower == "zstd") {
         return CompressionAlgorithm::ZSTD;
     }
     
-    return CompressionAlgorithm::LZMA_HIGH;
+    return CompressionAlgorithm::LZMA2_XZ;
 }
 
 std::string CliSupport::compressionAlgorithmToString(CompressionAlgorithm algorithm) {
     switch (algorithm) {
-        case CompressionAlgorithm::LZMA_HIGH:
-            return "LZMA";
+        case CompressionAlgorithm::LZMA2_XZ:
+            return "XZ/LZMA2";
         case CompressionAlgorithm::ZSTD:
             return "ZSTD";
         default:

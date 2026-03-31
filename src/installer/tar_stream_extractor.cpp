@@ -47,7 +47,7 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                 
                 std::memcpy(&pathLength_, bufferData(), sizeof(uint32_t));
                 if (!validatePathLength(pathLength_)) {
-                    logInstallerError("[DECOMP][LegacyWrite] invalid path length=" +
+                    logInstallerError("[DECOMP][PayloadWrite] invalid path length=" +
                                       std::to_string(pathLength_) +
                                       " targetRoot=" + targetRoot_);
                     return false;
@@ -63,7 +63,7 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                 
                 std::memcpy(&fileSize_, bufferData(), sizeof(uint32_t));
                 if (!validateFileSize(fileSize_)) {
-                    logInstallerError("[DECOMP][LegacyWrite] invalid file size=" +
+                    logInstallerError("[DECOMP][PayloadWrite] invalid file size=" +
                                       std::to_string(fileSize_) +
                                       " currentPathLength=" + std::to_string(pathLength_) +
                                       " targetRoot=" + targetRoot_);
@@ -105,7 +105,7 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                 size_t toWrite = std::min(static_cast<size_t>(remaining_), available);
                 currentFile_.write(reinterpret_cast<const char*>(bufferData()), static_cast<std::streamsize>(toWrite));
                 if (!currentFile_) {
-                    logInstallerError("[DECOMP][LegacyWrite] file write failed targetRoot=" + targetRoot_ +
+                    logInstallerError("[DECOMP][PayloadWrite] file write failed targetRoot=" + targetRoot_ +
                                       " relativePath=" + currentPath_ +
                                       " remaining=" + std::to_string(remaining_) +
                                       " writeSize=" + std::to_string(toWrite));
@@ -140,7 +140,7 @@ bool TarStreamExtractor::openCurrentFile() {
         std::filesystem::path root = PathFromUtf8(targetRoot_);
         std::filesystem::path rel = PathFromUtf8(currentPath_);
         if (!validateCurrentPath(rel)) {
-            logInstallerError("[DECOMP][LegacyWrite] rejected unsafe relative path currentPath=" +
+            logInstallerError("[DECOMP][PayloadWrite] rejected unsafe relative path currentPath=" +
                               currentPath_ + " targetRoot=" + targetRoot_);
             return false;
         }
@@ -150,7 +150,7 @@ bool TarStreamExtractor::openCurrentFile() {
         std::filesystem::path parent = fullPath.parent_path();
         if (!parent.empty()) {
             if (!fsOperator.createDirectoryRecursive(Utf8FromPath(parent))) {
-                logInstallerError("[DECOMP][LegacyWrite] failed to create parent directory path=" +
+                logInstallerError("[DECOMP][PayloadWrite] failed to create parent directory path=" +
                                   Utf8FromPath(parent) + " currentPath=" + currentPath_);
                 return false;
             }
@@ -158,17 +158,17 @@ bool TarStreamExtractor::openCurrentFile() {
 
         currentFile_.open(toLongPath(fullPath), std::ios::binary);
         if (!currentFile_.is_open()) {
-            logInstallerError("[DECOMP][LegacyWrite] failed to open file path=" +
+            logInstallerError("[DECOMP][PayloadWrite] failed to open file path=" +
                               Utf8FromPath(fullPath) + " currentPath=" + currentPath_);
             return false;
         }
         return true;
     } catch (const std::exception& e) {
-        logInstallerError(std::string("[DECOMP][LegacyWrite] exception opening current file currentPath=") +
+        logInstallerError(std::string("[DECOMP][PayloadWrite] exception opening current file currentPath=") +
                           currentPath_ + " error=" + e.what());
         return false;
     } catch (...) {
-        logInstallerError(std::string("[DECOMP][LegacyWrite] unknown exception opening current file currentPath=") +
+        logInstallerError(std::string("[DECOMP][PayloadWrite] unknown exception opening current file currentPath=") +
                           currentPath_);
         return false;
     }

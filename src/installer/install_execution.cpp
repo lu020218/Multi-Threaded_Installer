@@ -2,7 +2,9 @@
 
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
+#include "installer/folder_payload_reader.h"
 #include "installer/installer_helpers.h"
+#include "installer/metadata_parser.h"
 
 #include <algorithm>
 #include <cctype>
@@ -657,6 +659,7 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
     };
 
     ParallelInstallResult parallelResult;
+    FolderPayloadReader payloadReader(parser.getDataPackagePath());
     if (plan.selectedEmbeddedFolders.empty() && plan.componentPlan.hasComponents) {
         parallelResult.success = true;
         parallelResult.installRootPath = plan.pathDecision.resolvedInstallRoot;
@@ -669,7 +672,7 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                          " installPath=" + options.installPath +
                          " threadCount=" + std::to_string(options.threadCount));
         parallelResult = RunParallelInstall(metadata,
-                                            parser,
+                                            payloadReader,
                                             pathResolver,
                                             options.installPath,
                                             options.folderMappings,

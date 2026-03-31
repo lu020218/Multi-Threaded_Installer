@@ -1,156 +1,32 @@
 #include "common/installer_parallel_install.h"
 
-#include "installer/metadata_parser.h"
-#include "installer/thread_pool_manager.h"
-#include "installer/decompression_engine.h"
-#include "installer/file_system_operator.h"
+#include "common/installer_logger.h"
+#include "installer/folder_install_executor.h"
+#include "installer/folder_payload_reader.h"
 #include "installer/installer_helpers.h"
 #include "installer/path_resolver.h"
-#include "common/installer_logger.h"
-#include "common/utf8_utils.h"
+#include "installer/thread_pool_manager.h"
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
-#include <cstring>
-#include <filesystem>
-#include <future>
-#include <fstream>
 #include <mutex>
-#include <unordered_set>
-#include <thread>
 #include <stdexcept>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <Windows.h>
-#endif
+#include <unordered_set>
 
 namespace MultiThreadedInstaller {
 
 namespace {
 
-struct FileWriter {
-    std::filesystem::path path;
-    uint64_t start;
-    uint64_t end;
-    std::mutex mutex;
-};
-
-struct BlockInfo {
-    uint32_t blockId;
-    uint64_t compressedOffset;
-    uint64_t compressedSize;
-    uint64_t originalSize;
-    uint64_t startOffset;
-};
-
-struct BlockMetaHeader {
-    uint32_t offset;
-    uint32_t compressedSize;
-    uint32_t originalSize;
-    uint32_t checksum;
-};
-
-struct BlockSegment {
-    size_t fileIndex;
-    uint64_t blockOffset;
-    uint64_t fileOffset;
-    uint64_t size;
-};
-
-struct FolderTask {
+struct FolderDispatch {
     std::string folderName;
     std::string targetPath;
     ExtendedFolderMapping mapping;
-    bool useIndex = false;
-    DecompressionTask decompTask;
-    double legacyReadSec = 0.0;
-    DecompressionEngine::LegacyStageTiming legacyStage;
 };
-
-constexpr uint64_t kMemorySafetyReserveBytes = 512ull * 1024ull * 1024ull;
-constexpr uint64_t kPerBlockOverheadBytes = 8ull * 1024ull * 1024ull;
-
-uint64_t QueryAvailablePhysicalMemoryBytes() {
-#ifdef _WIN32
-    MEMORYSTATUSEX status{};
-    status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status)) {
-        return static_cast<uint64_t>(status.ullAvailPhys);
-    }
-#endif
-    return 0;
-}
-
-std::string BuildMemorySnapshotText() {
-#ifdef _WIN32
-    MEMORYSTATUSEX status{};
-    status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status)) {
-        return "availPhysMB=" + std::to_string(status.ullAvailPhys / (1024ull * 1024ull)) +
-               " totalPhysMB=" + std::to_string(status.ullTotalPhys / (1024ull * 1024ull)) +
-               " availPageMB=" + std::to_string(status.ullAvailPageFile / (1024ull * 1024ull)) +
-               " memoryLoad=" + std::to_string(status.dwMemoryLoad) + "%";
-    }
-#endif
-    return "memorySnapshot=unavailable";
-}
-
-size_t ResolveBlockConcurrencyLimit(size_t requestedLimit,
-                                    uint64_t estimatedBytesPerTask,
-                                    const std::string& contextLabel) {
-    if (requestedLimit <= 1 || estimatedBytesPerTask == 0) {
-        return requestedLimit <= 1 ? requestedLimit : 1;
-    }
-
-    const uint64_t availableBytes = QueryAvailablePhysicalMemoryBytes();
-    if (availableBytes == 0) {
-        return requestedLimit;
-    }
-
-    const uint64_t usableBytes =
-        availableBytes > kMemorySafetyReserveBytes ? (availableBytes - kMemorySafetyReserveBytes) : 0;
-    if (usableBytes == 0) {
-        logInstallerWarning("[InstallFlow][Memory] " + contextLabel +
-                            " forcing sequential execution due to low available memory.");
-        return 1;
-    }
-
-    size_t memoryLimited =
-        static_cast<size_t>(std::max<uint64_t>(1, usableBytes / estimatedBytesPerTask));
-    if (memoryLimited < requestedLimit) {
-        logInstallerInfo("[InstallFlow][Memory] " + contextLabel +
-                         " limiting block concurrency from " + std::to_string(requestedLimit) +
-                         " to " + std::to_string(memoryLimited) +
-                         " availableMB=" + std::to_string(availableBytes / (1024ull * 1024ull)) +
-                         " perTaskMB=" + std::to_string(estimatedBytesPerTask / (1024ull * 1024ull)));
-    }
-    return std::max<size_t>(1, std::min(requestedLimit, memoryLimited));
-}
-
-std::string BuildDisplayPath(const std::string& folderName, const std::string& relativePath) {
-    if (relativePath.empty()) {
-        return folderName;
-    }
-    std::string display = folderName;
-    if (!display.empty() && display.back() != '\\' && display.back() != '/') {
-        display += '\\';
-    }
-    if (relativePath.front() == '\\' || relativePath.front() == '/') {
-        display += relativePath.substr(1);
-    } else {
-        display += relativePath;
-    }
-    return display;
-}
 
 } // namespace
 
 ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& metadata,
-                                         MetadataParser& parser,
+                                         FolderPayloadReader& payloadReader,
                                          InstallerPathResolver& pathResolver,
                                          const std::string& userSelectedPath,
                                          const std::vector<std::pair<std::string, std::string>>& folderMappings,
@@ -162,74 +38,17 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                                          const LogCallback& errorCallback,
                                          const CancellationCallback& cancellationCallback) {
     ParallelInstallResult result;
-    auto logInfo = [&](const std::string& msg) {
+
+    auto logInfo = [&](const std::string& message) {
         if (infoCallback) {
-            infoCallback(msg);
+            infoCallback(message);
         }
     };
-    auto logError = [&](const std::string& msg) {
+    auto logError = [&](const std::string& message) {
         if (errorCallback) {
-            errorCallback(msg);
+            errorCallback(message);
         }
     };
-    bool hasInfoCallback = static_cast<bool>(infoCallback);
-
-    auto threadPool = std::make_shared<ThreadPoolManager>(
-        ResolveThreadPoolWorkerCount(threadCount > 0 ? static_cast<size_t>(threadCount) : 0)
-    );
-    logInstallerInfo("[InstallFlow][Memory] parallel install start " + BuildMemorySnapshotText() +
-                     " threadCount=" + std::to_string(threadPool->getTotalThreadCount()));
-
-    DecompressionEngine decompressor;
-    if (progressCallback) {
-        decompressor.registerProgressCallback(progressCallback);
-    }
-
-    FileSystemOperator fsOperator;
-    std::mutex errorsMutex;
-    std::vector<std::string> errors;
-    std::mutex progressMutex;
-    std::atomic<bool> overallSuccess(true);
-    std::atomic<size_t> completedFolders(0);
-    std::atomic<long long> totalReadNs(0);
-    std::atomic<long long> totalDecompressNs(0);
-    std::atomic<long long> totalWriteNs(0);
-    std::atomic<long long> totalLegacyNs(0);
-    std::mutex timingMutex;
-    std::vector<FolderTiming> folderTimings;
-    std::atomic<bool> cancellationDetected(false);
-    std::atomic<bool> cancellationRecorded(false);
-    auto markCancelled = [&](const std::string& detail) {
-        cancellationDetected.store(true);
-        overallSuccess.store(false);
-        if (!cancellationRecorded.exchange(true)) {
-            std::string message = detail.empty() ? "Installation cancelled." : detail;
-            std::lock_guard<std::mutex> lock(errorsMutex);
-            errors.push_back(message);
-        }
-    };
-    auto isCancellationRequested = [&]() {
-        if (cancellationDetected.load()) {
-            return true;
-        }
-        if (cancellationCallback && cancellationCallback()) {
-            markCancelled("Installation cancelled.");
-            return true;
-        }
-        return false;
-    };
-    if (progressCallback) {
-        decompressor.registerProgressCallback(
-            [&](const std::string& folder, const std::string& currentFile, float progress) {
-                if (isCancellationRequested()) {
-                    throw std::runtime_error("Installation cancelled.");
-                }
-                progressCallback(folder, currentFile, progress);
-            });
-    }
-
-    std::vector<FolderTask> folderTasks;
-    folderTasks.reserve(metadata.extendedMappings.size());
 
     std::unordered_set<std::string> includedFolderSet;
     if (filterFolders) {
@@ -241,28 +60,31 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         }
     }
 
-    for (const auto& mapping : metadata.extendedMappings) {
-        if (isCancellationRequested()) {
-            break;
-        }
-        if (filterFolders) {
-            if (includedFolderSet.empty() ||
-                includedFolderSet.find(mapping.folderName) == includedFolderSet.end()) {
-                continue;
-            }
-        }
-        std::string targetPath;
-        bool foundMapping = false;
+    std::vector<FolderDispatch> dispatches;
+    dispatches.reserve(metadata.extendedMappings.size());
 
-        for (const auto& userMapping : folderMappings) {
-            if (userMapping.first == mapping.folderName) {
-                targetPath = userMapping.second;
-                foundMapping = true;
+    for (const auto& mapping : metadata.extendedMappings) {
+        if (cancellationCallback && cancellationCallback()) {
+            result.cancelled = true;
+            result.errors.push_back("Installation cancelled.");
+            return result;
+        }
+
+        if (filterFolders &&
+            (includedFolderSet.empty() ||
+             includedFolderSet.find(mapping.folderName) == includedFolderSet.end())) {
+            continue;
+        }
+
+        std::string targetPath;
+        for (const auto& explicitMapping : folderMappings) {
+            if (explicitMapping.first == mapping.folderName) {
+                targetPath = explicitMapping.second;
                 break;
             }
         }
 
-        if (!foundMapping) {
+        if (targetPath.empty()) {
             const std::string directoryName =
                 resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName);
             std::string basePath;
@@ -271,15 +93,13 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                     userSelectedPath,
                     mapping.targetDirType,
                     directoryName,
-                    mapping.appendDirectoryName
-                );
+                    mapping.appendDirectoryName);
             } else {
                 basePath = pathResolver.resolveFinalPath(
                     mapping.customTargetPath.empty() ? mapping.targetPath : mapping.customTargetPath,
                     mapping.targetDirType,
                     directoryName,
-                    mapping.appendDirectoryName
-                );
+                    mapping.appendDirectoryName);
             }
 
             if (!basePath.empty()) {
@@ -287,11 +107,18 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                     targetPath = basePath;
                 } else {
                     if (basePath.back() != '\\' && basePath.back() != '/') {
-                        basePath += '\\';
+                        basePath.push_back('\\');
                     }
                     targetPath = basePath + mapping.folderName;
                 }
             }
+        }
+
+        if (targetPath.empty()) {
+            const std::string message = "No target path specified for folder: " + mapping.folderName;
+            logError(message);
+            result.errors.push_back(message);
+            continue;
         }
 
         if (result.installRootPath.empty() &&
@@ -299,645 +126,107 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
             result.installRootPath = targetPath;
         }
 
-        if (targetPath.empty()) {
-            std::string error = "No target path specified for folder: " + mapping.folderName;
-            logError(error);
-            std::lock_guard<std::mutex> lock(errorsMutex);
-            errors.push_back(error);
-            overallSuccess = false;
-            continue;
-        }
-
-        logInfo("Installing folder '" + mapping.folderName + "' to: " + targetPath);
-
-        if (!fsOperator.createDirectoryRecursive(targetPath)) {
-            std::string error = "Failed to create target directory: " + targetPath;
-            logError(error);
-            std::lock_guard<std::mutex> lock(errorsMutex);
-            errors.push_back(error);
-            overallSuccess = false;
-            continue;
-        }
-
-        FolderTask folderTask;
-        folderTask.folderName = mapping.folderName;
-        folderTask.targetPath = targetPath;
-        folderTask.mapping = mapping;
-        folderTask.useIndex = !mapping.fileIndex.empty() && !mapping.blockIndex.empty();
-        logInfo("Install path for '" + mapping.folderName + "': " +
-                std::string(folderTask.useIndex ? "indexed" : "legacy"));
-
-        if (!folderTask.useIndex) {
-            auto readStart = std::chrono::steady_clock::now();
-            std::vector<uint8_t> compressedData = parser.readCompressedData(mapping.offset, mapping.compressedSize);
-            auto readEnd = std::chrono::steady_clock::now();
-            if (compressedData.empty()) {
-                std::string error = "Failed to read compressed data for folder: " + mapping.folderName;
-                logError(error);
-                std::lock_guard<std::mutex> lock(errorsMutex);
-                errors.push_back(error);
-                overallSuccess = false;
-                continue;
-            }
-            folderTask.legacyReadSec = std::chrono::duration<double>(readEnd - readStart).count();
-
-            folderTask.decompTask.compressedData = std::move(compressedData);
-            folderTask.decompTask.targetPath = targetPath;
-            folderTask.decompTask.expectedChecksum = mapping.checksum;
-            folderTask.decompTask.originalSize = mapping.originalSize;
-            folderTask.decompTask.algorithm = mapping.algorithm;
-        }
-
-        folderTasks.push_back(std::move(folderTask));
+        FolderDispatch dispatch;
+        dispatch.folderName = mapping.folderName;
+        dispatch.targetPath = targetPath;
+        dispatch.mapping = mapping;
+        dispatches.push_back(std::move(dispatch));
         result.installedRoots.push_back(targetPath);
     }
 
-    auto installWithIndex = [&](const FolderTask& folderTask, FolderTiming& timing) -> bool {
-        if (isCancellationRequested()) {
-            return false;
-        }
-        const auto& mapping = folderTask.mapping;
-        if (mapping.fileIndex.empty() || mapping.blockIndex.empty()) {
-            logError("Indexed metadata missing for '" + folderTask.folderName + "'");
-            return false;
-        }
-
-        timing.indexed = true;
-        timing.folderName = folderTask.folderName;
-        auto totalStart = std::chrono::steady_clock::now();
-
-        std::vector<std::unique_ptr<FileWriter>> writers;
-        writers.reserve(mapping.fileIndex.size());
-        std::vector<std::string> displayNames;
-        displayNames.reserve(mapping.fileIndex.size());
-
-        std::unordered_set<std::string> parentDirs;
-        parentDirs.reserve(mapping.fileIndex.size());
-        for (const auto& fileEntry : mapping.fileIndex) {
-            std::filesystem::path fullPath = PathFromUtf8(folderTask.targetPath) / PathFromUtf8(fileEntry.relativePath);
-            std::filesystem::path parent = fullPath.parent_path();
-            if (!parent.empty()) {
-                parentDirs.insert(Utf8FromPath(parent));
-            }
-        }
-        FileSystemOperator fsOp;
-        for (const auto& dir : parentDirs) {
-            if (!fsOp.createDirectoryRecursive(dir)) {
-                logError("Failed to create directory: " + dir);
-                return false;
-            }
-        }
-
-        uint64_t totalBytes = 0;
-        for (const auto& fileEntry : mapping.fileIndex) {
-            std::filesystem::path fullPath = PathFromUtf8(folderTask.targetPath) / PathFromUtf8(fileEntry.relativePath);
-            std::string fullPathStr = Utf8FromPath(fullPath);
-            if (!ensureFileWithSize(fullPath, fileEntry.size, metadata.sparseFileThresholdBytes)) {
-                logError("Failed to create file: " + fullPathStr);
-                return false;
-            }
-
-            auto writer = std::make_unique<FileWriter>();
-            writer->path = std::move(fullPath);
-            writer->start = fileEntry.offset;
-            writer->end = fileEntry.offset + fileEntry.size;
-            writers.push_back(std::move(writer));
-            displayNames.push_back(BuildDisplayPath(folderTask.folderName, fileEntry.relativePath));
-            totalBytes += fileEntry.size;
-        }
-
-        std::vector<FileWriter*> writerPtrs;
-        writerPtrs.reserve(writers.size());
-        for (const auto& writer : writers) {
-            writerPtrs.push_back(writer.get());
-        }
-        if (writerPtrs.empty()) {
-            logError("No files to write for '" + folderTask.folderName + "'");
-            return false;
-        }
-
-        std::vector<size_t> fileOrder(writerPtrs.size());
-        for (size_t i = 0; i < fileOrder.size(); ++i) {
-            fileOrder[i] = i;
-        }
-        std::sort(fileOrder.begin(), fileOrder.end(),
-                  [&](size_t a, size_t b) { return writerPtrs[a]->start < writerPtrs[b]->start; });
-
-        std::vector<BlockInfo> blocks;
-        bool parsedHeader = false;
-        {
-            std::vector<uint8_t> headerCount = parser.readCompressedData(mapping.offset, sizeof(uint32_t));
-            if (headerCount.size() == sizeof(uint32_t)) {
-                uint32_t blockCount = *reinterpret_cast<const uint32_t*>(headerCount.data());
-                size_t headerSize = sizeof(uint32_t) + static_cast<size_t>(blockCount) * sizeof(BlockMetaHeader);
-                if (blockCount > 0 && headerSize <= static_cast<size_t>(mapping.compressedSize)) {
-                    std::vector<uint8_t> headerData = parser.readCompressedData(mapping.offset, headerSize);
-                    if (headerData.size() == headerSize) {
-                        blocks.reserve(blockCount);
-                        size_t metaOffset = sizeof(uint32_t);
-                        for (uint32_t i = 0; i < blockCount; ++i) {
-                            BlockMetaHeader meta;
-                            std::memcpy(&meta, headerData.data() + metaOffset + i * sizeof(BlockMetaHeader),
-                                        sizeof(BlockMetaHeader));
-                            BlockInfo block;
-                            block.blockId = i;
-                            block.compressedOffset = meta.offset;
-                            block.compressedSize = meta.compressedSize;
-                            block.originalSize = meta.originalSize;
-                            block.startOffset = 0;
-                            blocks.push_back(block);
-                        }
-                        parsedHeader = true;
-                    }
-                }
-            }
-        }
-
-        if (!parsedHeader) {
-            logInfo("Indexed header read failed for '" + folderTask.folderName + "', using metadata index");
-            blocks.reserve(mapping.blockIndex.size());
-            for (const auto& blockEntry : mapping.blockIndex) {
-                BlockInfo block;
-                block.blockId = blockEntry.blockId;
-                block.compressedOffset = blockEntry.offset;
-                block.compressedSize = blockEntry.compressedSize;
-                block.originalSize = blockEntry.originalSize;
-                block.startOffset = 0;
-                blocks.push_back(block);
-            }
-        }
-        if (blocks.empty()) {
-            logError("No blocks available for '" + folderTask.folderName + "'");
-            return false;
-        }
-        std::sort(blocks.begin(), blocks.end(),
-                  [](const BlockInfo& a, const BlockInfo& b) { return a.blockId < b.blockId; });
-
-        for (const auto& block : blocks) {
-            if (block.compressedOffset + block.compressedSize > mapping.compressedSize) {
-                logError("Invalid block metadata for '" + folderTask.folderName +
-                         "': block " + std::to_string(block.blockId) + " out of range");
-                return false;
-            }
-        }
-
-        uint64_t cumulative = 0;
-        for (auto& block : blocks) {
-            block.startOffset = cumulative;
-            cumulative += block.originalSize;
-        }
-
-        std::vector<std::vector<BlockSegment>> segments(blocks.size());
-        size_t fileIdx = 0;
-        for (size_t i = 0; i < blocks.size(); ++i) {
-                if (isCancellationRequested()) {
-                    return false;
-                }
-            uint64_t blockStart = blocks[i].startOffset;
-            uint64_t blockEnd = blockStart + blocks[i].originalSize;
-
-            while (fileIdx < fileOrder.size() && writerPtrs[fileOrder[fileIdx]]->end <= blockStart) {
-                ++fileIdx;
-            }
-
-            size_t k = fileIdx;
-            while (k < fileOrder.size()) {
-                FileWriter* writer = writerPtrs[fileOrder[k]];
-                if (writer->start >= blockEnd) {
-                    break;
-                }
-
-                uint64_t overlapStart = std::max(blockStart, writer->start);
-                uint64_t overlapEnd = std::min(blockEnd, writer->end);
-                if (overlapEnd > overlapStart) {
-                    BlockSegment seg;
-                    seg.fileIndex = fileOrder[k];
-                    seg.blockOffset = overlapStart - blockStart;
-                    seg.fileOffset = overlapStart - writer->start;
-                    seg.size = overlapEnd - overlapStart;
-                    segments[i].push_back(seg);
-                }
-
-                if (writer->end <= blockEnd) {
-                    ++k;
-                } else {
-                    break;
-                }
-            }
-
-            while (fileIdx < fileOrder.size() && writerPtrs[fileOrder[fileIdx]]->end <= blockEnd) {
-                ++fileIdx;
-            }
-        }
-
-        for (auto& segs : segments) {
-            std::sort(segs.begin(), segs.end(),
-                      [](const BlockSegment& a, const BlockSegment& b) {
-                          if (a.fileIndex == b.fileIndex) {
-                              return a.fileOffset < b.fileOffset;
-                          }
-                          return a.fileIndex < b.fileIndex;
-                      });
-        }
-
-        std::atomic<uint64_t> writtenBytes(0);
-        std::atomic<long long> readNs(0);
-        std::atomic<long long> decompressNs(0);
-        std::atomic<long long> writeNs(0);
-
-        constexpr uint64_t kProgressChunkBytes = 8 * 1024 * 1024;
-        if (threadPool && threadPool->getTotalThreadCount() > 1) {
-            std::atomic<bool> blockFailed(false);
-            uint64_t estimatedBytesPerTask = 0;
-            for (const auto& block : blocks) {
-                uint64_t estimate = block.compressedSize + (block.originalSize * 2ull) + kPerBlockOverheadBytes;
-                if (estimate > estimatedBytesPerTask) {
-                    estimatedBytesPerTask = estimate;
-                }
-            }
-            const size_t maxInflight = ResolveBlockConcurrencyLimit(
-                threadPool->getTotalThreadCount(),
-                estimatedBytesPerTask,
-                "indexed install for folder '" + folderTask.folderName + "'");
-
-            for (size_t batchStart = 0; batchStart < blocks.size(); batchStart += maxInflight) {
-                if (isCancellationRequested()) {
-                    return false;
-                }
-
-                const size_t batchEnd = std::min(batchStart + maxInflight, blocks.size());
-                std::vector<std::future<bool>> futures;
-                futures.reserve(batchEnd - batchStart);
-
-                for (size_t i = batchStart; i < batchEnd; ++i) {
-                    futures.push_back(threadPool->enqueue([&, i]() -> bool {
-                        if (blockFailed.load() || isCancellationRequested()) {
-                            return true;
-                        }
-
-                        const auto& block = blocks[i];
-                        auto readStart = std::chrono::steady_clock::now();
-                        std::vector<uint8_t> compressedData = parser.readCompressedData(
-                            mapping.offset + block.compressedOffset,
-                            block.compressedSize
-                        );
-                        auto readEnd = std::chrono::steady_clock::now();
-                        readNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(readEnd - readStart).count());
-                    if (compressedData.empty()) {
-                        logError("Indexed read failed for '" + folderTask.folderName +
-                                 "': block " + std::to_string(block.blockId) +
-                                 " compressedSize=" + std::to_string(block.compressedSize) +
-                                 " originalSize=" + std::to_string(block.originalSize) + " " +
-                                 BuildMemorySnapshotText());
-                        blockFailed.store(true);
-                        return false;
-                    }
-
-                        auto decompressStart = std::chrono::steady_clock::now();
-                        std::vector<uint8_t> decompressed;
-                        if (!decompressor.decompressLzmaBlockData(compressedData, block.originalSize, decompressed)) {
-                            logError("Indexed decompress failed for '" + folderTask.folderName +
-                                     "': block " + std::to_string(block.blockId) +
-                                     " compressedSize=" + std::to_string(block.compressedSize) +
-                                     " originalSize=" + std::to_string(block.originalSize) + " " +
-                                     BuildMemorySnapshotText());
-                            blockFailed.store(true);
-                            return false;
-                        }
-                        auto decompressEnd = std::chrono::steady_clock::now();
-                        decompressNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count());
-
-                        uint64_t progressChunk = 0;
-                        auto writeStart = std::chrono::steady_clock::now();
-                        const auto& segs = segments[i];
-                        size_t currentFileIndex = static_cast<size_t>(-1);
-                        std::string currentDisplayName;
-                        std::fstream stream;
-                        std::unique_lock<std::mutex> fileLock;
-                        for (const auto& seg : segs) {
-                            if (seg.fileIndex != currentFileIndex) {
-                                if (stream.is_open()) {
-                                    stream.close();
-                                }
-                                if (fileLock.owns_lock()) {
-                                    fileLock.unlock();
-                                }
-                                currentFileIndex = seg.fileIndex;
-                                if (currentFileIndex < displayNames.size()) {
-                                    currentDisplayName = displayNames[currentFileIndex];
-                                } else {
-                                    currentDisplayName.clear();
-                                }
-                                FileWriter* writer = writerPtrs[currentFileIndex];
-                                fileLock = std::unique_lock<std::mutex>(writer->mutex);
-                                if (!openFileForWrite(writer->path, stream)) {
-                                    logError("Indexed write failed for '" + folderTask.folderName +
-                                             "': block " + std::to_string(block.blockId) +
-                                             " file=" + Utf8FromPath(writer->path) +
-                                             " fileOffset=" + std::to_string(seg.fileOffset) +
-                                             " segSize=" + std::to_string(seg.size) + " " +
-                                             BuildMemorySnapshotText());
-                                    blockFailed.store(true);
-                                    return false;
-                                }
-                            }
-                            stream.seekp(static_cast<std::streamoff>(seg.fileOffset));
-                            stream.write(reinterpret_cast<const char*>(decompressed.data() + seg.blockOffset),
-                                         static_cast<std::streamsize>(seg.size));
-                            if (!stream) {
-                                logError("Indexed write failed for '" + folderTask.folderName +
-                                         "': block " + std::to_string(block.blockId) +
-                                         " file=" + Utf8FromPath(writerPtrs[currentFileIndex]->path) +
-                                         " fileOffset=" + std::to_string(seg.fileOffset) +
-                                         " segSize=" + std::to_string(seg.size) + " " +
-                                         BuildMemorySnapshotText());
-                                blockFailed.store(true);
-                                return false;
-                            }
-                            progressChunk += seg.size;
-                            if (totalBytes > 0 && progressChunk >= kProgressChunkBytes && progressCallback) {
-                                uint64_t current = writtenBytes.fetch_add(progressChunk) + progressChunk;
-                                float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
-                                {
-                                    std::lock_guard<std::mutex> lock(progressMutex);
-                                    progressCallback(folderTask.folderName, currentDisplayName, progress);
-                                }
-                                progressChunk = 0;
-                            }
-                        }
-                        if (stream.is_open()) {
-                            stream.close();
-                        }
-                        if (fileLock.owns_lock()) {
-                            fileLock.unlock();
-                        }
-                        auto writeEnd = std::chrono::steady_clock::now();
-                        writeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count());
-
-                        if (totalBytes > 0 && progressChunk > 0 && progressCallback) {
-                            uint64_t current = writtenBytes.fetch_add(progressChunk) + progressChunk;
-                            float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
-                            std::lock_guard<std::mutex> lock(progressMutex);
-                            progressCallback(folderTask.folderName, currentDisplayName, progress);
-                        }
-
-                        return true;
-                    }));
-                }
-
-                for (auto& future : futures) {
-                    if (!future.get()) {
-                        return false;
-                    }
-                }
-            }
-        } else {
-            for (size_t i = 0; i < blocks.size(); ++i) {
-                if (isCancellationRequested()) {
-                    return false;
-                }
-                const auto& block = blocks[i];
-                auto readStart = std::chrono::steady_clock::now();
-                std::vector<uint8_t> compressedData = parser.readCompressedData(
-                    mapping.offset + block.compressedOffset,
-                    block.compressedSize
-                );
-                auto readEnd = std::chrono::steady_clock::now();
-                readNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(readEnd - readStart).count());
-                if (compressedData.empty()) {
-                    logError("Indexed read failed for '" + folderTask.folderName +
-                             "': block " + std::to_string(block.blockId) +
-                             " compressedSize=" + std::to_string(block.compressedSize) +
-                             " originalSize=" + std::to_string(block.originalSize) + " " +
-                             BuildMemorySnapshotText());
-                    return false;
-                }
-
-                auto decompressStart = std::chrono::steady_clock::now();
-                std::vector<uint8_t> decompressed;
-                if (!decompressor.decompressLzmaBlockData(compressedData, block.originalSize, decompressed)) {
-                    logError("Indexed decompress failed for '" + folderTask.folderName +
-                             "': block " + std::to_string(block.blockId) +
-                             " compressedSize=" + std::to_string(block.compressedSize) +
-                             " originalSize=" + std::to_string(block.originalSize) + " " +
-                             BuildMemorySnapshotText());
-                    return false;
-                }
-                auto decompressEnd = std::chrono::steady_clock::now();
-                decompressNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(decompressEnd - decompressStart).count());
-
-                uint64_t blockWritten = 0;
-                uint64_t progressChunk = 0;
-                auto writeStart = std::chrono::steady_clock::now();
-                const auto& segs = segments[i];
-                size_t currentFileIndex = static_cast<size_t>(-1);
-                std::string currentDisplayName;
-                std::fstream stream;
-                std::unique_lock<std::mutex> fileLock;
-                for (const auto& seg : segs) {
-                    if (seg.fileIndex != currentFileIndex) {
-                        if (stream.is_open()) {
-                            stream.close();
-                        }
-                        if (fileLock.owns_lock()) {
-                            fileLock.unlock();
-                        }
-                        currentFileIndex = seg.fileIndex;
-                        if (currentFileIndex < displayNames.size()) {
-                            currentDisplayName = displayNames[currentFileIndex];
-                        } else {
-                            currentDisplayName.clear();
-                        }
-                        FileWriter* writer = writerPtrs[currentFileIndex];
-                        fileLock = std::unique_lock<std::mutex>(writer->mutex);
-                        if (!openFileForWrite(writer->path, stream)) {
-                            logError("Indexed write failed for '" + folderTask.folderName +
-                                     "': block " + std::to_string(block.blockId) +
-                                     " file=" + Utf8FromPath(writer->path) +
-                                     " fileOffset=" + std::to_string(seg.fileOffset) +
-                                     " segSize=" + std::to_string(seg.size) + " " +
-                                     BuildMemorySnapshotText());
-                            return false;
-                        }
-                    }
-                    stream.seekp(static_cast<std::streamoff>(seg.fileOffset));
-                    stream.write(reinterpret_cast<const char*>(decompressed.data() + seg.blockOffset),
-                                 static_cast<std::streamsize>(seg.size));
-                    if (!stream) {
-                        logError("Indexed write failed for '" + folderTask.folderName +
-                                 "': block " + std::to_string(block.blockId) +
-                                 " file=" + Utf8FromPath(writerPtrs[currentFileIndex]->path) +
-                                 " fileOffset=" + std::to_string(seg.fileOffset) +
-                                 " segSize=" + std::to_string(seg.size) + " " +
-                                 BuildMemorySnapshotText());
-                        return false;
-                    }
-                    blockWritten += seg.size;
-                    progressChunk += seg.size;
-                    if (totalBytes > 0 && progressChunk >= kProgressChunkBytes && progressCallback) {
-                        uint64_t current = writtenBytes.fetch_add(progressChunk) + progressChunk;
-                        float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
-                        std::lock_guard<std::mutex> lock(progressMutex);
-                        progressCallback(folderTask.folderName, currentDisplayName, progress);
-                        progressChunk = 0;
-                    }
-                }
-                if (stream.is_open()) {
-                    stream.close();
-                }
-                if (fileLock.owns_lock()) {
-                    fileLock.unlock();
-                }
-                auto writeEnd = std::chrono::steady_clock::now();
-                writeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(writeEnd - writeStart).count());
-
-                if (totalBytes > 0 && (progressChunk > 0 || blockWritten > 0) && progressCallback) {
-                    uint64_t toAdd = progressChunk > 0 ? progressChunk : blockWritten;
-                    uint64_t current = writtenBytes.fetch_add(toAdd) + toAdd;
-                    float progress = std::min(0.99f, static_cast<float>(current) / totalBytes);
-                    std::lock_guard<std::mutex> lock(progressMutex);
-                    progressCallback(folderTask.folderName, currentDisplayName, progress);
-                }
-            }
-        }
-
-        if (progressCallback) {
-            progressCallback(folderTask.folderName, std::string(), 1.0f);
-        }
-
-        auto totalEnd = std::chrono::steady_clock::now();
-        timing.totalSec = std::chrono::duration<double>(totalEnd - totalStart).count();
-        timing.readSec = static_cast<double>(readNs.load()) / 1e9;
-        timing.decompressSec = static_cast<double>(decompressNs.load()) / 1e9;
-        timing.writeSec = static_cast<double>(writeNs.load()) / 1e9;
-        totalReadNs.fetch_add(readNs.load());
-        totalDecompressNs.fetch_add(decompressNs.load());
-        totalWriteNs.fetch_add(writeNs.load());
-
-        return true;
-    };
-
-    if (isCancellationRequested()) {
-        markCancelled("Installation cancelled.");
+    if (!result.errors.empty()) {
+        result.success = false;
+        return result;
     }
 
-    if (!folderTasks.empty()) {
-        logInfo("Decompressing " + std::to_string(folderTasks.size()) + " folders in parallel...");
+    if (dispatches.empty()) {
+        result.success = true;
+        return result;
+    }
 
-        std::vector<FolderTask*> indexedTasks;
-        std::vector<FolderTask*> regularTasks;
-        for (auto& folderTask : folderTasks) {
-            if (folderTask.useIndex) {
-                indexedTasks.push_back(&folderTask);
-            } else {
-                regularTasks.push_back(&folderTask);
+    const size_t workerCount =
+        ResolveThreadPoolWorkerCount(threadCount > 0 ? static_cast<size_t>(threadCount) : 0);
+    logInstallerInfo("[InstallFlow][Payload] folderCount=" + std::to_string(dispatches.size()) +
+                     " requestedThreadCount=" + std::to_string(threadCount) +
+                     " workerCount=" + std::to_string(workerCount));
+
+    std::mutex resultMutex;
+    std::vector<std::string> errors;
+    std::vector<FolderTiming> folderTimings;
+    std::atomic<bool> overallSuccess(true);
+    std::atomic<bool> cancelled(false);
+    std::atomic<long long> totalReadNs(0);
+    std::atomic<long long> totalDecompressNs(0);
+    std::atomic<long long> totalWriteNs(0);
+    std::atomic<long long> totalNs(0);
+
+    ThreadPoolManager threadPool(workerCount);
+    DecompressionEngine decompressor;
+    decompressor.registerProgressCallback(
+        [&](const std::string& folder, const std::string& currentFile, float progress) {
+            if (cancellationCallback && cancellationCallback()) {
+                cancelled.store(true);
+                throw std::runtime_error("Installation cancelled.");
             }
-        }
-
-        for (auto* folderTask : regularTasks) {
-            threadPool->enqueue([folderTask, &decompressor, &logError, &errors, &errorsMutex,
-                                &overallSuccess, &completedFolders, &totalLegacyNs, &folderTimings, &timingMutex,
-                                &isCancellationRequested, &markCancelled,
-                                logInfo, totalFolders = folderTasks.size(), hasInfoCallback]() {
-                if (isCancellationRequested()) {
-                    markCancelled("Installation cancelled.");
-                    return;
-                }
-
-                auto legacyStart = std::chrono::steady_clock::now();
-                bool ok = decompressor.decompressFolder(folderTask->decompTask, &folderTask->legacyStage);
-                auto legacyEnd = std::chrono::steady_clock::now();
-                if (isCancellationRequested()) {
-                    markCancelled("Installation cancelled.");
-                    return;
-                }
-                long long legacyNs = std::chrono::duration_cast<std::chrono::nanoseconds>(legacyEnd - legacyStart).count();
-                totalLegacyNs.fetch_add(legacyNs);
-
-                if (!ok) {
-                    std::string error = "Failed to decompress folder: " + folderTask->folderName;
-                    logError(error);
-                    std::lock_guard<std::mutex> lock(errorsMutex);
-                    errors.push_back(error);
-                    overallSuccess = false;
-                } else {
-                    FolderTiming timing;
-                    timing.indexed = false;
-                    timing.folderName = folderTask->folderName;
-                    timing.totalSec = static_cast<double>(legacyNs) / 1e9;
-                    timing.readSec = folderTask->legacyReadSec;
-                    timing.decompressSec = static_cast<double>(folderTask->legacyStage.decompressNs) / 1e9;
-                    timing.writeSec = static_cast<double>(folderTask->legacyStage.writeNs) / 1e9;
-                    timing.processSec = std::max(0.0, timing.totalSec - timing.readSec);
-                    {
-                        std::lock_guard<std::mutex> lock(timingMutex);
-                        folderTimings.push_back(timing);
-                    }
-                    size_t completed = ++completedFolders;
-                    if (hasInfoCallback) {
-                        float progress = static_cast<float>(completed) / totalFolders;
-                        logInfo("Progress: " + std::to_string(completed) + "/" +
-                               std::to_string(totalFolders) + " folders completed (" +
-                               std::to_string(static_cast<int>(progress * 100)) + "%)");
-                    }
-                }
-            });
-        }
-
-        for (auto* folderTask : indexedTasks) {
-            if (isCancellationRequested()) {
-                break;
+            if (progressCallback) {
+                progressCallback(folder, currentFile, progress);
             }
+        });
+    FolderInstallExecutor executor(payloadReader, decompressor);
+
+    for (const auto& dispatch : dispatches) {
+        threadPool.enqueue([&, dispatch]() {
+            if (cancelled.load()) {
+                return;
+            }
+
+            FolderInstallRequest request;
+            request.folderName = dispatch.folderName;
+            request.mapping = dispatch.mapping;
+            request.resolvedTargetPath = dispatch.targetPath;
+            request.schedulerConcurrencyHint = static_cast<unsigned int>(workerCount);
+            request.cancellationCallback = cancellationCallback;
+            request.infoCallback = infoCallback;
+            request.errorCallback = errorCallback;
+
+            FolderInstallResult folderResult = executor.execute(request);
+            if (folderResult.cancelled) {
+                cancelled.store(true);
+            }
+            if (!folderResult.success) {
+                overallSuccess.store(false);
+            }
+
             FolderTiming timing;
-            bool ok = installWithIndex(*folderTask, timing);
-            if (!ok) {
-                std::string error = "Failed to decompress folder: " + folderTask->folderName;
-                logError(error);
-                std::lock_guard<std::mutex> lock(errorsMutex);
-                errors.push_back(error);
-                overallSuccess = false;
-            } else {
-                {
-                    std::lock_guard<std::mutex> lock(timingMutex);
-                    folderTimings.push_back(timing);
-                }
-                size_t completed = ++completedFolders;
-                if (hasInfoCallback) {
-                    float progress = static_cast<float>(completed) / folderTasks.size();
-                    logInfo("Progress: " + std::to_string(completed) + "/" +
-                           std::to_string(folderTasks.size()) + " folders completed (" +
-                           std::to_string(static_cast<int>(progress * 100)) + "%)");
-                }
-            }
-        }
+            timing.folderName = folderResult.folderName;
+            timing.readSec = folderResult.readSec;
+            timing.decompressSec = folderResult.decompressSec;
+            timing.writeSec = folderResult.writeSec;
+            timing.totalSec = folderResult.totalSec;
+
+            totalReadNs.fetch_add(static_cast<long long>(folderResult.readSec * 1e9));
+            totalDecompressNs.fetch_add(static_cast<long long>(folderResult.decompressSec * 1e9));
+            totalWriteNs.fetch_add(static_cast<long long>(folderResult.writeSec * 1e9));
+            totalNs.fetch_add(static_cast<long long>(folderResult.totalSec * 1e9));
+
+            std::lock_guard<std::mutex> lock(resultMutex);
+            folderTimings.push_back(std::move(timing));
+            errors.insert(errors.end(), folderResult.errors.begin(), folderResult.errors.end());
+        });
     }
 
-    threadPool->waitForAll();
+    threadPool.waitForAll();
 
     result.errors = std::move(errors);
-    result.cancelled = cancellationDetected.load();
+    result.cancelled = cancelled.load();
     result.success = overallSuccess.load() && result.errors.empty() && !result.cancelled;
-    result.timing.indexedReadSec = static_cast<double>(totalReadNs.load()) / 1e9;
-    result.timing.indexedDecompressSec = static_cast<double>(totalDecompressNs.load()) / 1e9;
-    result.timing.indexedWriteSec = static_cast<double>(totalWriteNs.load()) / 1e9;
-    result.timing.legacyTotalSec = static_cast<double>(totalLegacyNs.load()) / 1e9;
+    result.timing.payloadReadSec = static_cast<double>(totalReadNs.load()) / 1e9;
+    result.timing.decompressSec = static_cast<double>(totalDecompressNs.load()) / 1e9;
+    result.timing.writeSec = static_cast<double>(totalWriteNs.load()) / 1e9;
+    result.timing.totalSec = static_cast<double>(totalNs.load()) / 1e9;
     result.timing.folderTimings = std::move(folderTimings);
 
     return result;
 }
 
 } // namespace MultiThreadedInstaller
-
-
-
-
-
-
-
-
-
-
-
-
-
-

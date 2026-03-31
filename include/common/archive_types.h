@@ -10,33 +10,27 @@ struct FileIndexEntry {
     uint64_t size;
 };
 
-struct BlockIndexEntry {
-    uint32_t blockId;
-    uint64_t offset;
-    uint64_t compressedSize;
-    uint64_t originalSize;
-    uint32_t checksum;
-};
-
 struct CompressionResult {
+    // A single standard XZ/LZMA2 payload for one folder.
     std::vector<uint8_t> compressedData;
     uint32_t checksum;
     size_t originalSize;
     size_t compressedSize;
     CompressionAlgorithm algorithm;
+    // File manifest for logging, validation, and post-install bookkeeping only.
     std::vector<FileIndexEntry> fileIndex;
-    std::vector<BlockIndexEntry> blockIndex;
 
     CompressionResult()
         : checksum(0),
           originalSize(0),
           compressedSize(0),
-          algorithm(CompressionAlgorithm::LZMA_HIGH) {}
+          algorithm(CompressionAlgorithm::LZMA2_XZ) {}
 };
 
 struct FolderMapping {
     std::string folderName;
     std::string targetPath;
+    // Payload location and size in the package data area.
     uint64_t offset;
     uint64_t compressedSize;
     uint64_t originalSize;
@@ -48,15 +42,15 @@ struct FolderMapping {
           compressedSize(0),
           originalSize(0),
           checksum(0),
-          algorithm(CompressionAlgorithm::LZMA_HIGH) {}
+          algorithm(CompressionAlgorithm::LZMA2_XZ) {}
 };
 
 struct ExtendedFolderMapping : public FolderMapping {
     SpecialDirectoryType targetDirType;
     std::string customTargetPath;
     bool appendDirectoryName;
+    // File manifest for logging, validation, and post-install bookkeeping only.
     std::vector<FileIndexEntry> fileIndex;
-    std::vector<BlockIndexEntry> blockIndex;
 
     ExtendedFolderMapping()
         : FolderMapping(),
@@ -138,15 +132,18 @@ struct BinaryMetadata {
 
 struct DecompressionTask {
     std::vector<uint8_t> compressedData;
+    std::string folderName;
     std::string targetPath;
+    unsigned int schedulerConcurrencyHint;
     uint32_t expectedChecksum;
     size_t originalSize;
     CompressionAlgorithm algorithm;
 
     DecompressionTask()
-        : expectedChecksum(0),
+        : schedulerConcurrencyHint(1),
+          expectedChecksum(0),
           originalSize(0),
-          algorithm(CompressionAlgorithm::LZMA_HIGH) {}
+          algorithm(CompressionAlgorithm::LZMA2_XZ) {}
 };
 
 using ProgressCallback = std::function<void(const std::string&, const std::string&, float)>;
@@ -154,11 +151,7 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;
-    constexpr uint32_t VERSION = 20;
-
-    constexpr size_t DEFAULT_BLOCK_SIZE = 128 * 1024 * 1024;
-    constexpr size_t MIN_BLOCK_SIZE = 4 * 1024 * 1024;
-    constexpr size_t MAX_BLOCK_SIZE = 128 * 1024 * 1024;
+    constexpr uint32_t VERSION = 21;
 
     constexpr int DEFAULT_LZMA_LEVEL = 9;
     constexpr int DEFAULT_ZSTD_LEVEL = 3;

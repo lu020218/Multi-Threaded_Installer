@@ -268,6 +268,7 @@ endfunction()
 set(PACKAGER_SOURCES
     src/packager/folder_scanner.cpp
     src/packager/compression_module.cpp
+    src/packager/folder_payload_compressor.cpp
     src/packager/metadata_generator.cpp
     src/packager/installer_generator.cpp
     src/packager/icon_updater.cpp
@@ -291,6 +292,8 @@ set(INSTALLER_SOURCES
     src/installer/metadata_binary_reader.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp
+    src/installer/folder_payload_reader.cpp
+    src/installer/folder_install_executor.cpp
     src/installer/tar_stream_extractor.cpp
     src/installer/file_system_operator.cpp
     src/installer/console_interface.cpp
@@ -323,6 +326,8 @@ set(UNINSTALLER_SOURCES
     src/installer/metadata_binary_reader.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp
+    src/installer/folder_payload_reader.cpp
+    src/installer/folder_install_executor.cpp
     src/installer/tar_stream_extractor.cpp
     src/installer/file_system_operator.cpp
     src/installer/console_interface.cpp
@@ -382,6 +387,7 @@ message(STATUS "Added GUI source files to installer")
 set(COMMON_SOURCES
     src/common/types.cpp
     src/common/installer_logger.cpp
+    src/common/lzma_loader.cpp
     src/common/utf8_utils.cpp
 )
 

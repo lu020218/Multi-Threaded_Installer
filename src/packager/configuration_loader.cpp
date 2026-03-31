@@ -263,13 +263,13 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(
             return std::nullopt;
         }
         algo = ToLowerCopy(algo);
-        if (algo == "lzma") {
-            config.compressionAlgorithm = CompressionAlgorithm::LZMA_HIGH;
+        if (algo == "xz" || algo == "lzma2" || algo == "xz_lzma2" || algo == "lzma2_xz") {
+            config.compressionAlgorithm = CompressionAlgorithm::LZMA2_XZ;
         } else if (algo == "zstd") {
             config.compressionAlgorithm = CompressionAlgorithm::ZSTD;
         } else {
             lastError_ = "Invalid compressionAlgorithm: '" + algo +
-                         "' (expected: lzma or zstd)";
+                         "' (expected: xz/lzma2 or zstd)";
             return std::nullopt;
         }
     }

@@ -77,13 +77,12 @@ LzmaLoader::LzmaLoader()
     : loaded(false)
     , lzma_easy_encoder_ptr(nullptr)
     , lzma_stream_decoder_ptr(nullptr)
+    , lzma_stream_decoder_mt_ptr(nullptr)
     , lzma_auto_decoder_ptr(nullptr)
     , lzma_alone_decoder_ptr(nullptr)
     , lzma_stream_buffer_decode_ptr(nullptr)
     , lzma_stream_encoder_mt_ptr(nullptr)
     , lzma_stream_encoder_mt_memusage_ptr(nullptr)
-    , lzma_block_encoder_ptr(nullptr)
-    , lzma_block_decoder_ptr(nullptr)
     , lzma_code_ptr(nullptr)
     , lzma_end_ptr(nullptr)
     , lzma_version_number_ptr(nullptr)
@@ -102,6 +101,21 @@ LzmaLoader::~LzmaLoader() {
 
 bool LzmaLoader::loadLibrary() {
 #ifdef _WIN32
+#ifdef LZMA_API_STATIC
+    lzma_easy_encoder_ptr = &lzma_easy_encoder;
+    lzma_stream_decoder_ptr = &lzma_stream_decoder;
+    lzma_stream_decoder_mt_ptr = &lzma_stream_decoder_mt;
+    lzma_auto_decoder_ptr = &lzma_auto_decoder;
+    lzma_alone_decoder_ptr = &lzma_alone_decoder;
+    lzma_stream_buffer_decode_ptr = &lzma_stream_buffer_decode;
+    lzma_stream_encoder_mt_ptr = &lzma_stream_encoder_mt;
+    lzma_stream_encoder_mt_memusage_ptr = &lzma_stream_encoder_mt_memusage;
+    lzma_code_ptr = &lzma_code;
+    lzma_end_ptr = &lzma_end;
+    lzma_version_number_ptr = reinterpret_cast<lzma_version_number_func>(&lzma_version_number);
+    logInstallerInfo("[LZMA] Using statically linked liblzma symbols.");
+    return true;
+#else
     std::vector<std::string> candidates;
     std::string envPath = getEnvVar("LZMA_DLL_PATH");
     if (!envPath.empty()) {
@@ -144,6 +158,13 @@ bool LzmaLoader::loadLibrary() {
         loadFunction(lzma_stream_decoder_ptr, "lzma_stream_decoder") &&
         loadFunction(lzma_auto_decoder_ptr, "lzma_auto_decoder") &&
         loadFunction(lzma_alone_decoder_ptr, "lzma_alone_decoder");
+#ifdef _WIN32
+    lzma_stream_decoder_mt_ptr =
+        reinterpret_cast<lzma_stream_decoder_mt_func>(GetProcAddress(hModule, "lzma_stream_decoder_mt"));
+#else
+    lzma_stream_decoder_mt_ptr =
+        reinterpret_cast<lzma_stream_decoder_mt_func>(dlsym(handle, "lzma_stream_decoder_mt"));
+#endif
     
     // lzma_stream_buffer_decode is optional (for single-call decompression)
     loadFunction(lzma_stream_buffer_decode_ptr, "lzma_stream_buffer_decode");
@@ -179,7 +200,7 @@ bool LzmaLoader::loadLibrary() {
     if (decompressionOk) logInstallerInfo("[LZMA] Decompression support: enabled.");
     
     return true;
-    
+#endif
 #else
     // Linux/Unix implementation
     handle = dlopen("liblzma.so", RTLD_LAZY);
@@ -200,6 +221,13 @@ bool LzmaLoader::loadLibrary() {
         loadFunction(lzma_stream_decoder_ptr, "lzma_stream_decoder") &&
         loadFunction(lzma_auto_decoder_ptr, "lzma_auto_decoder") &&
         loadFunction(lzma_alone_decoder_ptr, "lzma_alone_decoder");
+#ifdef _WIN32
+    lzma_stream_decoder_mt_ptr =
+        reinterpret_cast<lzma_stream_decoder_mt_func>(GetProcAddress(hModule, "lzma_stream_decoder_mt"));
+#else
+    lzma_stream_decoder_mt_ptr =
+        reinterpret_cast<lzma_stream_decoder_mt_func>(dlsym(handle, "lzma_stream_decoder_mt"));
+#endif
     
     // lzma_stream_buffer_decode is optional (for single-call decompression)
     loadFunction(lzma_stream_buffer_decode_ptr, "lzma_stream_buffer_decode");
@@ -253,13 +281,12 @@ void LzmaLoader::unloadLibrary() {
     
     lzma_easy_encoder_ptr = nullptr;
     lzma_stream_decoder_ptr = nullptr;
+    lzma_stream_decoder_mt_ptr = nullptr;
     lzma_auto_decoder_ptr = nullptr;
     lzma_alone_decoder_ptr = nullptr;
     lzma_stream_buffer_decode_ptr = nullptr;
     lzma_stream_encoder_mt_ptr = nullptr;
     lzma_stream_encoder_mt_memusage_ptr = nullptr;
-    lzma_block_encoder_ptr = nullptr;
-    lzma_block_decoder_ptr = nullptr;
     lzma_code_ptr = nullptr;
     lzma_end_ptr = nullptr;
     lzma_version_number_ptr = nullptr;
@@ -268,6 +295,10 @@ void LzmaLoader::unloadLibrary() {
 
 template<typename T>
 bool LzmaLoader::loadFunction(T& func, const char* name) {
+#ifdef LZMA_API_STATIC
+    (void)name;
+    return func != nullptr;
+#else
 #ifdef _WIN32
     func = reinterpret_cast<T>(GetProcAddress(hModule, name));
 #else
@@ -280,6 +311,7 @@ bool LzmaLoader::loadFunction(T& func, const char* name) {
     }
     
     return true;
+#endif
 }
 
 LzmaLoader::Version LzmaLoader::getVersion() const {

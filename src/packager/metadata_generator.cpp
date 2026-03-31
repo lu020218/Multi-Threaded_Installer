@@ -330,7 +330,7 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
         if (header.version >= 18) {
             AppendCleanupRules(serialized, metadata.uninstallCleanupRules);
         }
-        if (header.version >= 20) {
+        if (header.version >= 21) {
             serialized.push_back(metadata.upgradeCleanup.registry.deleteFromManifest ? 1 : 0);
             AppendRegistryList(serialized, metadata.upgradeCleanup.registry.legacyKeys);
             AppendCleanupRules(serialized, metadata.upgradeCleanup.extraPaths);
@@ -394,26 +394,6 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
             serialized.insert(serialized.end(), entrySizeBytes, entrySizeBytes + sizeof(uint64_t));
         }
         
-        uint32_t blockCount = static_cast<uint32_t>(extMapping.blockIndex.size());
-        const uint8_t* blockCountBytes = reinterpret_cast<const uint8_t*>(&blockCount);
-        serialized.insert(serialized.end(), blockCountBytes, blockCountBytes + sizeof(uint32_t));
-        
-        for (const auto& blockEntry : extMapping.blockIndex) {
-            const uint8_t* blockIdBytes = reinterpret_cast<const uint8_t*>(&blockEntry.blockId);
-            serialized.insert(serialized.end(), blockIdBytes, blockIdBytes + sizeof(uint32_t));
-            
-            const uint8_t* blockOffsetBytes = reinterpret_cast<const uint8_t*>(&blockEntry.offset);
-            serialized.insert(serialized.end(), blockOffsetBytes, blockOffsetBytes + sizeof(uint64_t));
-            
-            const uint8_t* compSizeBytes = reinterpret_cast<const uint8_t*>(&blockEntry.compressedSize);
-            serialized.insert(serialized.end(), compSizeBytes, compSizeBytes + sizeof(uint64_t));
-            
-            const uint8_t* origSizeBytes = reinterpret_cast<const uint8_t*>(&blockEntry.originalSize);
-            serialized.insert(serialized.end(), origSizeBytes, origSizeBytes + sizeof(uint64_t));
-            
-            const uint8_t* blockChecksumBytes = reinterpret_cast<const uint8_t*>(&blockEntry.checksum);
-            serialized.insert(serialized.end(), blockChecksumBytes, blockChecksumBytes + sizeof(uint32_t));
-        }
     }
     
     header.metadataSize = static_cast<uint64_t>(serialized.size());
@@ -462,7 +442,6 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
     mapping.checksum = result.checksum;
     mapping.algorithm = result.algorithm;
     mapping.fileIndex = result.fileIndex;
-    mapping.blockIndex = result.blockIndex;
     
 
     mapping.targetDirType = SpecialDirectoryType::INSTALL_DIRECTORY;

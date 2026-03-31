@@ -66,13 +66,13 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
         std::string prePath = options.preRegistryInstallPath.empty()
                                   ? options.installPath
                                   : options.preRegistryInstallPath;
-        applyRegistryEntries(effectiveRegistry, prePath, metadata.configVersion, metadata.applicationName);
+        applyRegistryEntries(effectiveRegistry, prePath, metadata.appVersion, metadata.appName);
     }
     advanceFinalize(0.15f, "Applying registry entries");
 
     if ((effectiveAutoStartup || effectiveDesktopIcons) && result.installRootPath.empty()) {
         reporter.EmitMessage(InstallServiceEventType::Warning,
-                             "Install root not detected; AutoStartup/DesktopIcons skipped");
+                             "Install root not detected; installAutoStartup/installDesktopIcon skipped");
     }
 
     const std::string languageCode = ResolveLanguageCode(options.languageCode);
@@ -90,17 +90,17 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
         }
 
         std::filesystem::path exePath =
-            findPrimaryExecutable(PathFromUtf8(result.installRootPath), metadata.applicationName);
+            findPrimaryExecutable(PathFromUtf8(result.installRootPath), metadata.appName);
         if ((effectiveAutoStartup || effectiveDesktopIcons) && exePath.empty()) {
             reporter.EmitMessage(InstallServiceEventType::Warning,
-                                 "No executable found for AutoStartup/DesktopIcons");
+                                 "No executable found for installAutoStartup/installDesktopIcon");
         } else {
             if (effectiveAutoStartup) {
-                if (setAutoStartup(metadata.applicationName, exePath)) {
-                    reporter.EmitMessage(InstallServiceEventType::Info, "AutoStartup enabled");
+                if (setAutoStartup(metadata.appName, exePath)) {
+                    reporter.EmitMessage(InstallServiceEventType::Info, "installAutoStartup enabled");
                 } else {
                     reporter.EmitMessage(InstallServiceEventType::Warning,
-                                         "Failed to enable AutoStartup");
+                                         "Failed to enable installAutoStartup");
                 }
             }
             if (effectiveDesktopIcons) {
@@ -139,20 +139,20 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
         std::filesystem::path localPath = PathFromUtf8(result.installRootPath) / "install.manifest.json";
         if (!writeManifest(Utf8FromPath(localPath),
                            plan.effectiveAppId,
-                           metadata.applicationName,
-                           metadata.legacyAppIds,
-                           metadata.legacyDesktopShortcutNames,
-                           metadata.configVersion,
+                           metadata.appName,
+                           metadata.compatibilityLegacyAppIds,
+                           metadata.compatibilityLegacyDesktopShortcutNames,
+                           metadata.appVersion,
                            result.installRootPath,
                            result.installedRoots,
-                           metadata.uninstallCleanupRules,
+                           metadata.lifecycleUninstallCleanupRules,
                            result.installedFiles,
                            effectiveRegistry,
                            effectiveKillProcesses,
                            effectiveAutoStartup,
                            effectiveDesktopIcons,
                            desktopShortcutDisplayName,
-                           metadata.installState,
+                           metadata.installStateConfig,
                            result.uninstallPath,
                            languageCode,
                            componentActions)) {
@@ -165,36 +165,36 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
     if (options.applyRegistryAfterInstall && !effectiveRegistry.empty()) {
         applyRegistryEntries(effectiveRegistry,
                              result.installRootPath,
-                             metadata.configVersion,
-                             metadata.applicationName);
+                             metadata.appVersion,
+                             metadata.appName);
     }
 
 #ifdef _WIN32
     if (options.writeUninstallRegistry && !result.uninstallPath.empty()) {
         bool perMachine = isRunningAsAdmin();
         if (!writeUninstallRegistryEntry(plan.effectiveAppId,
-                                         metadata.configVersion,
+                                         metadata.appVersion,
                                          result.installRootPath,
                                          result.uninstallPath,
                                          perMachine)) {
             reporter.EmitMessage(InstallServiceEventType::Warning,
                                  "Failed to write uninstall registry entry");
         }
-        for (const auto& legacyId : metadata.legacyAppIds) {
+        for (const auto& legacyId : metadata.compatibilityLegacyAppIds) {
             deleteUninstallRegistryEntry(legacyId, perMachine);
             deleteUninstallRegistryEntry(legacyId, !perMachine);
         }
-        if (!metadata.applicationName.empty() &&
-            normalizePathForCompare(metadata.applicationName) !=
+        if (!metadata.appName.empty() &&
+            normalizePathForCompare(metadata.appName) !=
                 normalizePathForCompare(plan.effectiveAppId)) {
-            deleteUninstallRegistryEntry(metadata.applicationName, perMachine);
-            deleteUninstallRegistryEntry(metadata.applicationName, !perMachine);
+            deleteUninstallRegistryEntry(metadata.appName, perMachine);
+            deleteUninstallRegistryEntry(metadata.appName, !perMachine);
         }
     }
 #endif
     advanceFinalize(0.90f, "Writing uninstall registry");
 
-    applyInstallState(metadata.installState, "installed", pathResolver);
+    applyInstallState(metadata.installStateConfig, "installed", pathResolver);
     advanceFinalize(1.0f, "Finalization complete");
     return true;
 }

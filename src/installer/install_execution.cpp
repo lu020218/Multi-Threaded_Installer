@@ -42,6 +42,10 @@ float Clamp01(float value) {
     return value;
 }
 
+std::string ResolveComponentDisplayName(const ComponentConfig& component) {
+    return component.name.empty() ? component.id : component.name;
+}
+
 bool IsCancellationRequested(const InstallServiceOptions& options) {
     return options.cancellationCallback && options.cancellationCallback();
 }
@@ -86,9 +90,9 @@ std::string ExpandRuntimeTokens(const std::string& text,
 
     std::string expanded = ExpandInstallDirToken(text, installDir);
     const std::vector<std::pair<std::string, std::string>> tokens = {
-        { "%AppVersion%", metadata.configVersion },
-        { "%AppId%", resolveEffectiveAppId(metadata.appId, metadata.applicationName) },
-        { "%DirectoryName%", resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName) },
+        { "%AppVersion%", metadata.appVersion },
+        { "%AppId%", resolveEffectiveAppId(metadata.appId, metadata.appName) },
+        { "%appDirectoryName%", resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName) },
         { "%ComponentInstallDir%", componentInstallDir }
     };
     for (const auto& token : tokens) {
@@ -620,10 +624,10 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
     std::unordered_map<std::string, float> folderProgress;
     folderSizes.reserve(plan.selectedEmbeddedFolders.size());
     folderProgress.reserve(plan.selectedEmbeddedFolders.size());
-    for (const auto& mapping : metadata.extendedMappings) {
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
         if (std::find(plan.selectedEmbeddedFolders.begin(),
                       plan.selectedEmbeddedFolders.end(),
-                      mapping.folderName) == plan.selectedEmbeddedFolders.end()) {
+                      mapping.folderId) == plan.selectedEmbeddedFolders.end()) {
             continue;
         }
         folderSizes[mapping.folderName] = mapping.originalSize;
@@ -729,12 +733,12 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                                                          : output.installRootPath;
         size_t completedComponents = 0;
 
-        auto advanceComponentProgress = [&](const std::string& id, float offset) {
+        auto advanceComponentProgress = [&](const std::string& displayName, float offset) {
             float progress = extractionWeight +
                              ((static_cast<float>(completedComponents) + offset) /
                               static_cast<float>(executableComponentCount)) *
                                  (1.0f - extractionWeight);
-            reporter.EmitProgress("component", id, progress);
+            reporter.EmitProgress("component", displayName, progress);
         };
 
         for (const auto* component : plan.componentPlan.ordered) {
@@ -752,9 +756,12 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                 return false;
             }
 
-            advanceComponentProgress(component->id, 0.0f);
+            const std::string componentDisplayName = ResolveComponentDisplayName(*component);
+
+            advanceComponentProgress(componentDisplayName, 0.0f);
             reporter.EmitMessage(InstallServiceEventType::Info,
-                                 "Installing component: " + component->id);
+                                 "Installing component: " + componentDisplayName +
+                                     " (id=" + component->id + ")");
 
             std::string componentError;
             if (component->source.type == ComponentSourceType::LOCAL) {
@@ -777,7 +784,7 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
 
             if (!componentError.empty()) {
                 std::string failureMessage =
-                    "Component '" + component->id + "' failed: " + componentError;
+                    "Component '" + componentDisplayName + "' failed: " + componentError;
                 if (component->required) {
                     output.cancelled = IsCancellationRequested(options);
                     output.errors.push_back(failureMessage);
@@ -790,32 +797,32 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                 reporter.EmitMessage(InstallServiceEventType::Warning,
                                      failureMessage + " Continuing because component is optional.");
                 ++completedComponents;
-                advanceComponentProgress(component->id, 0.0f);
+                advanceComponentProgress(componentDisplayName, 0.0f);
                 continue;
             }
 
             std::string successMessage;
             if (component->source.type == ComponentSourceType::LOCAL &&
                 !component->source.local.wait) {
-                successMessage = "Component '" + component->id +
+                successMessage = "Component '" + componentDisplayName +
                                  "' installer launched (not waiting for completion).";
             } else if (component->source.type == ComponentSourceType::DOWNLOAD &&
                        !component->source.download.wait) {
-                successMessage = "Component '" + component->id +
+                successMessage = "Component '" + componentDisplayName +
                                  "' installer launched (not waiting for completion).";
             } else {
-                successMessage = "Component '" + component->id + "' installed successfully.";
+                successMessage = "Component '" + componentDisplayName + "' installed successfully.";
             }
             reporter.EmitMessage(InstallServiceEventType::Info, successMessage);
 
             ++completedComponents;
-            advanceComponentProgress(component->id, 0.0f);
+            advanceComponentProgress(componentDisplayName, 0.0f);
         }
     }
 
     output.effectiveRegistry = plan.effectiveRegistry;
     std::unordered_set<std::string> registrySeen;
-    registrySeen.reserve(output.effectiveRegistry.size() + metadata.components.size() * 2);
+    registrySeen.reserve(output.effectiveRegistry.size() + metadata.layoutComponents.size() * 2);
     for (const auto& entry : output.effectiveRegistry) {
         std::string key = entry.path;
         key.push_back('\n');

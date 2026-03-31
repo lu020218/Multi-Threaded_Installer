@@ -16,11 +16,11 @@ struct GuiNotifyCallbacks {
     std::function<void()> onMinimize;
     std::function<void()> onShowMore;
     std::function<void()> onLicenseLink;
-    std::function<void()> onLicenseBack;
+    std::function<void()> onLicenseAgree;
+    std::function<void()> onLicenseDisagree;
     std::function<void()> onUninstallConfirm;
     std::function<void()> onCloseWindow;
     std::function<void()> onLicenseCheckboxChanged;
-    std::function<void()> onLicenseAgreementSync;
     std::function<void(int)> onLanguageSelect;
     std::function<void(const std::wstring&)> onOpenLink;
 };

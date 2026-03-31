@@ -39,9 +39,9 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
     uint16_t currentMajor = 0;
     uint16_t currentMinor = 0;
     uint32_t currentBuild = 0;
-    if (!checkMinimumWindowsVersion(metadata.minWindowsMajor,
-                                    metadata.minWindowsMinor,
-                                    metadata.minWindowsBuild,
+    if (!checkMinimumWindowsVersion(metadata.installMinWindowsMajor,
+                                    metadata.installMinWindowsMinor,
+                                    metadata.installMinWindowsBuild,
                                     currentMajor,
                                     currentMinor,
                                     currentBuild)) {
@@ -53,7 +53,7 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
 
 #ifdef _WIN32
     std::vector<std::string> processNames = buildKillProcessList(
-        metadata.applicationName,
+        metadata.appName,
         plan.effectiveKillProcesses);
     if (!processNames.empty()) {
         std::vector<std::string> running = getRunningProcessesByName(processNames);
@@ -96,9 +96,9 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
                         0.85f,
                         "Precheck almost complete...");
 
-    if (metadata.installState.useMutex) {
+    if (metadata.installStateConfig.useMutex) {
         reporter.EmitMessage(InstallServiceEventType::Info, "Acquiring install mutex...");
-        installMutex = acquireInstallMutex(metadata.installState);
+        installMutex = acquireInstallMutex(metadata.installStateConfig);
     }
 
     reporter.EmitProgress("", "Precheck completed", 1.0f);

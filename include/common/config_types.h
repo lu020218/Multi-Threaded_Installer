@@ -16,6 +16,7 @@ enum class CompressionAlgorithm {
 
 enum class SpecialDirectoryType {
     INSTALL_DIRECTORY,
+    CUSTOM,
     PROGRAM_FILES,
     PROGRAM_FILES_X86,
     APPDATA_ROAMING,
@@ -57,6 +58,7 @@ struct InstallStateConfig {
 };
 
 struct FolderInfo {
+    std::string id;
     std::string sourcePath;
     std::string targetPath;
     std::vector<std::string> files;
@@ -66,17 +68,6 @@ struct FolderInfo {
 
     FolderInfo(const std::string& source, const std::string& target)
         : sourcePath(source), targetPath(target), totalSize(0) {}
-};
-
-struct FolderTargetConfig {
-    std::string folderName;
-    std::string targetDirectory;
-    SpecialDirectoryType dirType;
-    bool appendDirectoryName;
-
-    FolderTargetConfig()
-        : dirType(SpecialDirectoryType::INSTALL_DIRECTORY),
-          appendDirectoryName(true) {}
 };
 
 struct RegistryEntry {
@@ -188,61 +179,148 @@ struct UiComponentSelectionConfig {
           tokenPrefix("component:") {}
 };
 
-struct PackagerConfiguration {
-    std::string version;
-    std::string applicationName;
-    std::string appId;
-    std::string directoryName;
-    std::vector<std::string> legacyAppIds;
-    std::string defaultInstallDir;
-    std::string desktopShortcutName;
-    std::unordered_map<std::string, std::string> desktopShortcutNameI18n;
-    std::vector<std::string> legacyDesktopShortcutNames;
+struct AppProductInfo {
     std::string iconPath;
-    std::string webPageUrl;
     std::string productName;
     std::string fileVersion;
     std::string productVersion;
     std::string companyName;
     std::string fileDescription;
     std::string copyright;
-    CompressionAlgorithm compressionAlgorithm;
-    int compressionLevel;
-    std::vector<FolderTargetConfig> folderTargets;
-    std::vector<RegistryEntry> registry;
-    std::vector<std::string> installKillProcesses;
-    std::vector<ComponentConfig> components;
-    UiComponentSelectionConfig componentUi;
-    std::vector<UiLinkBinding> uiLinks;
-    std::vector<UninstallCleanupRule> uninstallCleanupRules;
-    UpgradeCleanupConfig upgradeCleanup;
-    bool autoStartup;
-    bool desktopIcons;
-    bool autoCleanOldInstall;
+};
+
+struct AppConfig {
+    std::string name;
+    std::string id;
+    std::string version;
+    std::string directoryName;
+    std::string website;
+    AppProductInfo product;
+
+    AppConfig()
+        : name("MyApplication"),
+          version("1.0") {}
+};
+
+struct PackageCompressionConfig {
+    CompressionAlgorithm algorithm;
+    int level;
+    int threads;
+
+    PackageCompressionConfig()
+        : algorithm(CompressionAlgorithm::LZMA2_XZ),
+          level(-1),
+          threads(0) {}
+};
+
+struct PackageConfig {
+    PackageCompressionConfig compression;
+};
+
+struct MinWindowsConfig {
+    uint16_t major;
+    uint16_t minor;
+    uint32_t build;
+
+    MinWindowsConfig() : major(0), minor(0), build(0) {}
+};
+
+struct PackagerInstallConfig {
+    std::string defaultDir;
     bool requireAdmin;
-    uint16_t minWindowsMajor;
-    uint16_t minWindowsMinor;
-    uint32_t minWindowsBuild;
+    bool autoCleanOldInstall;
+    bool autoStartup;
+    bool desktopIcon;
+    MinWindowsConfig minWindows;
     uint64_t sparseFileThresholdBytes;
+    std::vector<std::string> killProcesses;
     InstallStateConfig installState;
 
-    PackagerConfiguration()
-        : version("1.0"),
-          applicationName("MyApplication"),
-          appId(""),
-          directoryName(""),
-          defaultInstallDir("%ProgramFiles%"),
-          desktopShortcutName(""),
-          compressionAlgorithm(CompressionAlgorithm::LZMA2_XZ),
-          compressionLevel(-1),
-          autoStartup(false),
-          desktopIcons(false),
-          autoCleanOldInstall(false),
+    PackagerInstallConfig()
+        : defaultDir("%ProgramFiles%"),
           requireAdmin(false),
-          minWindowsMajor(0),
-          minWindowsMinor(0),
-          minWindowsBuild(0),
+          autoCleanOldInstall(false),
+          autoStartup(false),
+          desktopIcon(false),
           sparseFileThresholdBytes(4 * 1024 * 1024) {}
+};
+
+struct UiDesktopShortcutConfig {
+    std::string defaultName;
+    std::unordered_map<std::string, std::string> i18n;
+};
+
+struct UiConfig {
+    std::string defaultLanguage;
+    UiDesktopShortcutConfig desktopShortcut;
+    std::vector<UiLinkBinding> links;
+    UiComponentSelectionConfig componentSelection;
+};
+
+struct LayoutFolderDestination {
+    std::string type;
+    std::string path;
+    bool appendDirectoryName;
+
+    LayoutFolderDestination()
+        : type("install"),
+          appendDirectoryName(true) {}
+};
+
+struct LayoutFolderConfig {
+    std::string id;
+    std::string source;
+    LayoutFolderDestination destination;
+};
+
+struct LayoutConfig {
+    std::vector<LayoutFolderConfig> folders;
+    std::vector<ComponentConfig> components;
+};
+
+struct LifecycleCompatibilityConfig {
+    std::vector<std::string> legacyAppIds;
+    std::vector<std::string> legacyDesktopShortcutNames;
+};
+
+struct LifecycleRegistryConfig {
+    std::vector<RegistryEntry> onInstall;
+};
+
+struct LifecycleCleanupConfig {
+    UpgradeCleanupConfig onUpgrade;
+    std::vector<UninstallCleanupRule> onUninstallPaths;
+};
+
+struct PostSetupAgentConfig {
+    bool enabled;
+    std::vector<std::string> tasks;
+
+    PostSetupAgentConfig() : enabled(false) {}
+};
+
+struct PostSetupConfig {
+    PostSetupAgentConfig agent;
+};
+
+struct LifecycleConfig {
+    LifecycleCompatibilityConfig compatibility;
+    LifecycleRegistryConfig registry;
+    LifecycleCleanupConfig cleanup;
+    PostSetupConfig postSetup;
+};
+
+struct PackagerConfiguration {
+    uint32_t schemaVersion;
+    AppConfig app;
+    PackageConfig package;
+    PackagerInstallConfig install;
+    UiConfig ui;
+    LayoutConfig layout;
+    LifecycleConfig lifecycle;
+
+    PackagerConfiguration()
+        : schemaVersion(2) {}
 };
 
 } // namespace MultiThreadedInstaller

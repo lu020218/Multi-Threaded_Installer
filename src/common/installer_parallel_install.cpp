@@ -61,9 +61,9 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     }
 
     std::vector<FolderDispatch> dispatches;
-    dispatches.reserve(metadata.extendedMappings.size());
+    dispatches.reserve(metadata.extendedPayloadMappings.size());
 
-    for (const auto& mapping : metadata.extendedMappings) {
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
         if (cancellationCallback && cancellationCallback()) {
             result.cancelled = true;
             result.errors.push_back("Installation cancelled.");
@@ -72,13 +72,14 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
 
         if (filterFolders &&
             (includedFolderSet.empty() ||
-             includedFolderSet.find(mapping.folderName) == includedFolderSet.end())) {
+             includedFolderSet.find(mapping.folderId) == includedFolderSet.end())) {
             continue;
         }
 
         std::string targetPath;
         for (const auto& explicitMapping : folderMappings) {
-            if (explicitMapping.first == mapping.folderName) {
+            if (explicitMapping.first == mapping.folderId ||
+                explicitMapping.first == mapping.folderName) {
                 targetPath = explicitMapping.second;
                 break;
             }
@@ -86,7 +87,7 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
 
         if (targetPath.empty()) {
             const std::string directoryName =
-                resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName);
+                resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName);
             std::string basePath;
             if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
                 basePath = pathResolver.resolveFinalPath(

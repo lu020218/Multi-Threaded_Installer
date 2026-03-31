@@ -523,14 +523,14 @@ bool requiresAdminForInstall(const std::string& installPath,
         return true;
     }
 
-    if (metadata.installState.mode == InstallStateMode::REGISTRY ||
-        metadata.installState.mode == InstallStateMode::BOTH) {
-        if (registryPathRequiresAdmin(metadata.installState.registryPath)) {
+    if (metadata.installStateConfig.mode == InstallStateMode::REGISTRY ||
+        metadata.installStateConfig.mode == InstallStateMode::BOTH) {
+        if (registryPathRequiresAdmin(metadata.installStateConfig.registryPath)) {
             return true;
         }
     }
 
-    for (const auto& entry : metadata.registry) {
+    for (const auto& entry : metadata.lifecycleInstallRegistry) {
         if (registryPathRequiresAdmin(entry.path)) {
             return true;
         }

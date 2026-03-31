@@ -97,11 +97,11 @@ std::vector<ComponentControlBinding> CollectComponentBindings(CTabLayoutUI* tabP
                                                               const ExtendedInstallationMetadata& metadata,
                                                               std::vector<std::string>* warnings) {
     std::vector<ComponentControlBinding> bindings;
-    if (!tabPages || metadata.components.empty()) {
+    if (!tabPages || metadata.layoutComponents.empty()) {
         return bindings;
     }
 
-    const UiComponentSelectionConfig& ui = metadata.componentUi;
+    const UiComponentSelectionConfig& ui = metadata.uiComponentSelection;
     if (!IsEmbeddedSelectionMode(ui.mode)) {
         return bindings;
     }
@@ -208,8 +208,8 @@ void ApplyComponentBindingConstraints(const ExtendedInstallationMetadata& metada
                                       bool applyDefaults,
                                       std::vector<std::string>* warnings) {
     std::unordered_map<std::string, const ComponentConfig*> componentIndex;
-    componentIndex.reserve(metadata.components.size());
-    for (const auto& component : metadata.components) {
+    componentIndex.reserve(metadata.layoutComponents.size());
+    for (const auto& component : metadata.layoutComponents) {
         componentIndex[component.id] = &component;
     }
 
@@ -241,14 +241,14 @@ std::vector<std::string> CollectSelectedComponentIds(const ExtendedInstallationM
                                                      const std::vector<ComponentControlBinding>& bindings,
                                                      std::vector<std::string>* warnings) {
     std::unordered_map<std::string, const ComponentConfig*> componentIndex;
-    componentIndex.reserve(metadata.components.size());
-    for (const auto& component : metadata.components) {
+    componentIndex.reserve(metadata.layoutComponents.size());
+    for (const auto& component : metadata.layoutComponents) {
         componentIndex[component.id] = &component;
     }
 
     std::unordered_set<std::string> selected;
-    selected.reserve(metadata.components.size());
-    for (const auto& component : metadata.components) {
+    selected.reserve(metadata.layoutComponents.size());
+    for (const auto& component : metadata.layoutComponents) {
         if (component.required) {
             selected.insert(component.id);
         }
@@ -268,7 +268,7 @@ std::vector<std::string> CollectSelectedComponentIds(const ExtendedInstallationM
 
     std::vector<std::string> ordered;
     ordered.reserve(selected.size());
-    for (const auto& component : metadata.components) {
+    for (const auto& component : metadata.layoutComponents) {
         if (selected.find(component.id) != selected.end()) {
             ordered.push_back(component.id);
         }

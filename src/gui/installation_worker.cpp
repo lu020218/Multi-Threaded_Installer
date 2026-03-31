@@ -207,12 +207,12 @@ PostProgressMessage(
             throw std::runtime_error(WideToUtf8(
                 GUIHelpers::GetLocalizedText(L"msg.error.metadata_invalid", L"")));
         }
-        logInstallerInfo(std::string("[GUI] Metadata loaded. App=") + metadata.applicationName +
+        logInstallerInfo(std::string("[GUI] Metadata loaded. App=") + metadata.appName +
                          " folders=" + std::to_string(metadata.folderCount));
         logElapsed("metadata_loaded");
 
-        metadata.autoStartup = m_autoRun;
-        metadata.desktopIcons = m_desktopIcons;
+        metadata.installAutoStartup = m_autoRun;
+        metadata.installDesktopIcon = m_desktopIcons;
 
         std::string installPathStr = WideToUtf8(installPath);
         if (requiresAdminForInstall(installPathStr, metadata, pathResolver) && !isRunningAsAdmin()) {

@@ -394,20 +394,20 @@ bool cleanupUpgradeSystemArtifacts(
         return false;
     }
 
-    std::vector<std::string> autoStartupNames;
+    std::vector<std::string> installAutoStartupNames;
     std::set<std::string> seenNames;
     if (hasManifest) {
-        AppendUniqueName(autoStartupNames, seenNames, GetManifestDisplayName(manifest));
+        AppendUniqueName(installAutoStartupNames, seenNames, GetManifestDisplayName(manifest));
     }
-    for (const auto& legacyId : metadata.legacyAppIds) {
-        AppendUniqueName(autoStartupNames, seenNames, legacyId);
+    for (const auto& legacyId : metadata.compatibilityLegacyAppIds) {
+        AppendUniqueName(installAutoStartupNames, seenNames, legacyId);
     }
-    AppendUniqueName(autoStartupNames, seenNames, metadata.applicationName);
+    AppendUniqueName(installAutoStartupNames, seenNames, metadata.appName);
 
-    const size_t totalSteps = autoStartupNames.size() +
-                              metadata.upgradeCleanup.registry.legacyKeys.size() +
-                              metadata.upgradeCleanup.extraPaths.size() +
-                              (metadata.upgradeCleanup.registry.deleteFromManifest
+    const size_t totalSteps = installAutoStartupNames.size() +
+                              metadata.lifecycleUpgradeCleanup.registry.legacyKeys.size() +
+                              metadata.lifecycleUpgradeCleanup.extraPaths.size() +
+                              (metadata.lifecycleUpgradeCleanup.registry.deleteFromManifest
                                    ? CollectManifestRegistryEntries(manifest).size()
                                    : 0);
     size_t completedSteps = 0;
@@ -419,7 +419,7 @@ bool cleanupUpgradeSystemArtifacts(
         EmitProgress(progressCallback, progress, item);
     };
 
-    for (const auto& name : autoStartupNames) {
+    for (const auto& name : installAutoStartupNames) {
         if (IsCancelled(cancellationCallback)) {
             console.showWarning("Upgrade system cleanup cancelled while removing auto startup.");
             return false;
@@ -432,12 +432,12 @@ bool cleanupUpgradeSystemArtifacts(
 
     std::vector<RegistryEntry> registryEntries;
     std::set<std::string> seenRegistry;
-    if (metadata.upgradeCleanup.registry.deleteFromManifest && hasManifest) {
+    if (metadata.lifecycleUpgradeCleanup.registry.deleteFromManifest && hasManifest) {
         for (const auto& entry : CollectManifestRegistryEntries(manifest)) {
             AppendUniqueRegistryEntry(registryEntries, seenRegistry, entry);
         }
     }
-    for (const auto& entry : metadata.upgradeCleanup.registry.legacyKeys) {
+    for (const auto& entry : metadata.lifecycleUpgradeCleanup.registry.legacyKeys) {
         AppendUniqueRegistryEntry(registryEntries, seenRegistry, entry);
     }
 
@@ -463,7 +463,7 @@ bool cleanupUpgradeSystemArtifacts(
         emitStep("Removing legacy registry entry");
     }
 
-    for (const auto& rule : metadata.upgradeCleanup.extraPaths) {
+    for (const auto& rule : metadata.lifecycleUpgradeCleanup.extraPaths) {
         if (IsCancelled(cancellationCallback)) {
             console.showWarning("Upgrade system cleanup cancelled while removing extra paths.");
             return false;

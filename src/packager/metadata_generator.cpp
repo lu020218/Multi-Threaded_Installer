@@ -71,13 +71,70 @@ void AppendCleanupRules(std::vector<uint8_t>& out, const std::vector<UninstallCl
     }
 }
 
-std::string ResolveEffectiveAppIdLocal(const std::string& appId, const std::string& applicationName) {
-    return appId.empty() ? applicationName : appId;
+std::string ResolveEffectiveAppIdLocal(const std::string& appId, const std::string& appName) {
+    return appId.empty() ? appName : appId;
 }
 
-std::string ResolveEffectiveDirectoryNameLocal(const std::string& directoryName,
-                                               const std::string& applicationName) {
-    return directoryName.empty() ? applicationName : directoryName;
+std::string ResolveEffectiveDirectoryNameLocal(const std::string& appDirectoryName,
+                                               const std::string& appName) {
+    return appDirectoryName.empty() ? appName : appDirectoryName;
+}
+
+SpecialDirectoryType MapDestinationType(const std::string& type) {
+    if (type == "custom") {
+        return SpecialDirectoryType::CUSTOM;
+    }
+    if (type == "programFiles") {
+        return SpecialDirectoryType::PROGRAM_FILES;
+    }
+    if (type == "programFilesX86") {
+        return SpecialDirectoryType::PROGRAM_FILES_X86;
+    }
+    if (type == "appDataRoaming") {
+        return SpecialDirectoryType::APPDATA_ROAMING;
+    }
+    if (type == "appDataLocal") {
+        return SpecialDirectoryType::APPDATA_LOCAL;
+    }
+    if (type == "programData") {
+        return SpecialDirectoryType::PROGRAM_DATA;
+    }
+    if (type == "userProfile") {
+        return SpecialDirectoryType::USER_PROFILE;
+    }
+    return SpecialDirectoryType::INSTALL_DIRECTORY;
+}
+
+std::string DestinationTypeToPathToken(const LayoutFolderDestination& destination) {
+    if (destination.type == "install") {
+        return "installDirectory";
+    }
+    if (destination.type == "custom") {
+        return destination.path;
+    }
+    if (destination.type == "programFiles") {
+        return "%ProgramFiles%";
+    }
+    if (destination.type == "programFilesX86") {
+        return "%ProgramFiles(x86)%";
+    }
+    if (destination.type == "appDataRoaming") {
+        return "%AppData%";
+    }
+    if (destination.type == "appDataLocal") {
+        return "%LocalAppData%";
+    }
+    if (destination.type == "programData") {
+        return "%ProgramData%";
+    }
+    if (destination.type == "userProfile") {
+        return "%USERPROFILE%";
+    }
+    return destination.path;
+}
+
+std::string FolderSourceName(const std::string& source) {
+    return Utf8FromPath(PathFromUtf8(source).filename());
 }
 
 } // namespace
@@ -87,12 +144,12 @@ InstallationMetadata MetadataGenerator::generateMetadata(const std::vector<Compr
     InstallationMetadata metadata;
     metadata.version = Constants::VERSION;
     metadata.folderCount = static_cast<uint32_t>(results.size());
-    metadata.totalCompressedSize = calculateTotalCompressedSize(results);
+    metadata.totalPayloadCompressedSize = calculateTotalPayloadCompressedSize(results);
     
     uint64_t currentOffset = 0;
     for (size_t i = 0; i < results.size() && i < folderInfos.size(); ++i) {
         FolderMapping mapping = createFolderMapping(results[i], folderInfos[i], currentOffset);
-        metadata.folderMappings.push_back(mapping);
+        metadata.payloadMappings.push_back(mapping);
         currentOffset += results[i].compressedSize;
     }
     
@@ -105,48 +162,49 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     ExtendedInstallationMetadata metadata;
     metadata.version = Constants::VERSION;
     metadata.folderCount = static_cast<uint32_t>(results.size());
-    metadata.totalCompressedSize = calculateTotalCompressedSize(results);
+    metadata.totalPayloadCompressedSize = calculateTotalPayloadCompressedSize(results);
     
 
-    metadata.applicationName = config.applicationName;
-    metadata.appId = ResolveEffectiveAppIdLocal(config.appId, config.applicationName);
-    metadata.directoryName =
-        ResolveEffectiveDirectoryNameLocal(config.directoryName, config.applicationName);
-    metadata.legacyAppIds = config.legacyAppIds;
-    metadata.desktopShortcutName = config.desktopShortcutName.empty()
-                                       ? config.applicationName
-                                       : config.desktopShortcutName;
-    metadata.desktopShortcutNameI18n = config.desktopShortcutNameI18n;
-    metadata.legacyDesktopShortcutNames = config.legacyDesktopShortcutNames;
-    metadata.configVersion = config.version;
-    metadata.defaultInstallDir = config.defaultInstallDir;
-    metadata.webPageUrl = config.webPageUrl;
-    metadata.autoStartup = config.autoStartup;
-    metadata.desktopIcons = config.desktopIcons;
-    metadata.autoCleanOldInstall = config.autoCleanOldInstall;
-    metadata.requireAdmin = config.requireAdmin;
-    metadata.minWindowsMajor = config.minWindowsMajor;
-    metadata.minWindowsMinor = config.minWindowsMinor;
-    metadata.minWindowsBuild = config.minWindowsBuild;
-    metadata.sparseFileThresholdBytes = config.sparseFileThresholdBytes;
-    metadata.installState = config.installState;
-    metadata.registry = config.registry;
-    metadata.installKillProcesses = config.installKillProcesses;
-    metadata.components = config.components;
-    metadata.componentUi = config.componentUi;
-    metadata.uiLinks = config.uiLinks;
-    metadata.uninstallCleanupRules = config.uninstallCleanupRules;
-    metadata.upgradeCleanup = config.upgradeCleanup;
+    metadata.appName = config.app.name;
+    metadata.appId = ResolveEffectiveAppIdLocal(config.app.id, config.app.name);
+    metadata.appDirectoryName =
+        ResolveEffectiveDirectoryNameLocal(config.app.directoryName, config.app.name);
+    metadata.compatibilityLegacyAppIds = config.lifecycle.compatibility.legacyAppIds;
+    metadata.desktopShortcutDefaultName = config.ui.desktopShortcut.defaultName.empty()
+                                       ? config.app.name
+                                       : config.ui.desktopShortcut.defaultName;
+    metadata.desktopShortcutLocalizedNames = config.ui.desktopShortcut.i18n;
+    metadata.compatibilityLegacyDesktopShortcutNames =
+        config.lifecycle.compatibility.legacyDesktopShortcutNames;
+    metadata.appVersion = config.app.version;
+    metadata.installDefaultDir = config.install.defaultDir;
+    metadata.appWebsite = config.app.website;
+    metadata.installAutoStartup = config.install.autoStartup;
+    metadata.installDesktopIcon = config.install.desktopIcon;
+    metadata.installAutoCleanOldInstall = config.install.autoCleanOldInstall;
+    metadata.installRequireAdmin = config.install.requireAdmin;
+    metadata.installMinWindowsMajor = config.install.minWindows.major;
+    metadata.installMinWindowsMinor = config.install.minWindows.minor;
+    metadata.installMinWindowsBuild = config.install.minWindows.build;
+    metadata.installSparseFileThresholdBytes = config.install.sparseFileThresholdBytes;
+    metadata.installStateConfig = config.install.installState;
+    metadata.lifecycleInstallRegistry = config.lifecycle.registry.onInstall;
+    metadata.installKillProcesses = config.install.killProcesses;
+    metadata.layoutComponents = config.layout.components;
+    metadata.uiComponentSelection = config.ui.componentSelection;
+    metadata.uiLinkBindings = config.ui.links;
+    metadata.lifecycleUninstallCleanupRules = config.lifecycle.cleanup.onUninstallPaths;
+    metadata.lifecycleUpgradeCleanup = config.lifecycle.cleanup.onUpgrade;
     
     uint64_t currentOffset = 0;
     for (size_t i = 0; i < results.size() && i < folderInfos.size(); ++i) {
 
         ExtendedFolderMapping extMapping = createExtendedFolderMapping(results[i], folderInfos[i], currentOffset, config);
-        metadata.extendedMappings.push_back(extMapping);
+        metadata.extendedPayloadMappings.push_back(extMapping);
         
 
         FolderMapping baseMapping = createFolderMapping(results[i], folderInfos[i], currentOffset);
-        metadata.folderMappings.push_back(baseMapping);
+        metadata.payloadMappings.push_back(baseMapping);
         
         currentOffset += results[i].compressedSize;
     }
@@ -159,7 +217,8 @@ std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMeta
     
 
     size_t stringDataSize = 0;
-    for (const auto& mapping : metadata.folderMappings) {
+    for (const auto& mapping : metadata.payloadMappings) {
+        stringDataSize += mapping.folderId.length() + 1; // +1 for null terminator
         stringDataSize += mapping.folderName.length() + 1; // +1 for null terminator
         stringDataSize += mapping.targetPath.length() + 1; // +1 for null terminator
     }
@@ -170,7 +229,7 @@ std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMeta
     header.version = metadata.version;
     header.folderCount = metadata.folderCount;
     header.metadataSize = sizeof(BinaryMetadata) + 
-                         metadata.folderMappings.size() * (sizeof(uint64_t) * 4 + sizeof(uint32_t) * 2) + 
+                         metadata.payloadMappings.size() * (sizeof(uint64_t) * 4 + sizeof(uint32_t) * 3) + 
                          stringDataSize;
     header.dataOffset = header.metadataSize;
     
@@ -179,7 +238,7 @@ std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMeta
     serialized.insert(serialized.end(), headerBytes, headerBytes + sizeof(BinaryMetadata));
     
 
-    for (const auto& mapping : metadata.folderMappings) {
+    for (const auto& mapping : metadata.payloadMappings) {
 
         const uint8_t* offsetBytes = reinterpret_cast<const uint8_t*>(&mapping.offset);
         serialized.insert(serialized.end(), offsetBytes, offsetBytes + sizeof(uint64_t));
@@ -196,6 +255,11 @@ std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMeta
         const uint8_t* algorithmBytes = reinterpret_cast<const uint8_t*>(&mapping.algorithm);
         serialized.insert(serialized.end(), algorithmBytes, algorithmBytes + sizeof(CompressionAlgorithm));
         
+
+        uint32_t folderIdLen = static_cast<uint32_t>(mapping.folderId.length());
+        const uint8_t* folderIdLenBytes = reinterpret_cast<const uint8_t*>(&folderIdLen);
+        serialized.insert(serialized.end(), folderIdLenBytes, folderIdLenBytes + sizeof(uint32_t));
+        serialized.insert(serialized.end(), mapping.folderId.begin(), mapping.folderId.end());
 
         uint32_t folderNameLen = static_cast<uint32_t>(mapping.folderName.length());
         const uint8_t* folderNameLenBytes = reinterpret_cast<const uint8_t*>(&folderNameLen);
@@ -227,58 +291,58 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     uint32_t extendedMarker = 0x45585444;
     AppendPod(serialized, extendedMarker);
     
-    AppendString(serialized, metadata.applicationName);
+    AppendString(serialized, metadata.appName);
     if (header.version >= 15) {
         AppendString(serialized, metadata.appId);
         if (header.version >= 16) {
-            AppendString(serialized, metadata.directoryName);
+            AppendString(serialized, metadata.appDirectoryName);
         }
-        AppendStringList(serialized, metadata.legacyAppIds);
+        AppendStringList(serialized, metadata.compatibilityLegacyAppIds);
         if (header.version >= 19) {
-            AppendString(serialized, metadata.desktopShortcutName);
-            AppendStringMap(serialized, metadata.desktopShortcutNameI18n);
-            AppendStringList(serialized, metadata.legacyDesktopShortcutNames);
+            AppendString(serialized, metadata.desktopShortcutDefaultName);
+            AppendStringMap(serialized, metadata.desktopShortcutLocalizedNames);
+            AppendStringList(serialized, metadata.compatibilityLegacyDesktopShortcutNames);
         }
     }
     
-    AppendString(serialized, metadata.defaultInstallDir);
+    AppendString(serialized, metadata.installDefaultDir);
 
-    AppendString(serialized, metadata.configVersion);
+    AppendString(serialized, metadata.appVersion);
 
-    AppendString(serialized, metadata.webPageUrl);
+    AppendString(serialized, metadata.appWebsite);
 
-    uint8_t autoStartupFlag = metadata.autoStartup ? 1 : 0;
-    uint8_t desktopIconsFlag = metadata.desktopIcons ? 1 : 0;
-    uint8_t requireAdminFlag = metadata.requireAdmin ? 1 : 0;
-    uint8_t autoCleanFlag = metadata.autoCleanOldInstall ? 1 : 0;
-    serialized.push_back(autoStartupFlag);
-    serialized.push_back(desktopIconsFlag);
-    serialized.push_back(requireAdminFlag);
+    uint8_t installAutoStartupFlag = metadata.installAutoStartup ? 1 : 0;
+    uint8_t installDesktopIconFlag = metadata.installDesktopIcon ? 1 : 0;
+    uint8_t installRequireAdminFlag = metadata.installRequireAdmin ? 1 : 0;
+    uint8_t autoCleanFlag = metadata.installAutoCleanOldInstall ? 1 : 0;
+    serialized.push_back(installAutoStartupFlag);
+    serialized.push_back(installDesktopIconFlag);
+    serialized.push_back(installRequireAdminFlag);
     serialized.push_back(autoCleanFlag);
 
-    AppendPod(serialized, metadata.minWindowsMajor);
-    AppendPod(serialized, metadata.minWindowsMinor);
-    AppendPod(serialized, metadata.minWindowsBuild);
+    AppendPod(serialized, metadata.installMinWindowsMajor);
+    AppendPod(serialized, metadata.installMinWindowsMinor);
+    AppendPod(serialized, metadata.installMinWindowsBuild);
 
-    AppendPod(serialized, metadata.sparseFileThresholdBytes);
+    AppendPod(serialized, metadata.installSparseFileThresholdBytes);
 
-    uint8_t installMode = static_cast<uint8_t>(metadata.installState.mode);
-    uint8_t installMutex = metadata.installState.useMutex ? 1 : 0;
+    uint8_t installMode = static_cast<uint8_t>(metadata.installStateConfig.mode);
+    uint8_t installMutex = metadata.installStateConfig.useMutex ? 1 : 0;
     serialized.push_back(installMode);
     serialized.push_back(installMutex);
     
-    AppendString(serialized, metadata.installState.registryPath);
-    AppendString(serialized, metadata.installState.registryKey);
-    AppendString(serialized, metadata.installState.filePath);
-    AppendString(serialized, metadata.installState.mutexName);
+    AppendString(serialized, metadata.installStateConfig.registryPath);
+    AppendString(serialized, metadata.installStateConfig.registryKey);
+    AppendString(serialized, metadata.installStateConfig.filePath);
+    AppendString(serialized, metadata.installStateConfig.mutexName);
 
-    AppendRegistryList(serialized, metadata.registry);
+    AppendRegistryList(serialized, metadata.lifecycleInstallRegistry);
     AppendStringList(serialized, metadata.installKillProcesses);
 
     if (header.version >= 13) {
-        uint32_t componentCount = static_cast<uint32_t>(metadata.components.size());
+        uint32_t componentCount = static_cast<uint32_t>(metadata.layoutComponents.size());
         AppendPod(serialized, componentCount);
-        for (const auto& component : metadata.components) {
+        for (const auto& component : metadata.layoutComponents) {
             AppendString(serialized, component.id);
             AppendString(serialized, component.name);
             AppendString(serialized, component.description);
@@ -314,31 +378,31 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
             serialized.push_back(component.autoStartup ? 1 : 0);
         }
 
-        AppendString(serialized, metadata.componentUi.mode);
-        AppendString(serialized, metadata.componentUi.strategy);
-        AppendString(serialized, metadata.componentUi.tokenPrefix);
-        uint32_t pageCount = static_cast<uint32_t>(metadata.componentUi.pages.size());
+        AppendString(serialized, metadata.uiComponentSelection.mode);
+        AppendString(serialized, metadata.uiComponentSelection.strategy);
+        AppendString(serialized, metadata.uiComponentSelection.tokenPrefix);
+        uint32_t pageCount = static_cast<uint32_t>(metadata.uiComponentSelection.pages.size());
         AppendPod(serialized, pageCount);
-        for (const auto& page : metadata.componentUi.pages) {
+        for (const auto& page : metadata.uiComponentSelection.pages) {
             AppendString(serialized, page.skin);
             AppendStringList(serialized, page.controls);
         }
 
         if (header.version >= 14) {
-            AppendUiLinks(serialized, metadata.uiLinks);
+            AppendUiLinks(serialized, metadata.uiLinkBindings);
         }
         if (header.version >= 18) {
-            AppendCleanupRules(serialized, metadata.uninstallCleanupRules);
+            AppendCleanupRules(serialized, metadata.lifecycleUninstallCleanupRules);
         }
         if (header.version >= 21) {
-            serialized.push_back(metadata.upgradeCleanup.registry.deleteFromManifest ? 1 : 0);
-            AppendRegistryList(serialized, metadata.upgradeCleanup.registry.legacyKeys);
-            AppendCleanupRules(serialized, metadata.upgradeCleanup.extraPaths);
+            serialized.push_back(metadata.lifecycleUpgradeCleanup.registry.deleteFromManifest ? 1 : 0);
+            AppendRegistryList(serialized, metadata.lifecycleUpgradeCleanup.registry.legacyKeys);
+            AppendCleanupRules(serialized, metadata.lifecycleUpgradeCleanup.extraPaths);
         }
     }
 
-    for (size_t i = 0; i < metadata.extendedMappings.size(); ++i) {
-        const auto& extMapping = metadata.extendedMappings[i];
+    for (size_t i = 0; i < metadata.extendedPayloadMappings.size(); ++i) {
+        const auto& extMapping = metadata.extendedPayloadMappings[i];
         
         const uint8_t* offsetBytes = reinterpret_cast<const uint8_t*>(&extMapping.offset);
         serialized.insert(serialized.end(), offsetBytes, offsetBytes + sizeof(uint64_t));
@@ -355,6 +419,11 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
         const uint8_t* algorithmBytes = reinterpret_cast<const uint8_t*>(&extMapping.algorithm);
         serialized.insert(serialized.end(), algorithmBytes, algorithmBytes + sizeof(CompressionAlgorithm));
         
+        uint32_t folderIdLen = static_cast<uint32_t>(extMapping.folderId.length());
+        const uint8_t* folderIdLenBytes = reinterpret_cast<const uint8_t*>(&folderIdLen);
+        serialized.insert(serialized.end(), folderIdLenBytes, folderIdLenBytes + sizeof(uint32_t));
+        serialized.insert(serialized.end(), extMapping.folderId.begin(), extMapping.folderId.end());
+
         uint32_t folderNameLen = static_cast<uint32_t>(extMapping.folderName.length());
         const uint8_t* folderNameLenBytes = reinterpret_cast<const uint8_t*>(&folderNameLen);
         serialized.insert(serialized.end(), folderNameLenBytes, folderNameLenBytes + sizeof(uint32_t));
@@ -411,7 +480,7 @@ FolderMapping MetadataGenerator::createFolderMapping(const CompressionResult& re
 
     std::filesystem::path sourcePath = PathFromUtf8(folderInfo.sourcePath);
     std::string folderName = Utf8FromPath(sourcePath.filename());
-    
+    mapping.folderId = folderInfo.id.empty() ? folderName : folderInfo.id;
     mapping.folderName = folderName;
     mapping.targetPath = folderInfo.targetPath;
     mapping.offset = offset;
@@ -433,7 +502,7 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
     std::filesystem::path sourcePath = PathFromUtf8(folderInfo.sourcePath);
     std::string folderName = Utf8FromPath(sourcePath.filename());
     
-
+    mapping.folderId = folderInfo.id.empty() ? folderName : folderInfo.id;
     mapping.folderName = folderName;
     mapping.targetPath = folderInfo.targetPath;
     mapping.offset = offset;
@@ -448,11 +517,13 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
     mapping.customTargetPath = "";
     mapping.appendDirectoryName = true;
     
-    for (const auto& folderTarget : config.folderTargets) {
-        if (folderTarget.folderName == folderName) {
-            mapping.targetDirType = folderTarget.dirType;
-            mapping.customTargetPath = folderTarget.targetDirectory;
-            mapping.appendDirectoryName = folderTarget.appendDirectoryName;
+    const std::string folderId = mapping.folderId;
+    for (const auto& folderTarget : config.layout.folders) {
+        if ((!folderId.empty() && folderTarget.id == folderId) ||
+            FolderSourceName(folderTarget.source) == folderName) {
+            mapping.targetDirType = MapDestinationType(folderTarget.destination.type);
+            mapping.customTargetPath = DestinationTypeToPathToken(folderTarget.destination);
+            mapping.appendDirectoryName = folderTarget.destination.appendDirectoryName;
             break;
         }
     }
@@ -460,7 +531,7 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
     return mapping;
 }
 
-uint64_t MetadataGenerator::calculateTotalCompressedSize(const std::vector<CompressionResult>& results) {
+uint64_t MetadataGenerator::calculateTotalPayloadCompressedSize(const std::vector<CompressionResult>& results) {
     uint64_t total = 0;
     for (const auto& result : results) {
         total += result.compressedSize;

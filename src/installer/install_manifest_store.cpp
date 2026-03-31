@@ -81,19 +81,19 @@ std::vector<std::string> EnsureUtf8List(const std::vector<std::string>& values) 
 bool writeManifest(const std::string& manifestPath,
                    const std::string& appId,
                    const std::string& displayName,
-                   const std::vector<std::string>& legacyAppIds,
-                   const std::vector<std::string>& legacyDesktopShortcutNames,
-                   const std::string& configVersion,
+                   const std::vector<std::string>& compatibilityLegacyAppIds,
+                   const std::vector<std::string>& compatibilityLegacyDesktopShortcutNames,
+                   const std::string& appVersion,
                    const std::string& installDir,
                    const std::vector<std::string>& cleanupRoots,
-                   const std::vector<UninstallCleanupRule>& uninstallCleanupRules,
+                   const std::vector<UninstallCleanupRule>& lifecycleUninstallCleanupRules,
                    const std::vector<std::string>& filePaths,
-                   const std::vector<RegistryEntry>& registry,
+                   const std::vector<RegistryEntry>& lifecycleInstallRegistry,
                    const std::vector<std::string>& installKillProcesses,
-                   bool autoStartup,
-                   bool desktopIcons,
+                   bool installAutoStartup,
+                   bool installDesktopIcon,
                    const std::string& desktopShortcutDisplayName,
-                   const InstallStateConfig& installState,
+                   const InstallStateConfig& installStateConfig,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
                    const std::vector<ComponentExecutionRecord>& componentActions) {
@@ -106,22 +106,22 @@ bool writeManifest(const std::string& manifestPath,
         root["version"] = "1.0";
         root["appId"] = EnsureUtf8(appId);
         root["displayName"] = EnsureUtf8(displayName);
-        root["legacyAppIds"] = EnsureUtf8List(legacyAppIds);
-        root["legacyDesktopShortcutNames"] = EnsureUtf8List(legacyDesktopShortcutNames);
+        root["compatibilityLegacyAppIds"] = EnsureUtf8List(compatibilityLegacyAppIds);
+        root["compatibilityLegacyDesktopShortcutNames"] = EnsureUtf8List(compatibilityLegacyDesktopShortcutNames);
         root["appName"] = EnsureUtf8(displayName);
-        root["configVersion"] = EnsureUtf8(configVersion);
+        root["appVersion"] = EnsureUtf8(appVersion);
         root["installDir"] = EnsureUtf8(installDir);
         root["uninstallPath"] = EnsureUtf8(uninstallPath);
         root["cleanupRoots"] = EnsureUtf8List(cleanupRoots);
         json cleanup = json::array();
-        for (const auto& rule : uninstallCleanupRules) {
+        for (const auto& rule : lifecycleUninstallCleanupRules) {
             json item;
             item["path"] = EnsureUtf8(rule.path);
             item["recursive"] = rule.recursive;
             item["onlyIfEmpty"] = rule.onlyIfEmpty;
             cleanup.push_back(std::move(item));
         }
-        root["uninstallCleanupRules"] = std::move(cleanup);
+        root["lifecycleUninstallCleanupRules"] = std::move(cleanup);
 
         std::vector<std::string> safeFiles;
         safeFiles.reserve(filePaths.size());
@@ -129,13 +129,13 @@ bool writeManifest(const std::string& manifestPath,
             safeFiles.push_back(EnsureUtf8(path));
         }
         root["files"] = safeFiles;
-        root["autoStartup"] = autoStartup;
-        root["desktopIcons"] = desktopIcons;
+        root["installAutoStartup"] = installAutoStartup;
+        root["installDesktopIcon"] = installDesktopIcon;
         root["desktopShortcutDisplayName"] = EnsureUtf8(desktopShortcutDisplayName);
         root["language"] = EnsureUtf8(languageCode);
 
         json reg = json::array();
-        for (const auto& entry : registry) {
+        for (const auto& entry : lifecycleInstallRegistry) {
             json item;
             item["path"] = EnsureUtf8(entry.path);
             item["key"] = EnsureUtf8(entry.key);
@@ -143,7 +143,7 @@ bool writeManifest(const std::string& manifestPath,
             item["type"] = static_cast<int>(entry.type);
             reg.push_back(item);
         }
-        root["registry"] = reg;
+        root["lifecycleInstallRegistry"] = reg;
 
         std::vector<std::string> safeInstallKill;
         safeInstallKill.reserve(installKillProcesses.size());
@@ -169,13 +169,13 @@ bool writeManifest(const std::string& manifestPath,
         root["componentActions"] = actions;
 
         json state;
-        state["mode"] = static_cast<int>(installState.mode);
-        state["registryPath"] = EnsureUtf8(installState.registryPath);
-        state["registryKey"] = EnsureUtf8(installState.registryKey);
-        state["filePath"] = EnsureUtf8(installState.filePath);
-        state["useMutex"] = installState.useMutex;
-        state["mutexName"] = EnsureUtf8(installState.mutexName);
-        root["installState"] = state;
+        state["mode"] = static_cast<int>(installStateConfig.mode);
+        state["registryPath"] = EnsureUtf8(installStateConfig.registryPath);
+        state["registryKey"] = EnsureUtf8(installStateConfig.registryKey);
+        state["filePath"] = EnsureUtf8(installStateConfig.filePath);
+        state["useMutex"] = installStateConfig.useMutex;
+        state["mutexName"] = EnsureUtf8(installStateConfig.mutexName);
+        root["installStateConfig"] = state;
 
         std::filesystem::path path = PathFromUtf8(manifestPath);
         std::filesystem::path parent = path.parent_path();

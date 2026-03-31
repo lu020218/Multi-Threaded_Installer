@@ -26,6 +26,11 @@ TarStreamExtractor::TarStreamExtractor(const std::string& targetRoot)
     , fileSize_(0)
     , remaining_(0) {}
 
+void TarStreamExtractor::setCurrentFileChangedCallback(
+    std::function<void(const std::string&)> callback) {
+    currentFileChangedCallback_ = std::move(callback);
+}
+
 bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
     if (!data || size == 0) {
         return true;
@@ -161,6 +166,9 @@ bool TarStreamExtractor::openCurrentFile() {
             logInstallerError("[DECOMP][PayloadWrite] failed to open file path=" +
                               Utf8FromPath(fullPath) + " currentPath=" + currentPath_);
             return false;
+        }
+        if (currentFileChangedCallback_) {
+            currentFileChangedCallback_(currentPath_);
         }
         return true;
     } catch (const std::exception& e) {

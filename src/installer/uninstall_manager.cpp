@@ -62,10 +62,10 @@ static std::vector<std::string> GetManifestLegacyDesktopShortcutNames(const json
 
 static std::vector<UninstallCleanupRule> GetManifestCleanupRules(const json& manifest) {
     std::vector<UninstallCleanupRule> rules;
-    if (!manifest.contains("uninstallCleanupRules") || !manifest["uninstallCleanupRules"].is_array()) {
+    if (!manifest.contains("lifecycleUninstallCleanupRules") || !manifest["lifecycleUninstallCleanupRules"].is_array()) {
         return rules;
     }
-    for (const auto& item : manifest["uninstallCleanupRules"]) {
+    for (const auto& item : manifest["lifecycleUninstallCleanupRules"]) {
         if (!item.is_object()) {
             continue;
         }
@@ -266,14 +266,14 @@ bool uninstallFromManifest(const std::string& manifestPath,
 
     std::string appId = GetManifestAppId(manifest);
     std::string displayName = GetManifestDisplayName(manifest);
-    std::vector<std::string> legacyAppIds = GetManifestLegacyAppIds(manifest);
-    std::vector<std::string> legacyDesktopShortcutNames =
+    std::vector<std::string> compatibilityLegacyAppIds = GetManifestLegacyAppIds(manifest);
+    std::vector<std::string> compatibilityLegacyDesktopShortcutNames =
         GetManifestLegacyDesktopShortcutNames(manifest);
     std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(appId, legacyAppIds, displayName);
+        buildIdentityCandidates(appId, compatibilityLegacyAppIds, displayName);
     std::string installDir = manifest.value("installDir", "");
-    bool autoStartup = manifest.value("autoStartup", false);
-    bool desktopIcons = manifest.value("desktopIcons", false);
+    bool installAutoStartup = manifest.value("installAutoStartup", false);
+    bool installDesktopIcon = manifest.value("installDesktopIcon", false);
     std::string desktopShortcutDisplayName = manifest.value("desktopShortcutDisplayName", "");
     bool removedUninstall = false;
     std::string uninstallPath = manifest.value("uninstallPath", "");
@@ -291,15 +291,15 @@ bool uninstallFromManifest(const std::string& manifestPath,
         }
     }
 
-    InstallStateConfig installState;
-    if (manifest.contains("installState")) {
-        const auto& state = manifest["installState"];
-        installState.mode = static_cast<InstallStateMode>(state.value("mode", 0));
-        installState.registryPath = state.value("registryPath", "");
-        installState.registryKey = state.value("registryKey", "");
-        installState.filePath = state.value("filePath", "");
-        installState.useMutex = state.value("useMutex", true);
-        installState.mutexName = state.value("mutexName", "");
+    InstallStateConfig installStateConfig;
+    if (manifest.contains("installStateConfig")) {
+        const auto& state = manifest["installStateConfig"];
+        installStateConfig.mode = static_cast<InstallStateMode>(state.value("mode", 0));
+        installStateConfig.registryPath = state.value("registryPath", "");
+        installStateConfig.registryKey = state.value("registryKey", "");
+        installStateConfig.filePath = state.value("filePath", "");
+        installStateConfig.useMutex = state.value("useMutex", true);
+        installStateConfig.mutexName = state.value("mutexName", "");
     }
 
     std::vector<ComponentExecutionRecord> componentActions;
@@ -322,8 +322,8 @@ bool uninstallFromManifest(const std::string& manifestPath,
     }
 
     std::vector<RegistryEntry> manifestRegistryEntries;
-    if (manifest.contains("registry") && manifest["registry"].is_array()) {
-        for (const auto& reg : manifest["registry"]) {
+    if (manifest.contains("lifecycleInstallRegistry") && manifest["lifecycleInstallRegistry"].is_array()) {
+        for (const auto& reg : manifest["lifecycleInstallRegistry"]) {
             RegistryEntry entry;
             entry.path = reg.value("path", "");
             entry.key = reg.value("key", "");
@@ -340,7 +340,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
         }
     }
     console.showInfo("Manifest files: " + std::to_string(files.size()));
-    std::vector<UninstallCleanupRule> uninstallCleanupRules = GetManifestCleanupRules(manifest);
+    std::vector<UninstallCleanupRule> lifecycleUninstallCleanupRules = GetManifestCleanupRules(manifest);
 
     std::vector<std::string> cleanupRoots;
     if (manifest.contains("cleanupRoots") && manifest["cleanupRoots"].is_array()) {
@@ -389,17 +389,17 @@ bool uninstallFromManifest(const std::string& manifestPath,
     if (!killTargets.empty()) {
         addWorkUnits(1);
     }
-    if (autoStartup && !displayName.empty()) {
+    if (installAutoStartup && !displayName.empty()) {
         addWorkUnits(1);
     }
     size_t desktopShortcutRemovalCount = 0;
-    if (desktopIcons) {
+    if (installDesktopIcon) {
         if (!desktopShortcutDisplayName.empty()) {
             ++desktopShortcutRemovalCount;
         } else if (!displayName.empty()) {
             ++desktopShortcutRemovalCount;
         }
-        desktopShortcutRemovalCount += legacyDesktopShortcutNames.size();
+        desktopShortcutRemovalCount += compatibilityLegacyDesktopShortcutNames.size();
     }
     if (desktopShortcutRemovalCount > 0) {
         addWorkUnits(desktopShortcutRemovalCount);
@@ -462,7 +462,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
         return false;
     }
 
-    applyInstallState(installState, "uninstalling", resolver);
+    applyInstallState(installStateConfig, "uninstalling", resolver);
     completeWorkUnit("Marking uninstalling state");
 
     for (const auto& action : componentActions) {
@@ -501,11 +501,11 @@ bool uninstallFromManifest(const std::string& manifestPath,
         completeWorkUnit("Replaying component uninstall action: " + label);
     }
 
-    if (autoStartup && !displayName.empty()) {
+    if (installAutoStartup && !displayName.empty()) {
         removeAutoStartup(displayName);
         completeWorkUnit("Removing auto startup entry");
     }
-    if (desktopIcons) {
+    if (installDesktopIcon) {
         std::vector<std::string> shortcutNames;
         std::unordered_set<std::string> seenShortcutNames;
         auto appendShortcutName = [&](const std::string& name) {
@@ -521,7 +521,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
         };
 
         appendShortcutName(desktopShortcutDisplayName);
-        for (const auto& name : legacyDesktopShortcutNames) {
+        for (const auto& name : compatibilityLegacyDesktopShortcutNames) {
             appendShortcutName(name);
         }
         if (shortcutNames.empty()) {
@@ -703,7 +703,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
         completeWorkUnit("Removing install root: " + root);
     }
 
-    for (const auto& rule : uninstallCleanupRules) {
+    for (const auto& rule : lifecycleUninstallCleanupRules) {
         if (isCancelled()) {
             console.showWarning("Uninstall cancelled while running cleanup rules");
             return false;
@@ -740,10 +740,10 @@ bool uninstallFromManifest(const std::string& manifestPath,
         }
     }
 
-    removeInstallStateArtifacts(installState, resolver);
+    removeInstallStateArtifacts(installStateConfig, resolver);
     completeWorkUnit("Removing install state artifacts");
 
-    applyInstallState(installState, "uninstalled", resolver);
+    applyInstallState(installStateConfig, "uninstalled", resolver);
     completeWorkUnit("Marking uninstalled state");
 
     if (!manifestPath.empty()) {

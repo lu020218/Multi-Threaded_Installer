@@ -31,7 +31,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                            const InstallServiceCallbacks& callbacks) {
     InstallServiceResult result;
     HANDLE installMutex = nullptr;
-    bool installStateApplied = false;
+    bool installStateConfigApplied = false;
     InstallProgressReporter reporter(callbacks);
 
     auto releaseResources = [&]() {
@@ -56,9 +56,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                             reporter.CurrentPhase(),
                             reporter.CurrentPhaseProgress(),
                             cancelled ? "Installation cancelled." : "Installation failed.");
-        if (installStateApplied) {
-            applyInstallState(metadata.installState, "failed", pathResolver);
-            installStateApplied = false;
+        if (installStateConfigApplied) {
+            applyInstallState(metadata.installStateConfig, "failed", pathResolver);
+            installStateConfigApplied = false;
         }
         releaseResources();
     };
@@ -109,7 +109,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                          " threadCount=" + std::to_string(options.threadCount));
 
         if (plan.componentPlan.hasComponents) {
-            std::string selectedSummary = "Selected components:";
+            std::string selectedSummary = "Selected layoutComponents:";
             if (plan.componentPlan.ordered.empty()) {
                 selectedSummary += " (none)";
             } else {
@@ -154,8 +154,8 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             return result;
         }
 
-        applyInstallState(metadata.installState, "installing", pathResolver);
-        installStateApplied = true;
+        applyInstallState(metadata.installStateConfig, "installing", pathResolver);
+        installStateConfigApplied = true;
 
         InstallExecutionOutput executionOutput;
         if (!ExecuteInstallExecution(metadata,
@@ -193,7 +193,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             markFailed("Installation finalization failed.", false, true);
             return result;
         }
-        installStateApplied = false;
+        installStateConfigApplied = false;
         releaseResources();
 
         if (!executionOutput.failedOptionalComponentMessages.empty()) {

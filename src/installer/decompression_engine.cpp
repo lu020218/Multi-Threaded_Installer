@@ -148,6 +148,13 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task,
                                          Crc32Stream* checksum,
                                          DecompressionTiming* timing) {
 #ifdef LibLZMA_FOUND
+    std::string currentFile;
+    if (auto* extractor = dynamic_cast<TarStreamExtractor*>(&sink)) {
+        extractor->setCurrentFileChangedCallback([&currentFile](const std::string& path) {
+            currentFile = path;
+        });
+    }
+
     if (!lzmaLoader_.isLoaded()) {
         logInstallerError("[DECOMP] LZMA loader is not available for folder: " + task.folderName);
         return false;
@@ -207,7 +214,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task,
                 const float progress = (std::min)(
                     0.99f,
                     static_cast<float>(totalOut) / static_cast<float>(task.originalSize));
-                reportProgress(task.folderName, std::string(), progress);
+                reportProgress(task.folderName, currentFile, progress);
             }
         }
 
@@ -231,7 +238,7 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task,
         return false;
     }
 
-    reportProgress(task.folderName, std::string(), 1.0f);
+    reportProgress(task.folderName, currentFile, 1.0f);
     return true;
 #else
     (void)task;
@@ -248,6 +255,13 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task,
                                          Crc32Stream* checksum,
                                          DecompressionTiming* timing) {
 #ifdef ZSTD_FOUND
+    std::string currentFile;
+    if (auto* extractor = dynamic_cast<TarStreamExtractor*>(&sink)) {
+        extractor->setCurrentFileChangedCallback([&currentFile](const std::string& path) {
+            currentFile = path;
+        });
+    }
+
     if (task.compressedData.empty()) {
         logInstallerError("[DECOMP] No ZSTD payload provided for folder: " + task.folderName);
         return false;
@@ -312,7 +326,7 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task,
                 const float progress = (std::min)(
                     0.99f,
                     static_cast<float>(totalOut) / static_cast<float>(task.originalSize));
-                reportProgress(task.folderName, std::string(), progress);
+                reportProgress(task.folderName, currentFile, progress);
             }
         }
     }
@@ -326,7 +340,7 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task,
         return false;
     }
 
-    reportProgress(task.folderName, std::string(), 1.0f);
+    reportProgress(task.folderName, currentFile, 1.0f);
     return true;
 #else
     (void)task;

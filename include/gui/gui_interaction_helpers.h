@@ -12,11 +12,11 @@ bool HandleRunningApplicationDialog(HWND hWnd, const std::vector<std::string>& p
 
 void RefreshLicenseText(DuiLib::CPaintManagerUI& paintManager, const InstallConfig& config);
 
-void SyncLicenseAgreementFromPage(DuiLib::CPaintManagerUI& paintManager,
-                                  DuiLib::CCheckBoxUI* licenseCheckbox,
-                                  DuiLib::CButtonUI* installButton,
-                                  uint64_t requiredDiskSpace,
-                                  DuiLib::CEditUI* installPathEdit);
+void ApplyLicenseAgreementSelection(DuiLib::CCheckBoxUI* licenseCheckbox,
+                                    bool agreed,
+                                    DuiLib::CButtonUI* installButton,
+                                    uint64_t requiredDiskSpace,
+                                    DuiLib::CEditUI* installPathEdit);
 
 void ShowLicensePage(DuiLib::CPaintManagerUI& paintManager,
                      DuiLib::CTabLayoutUI* tabPages,

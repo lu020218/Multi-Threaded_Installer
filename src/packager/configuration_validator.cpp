@@ -1,10 +1,13 @@
 #include "packager/configuration_validator.h"
+
 #include "common/utf8_utils.h"
-#include <filesystem>
+
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -21,7 +24,7 @@ bool IsLikelyRelativePath(const std::string& path) {
     if (path.empty()) {
         return true;
     }
-    fs::path fsPath = PathFromUtf8(path);
+    const fs::path fsPath = PathFromUtf8(path);
     if (fsPath.is_absolute()) {
         return false;
     }
@@ -34,8 +37,7 @@ bool ContainsParentTraversal(const std::string& path) {
     if (path.empty()) {
         return false;
     }
-    fs::path fsPath = PathFromUtf8(path);
-    for (const auto& part : fsPath) {
+    for (const auto& part : PathFromUtf8(path)) {
         if (part == "..") {
             return true;
         }
@@ -55,7 +57,7 @@ bool IsHexSha256(const std::string& value) {
 const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
     switch (algorithm) {
         case CompressionAlgorithm::LZMA2_XZ:
-            return "xz/lzma2";
+            return "xz";
         case CompressionAlgorithm::ZSTD:
             return "zstd";
         default:
@@ -63,212 +65,194 @@ const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
     }
 }
 
+bool IsSupportedDestinationType(const std::string& type) {
+    static const std::unordered_set<std::string> kTypes = {
+        "install",
+        "programFiles",
+        "programFilesX86",
+        "appDataRoaming",
+        "appDataLocal",
+        "programData",
+        "userProfile",
+        "custom"
+    };
+    return kTypes.find(type) != kTypes.end();
+}
+
 } // namespace
 
 ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
     const PackagerConfiguration& config,
     const std::string& inputDirectory) {
-    
     ValidationResult result;
-    
 
-    if (config.version.empty()) {
-        result.errors.push_back("ERROR: Missing required field 'Version'\n"
-                                "  Reason: Version is required\n"
-                                "  Suggestion: Add \"Version\": \"1.0\" to the configuration file");
-        result.isValid = false;
-    }
-    
-
-    if (!validateApplicationName(config.applicationName, result.errors)) {
+    if (config.schemaVersion != 2) {
+        result.errors.push_back("ERROR: schemaVersion must be 2");
         result.isValid = false;
     }
 
-    if (config.compressionLevel != -1) {
+    if (config.app.version.empty()) {
+        result.errors.push_back("ERROR: Missing required field 'app.version'");
+        result.isValid = false;
+    }
+
+    if (!validateApplicationName(config.app.name, result.errors)) {
+        result.isValid = false;
+    }
+
+    const int compressionLevel = config.package.compression.level;
+    if (compressionLevel != -1) {
         bool levelValid = false;
-        if (config.compressionAlgorithm == CompressionAlgorithm::LZMA2_XZ) {
-            levelValid = config.compressionLevel >= 0 && config.compressionLevel <= 9;
-        } else if (config.compressionAlgorithm == CompressionAlgorithm::ZSTD) {
-            levelValid = config.compressionLevel >= 1 && config.compressionLevel <= 22;
+        if (config.package.compression.algorithm == CompressionAlgorithm::LZMA2_XZ) {
+            levelValid = compressionLevel >= 0 && compressionLevel <= 9;
+        } else if (config.package.compression.algorithm == CompressionAlgorithm::ZSTD) {
+            levelValid = compressionLevel >= 1 && compressionLevel <= 22;
         }
-
         if (!levelValid) {
             result.errors.push_back(
-                "ERROR: Invalid compressionLevel for algorithm '" +
-                std::string(CompressionAlgorithmName(config.compressionAlgorithm)) + "'\n"
-                "  Reason: compressionLevel is out of supported range\n"
-                "  Suggestion: use 0-9 for xz/lzma2, 1-22 for zstd, or -1 for default");
+                "ERROR: Invalid package.compression.level for algorithm '" +
+                std::string(CompressionAlgorithmName(config.package.compression.algorithm)) + "'");
             result.isValid = false;
         }
     }
-    
 
-    for (const auto& folderTarget : config.folderTargets) {
-
-        if (!validateFolderExists(folderTarget.folderName, inputDirectory, result.errors)) {
-            result.isValid = false;
-        }
-        
-
-        if (!validateTargetDirectory(folderTarget.targetDirectory, result.errors)) {
-            result.isValid = false;
-        }
-    }
-    
-
-    if (!config.defaultInstallDir.empty()) {
-        if (!validateTargetDirectory(config.defaultInstallDir, result.errors)) {
-            result.isValid = false;
-        }
-    } else {
-        result.errors.push_back("ERROR: Missing required field 'InstallDir'\n"
-                                "  Reason: Default install directory is required\n"
-                                "  Suggestion: Add \"InstallDir\": \"%ProgramFiles%\" to the configuration file");
+    if (config.install.defaultDir.empty()) {
+        result.errors.push_back("ERROR: Missing required field 'install.defaultDir'");
+        result.isValid = false;
+    } else if (!validateTargetDirectory(config.install.defaultDir, result.errors)) {
         result.isValid = false;
     }
 
-
-    if (!config.iconPath.empty()) {
-        fs::path iconPath = PathFromUtf8(config.iconPath);
+    if (!config.app.product.iconPath.empty()) {
+        fs::path iconPath = PathFromUtf8(config.app.product.iconPath);
         if (!iconPath.is_absolute()) {
             iconPath = PathFromUtf8(inputDirectory) / iconPath;
         }
         if (!fs::exists(iconPath)) {
             result.errors.push_back("ERROR: Icon file not found: " + Utf8FromPath(iconPath));
             result.isValid = false;
-        } else if (iconPath.extension() != ".ico") {
+        } else if (ToLowerCopy(Utf8FromPath(iconPath.extension())) != ".ico") {
             result.errors.push_back("ERROR: Icon file must be .ico: " + Utf8FromPath(iconPath));
             result.isValid = false;
         }
     }
-    
 
-    for (const auto& reg : config.registry) {
+    for (const auto& reg : config.lifecycle.registry.onInstall) {
         if (reg.path.empty() || reg.key.empty()) {
-            result.errors.push_back("ERROR: Invalid Registry entry\n"
-                                    "  Reason: Registry 'path' and 'key' are required\n"
-                                    "  Suggestion: Provide both \"path\" and \"key\" in Registry entries");
+            result.errors.push_back("ERROR: Invalid lifecycle.registry.onInstall entry: path and key are required");
             result.isValid = false;
             break;
         }
     }
 
+    if ((config.install.installState.mode == InstallStateMode::REGISTRY ||
+         config.install.installState.mode == InstallStateMode::BOTH) &&
+        config.install.installState.registryPath.empty()) {
+        result.errors.push_back("ERROR: install.installState.registryPath is required for registry mode");
+        result.isValid = false;
+    }
 
-    if ((config.installState.mode == InstallStateMode::REGISTRY ||
-         config.installState.mode == InstallStateMode::BOTH) &&
-        config.installState.registryPath.empty()) {
-        result.errors.push_back("ERROR: InstallState.RegistryPath is required for Registry mode");
+    if ((config.install.installState.mode == InstallStateMode::FILE ||
+         config.install.installState.mode == InstallStateMode::BOTH) &&
+        config.install.installState.filePath.empty()) {
+        result.errors.push_back("ERROR: install.installState.filePath is required for file mode");
         result.isValid = false;
     }
-    
-    if ((config.installState.mode == InstallStateMode::FILE ||
-         config.installState.mode == InstallStateMode::BOTH) &&
-        config.installState.filePath.empty()) {
-        result.errors.push_back("ERROR: InstallState.FilePath is required for File mode");
+
+    if (config.install.installState.useMutex && config.install.installState.mutexName.empty()) {
+        result.errors.push_back("ERROR: install.installState.mutexName is required when useMutex is true");
         result.isValid = false;
     }
-    
-    if (config.installState.useMutex && config.installState.mutexName.empty()) {
-        result.errors.push_back("ERROR: InstallState.MutexName is required when UseMutex is true");
-        result.isValid = false;
+
+    std::unordered_set<std::string> folderIds;
+    folderIds.reserve(config.layout.folders.size());
+    for (const auto& folder : config.layout.folders) {
+        if (folder.id.empty()) {
+            result.errors.push_back("ERROR: layout.folders[].id is required");
+            result.isValid = false;
+            continue;
+        }
+        if (!folderIds.insert(folder.id).second) {
+            result.errors.push_back("ERROR: Duplicate layout.folders id: " + folder.id);
+            result.isValid = false;
+        }
+        if (!validateFolderExists(folder.source, inputDirectory, result.errors)) {
+            result.isValid = false;
+        }
+        if (!IsSupportedDestinationType(folder.destination.type)) {
+            result.errors.push_back("ERROR: Invalid field 'layout.folders[].destination.type': " +
+                                    folder.destination.type);
+            result.isValid = false;
+        }
+        if (folder.destination.type == "custom") {
+            if (folder.destination.path.empty()) {
+                result.errors.push_back(
+                    "ERROR: layout.folders[].destination.path is required when destination.type is 'custom'");
+                result.isValid = false;
+            } else if (!validateTargetDirectory(folder.destination.path, result.errors)) {
+                result.isValid = false;
+            }
+        }
     }
 
     if (!validateComponents(config, inputDirectory, result.errors)) {
         result.isValid = false;
     }
-    
+
     return result;
 }
 
-bool ConfigurationValidator::validateApplicationName(
-    const std::string& name,
-    std::vector<std::string>& errors) {
-    
-
+bool ConfigurationValidator::validateApplicationName(const std::string& name,
+                                                     std::vector<std::string>& errors) {
     if (name.empty()) {
-        errors.push_back("ERROR: Missing required field 'applicationName'\n"
-                        "  Reason: Application name is required\n"
-                        "  Suggestion: Add \"applicationName\": \"YourAppName\" to the configuration file");
+        errors.push_back("ERROR: Missing required field 'app.name'");
         return false;
     }
-    
-
 
     const std::string illegalChars = "<>:\"/\\|?*";
     for (char c : name) {
         if (illegalChars.find(c) != std::string::npos) {
-            errors.push_back("ERROR: Invalid application name '" + name + "'\n"
-                           "  Reason: Application name contains illegal character '" + std::string(1, c) + "'\n"
-                           "  Suggestion: Remove illegal characters (< > : \" / \\ | ? *) from the application name");
+            errors.push_back("ERROR: Invalid app.name: illegal character '" + std::string(1, c) + "'");
             return false;
         }
-    }
-    
-
-    for (char c : name) {
         if (std::iscntrl(static_cast<unsigned char>(c))) {
-            errors.push_back("ERROR: Invalid application name\n"
-                           "  Reason: Application name contains control characters\n"
-                           "  Suggestion: Remove control characters from the application name");
+            errors.push_back("ERROR: Invalid app.name: contains control character");
             return false;
         }
     }
-    
     return true;
 }
 
-bool ConfigurationValidator::validateFolderExists(
-    const std::string& folder,
-    const std::string& inputDir,
-    std::vector<std::string>& errors) {
-    
+bool ConfigurationValidator::validateFolderExists(const std::string& folder,
+                                                  const std::string& inputDir,
+                                                  std::vector<std::string>& errors) {
     if (folder.empty()) {
-        errors.push_back("ERROR: Empty folder name in folderTargets\n"
-                        "  Reason: Folder name cannot be empty\n"
-                        "  Suggestion: Provide a valid folder name");
+        errors.push_back("ERROR: layout.folders[].source must not be empty");
         return false;
     }
-    
 
-    fs::path folderPath = PathFromUtf8(inputDir) / PathFromUtf8(folder);
-    
-
+    const fs::path folderPath = PathFromUtf8(inputDir) / PathFromUtf8(folder);
     if (!fs::exists(folderPath)) {
-        errors.push_back("ERROR: Folder does not exist in input directory\n"
-                        "  Folder: " + folder + "\n"
-                        "  Input Directory: " + inputDir + "\n"
-                        "  Full Path: " + Utf8FromPath(folderPath) + "\n"
-                        "  Suggestion: Ensure the folder exists in the input directory or remove it from folderTargets");
+        errors.push_back("ERROR: Layout source folder does not exist: " + Utf8FromPath(folderPath));
         return false;
     }
-    
-
     if (!fs::is_directory(folderPath)) {
-        errors.push_back("ERROR: Path is not a directory\n"
-                        "  Path: " + Utf8FromPath(folderPath) + "\n"
-                        "  Suggestion: Ensure the path points to a directory, not a file");
+        errors.push_back("ERROR: Layout source path is not a directory: " + Utf8FromPath(folderPath));
         return false;
     }
-    
     return true;
 }
 
-bool ConfigurationValidator::validateTargetDirectory(
-    const std::string& targetDir,
-    std::vector<std::string>& errors) {
-    
+bool ConfigurationValidator::validateTargetDirectory(const std::string& targetDir,
+                                                     std::vector<std::string>& errors) {
     if (targetDir.empty()) {
-        errors.push_back("ERROR: Empty target directory\n"
-                        "  Reason: Target directory cannot be empty\n"
-                        "  Suggestion: Provide a valid target directory");
+        errors.push_back("ERROR: Target directory cannot be empty");
         return false;
     }
-    
 
     if (targetDir == "installDirectory") {
         return true;
     }
-    
 
     const std::vector<std::string> validEnvVars = {
         "%ProgramFiles%",
@@ -278,7 +262,7 @@ bool ConfigurationValidator::validateTargetDirectory(
         "%ProgramData%",
         "%USERPROFILE%"
     };
-    
+
     bool hasValidEnvVar = false;
     for (const auto& envVar : validEnvVars) {
         if (targetDir.find(envVar) != std::string::npos) {
@@ -286,23 +270,11 @@ bool ConfigurationValidator::validateTargetDirectory(
             break;
         }
     }
-    
 
     if (targetDir.find('%') != std::string::npos && !hasValidEnvVar) {
-        errors.push_back("ERROR: Invalid environment variable in target directory\n"
-                        "  Target Directory: " + targetDir + "\n"
-                        "  Reason: Unknown or unsupported environment variable\n"
-                        "  Suggestion: Use one of the supported environment variables:\n"
-                        "    - %ProgramFiles%\n"
-                        "    - %ProgramFiles(x86)%\n"
-                        "    - %AppData%\n"
-                        "    - %LocalAppData%\n"
-                        "    - %ProgramData%\n"
-                        "    - %USERPROFILE%");
+        errors.push_back("ERROR: Invalid environment variable in target directory: " + targetDir);
         return false;
     }
-    
-
 
     std::string pathToCheck = targetDir;
     for (const auto& envVar : validEnvVars) {
@@ -311,44 +283,42 @@ bool ConfigurationValidator::validateTargetDirectory(
             pathToCheck.replace(pos, envVar.length(), "");
         }
     }
-    
 
     const std::string illegalChars = "<>:\"|?*";
     for (char c : pathToCheck) {
         if (illegalChars.find(c) != std::string::npos) {
-            errors.push_back("ERROR: Invalid target directory path\n"
-                           "  Target Directory: " + targetDir + "\n"
-                           "  Reason: Path contains illegal character '" + std::string(1, c) + "'\n"
-                           "  Suggestion: Remove illegal characters (< > : \" | ? *) from the path");
+            errors.push_back("ERROR: Invalid target directory path: " + targetDir);
             return false;
         }
     }
-    
+
     return true;
 }
 
 bool ConfigurationValidator::validateComponents(const PackagerConfiguration& config,
                                                 const std::string& inputDirectory,
                                                 std::vector<std::string>& errors) {
-    if (config.components.empty()) {
+    if (config.layout.components.empty()) {
         return true;
     }
 
     bool valid = true;
-
     std::unordered_map<std::string, size_t> idIndex;
-    idIndex.reserve(config.components.size());
+    std::unordered_set<std::string> folderIds;
+    for (const auto& folder : config.layout.folders) {
+        folderIds.insert(folder.id);
+    }
 
-    for (size_t i = 0; i < config.components.size(); ++i) {
-        const auto& component = config.components[i];
-        const std::string position = "components[" + std::to_string(i) + "]";
+    idIndex.reserve(config.layout.components.size());
+    for (size_t i = 0; i < config.layout.components.size(); ++i) {
+        const auto& component = config.layout.components[i];
+        const std::string position = "layout.components[" + std::to_string(i) + "]";
 
         if (component.id.empty()) {
             errors.push_back("ERROR: " + position + ".id is required");
             valid = false;
             continue;
         }
-
         if (idIndex.find(component.id) != idIndex.end()) {
             errors.push_back("ERROR: Duplicate component id: " + component.id);
             valid = false;
@@ -361,8 +331,9 @@ bool ConfigurationValidator::validateComponents(const PackagerConfiguration& con
             valid = false;
         }
 
-        for (const auto& folder : component.folders) {
-            if (!validateFolderExists(folder, inputDirectory, errors)) {
+        for (const auto& folderId : component.folders) {
+            if (folderIds.find(folderId) == folderIds.end()) {
+                errors.push_back("ERROR: " + position + ".folders references unknown folder id: " + folderId);
                 valid = false;
             }
         }
@@ -375,7 +346,6 @@ bool ConfigurationValidator::validateComponents(const PackagerConfiguration& con
                                  ".source.local.base must start with %InstallDir%/installDirectory");
                 valid = false;
             }
-
             if (!IsLikelyRelativePath(component.source.local.installer)) {
                 errors.push_back("ERROR: " + position +
                                  ".source.local.installer must be a relative path under install dir");
@@ -383,8 +353,7 @@ bool ConfigurationValidator::validateComponents(const PackagerConfiguration& con
             }
             if (ContainsParentTraversal(component.source.local.installer) ||
                 ContainsParentTraversal(component.source.local.base)) {
-                errors.push_back("ERROR: " + position +
-                                 ".source.local contains parent path traversal ('..')");
+                errors.push_back("ERROR: " + position + ".source.local contains parent path traversal ('..')");
                 valid = false;
             }
         }
@@ -403,9 +372,9 @@ bool ConfigurationValidator::validateComponents(const PackagerConfiguration& con
         }
     }
 
-    for (size_t i = 0; i < config.components.size(); ++i) {
-        const auto& component = config.components[i];
-        const std::string position = "components[" + std::to_string(i) + "]";
+    for (size_t i = 0; i < config.layout.components.size(); ++i) {
+        const auto& component = config.layout.components[i];
+        const std::string position = "layout.components[" + std::to_string(i) + "]";
         for (const auto& dep : component.dependsOn) {
             if (idIndex.find(dep) == idIndex.end()) {
                 errors.push_back("ERROR: " + position + ".dependsOn references unknown component: " + dep);
@@ -437,12 +406,10 @@ bool ConfigurationValidator::validateComponents(const PackagerConfiguration& con
         itState->second = VisitState::Visiting;
         const auto itIndex = idIndex.find(id);
         if (itIndex != idIndex.end()) {
-            const auto& dependsOn = config.components[itIndex->second].dependsOn;
+            const auto& dependsOn = config.layout.components[itIndex->second].dependsOn;
             for (const auto& dep : dependsOn) {
-                if (idIndex.find(dep) != idIndex.end()) {
-                    if (!dfs(dep)) {
-                        return false;
-                    }
+                if (idIndex.find(dep) != idIndex.end() && !dfs(dep)) {
+                    return false;
                 }
             }
         }

@@ -26,14 +26,14 @@ std::wstring ResolveEffectiveDirectoryNameFromConfig(const InstallConfig& config
 bool ConfirmCleanupOldInstall(HWND hWnd,
                               const ExtendedInstallationMetadata& metadata,
                               const std::wstring& installPath) {
-    if (metadata.autoCleanOldInstall) {
+    if (metadata.installAutoCleanOldInstall) {
         return true;
     }
 
     InstallerPathResolver pathResolver;
     const std::string installPathUtf8 = WideToUtf8(installPath);
     bool installDirectoryAppendName = true;
-    for (const auto& mapping : metadata.extendedMappings) {
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
         if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
             installDirectoryAppendName = mapping.appendDirectoryName;
             break;
@@ -43,13 +43,15 @@ bool ConfirmCleanupOldInstall(HWND hWnd,
     const std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
         installPathUtf8,
         SpecialDirectoryType::INSTALL_DIRECTORY,
-        resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName),
+        resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName),
         installDirectoryAppendName);
 
     std::string previousManifest;
     std::string previousInstallDir;
     const std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(metadata.appId, metadata.legacyAppIds, metadata.applicationName);
+        buildIdentityCandidates(metadata.appId,
+                                metadata.compatibilityLegacyAppIds,
+                                metadata.appName);
     if (!resolveExistingInstallInfo(identityCandidates,
                                     pathResolver,
                                     previousManifest,

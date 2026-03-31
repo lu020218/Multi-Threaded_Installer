@@ -340,7 +340,7 @@ bool GUIManager::EnsureInstallMetadataLoaded() {
         }
         m_installMetadata = std::move(metadata);
         m_uiLinks.clear();
-        for (const auto& link : m_installMetadata.uiLinks) {
+        for (const auto& link : m_installMetadata.uiLinkBindings) {
             if (!link.control.empty() && !link.url.empty()) {
                 m_uiLinks[link.control] = Utf8ToWide(link.url);
             }
@@ -402,11 +402,11 @@ void GUIManager::Notify(TNotifyUI& msg) {
             [this]() { SendMessage(WM_SYSCOMMAND, SC_MINIMIZE, 0); },
             [this]() { OnShowMoreClick(); },
             [this]() { OnLicenseLinkClick(); },
-            [this]() { OnLicenseBackClick(); },
+            [this]() { OnLicenseAgreeClick(); },
+            [this]() { OnLicenseDisagreeClick(); },
             [this]() { OnUninstallConfirmClick(); },
             [this]() { Close(); },
             [this]() { OnLicenseCheckboxChanged(); },
-            [this]() { SyncLicenseAgreementFromPage(); },
             [this](int index) { ApplyLanguageByIndex(index); },
             [](const std::wstring& url) { GUIHelpers::OpenWebPage(url); }});
 }
@@ -539,7 +539,7 @@ void GUIManager::OnInstallButtonClick() {
                                        m_hWnd, metadata, request.installPath);
 
     std::vector<std::string> processNames = buildKillProcessList(
-        metadata.applicationName,
+        metadata.appName,
         metadata.installKillProcesses);
     if (!HandleRunningApplicationDialog(m_hWnd, processNames)) {
         return;
@@ -628,12 +628,23 @@ void GUIManager::OnLicenseLinkClick() {
     MultiThreadedInstaller::ShowLicensePage(m_pm, m_pTabPages, m_pLicenseCheckbox, m_config, kPageLicense);
 }
 
-void GUIManager::OnLicenseBackClick() {
-    MultiThreadedInstaller::SyncLicenseAgreementFromPage(m_pm,
-                                                         m_pLicenseCheckbox,
-                                                         m_pInstallButton,
-                                                         m_config.requiredDiskSpace,
-                                                         m_pInstallPathEdit);
+void GUIManager::OnLicenseAgreeClick() {
+    MultiThreadedInstaller::ApplyLicenseAgreementSelection(m_pLicenseCheckbox,
+                                                           true,
+                                                           m_pInstallButton,
+                                                           m_config.requiredDiskSpace,
+                                                           m_pInstallPathEdit);
+    if (m_pTabPages) {
+        m_pTabPages->SelectItem(kPageWelcome);
+    }
+}
+
+void GUIManager::OnLicenseDisagreeClick() {
+    MultiThreadedInstaller::ApplyLicenseAgreementSelection(m_pLicenseCheckbox,
+                                                           false,
+                                                           m_pInstallButton,
+                                                           m_config.requiredDiskSpace,
+                                                           m_pInstallPathEdit);
     if (m_pTabPages) {
         m_pTabPages->SelectItem(kPageWelcome);
     }
@@ -645,14 +656,6 @@ void GUIManager::ShowLicensePage() {
 
 void GUIManager::RefreshLicenseText() {
     MultiThreadedInstaller::RefreshLicenseText(m_pm, m_config);
-}
-
-void GUIManager::SyncLicenseAgreementFromPage() {
-    MultiThreadedInstaller::SyncLicenseAgreementFromPage(m_pm,
-                                                         m_pLicenseCheckbox,
-                                                         m_pInstallButton,
-                                                         m_config.requiredDiskSpace,
-                                                         m_pInstallPathEdit);
 }
 
 void GUIManager::OnFinishButtonClick() {

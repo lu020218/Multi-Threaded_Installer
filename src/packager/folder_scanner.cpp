@@ -17,6 +17,7 @@ std::vector<FolderInfo> FolderScanner::scanInputDirectory(const std::string& inp
         for (const auto& entry : std::filesystem::directory_iterator(PathFromUtf8(inputPath))) {
             if (entry.is_directory()) {
                 FolderInfo folderInfo;
+                folderInfo.id = Utf8FromPath(entry.path().filename());
                 folderInfo.sourcePath = Utf8FromPath(entry.path());
                 folderInfo.targetPath = Utf8FromPath(entry.path().filename());
                 

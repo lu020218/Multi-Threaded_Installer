@@ -15,7 +15,8 @@ std::string InstallerPathResolver::resolveFinalPath(
     std::string basePath;
     
 
-    if (targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
+    if (targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY ||
+        targetDirType == SpecialDirectoryType::CUSTOM) {
         basePath = userSelectedPath;
     } else {
         basePath = getSpecialDirectoryPath(targetDirType);
@@ -124,6 +125,7 @@ std::string InstallerPathResolver::getSpecialDirectoryPath(SpecialDirectoryType 
         case SpecialDirectoryType::USER_PROFILE:
             return "%USERPROFILE%";
         case SpecialDirectoryType::INSTALL_DIRECTORY:
+        case SpecialDirectoryType::CUSTOM:
         default:
             return "";
     }

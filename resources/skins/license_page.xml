@@ -8,12 +8,9 @@
 		
 		<RichEdit padding="20,16,5,0" height="180" name="editLicense" autovscroll="true" vscrollbar="true" readonly="true" textcolor="0xFF000000"  inset="12,12,2,12" bordersize="1"  />
 			   
-		<HorizontalLayout float="true" pos="0,260,200,276" >
-		<CheckBox name="chkAgree1" endellipsis="true" textcolor="0xFF333333" padding="20,0,0,0" width="145" font="0" showhtml="true" resourcetext="true" text="msg.agree1" />
-		</HorizontalLayout>	
-		
-		<HorizontalLayout float="true" pos="434,245,500,275" >
-		<Button name="btnBack" resourcetext="true" text="msg.back" cursor="hand" font="1" width="66" height="30" bordersize="1" bkcolor="0xFFEDF7FF" bordercolor="0xFFC2E1F9" hotbkcolor="0xFFE0F1FE" pushedbkcolor="0xFFD0E7F9" textcolor="0xFF060300" hottextcolor="0xFF060300" pushedtextcolor="0xFF060300" disabledtextcolor="0xFF060300" textpadding="0,-1,0,0" align="center" />		
+		<HorizontalLayout float="true" pos="320,245,500,275" childpadding="12">
+		<Button name="btnLicenseDisagree" resourcetext="true" text="msg.license_disagree" cursor="hand" font="1" width="78" height="30" bordersize="1" bkcolor="0xFFEDF7FF" bordercolor="0xFFC2E1F9" hotbkcolor="0xFFE0F1FE" pushedbkcolor="0xFFD0E7F9" textcolor="0xFF060300" hottextcolor="0xFF060300" pushedtextcolor="0xFF060300" disabledtextcolor="0xFF060300" textpadding="0,-1,0,0" align="center" />
+		<Button name="btnLicenseAgree" resourcetext="true" text="msg.license_agree" cursor="hand" font="1" width="78" height="30" bordersize="0" bkcolor="0xFF0091FF" hotbkcolor="0xFF0DA0FF" pushedbkcolor="0xFF007EE0" textcolor="0xFFFFFFFF" hottextcolor="0xFFFFFFFF" pushedtextcolor="0xFFFFFFFF" disabledtextcolor="0xFFB4DFFF" textpadding="0,-1,0,0" align="center" />
 		</HorizontalLayout>
 		</VerticalLayout>
 	</VerticalLayout>

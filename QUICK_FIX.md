@@ -1,107 +1,57 @@
-# 快速修复：打包器生成的安装程序资源加载问题
+# Quick Fix Notes
 
-## ✅ 问题已解决
+This document summarizes the current packaging/runtime assumptions after the recent refactors.
 
-打包器生成的安装程序之前会报错"加载资源文件失败：main.xml"。此问题已**修复**。
+## Current State
 
-## ✅ DuiLib静态链接已实现
+- DuiLib is linked statically in the supported build path
+- packager embeds UI resources into installer and uninstaller templates
+- packager config is YAML only
+- required config schema is `schemaVersion: 2`
+- old JSON config and old flat config schema are not supported
 
-现在使用DuiLib静态库，**不再需要DuiLib.dll**！安装程序只需要：
-- MyApp_Setup.exe (包含静态链接的DuiLib)
-- liblzma.dll
-- resources/ 目录
+## Minimal Build
 
-## 当前状态
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+  -DBUILD_GUI=ON `
+  -DSTATIC_LINK_RUNTIME=ON `
+  -DENABLE_ZSTD=ON
 
-✅ **DuiLib静态链接** - 无需DuiLib.dll  
-✅ **打包器正确复制依赖文件** (liblzma.dll, resources/)  
-✅ **安装程序正确回退到外部资源**  
-✅ **打包器生成的安装程序成功启动 GUI**
-
-## 使用方法
-
-1. **配置项目（使用静态库）**:
-   ```cmd
-   cmake -B build -DUSE_DUILIB_STATIC=ON -DSTATIC_LINK_RUNTIME=ON
-   ```
-
-2. **构建安装程序**:
-   ```cmd
-   cmake --build build --config Release --target installer
-   ```
-
-3. **构建打包器**:
-   ```cmd
-   cmake --build build --config Release --target packager
-   ```
-
-4. **运行打包器**:
-   ```cmd
-   build\Release\packager.exe <输入目录> <输出文件>
-   ```
-   
-   示例:
-   ```cmd
-   build\Release\packager.exe input build\Release\output\MyApp_Setup.exe
-   ```
-
-5. **打包器会自动**:
-   - 复制 liblzma.dll 到输出目录
-   - 复制 resources/ 目录到输出目录
-   - **不复制 DuiLib.dll**（已静态链接）
-
-6. **运行生成的安装程序**:
-   ```cmd
-   build\Release\output\MyApp_Setup.exe
-   ```
-
-## 配置文件格式
-
-在输入目录中创建 `packager.json`:
-
-```json
-{
-  "Version": "1.0.0",
-  "AppName": "YourApp",
-  "InstallDir": "%ProgramFiles%\\YourApp",
-  "Folder": {
-    "InstallDir": "your_folder_name"
-  }
-}
+cmake --build build --config Release --target installer
+cmake --build build --config Release --target uninstaller
+cmake --build build --config Release --target packager
 ```
 
-## 验证
+## Minimal Packaging Flow
 
-打包器输出会显示:
-```
-DuiLib.dll not found - assuming static linking
-Copied: liblzma.dll
-Copied: resources/ directory
-```
+1. Put your app folders and `packager.yaml` in one input directory.
+2. Run:
 
-安装程序会显示调试输出:
-```
-No embedded resources found, will use external resources
-Instance path: <exe所在目录>\
-Resource path: <exe所在目录>\resources
-Path exists: YES
+```powershell
+build\Release\packager.exe <input_directory> <output_installer.exe>
 ```
 
-## 下一步（可选）
+3. The generated installer will contain:
+- installer metadata
+- folder payloads
+- embedded UI resources
+- embedded `uninstaller.exe`
 
-要实现完全的单文件安装程序（无需任何外部文件），还需要：
-1. 静态链接或嵌入 liblzma.dll
-2. 嵌入 resources/ 目录
+## Config Reminder
 
-参见：
-- `docs/DETAILED_DESIGN.md` - 实现指南
-- `docs/USER_GUIDE.md` - 快速入门
-- `scripts/embed_resources.ps1` - 资源嵌入脚本
+Required structure:
 
-## 相关文档
+```yaml
+schemaVersion: 2
 
-- `docs/REQUIREMENTS.md` - DuiLib静态链接实现详情
-- `docs/DETAILED_DESIGN.md` - 资源路径修复详情
-- `docs/USER_GUIDE.md` - 打包指南
-- `docs/REQUIREMENTS.md` - 手动复制说明
+app:
+package:
+install:
+ui:
+layout:
+lifecycle:
+```
 
+Reference:
+- [examples/packager.yaml](/e:/Work/GitHub/Multi-Threaded_Installer-master/examples/packager.yaml)

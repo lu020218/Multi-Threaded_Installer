@@ -1,631 +1,344 @@
-# 测试用例清单
+# Test Cases
 
-## 1. 目的
+## Scope
 
-本清单用于覆盖以下核心能力：
+This checklist covers:
+- packager schema v2 loading
+- folder payload packaging
+- GUI install
+- silent install
+- uninstall
+- upgrade cleanup
+- component install
+- shortcut and startup behavior
+- payload extraction stability
 
-- `packager.exe` 打包
-- `installer.exe` GUI 安装与静默安装
-- `installer.exe` GUI 修复
-- `uninstaller.exe` GUI 卸载与静默卸载
-- 旧版本升级清理
-- DPI 缩放与资源加载
-- 多语言桌面快捷方式
-- 嵌入资源、日志、并发与异常场景
+## Test Environment
 
-## 2. 测试环境建议
+- Windows 10 22H2 and Windows 11 23H2 or later
+- x64
+- DPI 100%, 150%, 200%
+- standard user install path with elevation
+- administrator-run install path
 
-- 操作系统：Windows 10 22H2 / Windows 11 23H2 或更高
-- 架构：x64
-- DPI 缩放：100%、150%、200%
-- 权限场景：
-  - 标准用户触发提权
-  - 管理员直接运行
-- 安装路径场景：
-  - 默认路径
-  - 自定义路径
-  - 新旧版本不同路径
+## Preparation
 
-## 3. 测试准备
+### Build Outputs
 
-### 3.1 构建产物
-
-确保以下文件位于 `packager.exe` 同目录：
-
+Ensure these files exist next to `packager.exe`:
 - `installer.exe`
 - `uninstaller.exe`
 - `resources/`
 
-### 3.2 示例配置
+### Config Preparation
 
-准备一份可覆盖以下配置点的 `packager.yaml`：
+Prepare a schema v2 `packager.yaml` covering:
+- `app`
+- `package`
+- `install`
+- `ui`
+- `layout`
+- `lifecycle`
 
-- `legacyAppIds`
-- `desktopShortcutName`
-- `desktopShortcutNameI18n`
-- `legacyDesktopShortcutNames`
-- `cleanup.onUpgrade.registry.deleteFromManifest`
-- `cleanup.onUpgrade.registry.legacyKeys`
-- `cleanup.onUpgrade.extraPaths`
-- 业务注册表：`InstallDir`、`InstallLocation`、`ExecutablePath`
-- 可选组件
-- `autoCleanOldInstall=true`
+Recommended coverage:
+- `lifecycle.compatibility.legacyAppIds`
+- `ui.desktopShortcut.defaultName`
+- `ui.desktopShortcut.i18n`
+- `lifecycle.compatibility.legacyDesktopShortcutNames`
+- `lifecycle.cleanup.onUpgrade.registry.deleteFromManifest`
+- `lifecycle.cleanup.onUpgrade.registry.legacyKeys`
+- `lifecycle.cleanup.onUpgrade.extraPaths`
+- `lifecycle.registry.onInstall`
+- component definitions
 
-### 3.3 测试数据
+## Packager Tests
 
-准备：
+### PKG-001 Valid schema v2 config
 
-- 一个旧版本安装包
-- 一个新版本安装包
-- 旧版本与新版本的 `applicationName` 不同的场景
-- `zh_CN` 与 `en_US` 两种语言配置
+Steps:
+1. Run `packager.exe` with a valid `packager.yaml`
 
-## 4. 执行记录模板
+Expected:
+- config loads successfully
+- installer is generated successfully
 
-每条用例建议记录：
+### PKG-002 Missing schemaVersion
 
-- 用例编号
-- 执行日期
-- 构建版本
-- 测试环境
-- 实际结果
-- 是否通过
-- 日志路径
-- 截图路径
+Steps:
+1. Remove `schemaVersion`
+2. Run `packager.exe`
 
-## 5. 打包测试
+Expected:
+- fails
+- error mentions `schemaVersion`
 
-### PKG-001 正常打包
+### PKG-003 Wrong schemaVersion
 
-- 前置条件：`installer.exe`、`uninstaller.exe`、`resources/` 均存在
-- 步骤：
-1. 运行 `packager.exe`
-2. 指定有效 `packager.yaml`
-- 预期结果：
-1. 打包成功
-2. 输出安装包成功生成
-3. 日志中出现：
-   - `Embedded UI resources into uninstaller template`
-   - `Embedded UI resources into installer template`
-4. 安装包内包含：
-   - `resources.zip`
-   - `uninstaller.exe`
+Steps:
+1. Set the schema version to an unsupported value such as `1`
+2. Run `packager.exe`
 
-### PKG-002 缺少 installer 模板
+Expected:
+- fails
+- error says schema version 2 is required
 
-- 前置条件：移走 `installer.exe`
-- 步骤：
-1. 运行 `packager.exe`
-- 预期结果：
-1. 打包失败
-2. 错误明确指出缺少当前目录下的 `installer.exe`
+### PKG-004 Invalid compression algorithm
 
-### PKG-003 缺少 uninstaller 模板
+Steps:
+1. Set `package.compression.algorithm: lzma`
+2. Run `packager.exe`
 
-- 前置条件：移走 `uninstaller.exe`
-- 步骤：
-1. 运行 `packager.exe`
-- 预期结果：
-1. 打包失败
-2. 错误明确指出缺少当前目录下的 `uninstaller.exe`
+Expected:
+- fails
+- error points to `package.compression.algorithm`
 
-### PKG-004 缺少 resources 目录
+### PKG-005 Invalid destination type
 
-- 前置条件：移走 `resources/`
-- 步骤：
-1. 运行 `packager.exe`
-- 预期结果：
-1. 打包失败
-2. 错误明确指出缺少当前目录下的 `resources`
+Steps:
+1. Set `layout.folders[0].destination.type: unknown`
+2. Run `packager.exe`
 
-### PKG-005 JSON 配置不再支持
+Expected:
+- fails
+- error points to `layout.folders[].destination.type`
 
-- 前置条件：提供 `packager.json`
-- 步骤：
-1. 用 `.json` 配置运行 `packager.exe`
-- 预期结果：
-1. 失败
-2. 明确提示当前只支持 YAML 配置
+### PKG-006 Unknown component folder reference
 
-## 6. GUI 安装测试
+Steps:
+1. Set `layout.components[0].folders` to an undeclared folder id
+2. Run `packager.exe`
 
-### INS-GUI-001 默认 GUI 安装
+Expected:
+- fails
+- error points to `layout.components[].folders`
 
-- 步骤：
-1. 双击安装包
-2. 使用默认路径安装
-- 预期结果：
-1. 欢迎页正常显示
-2. 安装成功
-3. 安装目录存在主程序、`uninstall.exe`、`install.manifest.json`
-4. 卸载注册表写入成功
+### PKG-007 Single folder package
 
-### INS-GUI-002 自定义安装路径
+Steps:
+1. Provide one top-level folder
+2. Run `packager.exe`
 
-- 步骤：
-1. 打开安装包
-2. 选择自定义安装路径
-3. 开始安装
-- 预期结果：
-1. 实际安装到指定路径
-2. manifest 中 `installDir` 与 UI 选择一致
+Expected:
+- package succeeds
+- installer metadata contains one folder payload
 
-### INS-GUI-003 组件选择安装
+### PKG-008 Multiple folder package
 
-- 前置条件：配置中存在多个可选组件
-- 步骤：
-1. 只勾选部分组件
-2. 开始安装
-- 预期结果：
-1. 仅选中组件被安装
-2. 组件相关文件、注册表、后置动作符合选择结果
+Steps:
+1. Provide at least two top-level folders
+2. Run `packager.exe`
 
-### INS-GUI-004 桌面图标与开机启动
+Expected:
+- package succeeds
+- each top-level folder becomes one payload
 
-- 步骤：
-1. 勾选桌面图标与开机启动
-2. 完成安装
-- 预期结果：
-1. 桌面存在快捷方式
-2. 启动项写入成功
+### PKG-009 XZ payload header validation
 
-### INS-GUI-005 不创建桌面图标与开机启动
+Steps:
+1. Package with `package.compression.algorithm: xz`
+2. Inspect payload bytes
 
-- 步骤：
-1. 取消勾选桌面图标与开机启动
-2. 完成安装
-- 预期结果：
-1. 不创建桌面快捷方式
-2. 不写入新的开机启动项
+Expected:
+- payload starts with standard XZ header
+- no custom block header exists
 
-## 7. 静默安装测试
+### PKG-010 ZSTD payload package
 
-### INS-SIL-001 最小静默安装
+Steps:
+1. Package with `package.compression.algorithm: zstd`
 
-- 步骤：
-1. 运行：
+Expected:
+- package succeeds
+- installer can later consume the result
+
+## Install Tests
+
+### INS-GUI-001 Default GUI install
+
+Steps:
+1. Launch installer
+2. Install using default path
+
+Expected:
+- install succeeds
+- `install.manifest.json` exists
+- `uninstall.exe` exists
+
+### INS-GUI-002 Custom install path
+
+Steps:
+1. Launch installer
+2. Change install path
+3. Install
+
+Expected:
+- files are installed to selected path
+
+### INS-GUI-003 Component selection
+
+Steps:
+1. Launch installer
+2. Select only part of optional components
+3. Install
+
+Expected:
+- only selected component actions are executed
+
+### INS-SIL-001 Minimal silent install
+
+Steps:
+1. Run:
+
 ```powershell
 installer.exe --silent
 ```
-- 预期结果：
-1. 安装成功
-2. 不弹出 GUI
-3. 使用默认安装路径
 
-### INS-SIL-002 指定安装路径
+Expected:
+- install succeeds without GUI
 
-- 步骤：
-1. 运行：
+### INS-SIL-002 Silent install with destination and components
+
+Steps:
+1. Run:
+
 ```powershell
-installer.exe --silent --destination "D:\Apps\MyApp"
+installer.exe --silent --destination "D:\Apps\MyApp" --components all
 ```
-- 预期结果：
-1. 安装成功
-2. 实际安装到 `D:\Apps\MyApp`
 
-### INS-SIL-003 指定组件
+Expected:
+- install succeeds at selected path
+- all optional components are installed
 
-- 步骤：
-1. 运行：
-```powershell
-installer.exe --silent --components componentA,componentB
-```
-- 预期结果：
-1. 仅安装指定组件
+### INS-SIL-003 Silent install startup and desktop icon
 
-### INS-SIL-004 安装全部组件
+Steps:
+1. Run:
 
-- 步骤：
-1. 运行：
-```powershell
-installer.exe --silent --components all
-```
-- 预期结果：
-1. 所有可选组件均安装
-
-### INS-SIL-005 静默安装开机自启动与桌面图标
-
-- 步骤：
-1. 运行：
 ```powershell
 installer.exe --silent --auto-startup true --desktop-icon true
 ```
-- 预期结果：
-1. 启动项存在
-2. 桌面快捷方式存在
 
-### INS-SIL-006 非法参数
+Expected:
+- startup entry is created
+- desktop shortcut is created
 
-- 步骤：
-1. 运行：
-```powershell
-installer.exe --silent --repair
-```
-- 预期结果：
-1. 失败
-2. 明确提示静默安装不支持 `--repair`
+## Uninstall Tests
 
-## 8. 修复安装测试
+### UNI-GUI-001 GUI uninstall
 
-### INS-REP-001 GUI 修复成功
+Steps:
+1. Run installed `uninstall.exe`
 
-- 前置条件：已安装旧版本或当前版本
-- 步骤：
-1. 运行：
-```powershell
-installer.exe --repair
-```
-- 预期结果：
-1. 进入修复模式 GUI
-2. 安装路径为已安装目录
-3. 安装路径控件只读，浏览按钮禁用
-4. 修复成功
+Expected:
+- uninstall succeeds
+- install directory cleanup matches manifest and cleanup rules
 
-### INS-REP-002 未安装时修复失败
+### UNI-SIL-001 Silent uninstall
 
-- 前置条件：系统中不存在已安装实例
-- 步骤：
-1. 运行：
-```powershell
-installer.exe --repair
-```
-- 预期结果：
-1. 明确失败
-2. 不回落成普通安装
+Steps:
+1. Run:
 
-## 9. GUI 卸载测试
-
-### UNINS-GUI-001 默认 GUI 卸载
-
-- 前置条件：已安装
-- 步骤：
-1. 运行安装目录中的 `uninstall.exe`
-2. 执行卸载
-- 预期结果：
-1. GUI 正常显示
-2. 卸载成功
-3. 主程序、manifest、卸载器被清理
-
-### UNINS-GUI-002 桌面快捷方式删除
-
-- 前置条件：安装时创建了桌面快捷方式
-- 步骤：
-1. 运行 `uninstall.exe`
-2. 卸载
-- 预期结果：
-1. 按 `desktopShortcutDisplayName` 删除真实快捷方式
-2. 历史快捷方式也按 `legacyDesktopShortcutNames` 删除
-
-### UNINS-GUI-003 启动项删除
-
-- 前置条件：安装时启用了开机启动
-- 步骤：
-1. 卸载
-- 预期结果：
-1. 开机启动项被删除
-
-## 10. 静默卸载测试
-
-### UNINS-SIL-001 最小静默卸载
-
-- 前置条件：已安装
-- 步骤：
-1. 运行：
 ```powershell
 uninstall.exe --silent
 ```
-- 预期结果：
-1. 卸载成功
-2. 不显示 GUI
-
-## 11. 升级安装与旧版本清理测试
-
-### UPG-001 旧安装目录文件清理
-
-- 前置条件：
-  - 旧版本安装在 `D:\Apps\OldApp`
-  - 新版本安装到 `D:\Apps\NewApp`
-- 步骤：
-1. 安装旧版本
-2. 安装新版本
-- 预期结果：
-1. 旧目录中 manifest 记录的文件被删除
-2. `uninstall.exe`、`install.manifest.json` 被删除
-3. 空目录被清理
-
-### UPG-002 旧桌面快捷方式清理
-
-- 前置条件：
-  - 旧版本快捷方式名称与新版本不同
-  - `legacyDesktopShortcutNames` 已配置
-- 步骤：
-1. 安装旧版本
-2. 安装新版本
-- 预期结果：
-1. 旧快捷方式被删除
-2. 新快捷方式按当前语言名称创建
-
-### UPG-003 旧开机启动项清理
-
-- 前置条件：
-  - 旧版本存在开机启动项
-  - `legacyAppIds` 已配置
-- 步骤：
-1. 安装旧版本并开启开机启动
-2. 安装新版本
-- 预期结果：
-1. 旧开机启动项被删除
-2. 若新版本仍启用自启动，只保留新版本项
-
-### UPG-004 旧业务注册表清理
-
-- 前置条件：
-  - 旧版本写入业务注册表
-  - `cleanup.onUpgrade.registry.deleteFromManifest=true`
-- 步骤：
-1. 安装旧版本
-2. 安装新版本
-- 预期结果：
-1. 旧 manifest 记录的注册表项被删除
-2. 新版本本次应写入的注册表项仍存在
-
-### UPG-005 显式 legacy registry keys 清理
-
-- 前置条件：
-  - `cleanup.onUpgrade.registry.legacyKeys` 已配置
-- 步骤：
-1. 手动创建旧注册表路径/值
-2. 安装新版本
-- 预期结果：
-1. `legacyKeys` 中指定的注册表被删除
-
-### UPG-006 额外目录清理
-
-- 前置条件：
-  - `cleanup.onUpgrade.extraPaths` 已配置
-- 步骤：
-1. 预先创建 `%AppData%` / `%LocalAppData%` 下的旧目录和文件
-2. 安装新版本
-- 预期结果：
-1. 指定目录按规则清理
-2. `onlyIfEmpty=true` 的非空目录不会被误删
-
-### UPG-007 危险路径保护
-
-- 前置条件：在 `extraPaths` 中故意配置危险路径或根目录
-- 步骤：
-1. 安装新版本
-- 预期结果：
-1. 危险路径不会被删除
-2. 日志中有 warning
-3. 安装不中断
-
-## 12. 多语言桌面快捷方式测试
-
-### I18N-001 中文安装语言快捷方式名
-
-- 前置条件：配置 `desktopShortcutNameI18n.zh_CN`
-- 步骤：
-1. 以中文安装
-2. 勾选桌面图标
-- 预期结果：
-1. 桌面快捷方式名称为中文
-2. manifest 记录对应 `desktopShortcutDisplayName`
-
-### I18N-002 英文安装语言快捷方式名
-
-- 前置条件：配置 `desktopShortcutNameI18n.en_US`
-- 步骤：
-1. 以英文安装
-2. 勾选桌面图标
-- 预期结果：
-1. 桌面快捷方式名称为英文
-
-### I18N-003 语言切换后的升级清理
-
-- 前置条件：
-  - 旧版本中文安装
-  - 新版本英文安装
-- 步骤：
-1. 安装旧版本
-2. 安装新版本
-- 预期结果：
-1. 旧中文快捷方式被删除
-2. 新英文快捷方式创建成功
-
-## 13. DPI 与资源加载测试
-
-### DPI-001 100% 启动
-
-- 步骤：
-1. 系统缩放设为 100%
-2. 打开安装器
-- 预期结果：
-1. 窗口与控件完整显示
-2. 无裁切、重叠、空白异常
-
-### DPI-002 150% 启动
-
-- 步骤：
-1. 系统缩放设为 150%
-2. 打开安装器
-- 预期结果：
-1. 初始布局正常
-2. 日志显示 `dpi=144 scale=150%`
-3. 页面图片 `@150` 资源正常命中
-
-### DPI-003 200% 启动
-
-- 步骤：
-1. 系统缩放设为 200%
-2. 打开安装器
-- 预期结果：
-1. 初始布局正常
-2. 无控件偏移
-
-### DPI-004 运行中 150% -> 200%
-
-- 步骤：
-1. 在 150% 打开安装器
-2. 切换系统缩放到 200%
-- 预期结果：
-1. 窗口不会出现双重放大
-2. 控件位置同步调整
-3. 无明显错位
-
-### DPI-005 运行中 150% -> 100%
-
-- 步骤：
-1. 在 150% 打开安装器
-2. 切换系统缩放到 100%
-- 预期结果：
-1. 窗口不会被二次缩小
-2. 全部控件仍可完整显示
-
-### DPI-006 DPI 日志校验
-
-- 步骤：
-1. 执行 DPI 切换
-2. 查看日志
-- 预期结果：
-1. 存在 `[GUI][DPI]`
-2. 存在 `WM_DPICHANGED begin/end`
-3. 存在当前页面 XML scope 与控件图片快照
-
-## 14. 资源嵌入与临时目录测试
-
-### RES-001 GUI 资源来源
-
-- 步骤：
-1. 启动安装器
-2. 查看日志与临时目录
-- 预期结果：
-1. 从 EXE 提取 `resources.zip`
-2. DuiLib 使用 ZIP 模式加载
-3. 临时目录中不再预创建多余空目录
-
-### RES-002 独立卸载器提取
-
-- 步骤：
-1. 完成安装
-2. 查看安装目录
-- 预期结果：
-1. 存在独立 `uninstall.exe`
-2. 该卸载器可独立运行
-
-## 15. 日志与异常测试
-
-### LOG-001 单次启动仅生成一个主日志
-
-- 步骤：
-1. 启动安装器
-2. 查看 `%LOCALAPPDATA%\\MTInstaller`
-- 预期结果：
-1. 单次主流程仅生成一个主日志文件
-
-### LOG-002 关键链路日志输出
-
-- 步骤：
-1. 执行安装
-2. 查看日志
-- 预期结果：
-1. 有 `[GUI][RES]`
-2. 有 `[GUI][DPI]`
-3. 有安装阶段进度日志
-4. 有升级清理 warning/info 日志
-
-### LOG-003 资源缺失错误
-
-- 前置条件：故意构造缺少 `resources.zip` 的异常包
-- 步骤：
-1. 启动安装器
-- 预期结果：
-1. GUI 启动失败
-2. 明确错误提示
-3. 不再有 console fallback
-
-## 16. 并发与取消测试
-
-### THR-001 大量组件安装
-
-- 前置条件：多个组件、多个 embedded folder
-- 步骤：
-1. 执行安装
-- 预期结果：
-1. 安装成功
-2. 无死锁
-3. 进度正常推进
-
-### THR-002 安装中取消
-
-- 步骤：
-1. GUI 安装开始
-2. 进度页点击取消
-- 预期结果：
-1. 取消请求能够传递到真实后台 worker
-2. 后台线程退出
-3. 不崩溃、不挂死
-
-### THR-003 取消后关闭窗口
-
-- 步骤：
-1. 安装中点击取消
-2. 立即关闭窗口
-- 预期结果：
-1. 不发生 `std::terminate`
-2. 无后台消息悬空崩溃
-
-### THR-004 卸载中关闭窗口
-
-- 步骤：
-1. 卸载中关闭窗口
-- 预期结果：
-1. 线程能够正常回收
-2. 无崩溃
-
-## 17. 回归测试
-
-### REG-001 旧安装定位
-
-- 前置条件：系统存在旧版本
-- 步骤：
-1. 启动安装器
-- 预期结果：
-1. 仅通过 `InstallDir` 和卸载注册表两条路径定位旧安装
-2. 行为稳定
-
-### REG-002 packager 仅当前目录查找模板
-
-- 步骤：
-1. 在 `packager.exe` 同目录放模板
-2. 在其他目录放同名旧模板
-3. 运行打包
-- 预期结果：
-1. 只使用当前目录模板
-
-### REG-003 embedded-only 分发模型
-
-- 步骤：
-1. 生成安装包
-2. 只分发安装包本体
-- 预期结果：
-1. 不依赖外部 `resources/`
-2. GUI 正常启动
-
-## 18. 建议优先执行顺序
-
-建议优先执行以下高价值回归：
-
-1. `PKG-001`
-2. `INS-GUI-001`
-3. `INS-SIL-001`
-4. `INS-REP-001`
-5. `UNINS-GUI-001`
-6. `UPG-001`
-7. `UPG-003`
-8. `UPG-004`
-9. `I18N-001`
-10. `DPI-002`
-11. `DPI-004`
-12. `THR-002`
 
+Expected:
+- uninstall succeeds without GUI
+
+## Upgrade Cleanup Tests
+
+### UPG-001 Old install directory cleanup
+
+Steps:
+1. Install old version in one directory
+2. Install new version in another directory with upgrade cleanup enabled
+
+Expected:
+- old install files are removed
+- old manifest and uninstall binary are removed
+
+### UPG-002 Legacy startup cleanup
+
+Steps:
+1. Install old version with startup enabled
+2. Upgrade to new version
+
+Expected:
+- old startup entry is removed
+
+### UPG-003 Legacy registry cleanup
+
+Steps:
+1. Create old registry entries
+2. Upgrade to new version
+
+Expected:
+- configured legacy keys are removed
+
+### UPG-004 Extra path cleanup
+
+Steps:
+1. Create files in configured `lifecycle.cleanup.onUpgrade.extraPaths`
+2. Upgrade to new version
+
+Expected:
+- configured extra paths are cleaned according to rules
+
+## Shortcut and Localization Tests
+
+### UI-001 Default shortcut name
+
+Expected:
+- desktop shortcut uses `ui.desktopShortcut.defaultName` when no language-specific name exists
+
+### UI-002 Localized shortcut name
+
+Expected:
+- desktop shortcut uses language-specific value from `ui.desktopShortcut.i18n`
+
+### UI-003 Legacy shortcut cleanup
+
+Expected:
+- upgrade cleanup removes old shortcut names from `lifecycle.compatibility.legacyDesktopShortcutNames`
+
+## Payload Stability Tests
+
+### PAY-001 Large XZ payload
+
+Steps:
+1. Package a folder with a large executable, e.g. 177MB+
+2. Install
+
+Expected:
+- install succeeds
+- no crash or unexpected interruption during extraction
+
+### PAY-002 Multiple folder concurrent extraction
+
+Steps:
+1. Package at least two large folders
+2. Install
+
+Expected:
+- folder-level parallel install succeeds
+- logs show payload-level extraction behavior
+
+### PAY-003 MT decoder logging
+
+Expected logs for XZ payload:
+- decoder decision log
+- whether MT decoder was used
+- thread count
+- fallback reason when MT is not used
+
+## Documentation Consistency Checks
+
+### DOC-001 Schema references
+
+Steps:
+1. Search docs and examples
+
+Expected:
+- no active examples using schema version 1
+- no docs instruct users to use unsupported config filenames
+- no docs describe old flat config keys as current schema

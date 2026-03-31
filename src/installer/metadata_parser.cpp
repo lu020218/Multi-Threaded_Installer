@@ -66,7 +66,7 @@ bool MetadataParser::validateMetadata(const InstallationMetadata& metadata) {
         return false;
     }
     
-    if (metadata.folderMappings.size() != metadata.folderCount) {
+    if (metadata.payloadMappings.size() != metadata.folderCount) {
         META_LOG();
         return false;
     }
@@ -164,14 +164,30 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
             break;
         }
         
+        uint32_t folderIdLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+
+        if (offset + folderIdLen > data.size()) {
+            META_LOG();
+            break;
+        }
+
+        mapping.folderId = std::string(reinterpret_cast<const char*>(data.data() + offset), folderIdLen);
+        offset += folderIdLen;
+
+        if (offset + sizeof(uint32_t) > data.size()) {
+            META_LOG();
+            break;
+        }
+
         uint32_t folderNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
-        
+
         if (offset + folderNameLen > data.size()) {
             META_LOG();
             break;
         }
-        
+
         mapping.folderName = std::string(reinterpret_cast<const char*>(data.data() + offset), folderNameLen);
         offset += folderNameLen;
         
@@ -192,13 +208,13 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
         mapping.targetPath = std::string(reinterpret_cast<const char*>(data.data() + offset), targetPathLen);
         offset += targetPathLen;
         
-        metadata.folderMappings.push_back(mapping);
+        metadata.payloadMappings.push_back(mapping);
     }
     
 
-    metadata.totalCompressedSize = 0;
-    for (const auto& mapping : metadata.folderMappings) {
-        metadata.totalCompressedSize += mapping.compressedSize;
+    metadata.totalPayloadCompressedSize = 0;
+    for (const auto& mapping : metadata.payloadMappings) {
+        metadata.totalPayloadCompressedSize += mapping.compressedSize;
     }
     
     return metadata;
@@ -235,37 +251,40 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     }
     offset += sizeof(uint32_t);
     
-    if (!ReadString(data, offset, metadata.applicationName, "applicationName")) {
+    if (!ReadString(data, offset, metadata.appName, "appName")) {
         return metadata;
     }
     if (header->version >= 15) {
         if (!ReadString(data, offset, metadata.appId, "appId") ||
             (header->version >= 16 &&
-             !ReadString(data, offset, metadata.directoryName, "directoryName")) ||
-            !ReadStringList(data, offset, metadata.legacyAppIds, "legacyAppIds")) {
+             !ReadString(data, offset, metadata.appDirectoryName, "appDirectoryName")) ||
+            !ReadStringList(data, offset, metadata.compatibilityLegacyAppIds, "compatibilityLegacyAppIds")) {
             return metadata;
         }
         if (header->version >= 19) {
-            if (!ReadString(data, offset, metadata.desktopShortcutName, "desktopShortcutName") ||
-                !ReadStringMap(data, offset, metadata.desktopShortcutNameI18n, "desktopShortcutNameI18n") ||
-                !ReadStringList(data, offset, metadata.legacyDesktopShortcutNames, "legacyDesktopShortcutNames")) {
+            if (!ReadString(data, offset, metadata.desktopShortcutDefaultName, "desktopShortcutDefaultName") ||
+                !ReadStringMap(data, offset, metadata.desktopShortcutLocalizedNames, "desktopShortcutLocalizedNames") ||
+                !ReadStringList(data,
+                                offset,
+                                metadata.compatibilityLegacyDesktopShortcutNames,
+                                "compatibilityLegacyDesktopShortcutNames")) {
                 return metadata;
             }
         } else {
-            metadata.desktopShortcutName.clear();
-            metadata.desktopShortcutNameI18n.clear();
-            metadata.legacyDesktopShortcutNames.clear();
+            metadata.desktopShortcutDefaultName.clear();
+            metadata.desktopShortcutLocalizedNames.clear();
+            metadata.compatibilityLegacyDesktopShortcutNames.clear();
         }
     } else {
         metadata.appId.clear();
-        metadata.directoryName.clear();
-        metadata.legacyAppIds.clear();
-        metadata.desktopShortcutName.clear();
-        metadata.desktopShortcutNameI18n.clear();
-        metadata.legacyDesktopShortcutNames.clear();
+        metadata.appDirectoryName.clear();
+        metadata.compatibilityLegacyAppIds.clear();
+        metadata.desktopShortcutDefaultName.clear();
+        metadata.desktopShortcutLocalizedNames.clear();
+        metadata.compatibilityLegacyDesktopShortcutNames.clear();
     }
-    if (!ReadString(data, offset, metadata.defaultInstallDir, "defaultInstallDir") ||
-        !ReadString(data, offset, metadata.configVersion, "configVersion")) {
+    if (!ReadString(data, offset, metadata.installDefaultDir, "installDefaultDir") ||
+        !ReadString(data, offset, metadata.appVersion, "appVersion")) {
         return metadata;
     }
 
@@ -280,20 +299,20 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
             META_LOG();
             return metadata;
         }
-        metadata.webPageUrl = std::string(reinterpret_cast<const char*>(data.data() + offset), webUrlLen);
+        metadata.appWebsite = std::string(reinterpret_cast<const char*>(data.data() + offset), webUrlLen);
         offset += webUrlLen;
     } else {
-        metadata.webPageUrl.clear();
+        metadata.appWebsite.clear();
     }
 
     if (metadata.appId.empty()) {
-        metadata.appId = metadata.applicationName;
+        metadata.appId = metadata.appName;
     }
-    if (metadata.directoryName.empty()) {
-        metadata.directoryName = metadata.applicationName;
+    if (metadata.appDirectoryName.empty()) {
+        metadata.appDirectoryName = metadata.appName;
     }
-    if (metadata.desktopShortcutName.empty()) {
-        metadata.desktopShortcutName = metadata.applicationName;
+    if (metadata.desktopShortcutDefaultName.empty()) {
+        metadata.desktopShortcutDefaultName = metadata.appName;
     }
 
     if (header->version >= 7) {
@@ -302,20 +321,20 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
             META_LOG();
             return metadata;
         }
-        metadata.autoStartup = data[offset] != 0;
-        metadata.desktopIcons = data[offset + 1] != 0;
-        metadata.requireAdmin = data[offset + 2] != 0;
-        metadata.autoCleanOldInstall = header->version >= 9 ? (data[offset + 3] != 0) : false;
+        metadata.installAutoStartup = data[offset] != 0;
+        metadata.installDesktopIcon = data[offset + 1] != 0;
+        metadata.installRequireAdmin = data[offset + 2] != 0;
+        metadata.installAutoCleanOldInstall = header->version >= 9 ? (data[offset + 3] != 0) : false;
         offset += sizeof(uint8_t) * flagCount;
     } else {
         if (offset + sizeof(uint8_t) * 2 > data.size()) {
             META_LOG();
             return metadata;
         }
-        metadata.autoStartup = data[offset] != 0;
-        metadata.desktopIcons = data[offset + 1] != 0;
-        metadata.requireAdmin = false;
-        metadata.autoCleanOldInstall = false;
+        metadata.installAutoStartup = data[offset] != 0;
+        metadata.installDesktopIcon = data[offset + 1] != 0;
+        metadata.installRequireAdmin = false;
+        metadata.installAutoCleanOldInstall = false;
         offset += sizeof(uint8_t) * 2;
     }
 
@@ -324,16 +343,16 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
             META_LOG();
             return metadata;
         }
-        metadata.minWindowsMajor = *reinterpret_cast<const uint16_t*>(data.data() + offset);
+        metadata.installMinWindowsMajor = *reinterpret_cast<const uint16_t*>(data.data() + offset);
         offset += sizeof(uint16_t);
-        metadata.minWindowsMinor = *reinterpret_cast<const uint16_t*>(data.data() + offset);
+        metadata.installMinWindowsMinor = *reinterpret_cast<const uint16_t*>(data.data() + offset);
         offset += sizeof(uint16_t);
-        metadata.minWindowsBuild = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        metadata.installMinWindowsBuild = *reinterpret_cast<const uint32_t*>(data.data() + offset);
         offset += sizeof(uint32_t);
     } else {
-        metadata.minWindowsMajor = 0;
-        metadata.minWindowsMinor = 0;
-        metadata.minWindowsBuild = 0;
+        metadata.installMinWindowsMajor = 0;
+        metadata.installMinWindowsMinor = 0;
+        metadata.installMinWindowsBuild = 0;
     }
 
     if (header->version >= 6) {
@@ -341,18 +360,18 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
             META_LOG();
             return metadata;
         }
-        metadata.sparseFileThresholdBytes = *reinterpret_cast<const uint64_t*>(data.data() + offset);
+        metadata.installSparseFileThresholdBytes = *reinterpret_cast<const uint64_t*>(data.data() + offset);
         offset += sizeof(uint64_t);
     } else {
-        metadata.sparseFileThresholdBytes = 4 * 1024 * 1024;
+        metadata.installSparseFileThresholdBytes = 4 * 1024 * 1024;
     }
 
     if (offset + sizeof(uint8_t) * 2 > data.size()) {
         META_LOG();
         return metadata;
     }
-    metadata.installState.mode = static_cast<InstallStateMode>(data[offset]);
-    metadata.installState.useMutex = data[offset + 1] != 0;
+    metadata.installStateConfig.mode = static_cast<InstallStateMode>(data[offset]);
+    metadata.installStateConfig.useMutex = data[offset + 1] != 0;
     offset += sizeof(uint8_t) * 2;
 
     if (offset + sizeof(uint32_t) > data.size()) {
@@ -365,7 +384,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         META_LOG();
         return metadata;
     }
-    metadata.installState.registryPath = std::string(reinterpret_cast<const char*>(data.data() + offset), regPathLen);
+    metadata.installStateConfig.registryPath = std::string(reinterpret_cast<const char*>(data.data() + offset), regPathLen);
     offset += regPathLen;
 
     if (offset + sizeof(uint32_t) > data.size()) {
@@ -378,7 +397,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         META_LOG();
         return metadata;
     }
-    metadata.installState.registryKey = std::string(reinterpret_cast<const char*>(data.data() + offset), regKeyLen);
+    metadata.installStateConfig.registryKey = std::string(reinterpret_cast<const char*>(data.data() + offset), regKeyLen);
     offset += regKeyLen;
 
     if (offset + sizeof(uint32_t) > data.size()) {
@@ -391,7 +410,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         META_LOG();
         return metadata;
     }
-    metadata.installState.filePath = std::string(reinterpret_cast<const char*>(data.data() + offset), filePathLen);
+    metadata.installStateConfig.filePath = std::string(reinterpret_cast<const char*>(data.data() + offset), filePathLen);
     offset += filePathLen;
 
     if (offset + sizeof(uint32_t) > data.size()) {
@@ -404,17 +423,17 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         META_LOG();
         return metadata;
     }
-    metadata.installState.mutexName = std::string(reinterpret_cast<const char*>(data.data() + offset), mutexNameLen);
+    metadata.installStateConfig.mutexName = std::string(reinterpret_cast<const char*>(data.data() + offset), mutexNameLen);
     offset += mutexNameLen;
 
     if (offset + sizeof(uint32_t) > data.size()) {
         META_LOG();
         return metadata;
     }
-    uint32_t registryCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+    uint32_t lifecycleInstallRegistryCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
     offset += sizeof(uint32_t);
-    metadata.registry.reserve(registryCount);
-    for (uint32_t r = 0; r < registryCount; ++r) {
+    metadata.lifecycleInstallRegistry.reserve(lifecycleInstallRegistryCount);
+    for (uint32_t r = 0; r < lifecycleInstallRegistryCount; ++r) {
         if (offset + sizeof(uint32_t) > data.size()) {
             META_LOG();
             return metadata;
@@ -462,7 +481,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         reg.value = std::string(reinterpret_cast<const char*>(data.data() + offset), valueLen);
         offset += valueLen;
         
-        metadata.registry.push_back(std::move(reg));
+        metadata.lifecycleInstallRegistry.push_back(std::move(reg));
     }
     
     if (header->version >= 12) {
@@ -492,25 +511,25 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     }
 
     if (header->version >= 13) {
-        if (!ReadComponentList(data, offset, metadata.components)) {
+        if (!ReadComponentList(data, offset, metadata.layoutComponents)) {
             return metadata;
         }
-        if (!ReadComponentUiConfig(data, offset, metadata.componentUi)) {
+        if (!ReadComponentUiConfig(data, offset, metadata.uiComponentSelection)) {
             return metadata;
         }
         if (header->version >= 14) {
-            if (!ReadUiLinks(data, offset, metadata.uiLinks)) {
+            if (!ReadUiLinks(data, offset, metadata.uiLinkBindings)) {
                 return metadata;
             }
         } else {
-            metadata.uiLinks.clear();
+            metadata.uiLinkBindings.clear();
         }
         if (header->version >= 18) {
-            if (!ReadCleanupRules(data, offset, metadata.uninstallCleanupRules)) {
+            if (!ReadCleanupRules(data, offset, metadata.lifecycleUninstallCleanupRules)) {
                 return metadata;
             }
         } else {
-            metadata.uninstallCleanupRules.clear();
+            metadata.lifecycleUninstallCleanupRules.clear();
         }
         if (header->version >= 21) {
             uint8_t deleteFromManifest = 0;
@@ -518,23 +537,23 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
                 META_LOG();
                 return metadata;
             }
-            metadata.upgradeCleanup.registry.deleteFromManifest = deleteFromManifest != 0;
+            metadata.lifecycleUpgradeCleanup.registry.deleteFromManifest = deleteFromManifest != 0;
             if (!ReadRegistryList(data,
                                   offset,
-                                  metadata.upgradeCleanup.registry.legacyKeys,
-                                  "upgradeCleanup.registry.legacyKeys") ||
-                !ReadCleanupRules(data, offset, metadata.upgradeCleanup.extraPaths)) {
+                                  metadata.lifecycleUpgradeCleanup.registry.legacyKeys,
+                                  "lifecycleUpgradeCleanup.registry.legacyKeys") ||
+                !ReadCleanupRules(data, offset, metadata.lifecycleUpgradeCleanup.extraPaths)) {
                 return metadata;
             }
         } else {
-            metadata.upgradeCleanup = UpgradeCleanupConfig{};
+            metadata.lifecycleUpgradeCleanup = UpgradeCleanupConfig{};
         }
     } else {
-        metadata.components.clear();
-        metadata.componentUi = UiComponentSelectionConfig();
-        metadata.uiLinks.clear();
-        metadata.uninstallCleanupRules.clear();
-        metadata.upgradeCleanup = UpgradeCleanupConfig{};
+        metadata.layoutComponents.clear();
+        metadata.uiComponentSelection = UiComponentSelectionConfig();
+        metadata.uiLinkBindings.clear();
+        metadata.lifecycleUninstallCleanupRules.clear();
+        metadata.lifecycleUpgradeCleanup = UpgradeCleanupConfig{};
     }
 
     for (uint32_t i = 0; i < header->folderCount; ++i) {
@@ -560,6 +579,19 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
             return metadata;
         }
         
+        if (offset + sizeof(uint32_t) > data.size()) {
+            META_LOG();
+            return metadata;
+        }
+        uint32_t folderIdLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
+        offset += sizeof(uint32_t);
+        if (offset + folderIdLen > data.size()) {
+            META_LOG();
+            return metadata;
+        }
+        mapping.folderId = std::string(reinterpret_cast<const char*>(data.data() + offset), folderIdLen);
+        offset += folderIdLen;
+
         if (offset + sizeof(uint32_t) > data.size()) {
             META_LOG();
             return metadata;
@@ -649,9 +681,10 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
             mapping.fileIndex.push_back(std::move(fileEntry));
         }
         
-        metadata.extendedMappings.push_back(mapping);
+        metadata.extendedPayloadMappings.push_back(mapping);
         
         FolderMapping baseMapping;
+        baseMapping.folderId = mapping.folderId;
         baseMapping.folderName = mapping.folderName;
         baseMapping.targetPath = mapping.targetPath;
         baseMapping.offset = mapping.offset;
@@ -659,12 +692,12 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         baseMapping.originalSize = mapping.originalSize;
         baseMapping.checksum = mapping.checksum;
         baseMapping.algorithm = mapping.algorithm;
-        metadata.folderMappings.push_back(baseMapping);
+        metadata.payloadMappings.push_back(baseMapping);
     }
     
-    metadata.totalCompressedSize = 0;
-    for (const auto& mapping : metadata.folderMappings) {
-        metadata.totalCompressedSize += mapping.compressedSize;
+    metadata.totalPayloadCompressedSize = 0;
+    for (const auto& mapping : metadata.payloadMappings) {
+        metadata.totalPayloadCompressedSize += mapping.compressedSize;
     }
     
     return metadata;

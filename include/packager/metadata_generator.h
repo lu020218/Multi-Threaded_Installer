@@ -38,7 +38,7 @@ private:
                                                       const PackagerConfiguration& config);
     
 
-    uint64_t calculateTotalCompressedSize(const std::vector<CompressionResult>& results);
+    uint64_t calculateTotalPayloadCompressedSize(const std::vector<CompressionResult>& results);
 };
 
 } // namespace MultiThreadedInstaller

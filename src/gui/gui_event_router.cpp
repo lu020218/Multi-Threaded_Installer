@@ -55,8 +55,12 @@ bool RouteGuiNotify(
             callbacks.onLicenseLink();
             return true;
         }
-        if (senderName == _T("btnBack")) {
-            callbacks.onLicenseBack();
+        if (senderName == _T("btnLicenseAgree")) {
+            callbacks.onLicenseAgree();
+            return true;
+        }
+        if (senderName == _T("btnLicenseDisagree")) {
+            callbacks.onLicenseDisagree();
             return true;
         }
         if (senderName == _T("btnUninstallConfirm")) {
@@ -80,10 +84,6 @@ bool RouteGuiNotify(
     if (msg.sType == _T("selectchanged")) {
         if (senderName == _T("license_checkbox")) {
             callbacks.onLicenseCheckboxChanged();
-            return true;
-        }
-        if (senderName == _T("chkAgree1")) {
-            callbacks.onLicenseAgreementSync();
             return true;
         }
         return false;

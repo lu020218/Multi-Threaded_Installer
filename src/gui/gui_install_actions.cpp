@@ -112,7 +112,7 @@ bool TryBuildInstallStartRequest(HWND hWnd,
                                  CEditUI* installPathEdit,
                                  const InstallConfig& config,
                                  InstallStartRequest& request) {
-    CCheckBoxUI* agree = static_cast<CCheckBoxUI*>(manager.FindControl(_T("chkAgree")));
+    CCheckBoxUI* agree = static_cast<CCheckBoxUI*>(manager.FindControl(_T("license_checkbox")));
     if (agree && !agree->GetCheck()) {
         GUIHelpers::ShowWarningDialog(
             hWnd,

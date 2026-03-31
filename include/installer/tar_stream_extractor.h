@@ -3,6 +3,7 @@
 #include "installer/stream_sink.h"
 #include <cstdint>
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 #include <fstream>
@@ -12,6 +13,7 @@ namespace MultiThreadedInstaller {
 class TarStreamExtractor : public StreamSink {
 public:
     explicit TarStreamExtractor(const std::string& targetRoot);
+    void setCurrentFileChangedCallback(std::function<void(const std::string&)> callback);
     bool write(const uint8_t* data, size_t size) override;
     void flush() override;
     
@@ -33,6 +35,7 @@ private:
     uint32_t remaining_;
     std::string currentPath_;
     std::ofstream currentFile_;
+    std::function<void(const std::string&)> currentFileChangedCallback_;
     
     bool validatePathLength(uint32_t pathLength) const;
     bool validateFileSize(uint32_t fileSize) const;

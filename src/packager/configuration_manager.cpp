@@ -6,6 +6,46 @@
 namespace fs = std::filesystem;
 
 namespace MultiThreadedInstaller {
+namespace {
+
+std::string ResolveInstallStateIdentity(const PackagerConfiguration& config) {
+    return config.app.id.empty() ? config.app.name : config.app.id;
+}
+
+std::string DestinationTypeToPathToken(const LayoutFolderDestination& destination) {
+    const std::string type = destination.type;
+    if (type == "install") {
+        return "installDirectory";
+    }
+    if (type == "custom") {
+        return destination.path;
+    }
+    if (type == "programFiles") {
+        return "%ProgramFiles%";
+    }
+    if (type == "programFilesX86") {
+        return "%ProgramFiles(x86)%";
+    }
+    if (type == "appDataRoaming") {
+        return "%AppData%";
+    }
+    if (type == "appDataLocal") {
+        return "%LocalAppData%";
+    }
+    if (type == "programData") {
+        return "%ProgramData%";
+    }
+    if (type == "userProfile") {
+        return "%USERPROFILE%";
+    }
+    return destination.path;
+}
+
+std::string FolderSourceName(const std::string& source) {
+    return Utf8FromPath(PathFromUtf8(source).filename());
+}
+
+} // namespace
 
 bool ConfigurationManager::initialize(const std::string& inputDirectory) {
     lastError_.clear();
@@ -13,15 +53,15 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory) {
 
     auto configOpt = loader_.loadConfiguration(inputDirectory);
     auto applyInstallStateDefaults = [](PackagerConfiguration& config) {
-        const std::string identity = config.appId.empty() ? config.applicationName : config.appId;
-        if (config.installState.registryPath.empty()) {
-            config.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + identity;
+        const std::string identity = ResolveInstallStateIdentity(config);
+        if (config.install.installState.registryPath.empty()) {
+            config.install.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + identity;
         }
-        if (config.installState.filePath.empty()) {
-            config.installState.filePath = "%ProgramData%\\" + identity + "\\install.state";
+        if (config.install.installState.filePath.empty()) {
+            config.install.installState.filePath = "%ProgramData%\\" + identity + "\\install.state";
         }
-        if (config.installState.mutexName.empty()) {
-            config.installState.mutexName = "Global\\" + identity + "_Install";
+        if (config.install.installState.mutexName.empty()) {
+            config.install.installState.mutexName = "Global\\" + identity + "_Install";
         }
     };
     
@@ -71,29 +111,24 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory) {
 }
 
 void ConfigurationManager::applyFolderTargets(std::vector<FolderInfo>& folders) {
-
-    if (config_.folderTargets.empty()) {
+    if (config_.layout.folders.empty()) {
         return;
     }
-    
-
     for (auto& folder : folders) {
-
         fs::path sourcePath = PathFromUtf8(folder.sourcePath);
         std::string folderName = Utf8FromPath(sourcePath.filename());
-        
 
-        auto it = std::find_if(config_.folderTargets.begin(), 
-                              config_.folderTargets.end(),
-                              [&folderName](const FolderTargetConfig& target) {
-                                  return target.folderName == folderName;
-                              });
-        
-        if (it != config_.folderTargets.end()) {
+        auto it = std::find_if(
+            config_.layout.folders.begin(),
+            config_.layout.folders.end(),
+            [&folderName](const LayoutFolderConfig& target) {
+                return FolderSourceName(target.source) == folderName;
+            });
 
-            folder.targetPath = it->targetDirectory;
+        if (it != config_.layout.folders.end()) {
+            folder.id = it->id;
+            folder.targetPath = DestinationTypeToPathToken(it->destination);
         }
-
     }
 }
 

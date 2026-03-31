@@ -110,7 +110,7 @@ bool IsPostSetupAgentComponent(const ComponentConfig& component) {
 }
 
 std::wstring ResolvePostSetupStatePathTemplate(const ExtendedInstallationMetadata& metadata) {
-    for (const auto& component : metadata.components) {
+    for (const auto& component : metadata.layoutComponents) {
         if (!IsPostSetupAgentComponent(component)) {
             continue;
         }
@@ -293,37 +293,37 @@ private:
 
 InstallConfig CreateInstallConfigFromMetadata(const ExtendedInstallationMetadata& metadata) {
     InstallConfig config;
-    config.applicationName = Utf8ToWide(metadata.applicationName);
-    config.appId = Utf8ToWide(resolveEffectiveAppId(metadata.appId, metadata.applicationName));
+    config.applicationName = Utf8ToWide(metadata.appName);
+    config.appId = Utf8ToWide(resolveEffectiveAppId(metadata.appId, metadata.appName));
     config.directoryName =
-        Utf8ToWide(resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName));
-    config.legacyAppIds.reserve(metadata.legacyAppIds.size());
-    for (const auto& legacyId : metadata.legacyAppIds) {
+        Utf8ToWide(resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName));
+    config.legacyAppIds.reserve(metadata.compatibilityLegacyAppIds.size());
+    for (const auto& legacyId : metadata.compatibilityLegacyAppIds) {
         config.legacyAppIds.push_back(Utf8ToWide(legacyId));
     }
-    config.version = Utf8ToWide(metadata.configVersion);
-    config.defaultInstallPath = Utf8ToWide(metadata.defaultInstallDir);
-    for (const auto& entry : metadata.registry) {
+    config.version = Utf8ToWide(metadata.appVersion);
+    config.defaultInstallPath = Utf8ToWide(metadata.installDefaultDir);
+    for (const auto& entry : metadata.lifecycleInstallRegistry) {
         if (entry.key == "InstallDir") {
             config.registryPath = Utf8ToWide(entry.path);
             config.registryKey = Utf8ToWide(entry.key);
             break;
         }
     }
-    config.webPageUrl = Utf8ToWide(metadata.webPageUrl);
-    config.executableName = Utf8ToWide(metadata.applicationName + ".exe");
-    config.autoStartup = metadata.autoStartup;
-    config.desktopIcons = metadata.desktopIcons;
+    config.webPageUrl = Utf8ToWide(metadata.appWebsite);
+    config.executableName = Utf8ToWide(metadata.appName + ".exe");
+    config.autoStartup = metadata.installAutoStartup;
+    config.desktopIcons = metadata.installDesktopIcon;
     config.repairMode = false;
     config.postSetupStatePath = ResolvePostSetupStatePathTemplate(metadata);
 
     uint64_t totalSize = 0;
-    for (const auto& mapping : metadata.extendedMappings) {
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
         totalSize += mapping.originalSize;
     }
     config.requiredDiskSpace = totalSize;
     config.installDirectoryAppendName = true;
-    for (const auto& mapping : metadata.extendedMappings) {
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
         if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
             config.installDirectoryAppendName = mapping.appendDirectoryName;
             break;
@@ -403,7 +403,7 @@ bool TryResolveRepairInstallDir(const ExtendedInstallationMetadata& metadata,
                                 std::string& manifestPath,
                                 std::string& installDir) {
     const std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(metadata.appId, metadata.legacyAppIds, metadata.applicationName);
+        buildIdentityCandidates(metadata.appId, metadata.compatibilityLegacyAppIds, metadata.appName);
     return resolveExistingInstallInfo(identityCandidates, pathResolver, manifestPath, installDir) &&
            !installDir.empty();
 }
@@ -423,7 +423,7 @@ std::string ResolveInstallPathForSilentRun(const ExtendedInstallationMetadata& m
     if (!context.args.defaultDestination.empty()) {
         return context.args.defaultDestination;
     }
-    return pathResolver.expandEnvironmentVariables(metadata.defaultInstallDir);
+    return pathResolver.expandEnvironmentVariables(metadata.installDefaultDir);
 }
 
 InstallServiceCallbacks BuildConsoleServiceCallbacks(CliSupport& console) {
@@ -468,7 +468,7 @@ std::string ResolveUninstallManifestPath(const ExtendedInstallationMetadata* met
         return {};
     }
     const std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(metadata->appId, metadata->legacyAppIds, metadata->applicationName);
+        buildIdentityCandidates(metadata->appId, metadata->compatibilityLegacyAppIds, metadata->appName);
     return resolveInstalledManifestPath(identityCandidates, exePath, resolver);
 }
 
@@ -489,8 +489,8 @@ InstallConfig BuildUninstallConfigFromManifest(const std::string& manifestPath) 
         if (!lang.empty()) {
             config.languageCode = Utf8ToWide(lang);
         }
-        if (manifest.contains("legacyAppIds") && manifest["legacyAppIds"].is_array()) {
-            for (const auto& item : manifest["legacyAppIds"]) {
+        if (manifest.contains("compatibilityLegacyAppIds") && manifest["compatibilityLegacyAppIds"].is_array()) {
+            for (const auto& item : manifest["compatibilityLegacyAppIds"]) {
                 if (item.is_string()) {
                     config.legacyAppIds.push_back(Utf8ToWide(item.get<std::string>()));
                 }
@@ -510,7 +510,7 @@ int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
         return INSTALLER_EXIT_FAILED;
     }
 
-    SetInstallerAppNameEnv(metadata.applicationName);
+    SetInstallerAppNameEnv(metadata.appName);
     EnsureInstallerLoggingInitialized();
 
     std::string existingManifest;
@@ -520,7 +520,7 @@ int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
         return INSTALLER_EXIT_FAILED;
     }
 
-    if ((metadata.requireAdmin || requiresAdminForInstall(installPath, metadata, pathResolver)) && !isRunningAsAdmin()) {
+    if ((metadata.installRequireAdmin || requiresAdminForInstall(installPath, metadata, pathResolver)) && !isRunningAsAdmin()) {
         if (relaunchSelfAsAdmin()) {
             return INSTALLER_EXIT_SUCCESS;
         }
@@ -573,10 +573,10 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, boo
         return 1;
     }
 
-    SetInstallerAppNameEnv(metadata.applicationName);
+    SetInstallerAppNameEnv(metadata.appName);
     EnsureInstallerLoggingInitialized();
 
-    if (metadata.requireAdmin && !isRunningAsAdmin()) {
+    if (metadata.installRequireAdmin && !isRunningAsAdmin()) {
         if (relaunchSelfAsAdmin()) {
             return 0;
         }

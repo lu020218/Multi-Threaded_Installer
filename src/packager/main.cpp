@@ -196,10 +196,10 @@ int main(int argc, char* argv[]) {
         console.showInfo("No configuration file found, using default settings");
     }
     
-    console.showInfo("Application name: " + config.applicationName);
-    console.showInfo("Default install directory: " + config.defaultInstallDir);
+    console.showInfo("Application name: " + config.app.name);
+    console.showInfo("Default install directory: " + config.install.defaultDir);
 
-    CompressionAlgorithm effectiveAlgorithm = config.compressionAlgorithm;
+    CompressionAlgorithm effectiveAlgorithm = config.package.compression.algorithm;
     if (args.algorithmExplicitlySet) {
         effectiveAlgorithm = args.algorithm;
     }
@@ -238,8 +238,8 @@ int main(int argc, char* argv[]) {
     int effectiveCompressionLevel = -1;
     if (args.compressionLevel >= 0) {
         effectiveCompressionLevel = args.compressionLevel;
-    } else if (config.compressionLevel >= 0) {
-        effectiveCompressionLevel = config.compressionLevel;
+    } else if (config.package.compression.level >= 0) {
+        effectiveCompressionLevel = config.package.compression.level;
     }
     if (effectiveCompressionLevel >= 0) {
         if (!compressor.setCompressionLevel(effectiveCompressionLevel)) {
@@ -249,7 +249,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    size_t compressionThreadBudget = ResolveCompressionThreadBudget(args.threadCount);
+    int configuredThreadCount = args.threadCount > 0 ? args.threadCount : config.package.compression.threads;
+    size_t compressionThreadBudget = ResolveCompressionThreadBudget(configuredThreadCount);
     size_t folderWorkerCount = std::min(compressionThreadBudget, folders.size());
     int perCompressorThreadCount = static_cast<int>(compressionThreadBudget);
     if (folderWorkerCount > 1) {
@@ -373,13 +374,13 @@ int main(int argc, char* argv[]) {
     fs::path tempTemplatePath;
     bool usesTempTemplate = false;
     auto templateStart = std::chrono::steady_clock::now();
-    if (!config.iconPath.empty() ||
-        !config.productName.empty() ||
-        !config.fileDescription.empty() ||
-        !config.companyName.empty() ||
-        !config.copyright.empty() ||
-        !config.fileVersion.empty() ||
-        !config.productVersion.empty()) {
+    if (!config.app.product.iconPath.empty() ||
+        !config.app.product.productName.empty() ||
+        !config.app.product.fileDescription.empty() ||
+        !config.app.product.companyName.empty() ||
+        !config.app.product.copyright.empty() ||
+        !config.app.product.fileVersion.empty() ||
+        !config.app.product.productVersion.empty()) {
         std::string baseTemplate = installerGen.findDefaultInstallerTemplatePath();
         if (baseTemplate.empty()) {
             console.showError("Failed to locate installer template for resource updates");
@@ -401,8 +402,8 @@ int main(int argc, char* argv[]) {
 
         usesTempTemplate = true;
 
-        if (!config.iconPath.empty()) {
-            fs::path iconPath = PathFromUtf8(config.iconPath);
+        if (!config.app.product.iconPath.empty()) {
+            fs::path iconPath = PathFromUtf8(config.app.product.iconPath);
             if (!iconPath.is_absolute()) {
                 iconPath = PathFromUtf8(inputPath) / iconPath;
             }
@@ -415,14 +416,17 @@ int main(int argc, char* argv[]) {
         }
 
         VersionInfoData versionInfo;
-        versionInfo.productName = config.productName.empty() ? config.applicationName : config.productName;
-        versionInfo.fileDescription = config.fileDescription.empty()
-            ? (config.applicationName + " Installer")
-            : config.fileDescription;
-        versionInfo.companyName = config.companyName;
-        versionInfo.copyright = config.copyright;
-        versionInfo.fileVersion = config.fileVersion.empty() ? config.version : config.fileVersion;
-        versionInfo.productVersion = config.productVersion.empty() ? config.version : config.productVersion;
+        versionInfo.productName =
+            config.app.product.productName.empty() ? config.app.name : config.app.product.productName;
+        versionInfo.fileDescription = config.app.product.fileDescription.empty()
+            ? (config.app.name + " Installer")
+            : config.app.product.fileDescription;
+        versionInfo.companyName = config.app.product.companyName;
+        versionInfo.copyright = config.app.product.copyright;
+        versionInfo.fileVersion =
+            config.app.product.fileVersion.empty() ? config.app.version : config.app.product.fileVersion;
+        versionInfo.productVersion =
+            config.app.product.productVersion.empty() ? config.app.version : config.app.product.productVersion;
         versionInfo.originalFilename = Utf8FromPath(PathFromUtf8(outputPath).filename());
 
         std::string versionError;

@@ -40,7 +40,7 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
 
     reporter.EmitMessage(InstallServiceEventType::Info,
                          "Detected previous install at: " + plan.previousInstallDir);
-    if (!(metadata.autoCleanOldInstall || options.cleanupOldInstallRequested)) {
+    if (!(metadata.installAutoCleanOldInstall || options.cleanupOldInstallRequested)) {
         reporter.EmitMessage(InstallServiceEventType::Info,
                              "Skipping cleanup of previous installation.");
         return true;

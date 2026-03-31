@@ -1,148 +1,56 @@
-schemaVersion: 1
+schemaVersion: 2
+
+app:
+  name: MyDesktopApp
+  id: my_desktop_app
+  version: 1.2.3
+  directoryName: MyDesktopApp
+  website: https://example.com/intro
+  product:
+    icon: app.ico
+    productName: MyDesktopApp
+    fileVersion: 1.2.3.4
+    productVersion: 1.2.3.4
+    companyName: MyCompany
+    fileDescription: MyDesktopApp Installer
+    copyright: Copyright (c) 2026 MyCompany
 
 package:
-  appName: MyDesktopApp
-  appId: my_desktop_app
-  directoryName: MyDesktopApp
-  legacyAppIds:
-    - MyDesktopAppLegacy
-  version: 1.2.3
-  icon: app.ico
-  productName: MyDesktopApp
-  fileVersion: 1.2.3.4
-  productVersion: 1.2.3.4
-  companyName: MyCompany
-  fileDescription: MyDesktopApp Installer
-  copyright: Copyright (c) 2026 MyCompany
-  webPageUrl: https://example.com/intro
-  compressionAlgorithm: "lzma"
-  compressionLevel: 9
+  compression:
+    algorithm: xz
+    level: 9
+    threads: auto
+
 install:
-  defaultInstallDir: "%ProgramFiles%"
-  autoStartup: true
-  desktopIcons: true
-  desktopShortcutName: MyDesktopApp
-  desktopShortcutNameI18n:
-    zh_CN: 我的桌面应用
-    en_US: MyDesktopApp
-  legacyDesktopShortcutNames:
-    - MyDesktopApp Legacy
-    - 我的旧版桌面应用
-  autoCleanOldInstall: true
+  defaultDir: "%ProgramFiles%"
   requireAdmin: true
-  minWindowsVersion: 10.0.19041
+  autoCleanOldInstall: true
+  autoStartup: true
+  desktopIcon: true
+  minWindows:
+    major: 10
+    minor: 0
+    build: 19041
   sparseFileThresholdBytes: 4194304
-  allowScriptInstallers: true
   killProcesses:
     - MyDesktopApp.exe
     - MyDesktopAppHelper.exe
     - MyDesktopAppTray.exe
   installState:
-    mode: Registry
+    mode: registry
     registryPath: HKEY_CURRENT_USER\\Software\\my_desktop_app
     registryKey: InstallState
     filePath: "%ProgramData%\\my_desktop_app\\install.state"
     useMutex: true
     mutexName: Global\\my_desktop_app_Install
 
-registry:
-  - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-    key: InstallDir
-    value: "%InstallDir%"
-    type: expand
-  - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-    key: InstallLocation
-    value: "%InstallDir%"
-    type: expand
-  - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-    key: ExecutablePath
-    value: "%InstallDir%\\MyDesktopApp.exe"
-    type: expand
-  - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-    key: LaunchCommand
-    value: "\"%InstallDir%\\MyDesktopApp.exe\""
-    type: expand
-  - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-    key: Version
-    value: "%Version%"
-    type: string
-
-folders:
-  - name: bin
-    target: installDirectory
-    appendDirectoryName: false
-
-  - name: plugins
-    target: "%AppData%\\Roaming"
-    appendDirectoryName: true
-
-components:
-  - id: main_app
-    name: Main Application
-    description: Main application runtime and required binaries.
-    required: true
-    defaultSelected: true
-    sizeHintMB: 120
-    folders:
-      - bin
-      - plugins
-    source:
-      type: embedded
-
-  - id: chrome_plugin
-    name: Chrome Plugin
-    description: Install the optional Chrome browser plugin.
-    required: false
-    defaultSelected: true
-    dependsOn:
-      - main_app
-    sizeHintMB: 60
-    source:
-      type: local
-      local:
-        base: "%InstallDir%\\components"
-        installer: "chrome_plugin\\install_chrome_plugin.bat"
-        args: ""
-        wait: true
-        timeoutSec: 900
-        uninstall: "%InstallDir%\\components\\chrome_plugin\\uninstall_chrome_plugin.bat"
-
-  - id: ppt_plugin
-    name: PPT Plugin
-    description: Install the optional PowerPoint plugin.
-    required: false
-    defaultSelected: true
-    dependsOn:
-      - main_app
-    sizeHintMB: 35
-    source:
-      type: local
-      local:
-        base: "%InstallDir%\\components"
-        installer: "ppt_plugin\\install_ppt_plugin.bat"
-        args: ""
-        wait: true
-        timeoutSec: 900
-        uninstall: "%InstallDir%\\components\\ppt_plugin\\uninstall_ppt_plugin.bat"
-
-  - id: post_setup_agent
-    name: Post Setup Agent
-    description: Fetch remote runtime config and apply environment setup.
-    required: false
-    defaultSelected: true
-    dependsOn:
-      - main_app
-    sizeHintMB: 5
-    source:
-      type: local
-      local:
-        base: "%InstallDir%\\components"
-        installer: "post_setup_agent\\post_setup_agent.exe"
-        args: "--install-dir \"%InstallDir%\" --app-version \"%AppVersion%\" --config-url \"https://example.com/runtime-config.json\" --state-path \"%ProgramData%\\%AppId%\\post_setup_state.json\" --log-path \"%ProgramData%\\%AppId%\\post_setup_agent.log\""
-        wait: true
-        timeoutSec: 1800
-
 ui:
+  defaultLanguage: zh_CN
+  desktopShortcut:
+    defaultName: MyDesktopApp
+    i18n:
+      zh_CN: My Desktop App
+      en_US: MyDesktopApp
   links:
     - control: btnChrome
       url: https://example.com/chrome-plugin
@@ -159,125 +67,158 @@ ui:
             - chkChrome
             - chkPPt
 
-cleanup:
-  onUpgrade:
-    registry:
-      deleteFromManifest: true
-      legacyKeys:
-        - path: HKEY_CURRENT_USER\\Software\\MyDesktopAppLegacy
-          key: ""
-        - path: HKEY_LOCAL_MACHINE\\Software\\MyDesktopAppLegacy
-          key: ""
-    extraPaths:
-      - path: "%AppData%\\MyDesktopAppLegacy"
-        recursive: true
-        onlyIfEmpty: false
-      - path: "%LocalAppData%\\MyDesktopAppLegacy\\Cache"
-        recursive: true
-        onlyIfEmpty: false
-  onUninstall:
-    - path: "%LocalAppData%\\MyDesktopApp\\Cache"
-      recursive: true
-      onlyIfEmpty: false
-    - path: "%LocalAppData%\\MyDesktopApp\\Logs"
-      recursive: true
-      onlyIfEmpty: false
-    - path: "%LocalAppData%\\MyDesktopApp"
-      recursive: true
-      onlyIfEmpty: true
+layout:
+  folders:
+    - id: bin
+      source: bin
+      destination:
+        type: install
+        appendDirectoryName: false
+    - id: plugins
+      source: plugins
+      destination:
+        type: appDataRoaming
+        appendDirectoryName: true
+    - id: config
+      source: .config
+      destination:
+        type: userProfile
+        appendDirectoryName: false
 
-flow:
-  install:
-    - id: precheck
-      action: Precheck
-      enabled: true
-      weight: 10
-      onError: fail
+  components:
+    - id: main_app
+      name: Main Application
+      description: Main application runtime and required binaries.
+      required: true
+      defaultSelected: true
+      sizeHintMB: 120
+      folders:
+        - bin
+        - plugins
+        - config
+      source:
+        type: embedded
 
-    - id: collect_component_selection
-      action: CollectComponentSelection
-      enabled: true
-      weight: 5
-      onError: fail
+    - id: chrome_plugin
+      name: Chrome Plugin
+      description: Install the optional Chrome browser plugin.
+      required: false
+      defaultSelected: true
+      sizeHintMB: 60
+      dependsOn:
+        - main_app
+      folders:
+        - plugins
+      source:
+        type: local
+        local:
+          base: "%InstallDir%\\components"
+          installer: "chrome_plugin\\install_chrome_plugin.bat"
+          args: ""
+          wait: true
+          timeoutSec: 900
+          uninstall: "%InstallDir%\\components\\chrome_plugin\\uninstall_chrome_plugin.bat"
 
-    - id: resolve_components
-      action: ResolveComponents
-      enabled: true
-      weight: 5
-      onError: fail
+    - id: ppt_plugin
+      name: PPT Plugin
+      description: Install the optional PowerPoint plugin.
+      required: false
+      defaultSelected: true
+      sizeHintMB: 35
+      dependsOn:
+        - main_app
+      folders:
+        - plugins
+      source:
+        type: local
+        local:
+          base: "%InstallDir%\\components"
+          installer: "ppt_plugin\\install_ppt_plugin.bat"
+          args: ""
+          wait: true
+          timeoutSec: 900
+          uninstall: "%InstallDir%\\components\\ppt_plugin\\uninstall_ppt_plugin.bat"
 
-    - id: kill_processes
-      action: KillProcesses
-      enabled: true
-      weight: 10
-      onError: fail
-      params:
-        source: install.killProcesses
+    - id: post_setup_agent
+      name: Post Setup Agent
+      description: Fetch remote runtime config and apply environment setup.
+      required: false
+      defaultSelected: true
+      sizeHintMB: 5
+      dependsOn:
+        - main_app
+      folders:
+        - bin
+      source:
+        type: local
+        local:
+          base: "%InstallDir%\\components"
+          installer: "post_setup_agent\\post_setup_agent.exe"
+          args: "--install-dir \"%InstallDir%\" --app-version \"%AppVersion%\" --config-url \"https://example.com/runtime-config.json\" --state-path \"%ProgramData%\\%AppId%\\post_setup_state.json\" --log-path \"%ProgramData%\\%AppId%\\post_setup_agent.log\""
+          wait: true
+          timeoutSec: 1800
 
-    - id: cleanup_old
-      action: CleanupPreviousInstall
-      enabled: true
-      weight: 15
-      onError: continue
-      when: pathChanged == true
+lifecycle:
+  compatibility:
+    legacyAppIds:
+      - MyDesktopAppLegacy
+    legacyDesktopShortcutNames:
+      - MyDesktopApp Legacy
+      - My Desktop App Legacy
 
-    - id: extract_files
-      action: ExtractFiles
-      enabled: true
-      weight: 25
-      onError: fail
-      params:
-        componentSource: embedded
+  registry:
+    onInstall:
+      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
+        key: InstallDir
+        value: "%InstallDir%"
+        type: expand
+      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
+        key: InstallLocation
+        value: "%InstallDir%"
+        type: expand
+      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
+        key: ExecutablePath
+        value: "%InstallDir%\\MyDesktopApp.exe"
+        type: expand
+      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
+        key: LaunchCommand
+        value: "\"%InstallDir%\\MyDesktopApp.exe\""
+        type: expand
+      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
+        key: Version
+        value: "%Version%"
+        type: string
 
-    - id: install_selected_components
-      action: InstallSelectedComponents
-      enabled: true
-      weight: 20
-      onError: fail
-      params:
-        includeSources:
-          - local
-          - download
+  cleanup:
+    onUpgrade:
+      registry:
+        deleteFromManifest: true
+        legacyKeys:
+          - path: HKEY_CURRENT_USER\\Software\\MyDesktopAppLegacy
+            key: ""
+          - path: HKEY_LOCAL_MACHINE\\Software\\MyDesktopAppLegacy
+            key: ""
+      extraPaths:
+        - path: "%AppData%\\MyDesktopAppLegacy"
+          recursive: true
+          onlyIfEmpty: false
+        - path: "%LocalAppData%\\MyDesktopAppLegacy\\Cache"
+          recursive: true
+          onlyIfEmpty: false
 
-    - id: write_registry
-      action: WriteRegistry
-      enabled: true
-      weight: 5
-      onError: continue
+    onUninstall:
+      paths:
+        - path: "%LocalAppData%\\MyDesktopApp\\Cache"
+          recursive: true
+          onlyIfEmpty: false
+        - path: "%LocalAppData%\\MyDesktopApp\\Logs"
+          recursive: true
+          onlyIfEmpty: false
+        - path: "%LocalAppData%\\MyDesktopApp"
+          recursive: true
+          onlyIfEmpty: true
 
-    - id: create_shortcuts
-      action: CreateShortcuts
+  postSetup:
+    agent:
       enabled: true
-      weight: 3
-      onError: continue
-
-    - id: write_manifest
-      action: WriteManifest
-      enabled: true
-      weight: 2
-      onError: fail
-
-  uninstall:
-    - id: kill_processes
-      action: KillProcesses
-      enabled: true
-      weight: 10
-      onError: continue
-
-    - id: uninstall_selected_components
-      action: UninstallSelectedComponents
-      enabled: true
-      weight: 25
-      onError: continue
-
-    - id: cleanup_old
-      action: CleanupPreviousInstall
-      enabled: true
-      weight: 55
-      onError: continue
-
-    - id: cleanup_registry
-      action: WriteRegistry
-      enabled: true
-      weight: 10
-      onError: continue
+      tasks: []

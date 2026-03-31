@@ -115,13 +115,13 @@ std::vector<std::string> CollectLegacyDesktopShortcutCandidates(
     const std::string& previousManifest) {
     std::vector<std::string> candidates;
     std::unordered_set<std::string> seen;
-    seen.reserve(metadata.legacyDesktopShortcutNames.size() + 2);
+    seen.reserve(metadata.compatibilityLegacyDesktopShortcutNames.size() + 2);
 
     nlohmann::json manifest;
     if (readManifest(previousManifest, manifest)) {
         AppendShortcutNameCandidate(candidates, seen, manifest.value("desktopShortcutDisplayName", ""));
     }
-    for (const auto& legacyName : metadata.legacyDesktopShortcutNames) {
+    for (const auto& legacyName : metadata.compatibilityLegacyDesktopShortcutNames) {
         AppendShortcutNameCandidate(candidates, seen, legacyName);
     }
 
@@ -133,30 +133,30 @@ bool BuildComponentSelectionPlan(const ExtendedInstallationMetadata& metadata,
                                  ComponentSelectionPlan& plan,
                                  std::string& error) {
     plan = ComponentSelectionPlan{};
-    if (metadata.components.empty()) {
+    if (metadata.layoutComponents.empty()) {
         return true;
     }
 
     plan.hasComponents = true;
 
     std::unordered_map<std::string, const ComponentConfig*> index;
-    index.reserve(metadata.components.size());
-    for (const auto& component : metadata.components) {
+    index.reserve(metadata.layoutComponents.size());
+    for (const auto& component : metadata.layoutComponents) {
         if (!component.id.empty()) {
             index[component.id] = &component;
         }
     }
 
     std::unordered_set<std::string> initialSelection;
-    initialSelection.reserve(metadata.components.size());
-    for (const auto& component : metadata.components) {
+    initialSelection.reserve(metadata.layoutComponents.size());
+    for (const auto& component : metadata.layoutComponents) {
         if (component.required) {
             initialSelection.insert(component.id);
         }
     }
 
     if (options.installAllComponents) {
-        for (const auto& component : metadata.components) {
+        for (const auto& component : metadata.layoutComponents) {
             initialSelection.insert(component.id);
         }
     } else if (!options.selectedComponentIds.empty()) {
@@ -168,7 +168,7 @@ bool BuildComponentSelectionPlan(const ExtendedInstallationMetadata& metadata,
             initialSelection.insert(id);
         }
     } else {
-        for (const auto& component : metadata.components) {
+        for (const auto& component : metadata.layoutComponents) {
             if (component.defaultSelected) {
                 initialSelection.insert(component.id);
             }
@@ -176,7 +176,7 @@ bool BuildComponentSelectionPlan(const ExtendedInstallationMetadata& metadata,
     }
 
     std::unordered_set<std::string> selected;
-    selected.reserve(metadata.components.size());
+    selected.reserve(metadata.layoutComponents.size());
     std::function<bool(const std::string&)> includeWithDependencies =
         [&](const std::string& id) -> bool {
         if (selected.find(id) != selected.end()) {
@@ -236,7 +236,7 @@ bool BuildComponentSelectionPlan(const ExtendedInstallationMetadata& metadata,
         return true;
     };
 
-    for (const auto& component : metadata.components) {
+    for (const auto& component : metadata.layoutComponents) {
         if (selected.find(component.id) == selected.end()) {
             continue;
         }
@@ -281,7 +281,7 @@ bool ShouldInstallEmbeddedFolder(const ComponentSelectionPlan& plan,
     }
     return std::find(plan.embeddedFolders.begin(),
                      plan.embeddedFolders.end(),
-                     mapping.folderName) != plan.embeddedFolders.end();
+                     mapping.folderId) != plan.embeddedFolders.end();
 }
 
 } // namespace
@@ -328,15 +328,15 @@ std::string ResolveDesktopShortcutDisplayName(const ExtendedInstallationMetadata
     std::string normalizedLanguage = languageCode;
     std::replace(normalizedLanguage.begin(), normalizedLanguage.end(), '-', '_');
     if (!normalizedLanguage.empty()) {
-        auto exact = metadata.desktopShortcutNameI18n.find(normalizedLanguage);
-        if (exact != metadata.desktopShortcutNameI18n.end() && !exact->second.empty()) {
+        auto exact = metadata.desktopShortcutLocalizedNames.find(normalizedLanguage);
+        if (exact != metadata.desktopShortcutLocalizedNames.end() && !exact->second.empty()) {
             return exact->second;
         }
 
         std::string lowered = normalizedLanguage;
         std::transform(lowered.begin(), lowered.end(), lowered.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        for (const auto& item : metadata.desktopShortcutNameI18n) {
+        for (const auto& item : metadata.desktopShortcutLocalizedNames) {
             std::string key = item.first;
             std::replace(key.begin(), key.end(), '-', '_');
             std::transform(key.begin(), key.end(), key.begin(),
@@ -347,10 +347,10 @@ std::string ResolveDesktopShortcutDisplayName(const ExtendedInstallationMetadata
         }
     }
 
-    if (!metadata.desktopShortcutName.empty()) {
-        return metadata.desktopShortcutName;
+    if (!metadata.desktopShortcutDefaultName.empty()) {
+        return metadata.desktopShortcutDefaultName;
     }
-    return metadata.applicationName;
+    return metadata.appName;
 }
 
 bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
@@ -361,10 +361,10 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
     plan = InstallExecutionPlan{};
     error.clear();
 
-    plan.effectiveAppId = resolveEffectiveAppId(metadata.appId, metadata.applicationName);
+    plan.effectiveAppId = resolveEffectiveAppId(metadata.appId, metadata.appName);
     plan.effectiveDirectoryName =
-        resolveEffectiveDirectoryName(metadata.directoryName, metadata.applicationName);
-    for (const auto& mapping : metadata.extendedMappings) {
+        resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName);
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
         if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
             plan.installDirectoryAppendName = mapping.appendDirectoryName;
             break;
@@ -372,7 +372,7 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
     }
 
     const std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(metadata.appId, metadata.legacyAppIds, metadata.applicationName);
+        buildIdentityCandidates(metadata.appId, metadata.compatibilityLegacyAppIds, metadata.appName);
     plan.hasPreviousInstall = resolveExistingInstallInfo(identityCandidates,
                                                          pathResolver,
                                                          plan.previousManifest,
@@ -399,7 +399,7 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
         !normalizedPreviousInstallRoot.empty() &&
         !normalizedShortcutCleanupTarget.empty() &&
         (normalizedPreviousInstallRoot == normalizedShortcutCleanupTarget ||
-         metadata.autoCleanOldInstall ||
+         metadata.installAutoCleanOldInstall ||
          options.cleanupOldInstallRequested);
     if (shouldCleanupLegacyDesktopShortcuts) {
         plan.legacyDesktopShortcutCandidates =
@@ -410,9 +410,9 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
         return false;
     }
 
-    plan.effectiveRegistry = metadata.registry;
+    plan.effectiveRegistry = metadata.lifecycleInstallRegistry;
     std::unordered_set<std::string> registrySeen;
-    registrySeen.reserve(plan.effectiveRegistry.size() + metadata.components.size() * 2);
+    registrySeen.reserve(plan.effectiveRegistry.size() + metadata.layoutComponents.size() * 2);
     for (const auto& entry : plan.effectiveRegistry) {
         std::string key = entry.path;
         key.push_back('\n');
@@ -436,16 +436,16 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
 
     plan.effectiveAutoStartup = options.overrideAutoStartup
                                     ? options.autoStartupEnabled
-                                    : metadata.autoStartup;
+                                    : metadata.installAutoStartup;
     plan.effectiveDesktopIcons = options.overrideDesktopIcons
                                      ? options.desktopIconsEnabled
-                                     : metadata.desktopIcons;
+                                     : metadata.installDesktopIcon;
 
-    for (const auto& mapping : metadata.extendedMappings) {
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
         if (!ShouldInstallEmbeddedFolder(plan.componentPlan, mapping)) {
             continue;
         }
-        plan.selectedEmbeddedFolders.push_back(mapping.folderName);
+        plan.selectedEmbeddedFolders.push_back(mapping.folderId);
         plan.totalInstallBytes += mapping.originalSize;
     }
 

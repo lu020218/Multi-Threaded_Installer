@@ -65,22 +65,13 @@ void RefreshLicenseText(CPaintManagerUI& paintManager, const InstallConfig& conf
     licenseText->SetReadOnly(true);
 }
 
-void SyncLicenseAgreementFromPage(CPaintManagerUI& paintManager,
-                                  CCheckBoxUI* licenseCheckbox,
-                                  CButtonUI* installButton,
-                                  uint64_t requiredDiskSpace,
-                                  CEditUI* installPathEdit) {
-    CCheckBoxUI* agreeInline = static_cast<CCheckBoxUI*>(paintManager.FindControl(_T("chkAgree1")));
-    if (!agreeInline) {
-        return;
-    }
-
-    bool checked = agreeInline->GetCheck();
-    if (auto* agree = static_cast<CCheckBoxUI*>(paintManager.FindControl(_T("chkAgree")))) {
-        agree->SetCheck(checked);
-    }
+void ApplyLicenseAgreementSelection(CCheckBoxUI* licenseCheckbox,
+                                    bool agreed,
+                                    CButtonUI* installButton,
+                                    uint64_t requiredDiskSpace,
+                                    CEditUI* installPathEdit) {
     if (licenseCheckbox) {
-        licenseCheckbox->SetCheck(checked);
+        licenseCheckbox->SetCheck(agreed);
     }
     GUIInstallFlowUtils::UpdateInstallButtonEnabled(
         installButton, licenseCheckbox, installPathEdit, requiredDiskSpace);
@@ -96,17 +87,6 @@ void ShowLicensePage(CPaintManagerUI& paintManager,
     }
 
     RefreshLicenseText(paintManager, config);
-
-    CCheckBoxUI* agreeInline = static_cast<CCheckBoxUI*>(paintManager.FindControl(_T("chkAgree1")));
-    if (agreeInline) {
-        bool checked = false;
-        if (auto* agree = static_cast<CCheckBoxUI*>(paintManager.FindControl(_T("chkAgree")))) {
-            checked = agree->GetCheck();
-        } else if (licenseCheckbox) {
-            checked = licenseCheckbox->GetCheck();
-        }
-        agreeInline->SetCheck(checked);
-    }
 
     tabPages->SelectItem(licensePageIndex);
 }

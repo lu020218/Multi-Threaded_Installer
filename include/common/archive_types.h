@@ -28,6 +28,7 @@ struct CompressionResult {
 };
 
 struct FolderMapping {
+    std::string folderId;
     std::string folderName;
     std::string targetPath;
     // Payload location and size in the package data area.
@@ -61,58 +62,58 @@ struct ExtendedFolderMapping : public FolderMapping {
 struct InstallationMetadata {
     uint32_t version;
     uint32_t folderCount;
-    std::vector<FolderMapping> folderMappings;
-    uint64_t totalCompressedSize;
+    std::vector<FolderMapping> payloadMappings;
+    uint64_t totalPayloadCompressedSize;
 
-    InstallationMetadata() : version(1), folderCount(0), totalCompressedSize(0) {}
+    InstallationMetadata() : version(1), folderCount(0), totalPayloadCompressedSize(0) {}
 };
 
 struct ExtendedInstallationMetadata : public InstallationMetadata {
-    std::string applicationName;
+    std::string appName;
     std::string appId;
-    std::string directoryName;
-    std::vector<std::string> legacyAppIds;
-    std::string desktopShortcutName;
-    std::unordered_map<std::string, std::string> desktopShortcutNameI18n;
-    std::vector<std::string> legacyDesktopShortcutNames;
-    std::string configVersion;
-    std::string defaultInstallDir;
-    std::string webPageUrl;
-    bool autoStartup;
-    bool desktopIcons;
-    bool autoCleanOldInstall;
-    bool requireAdmin;
-    uint16_t minWindowsMajor;
-    uint16_t minWindowsMinor;
-    uint32_t minWindowsBuild;
-    uint64_t sparseFileThresholdBytes;
-    InstallStateConfig installState;
-    std::vector<ExtendedFolderMapping> extendedMappings;
-    std::vector<RegistryEntry> registry;
+    std::string appDirectoryName;
+    std::vector<std::string> compatibilityLegacyAppIds;
+    std::string desktopShortcutDefaultName;
+    std::unordered_map<std::string, std::string> desktopShortcutLocalizedNames;
+    std::vector<std::string> compatibilityLegacyDesktopShortcutNames;
+    std::string appVersion;
+    std::string installDefaultDir;
+    std::string appWebsite;
+    bool installAutoStartup;
+    bool installDesktopIcon;
+    bool installAutoCleanOldInstall;
+    bool installRequireAdmin;
+    uint16_t installMinWindowsMajor;
+    uint16_t installMinWindowsMinor;
+    uint32_t installMinWindowsBuild;
+    uint64_t installSparseFileThresholdBytes;
+    InstallStateConfig installStateConfig;
+    std::vector<ExtendedFolderMapping> extendedPayloadMappings;
+    std::vector<RegistryEntry> lifecycleInstallRegistry;
     std::vector<std::string> installKillProcesses;
-    std::vector<ComponentConfig> components;
-    UiComponentSelectionConfig componentUi;
-    std::vector<UiLinkBinding> uiLinks;
-    std::vector<UninstallCleanupRule> uninstallCleanupRules;
-    UpgradeCleanupConfig upgradeCleanup;
+    std::vector<ComponentConfig> layoutComponents;
+    UiComponentSelectionConfig uiComponentSelection;
+    std::vector<UiLinkBinding> uiLinkBindings;
+    std::vector<UninstallCleanupRule> lifecycleUninstallCleanupRules;
+    UpgradeCleanupConfig lifecycleUpgradeCleanup;
 
     ExtendedInstallationMetadata()
         : InstallationMetadata(),
-          applicationName("MyApplication"),
+          appName("MyApplication"),
           appId(""),
-          directoryName(""),
-          desktopShortcutName(""),
-          configVersion("1.0"),
-          defaultInstallDir("%ProgramFiles%"),
-          webPageUrl(""),
-          autoStartup(false),
-          desktopIcons(false),
-          autoCleanOldInstall(false),
-          requireAdmin(false),
-          minWindowsMajor(0),
-          minWindowsMinor(0),
-          minWindowsBuild(0),
-          sparseFileThresholdBytes(4 * 1024 * 1024) {}
+          appDirectoryName(""),
+          desktopShortcutDefaultName(""),
+          appVersion("1.0"),
+          installDefaultDir("%ProgramFiles%"),
+          appWebsite(""),
+          installAutoStartup(false),
+          installDesktopIcon(false),
+          installAutoCleanOldInstall(false),
+          installRequireAdmin(false),
+          installMinWindowsMajor(0),
+          installMinWindowsMinor(0),
+          installMinWindowsBuild(0),
+          installSparseFileThresholdBytes(4 * 1024 * 1024) {}
 };
 
 struct BinaryMetadata {
@@ -151,7 +152,7 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;
-    constexpr uint32_t VERSION = 21;
+    constexpr uint32_t VERSION = 22;
 
     constexpr int DEFAULT_LZMA_LEVEL = 9;
     constexpr int DEFAULT_ZSTD_LEVEL = 3;

@@ -1,0 +1,100 @@
+schemaVersion: 2
+
+app:
+  name: MyDesktopApp
+  id: my_desktop_app
+  version: 1.2.3
+  directoryName: MyDesktopApp
+  website: https://example.com/intro
+  product:
+    icon: app.ico
+    productName: MyDesktopApp
+    fileVersion: 1.2.3.4
+    productVersion: 1.2.3.4
+    companyName: MyCompany
+    fileDescription: MyDesktopApp Installer
+    copyright: Copyright (c) 2026 MyCompany
+
+package:
+  compression:
+    algorithm: zstd
+    level: 3
+    threads: auto
+
+install:
+  defaultDir: "%ProgramFiles%"
+  requireAdmin: true
+  autoCleanOldInstall: false
+  autoStartup: false
+  desktopIcon: true
+  minWindows:
+    major: 10
+    minor: 0
+    build: 19041
+  sparseFileThresholdBytes: 4194304
+  killProcesses: []
+  installState:
+    mode: registry
+    registryPath: HKEY_CURRENT_USER\\Software\\MyDesktopApp
+    registryKey: InstallState
+    filePath: "%ProgramData%\\MyDesktopApp\\install.state"
+    useMutex: true
+    mutexName: Global\\MyDesktopApp_Install
+
+ui:
+  defaultLanguage: en_US
+  desktopShortcut:
+    defaultName: MyDesktopApp
+    i18n:
+      en_US: MyDesktopApp
+  links: []
+  componentSelection:
+    mode: dedicatedPage
+    binding:
+      strategy: xml_userdata
+      tokenPrefix: "component:"
+      pages: []
+
+layout:
+  folders:
+    - id: bin
+      source: bin
+      destination:
+        type: install
+        appendDirectoryName: false
+
+    - id: plugins
+      source: plugins
+      destination:
+        type: appDataRoaming
+        appendDirectoryName: true
+
+lifecycle:
+  compatibility:
+    legacyAppIds: []
+    legacyDesktopShortcutNames: []
+
+  registry:
+    onInstall:
+      - path: HKEY_CURRENT_USER\\Software\\MyDesktopApp
+        key: InstallDir
+        value: "%InstallDir%"
+        type: expand
+      - path: HKEY_CURRENT_USER\\Software\\MyDesktopApp
+        key: Version
+        value: "%Version%"
+        type: string
+
+  cleanup:
+    onUpgrade:
+      registry:
+        deleteFromManifest: true
+        legacyKeys: []
+      extraPaths: []
+    onUninstall:
+      paths: []
+
+  postSetup:
+    agent:
+      enabled: false
+      tasks: []

@@ -96,8 +96,8 @@ bool ReadRegistryList(const std::vector<uint8_t>& data,
     out.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
         RegistryEntry reg;
-        if (!ReadString(data, offset, reg.path, "registry path") ||
-            !ReadString(data, offset, reg.key, "registry key")) {
+        if (!ReadString(data, offset, reg.path, "lifecycleInstallRegistry path") ||
+            !ReadString(data, offset, reg.key, "lifecycleInstallRegistry key")) {
             return false;
         }
         uint8_t valueType = 0;
@@ -106,7 +106,7 @@ bool ReadRegistryList(const std::vector<uint8_t>& data,
             return false;
         }
         reg.type = static_cast<RegistryValueType>(valueType);
-        if (!ReadString(data, offset, reg.value, "registry value")) {
+        if (!ReadString(data, offset, reg.value, "lifecycleInstallRegistry value")) {
             return false;
         }
         out.push_back(std::move(reg));
@@ -192,14 +192,14 @@ bool ReadComponentList(const std::vector<uint8_t>& data,
         }
 
         uint8_t createDesktopShortcut = 0;
-        uint8_t autoStartup = 0;
+        uint8_t installAutoStartup = 0;
         if (!ReadPod<uint8_t>(data, offset, createDesktopShortcut) ||
-            !ReadPod<uint8_t>(data, offset, autoStartup)) {
+            !ReadPod<uint8_t>(data, offset, installAutoStartup)) {
             META_LOG();
             return false;
         }
         component.createDesktopShortcut = createDesktopShortcut != 0;
-        component.autoStartup = autoStartup != 0;
+        component.autoStartup = installAutoStartup != 0;
 
         out.push_back(std::move(component));
     }
@@ -209,9 +209,9 @@ bool ReadComponentList(const std::vector<uint8_t>& data,
 bool ReadComponentUiConfig(const std::vector<uint8_t>& data,
                            size_t& offset,
                            UiComponentSelectionConfig& out) {
-    if (!ReadString(data, offset, out.mode, "componentUi.mode") ||
-        !ReadString(data, offset, out.strategy, "componentUi.strategy") ||
-        !ReadString(data, offset, out.tokenPrefix, "componentUi.tokenPrefix")) {
+    if (!ReadString(data, offset, out.mode, "uiComponentSelection.mode") ||
+        !ReadString(data, offset, out.strategy, "uiComponentSelection.strategy") ||
+        !ReadString(data, offset, out.tokenPrefix, "uiComponentSelection.tokenPrefix")) {
         return false;
     }
 
@@ -224,8 +224,8 @@ bool ReadComponentUiConfig(const std::vector<uint8_t>& data,
     out.pages.reserve(pageCount);
     for (uint32_t i = 0; i < pageCount; ++i) {
         UiComponentBindingPage page;
-        if (!ReadString(data, offset, page.skin, "componentUi.pages.skin") ||
-            !ReadStringList(data, offset, page.controls, "componentUi.pages.controls")) {
+        if (!ReadString(data, offset, page.skin, "uiComponentSelection.pages.skin") ||
+            !ReadStringList(data, offset, page.controls, "uiComponentSelection.pages.controls")) {
             return false;
         }
         out.pages.push_back(std::move(page));

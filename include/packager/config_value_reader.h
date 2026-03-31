@@ -22,8 +22,6 @@ bool JsonObjectToStringMap(
     const nlohmann::json& objectValue,
     std::unordered_map<std::string, std::string>& outMap);
 
-bool IsStructuredConfigSchema(const nlohmann::json& root);
-nlohmann::json NormalizeStructuredConfigSchema(const nlohmann::json& root);
 nlohmann::json ParseYamlScalar(const std::string& scalar);
 nlohmann::json YamlNodeToJson(const YAML::Node& node);
 

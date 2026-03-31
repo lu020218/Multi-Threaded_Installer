@@ -152,7 +152,8 @@ private:
     void OnCancelButtonClick();
     void OnBrowseButtonClick();
     void OnLicenseLinkClick();
-    void OnLicenseBackClick();
+    void OnLicenseAgreeClick();
+    void OnLicenseDisagreeClick();
     void OnFinishButtonClick();
     void OnCancelProgressButtonClick();
     void OnShowMoreClick();
@@ -161,7 +162,6 @@ private:
     void ApplyLanguageByIndex(int index);
     void ApplyLanguageByCode(const std::wstring& code);
     void ShowLicensePage();
-    void SyncLicenseAgreementFromPage();
     void RefreshLicenseText();
     int GetWelcomePageIndex() const;
     int GetProgressPageIndex() const;

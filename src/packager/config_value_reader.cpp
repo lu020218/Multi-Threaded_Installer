@@ -9,19 +9,6 @@ namespace MultiThreadedInstaller {
 
 using json = nlohmann::json;
 
-namespace {
-
-void SetNormalizedFieldIfMissing(json& target,
-                                 const std::string& normalizedKey,
-                                 const json& source,
-                                 const std::string& sourceKey) {
-    if (!target.contains(normalizedKey) && source.contains(sourceKey)) {
-        target[normalizedKey] = source[sourceKey];
-    }
-}
-
-}  // namespace
-
 std::string ToLowerCopy(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -180,108 +167,6 @@ bool JsonObjectToStringMap(const json& objectValue,
         outMap[it.key()] = std::move(value);
     }
     return true;
-}
-
-bool IsStructuredConfigSchema(const json& root) {
-    return root.is_object() &&
-           (root.contains("package") || root.contains("install") || root.contains("folders"));
-}
-
-json NormalizeStructuredConfigSchema(const json& root) {
-    json normalized = root;
-
-    if (normalized.contains("package") && normalized["package"].is_object()) {
-        const json& package = normalized["package"];
-        SetNormalizedFieldIfMissing(normalized, "Version", package, "version");
-        SetNormalizedFieldIfMissing(normalized, "AppName", package, "appName");
-        SetNormalizedFieldIfMissing(normalized, "AppId", package, "appId");
-        SetNormalizedFieldIfMissing(normalized, "DirectoryName", package, "directoryName");
-        SetNormalizedFieldIfMissing(normalized, "LegacyAppIds", package, "legacyAppIds");
-        SetNormalizedFieldIfMissing(normalized, "Icon", package, "icon");
-        SetNormalizedFieldIfMissing(normalized, "WebPageUrl", package, "webPageUrl");
-        SetNormalizedFieldIfMissing(normalized, "ProductName", package, "productName");
-        SetNormalizedFieldIfMissing(normalized, "FileVersion", package, "fileVersion");
-        SetNormalizedFieldIfMissing(normalized, "ProductVersion", package, "productVersion");
-        SetNormalizedFieldIfMissing(normalized, "CompanyName", package, "companyName");
-        SetNormalizedFieldIfMissing(normalized, "FileDescription", package, "fileDescription");
-        SetNormalizedFieldIfMissing(normalized, "Copyright", package, "copyright");
-        SetNormalizedFieldIfMissing(normalized, "compressionAlgorithm", package, "compressionAlgorithm");
-        SetNormalizedFieldIfMissing(normalized, "compressionLevel", package, "compressionLevel");
-    }
-
-    if (normalized.contains("install") && normalized["install"].is_object()) {
-        const json& install = normalized["install"];
-        SetNormalizedFieldIfMissing(normalized, "InstallDir", install, "defaultInstallDir");
-        SetNormalizedFieldIfMissing(normalized, "DesktopShortcutName", install, "desktopShortcutName");
-        SetNormalizedFieldIfMissing(normalized, "DesktopShortcutNameI18n", install, "desktopShortcutNameI18n");
-        SetNormalizedFieldIfMissing(normalized, "LegacyDesktopShortcutNames", install, "legacyDesktopShortcutNames");
-        SetNormalizedFieldIfMissing(normalized, "AutoStartup", install, "autoStartup");
-        SetNormalizedFieldIfMissing(normalized, "DesktopIcons", install, "desktopIcons");
-        SetNormalizedFieldIfMissing(normalized, "AutoCleanOldInstall", install, "autoCleanOldInstall");
-        SetNormalizedFieldIfMissing(normalized, "RequireAdmin", install, "requireAdmin");
-        SetNormalizedFieldIfMissing(normalized, "MinWindowsVersion", install, "minWindowsVersion");
-        SetNormalizedFieldIfMissing(normalized, "SparseFileThresholdBytes", install, "sparseFileThresholdBytes");
-        SetNormalizedFieldIfMissing(normalized, "KillProcesses", install, "killProcesses");
-
-        if (!normalized.contains("InstallState") &&
-            install.contains("installState") && install["installState"].is_object()) {
-            const json& state = install["installState"];
-            json normalizedState = json::object();
-            if (state.contains("mode")) {
-                normalizedState["Mode"] = state["mode"];
-            }
-            if (state.contains("registryPath")) {
-                normalizedState["RegistryPath"] = state["registryPath"];
-            }
-            if (state.contains("registryKey")) {
-                normalizedState["RegistryKey"] = state["registryKey"];
-            }
-            if (state.contains("filePath")) {
-                normalizedState["FilePath"] = state["filePath"];
-            }
-            if (state.contains("useMutex")) {
-                normalizedState["UseMutex"] = state["useMutex"];
-            }
-            if (state.contains("mutexName")) {
-                normalizedState["MutexName"] = state["mutexName"];
-            }
-            normalized["InstallState"] = std::move(normalizedState);
-        }
-    }
-
-    if (!normalized.contains("Registry") && normalized.contains("registry")) {
-        normalized["Registry"] = normalized["registry"];
-    }
-
-    if (!normalized.contains("Cleanup") &&
-        normalized.contains("cleanup") && normalized["cleanup"].is_object()) {
-        const json& cleanup = normalized["cleanup"];
-        normalized["Cleanup"] = json::object();
-        if (cleanup.contains("onUninstall")) {
-            normalized["Cleanup"]["OnUninstall"] = cleanup["onUninstall"];
-        }
-        if (cleanup.contains("onUpgrade") && cleanup["onUpgrade"].is_object()) {
-            const json& onUpgrade = cleanup["onUpgrade"];
-            json normalizedUpgrade = json::object();
-            if (onUpgrade.contains("extraPaths")) {
-                normalizedUpgrade["ExtraPaths"] = onUpgrade["extraPaths"];
-            }
-            if (onUpgrade.contains("registry") && onUpgrade["registry"].is_object()) {
-                const json& registry = onUpgrade["registry"];
-                json normalizedRegistry = json::object();
-                if (registry.contains("deleteFromManifest")) {
-                    normalizedRegistry["DeleteFromManifest"] = registry["deleteFromManifest"];
-                }
-                if (registry.contains("legacyKeys")) {
-                    normalizedRegistry["LegacyKeys"] = registry["legacyKeys"];
-                }
-                normalizedUpgrade["Registry"] = std::move(normalizedRegistry);
-            }
-            normalized["Cleanup"]["OnUpgrade"] = std::move(normalizedUpgrade);
-        }
-    }
-
-    return normalized;
 }
 
 json ParseYamlScalar(const std::string& scalar) {

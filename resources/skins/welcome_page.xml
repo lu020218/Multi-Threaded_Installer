@@ -40,7 +40,7 @@
         <control height="65"/>
         <HorizontalLayout height="16" padding="15,0,10,0">
             <HorizontalLayout name="license_layer" visible="true">
-                <CheckBox name="chkAgree" width="110" font="0" padding="0,0,0,0" textcolor="0xFFFFFFFF" resourcetext="true" text="msg.agree" selectedimage="file='images\check_blue.png' dest='0,0,16,16'" normalimage="file='images\check_darkgray.png' dest='0,0,16,16'"/>
+                <CheckBox name="license_checkbox" width="110" font="0" padding="0,0,0,0" textcolor="0xFFFFFFFF" resourcetext="true" text="msg.agree" selectedimage="file='images\check_blue.png' dest='0,0,16,16'" normalimage="file='images\check_darkgray.png' dest='0,0,16,16'"/>
                 <Button name="btnAgreement" cursor="hand" padding="0,0,0,0" resourcetext="true" text="msg.licence" showhtml="true" textcolor="#FF0091FF" font="0" width="160" align="left" height="16"/>
             </HorizontalLayout>
             <Control width="stretch"/> 

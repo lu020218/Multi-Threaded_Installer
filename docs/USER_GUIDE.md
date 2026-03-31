@@ -253,10 +253,6 @@ lifecycle:
     onUninstall:
       paths: []
 
-  postSetup:
-    agent:
-      enabled: true
-      tasks: []
 ```
 
 ## Validation Rules

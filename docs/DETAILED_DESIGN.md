@@ -117,7 +117,6 @@ Lifecycle configuration is grouped under:
 - `lifecycle.compatibility`
 - `lifecycle.registry`
 - `lifecycle.cleanup`
-- `lifecycle.postSetup`
 
 This covers:
 - legacy app ids

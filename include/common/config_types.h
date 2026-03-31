@@ -292,22 +292,10 @@ struct LifecycleCleanupConfig {
     std::vector<UninstallCleanupRule> onUninstallPaths;
 };
 
-struct PostSetupAgentConfig {
-    bool enabled;
-    std::vector<std::string> tasks;
-
-    PostSetupAgentConfig() : enabled(false) {}
-};
-
-struct PostSetupConfig {
-    PostSetupAgentConfig agent;
-};
-
 struct LifecycleConfig {
     LifecycleCompatibilityConfig compatibility;
     LifecycleRegistryConfig registry;
     LifecycleCleanupConfig cleanup;
-    PostSetupConfig postSetup;
 };
 
 struct PackagerConfiguration {

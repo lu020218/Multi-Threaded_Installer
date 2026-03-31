@@ -1,7 +1,7 @@
 schemaVersion: 2
 
 app:
-  name: MyDesktopApp
+  name: MyTestApp
   id: my_desktop_app
   version: 1.2.3
   directoryName: MyDesktopApp
@@ -12,7 +12,7 @@ app:
     fileVersion: 1.2.3.4
     productVersion: 1.2.3.4
     companyName: MyCompany
-    fileDescription: MyDesktopApp Installer
+    fileDescription: MyTestApp Installer
     copyright: Copyright (c) 2026 MyCompany
 
 package:
@@ -47,10 +47,10 @@ install:
 ui:
   defaultLanguage: zh_CN
   desktopShortcut:
-    defaultName: MyDesktopApp
+    defaultName: MyTestApp
     i18n:
-      zh_CN: My Desktop App
-      en_US: MyDesktopApp
+      zh_CN: My Test App
+      en_US: MyTestApp
   links:
     - control: btnChrome
       url: https://example.com/chrome-plugin
@@ -165,6 +165,7 @@ lifecycle:
     legacyDesktopShortcutNames:
       - MyDesktopApp Legacy
       - My Desktop App Legacy
+      - My Desktop App
 
   registry:
     onInstall:
@@ -217,8 +218,3 @@ lifecycle:
         - path: "%LocalAppData%\\MyDesktopApp"
           recursive: true
           onlyIfEmpty: true
-
-  postSetup:
-    agent:
-      enabled: true
-      tasks: []

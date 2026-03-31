@@ -625,6 +625,7 @@ void GUIManager::OnBrowseButtonClick() {
 }
 
 void GUIManager::OnLicenseLinkClick() {
+    CollapseConfigIfExpanded();
     MultiThreadedInstaller::ShowLicensePage(m_pm, m_pTabPages, m_pLicenseCheckbox, m_config, kPageLicense);
 }
 
@@ -651,6 +652,7 @@ void GUIManager::OnLicenseDisagreeClick() {
 }
 
 void GUIManager::ShowLicensePage() {
+    CollapseConfigIfExpanded();
     MultiThreadedInstaller::ShowLicensePage(m_pm, m_pTabPages, m_pLicenseCheckbox, m_config, kPageLicense);
 }
 

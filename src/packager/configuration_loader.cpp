@@ -575,17 +575,6 @@ bool ParseLifecycleConfig(const json& root, LifecycleConfig& out, std::string& l
         }
     }
 
-    json postSetup;
-    if (GetOptionalObject(section, "postSetup", postSetup)) {
-        json agent;
-        if (GetOptionalObject(postSetup, "agent", agent)) {
-            if (!GetOptionalBool(agent, "enabled", out.postSetup.agent.enabled, lastError) ||
-                !GetOptionalStringList(agent, "tasks", out.postSetup.agent.tasks, lastError)) {
-                return false;
-            }
-        }
-    }
-
     return true;
 }
 

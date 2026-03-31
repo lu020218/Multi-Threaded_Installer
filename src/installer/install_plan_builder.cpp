@@ -117,12 +117,13 @@ std::vector<std::string> CollectLegacyDesktopShortcutCandidates(
     std::unordered_set<std::string> seen;
     seen.reserve(metadata.compatibilityLegacyDesktopShortcutNames.size() + 2);
 
+    for (const auto& legacyName : metadata.compatibilityLegacyDesktopShortcutNames) {
+        AppendShortcutNameCandidate(candidates, seen, legacyName);
+    }
+
     nlohmann::json manifest;
     if (readManifest(previousManifest, manifest)) {
         AppendShortcutNameCandidate(candidates, seen, manifest.value("desktopShortcutDisplayName", ""));
-    }
-    for (const auto& legacyName : metadata.compatibilityLegacyDesktopShortcutNames) {
-        AppendShortcutNameCandidate(candidates, seen, legacyName);
     }
 
     return candidates;
@@ -394,17 +395,17 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
         plan.pathDecision.shortcutCleanupTargetRoot.empty()
             ? plan.pathDecision.resolvedInstallRoot
             : plan.pathDecision.shortcutCleanupTargetRoot);
-    const bool shouldCleanupLegacyDesktopShortcuts =
+    const bool shouldCollectPreviousManifestShortcutName =
         plan.hasPreviousInstall &&
         !normalizedPreviousInstallRoot.empty() &&
         !normalizedShortcutCleanupTarget.empty() &&
         (normalizedPreviousInstallRoot == normalizedShortcutCleanupTarget ||
          metadata.installAutoCleanOldInstall ||
          options.cleanupOldInstallRequested);
-    if (shouldCleanupLegacyDesktopShortcuts) {
-        plan.legacyDesktopShortcutCandidates =
-            CollectLegacyDesktopShortcutCandidates(metadata, plan.previousManifest);
-    }
+    const std::string previousManifestForShortcutCleanup =
+        shouldCollectPreviousManifestShortcutName ? plan.previousManifest : std::string();
+    plan.legacyDesktopShortcutCandidates =
+        CollectLegacyDesktopShortcutCandidates(metadata, previousManifestForShortcutCleanup);
 
     if (!BuildComponentSelectionPlan(metadata, options, plan.componentPlan, error)) {
         return false;

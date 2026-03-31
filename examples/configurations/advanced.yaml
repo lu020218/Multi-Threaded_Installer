@@ -93,8 +93,3 @@ lifecycle:
       extraPaths: []
     onUninstall:
       paths: []
-
-  postSetup:
-    agent:
-      enabled: false
-      tasks: []

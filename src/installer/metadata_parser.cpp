@@ -33,6 +33,65 @@ bool IsSupportedPayloadAlgorithm(CompressionAlgorithm algorithm) {
     }
 }
 
+bool ReadPayloadMapping(const std::vector<uint8_t>& data,
+                        size_t& offset,
+                        FolderMapping& mapping) {
+    return ReadPod<uint64_t>(data, offset, mapping.offset) &&
+           ReadPod<uint64_t>(data, offset, mapping.compressedSize) &&
+           ReadPod<uint64_t>(data, offset, mapping.originalSize) &&
+           ReadPod<uint32_t>(data, offset, mapping.checksum) &&
+           ReadPod<CompressionAlgorithm>(data, offset, mapping.algorithm) &&
+           IsSupportedPayloadAlgorithm(mapping.algorithm) &&
+           ReadString(data, offset, mapping.folderId, "folderId") &&
+           ReadString(data, offset, mapping.folderName, "folderName") &&
+           ReadString(data, offset, mapping.targetPath, "targetPath");
+}
+
+bool ReadExtendedPayloadMapping(const std::vector<uint8_t>& data,
+                                size_t& offset,
+                                ExtendedFolderMapping& mapping) {
+    if (!ReadPod<uint64_t>(data, offset, mapping.offset) ||
+        !ReadPod<uint64_t>(data, offset, mapping.compressedSize) ||
+        !ReadPod<uint64_t>(data, offset, mapping.originalSize) ||
+        !ReadPod<uint32_t>(data, offset, mapping.checksum) ||
+        !ReadPod<CompressionAlgorithm>(data, offset, mapping.algorithm) ||
+        !IsSupportedPayloadAlgorithm(mapping.algorithm) ||
+        !ReadString(data, offset, mapping.folderId, "folderId") ||
+        !ReadString(data, offset, mapping.folderName, "folderName") ||
+        !ReadString(data, offset, mapping.targetPath, "targetPath") ||
+        !ReadPod<SpecialDirectoryType>(data, offset, mapping.targetDirType)) {
+        return false;
+    }
+
+    uint8_t appendDirectoryName = 0;
+    if (!ReadPod<uint8_t>(data, offset, appendDirectoryName)) {
+        return false;
+    }
+    mapping.appendDirectoryName = appendDirectoryName != 0;
+
+    if (!ReadString(data, offset, mapping.customTargetPath, "customTargetPath")) {
+        return false;
+    }
+
+    uint32_t fileCount = 0;
+    if (!ReadPod<uint32_t>(data, offset, fileCount)) {
+        return false;
+    }
+    mapping.fileIndex.clear();
+    mapping.fileIndex.reserve(fileCount);
+    for (uint32_t f = 0; f < fileCount; ++f) {
+        FileIndexEntry fileEntry;
+        if (!ReadString(data, offset, fileEntry.relativePath, "fileIndex.relativePath") ||
+            !ReadPod<uint64_t>(data, offset, fileEntry.offset) ||
+            !ReadPod<uint64_t>(data, offset, fileEntry.size)) {
+            return false;
+        }
+        mapping.fileIndex.push_back(std::move(fileEntry));
+    }
+
+    return true;
+}
+
 } // namespace
 
 InstallationMetadata MetadataParser::parseEmbeddedMetadata() {
@@ -118,96 +177,20 @@ InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8
     }
     
 
-    const BinaryMetadata* header = reinterpret_cast<const BinaryMetadata*>(data.data());
-    
-    if (!validateHeader(*header)) {
+    BinaryMetadata header{};
+    size_t offset = 0;
+    if (!ReadPod<BinaryMetadata>(data, offset, header) || !validateHeader(header)) {
         return metadata;
     }
-    
-    metadata.version = header->version;
-    metadata.folderCount = header->folderCount;
-    
+    metadata.version = header.version;
+    metadata.folderCount = header.folderCount;
 
-    size_t offset = sizeof(BinaryMetadata);
-    for (uint32_t i = 0; i < header->folderCount; ++i) {
+    for (uint32_t i = 0; i < header.folderCount; ++i) {
         FolderMapping mapping;
-        
-
-        if (offset + sizeof(uint64_t) * 3 + sizeof(uint32_t) * 3 > data.size()) {
+        if (!ReadPayloadMapping(data, offset, mapping)) {
             META_LOG();
             break;
         }
-        
-
-        mapping.offset = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-        offset += sizeof(uint64_t);
-        
-        mapping.compressedSize = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-        offset += sizeof(uint64_t);
-        
-        mapping.originalSize = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-        offset += sizeof(uint64_t);
-        
-        mapping.checksum = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        
-        mapping.algorithm = *reinterpret_cast<const CompressionAlgorithm*>(data.data() + offset);
-        offset += sizeof(CompressionAlgorithm);
-        if (!IsSupportedPayloadAlgorithm(mapping.algorithm)) {
-            META_LOG();
-            break;
-        }
-        
-
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            break;
-        }
-        
-        uint32_t folderIdLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-
-        if (offset + folderIdLen > data.size()) {
-            META_LOG();
-            break;
-        }
-
-        mapping.folderId = std::string(reinterpret_cast<const char*>(data.data() + offset), folderIdLen);
-        offset += folderIdLen;
-
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            break;
-        }
-
-        uint32_t folderNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-
-        if (offset + folderNameLen > data.size()) {
-            META_LOG();
-            break;
-        }
-
-        mapping.folderName = std::string(reinterpret_cast<const char*>(data.data() + offset), folderNameLen);
-        offset += folderNameLen;
-        
-
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            break;
-        }
-        
-        uint32_t targetPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        
-        if (offset + targetPathLen > data.size()) {
-            META_LOG();
-            break;
-        }
-        
-        mapping.targetPath = std::string(reinterpret_cast<const char*>(data.data() + offset), targetPathLen);
-        offset += targetPathLen;
-        
         metadata.payloadMappings.push_back(mapping);
     }
     
@@ -228,40 +211,35 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         return metadata;
     }
     
-    const BinaryMetadata* header = reinterpret_cast<const BinaryMetadata*>(data.data());
-    
-    if (!validateHeader(*header)) {
+    BinaryMetadata header{};
+    size_t offset = 0;
+    if (!ReadPod<BinaryMetadata>(data, offset, header) || !validateHeader(header)) {
         return metadata;
     }
+    metadata.version = header.version;
+    metadata.folderCount = header.folderCount;
     
-    metadata.version = header->version;
-    metadata.folderCount = header->folderCount;
-    
-    size_t offset = sizeof(BinaryMetadata);
-    
-    if (offset + sizeof(uint32_t) > data.size()) {
+    uint32_t extendedMarker = 0;
+    if (!ReadPod<uint32_t>(data, offset, extendedMarker)) {
         META_LOG();
         return metadata;
     }
-    
-    uint32_t extendedMarker = *reinterpret_cast<const uint32_t*>(data.data() + offset);
     if (extendedMarker != 0x45585444) {
         META_LOG();
         return metadata;
     }
-    offset += sizeof(uint32_t);
     
     if (!ReadString(data, offset, metadata.appName, "appName")) {
         return metadata;
     }
-    if (header->version >= 15) {
+    if (header.version >= 15) {
         if (!ReadString(data, offset, metadata.appId, "appId") ||
-            (header->version >= 16 &&
+            (header.version >= 16 &&
              !ReadString(data, offset, metadata.appDirectoryName, "appDirectoryName")) ||
             !ReadStringList(data, offset, metadata.compatibilityLegacyAppIds, "compatibilityLegacyAppIds")) {
             return metadata;
         }
-        if (header->version >= 19) {
+        if (header.version >= 19) {
             if (!ReadString(data, offset, metadata.desktopShortcutDefaultName, "desktopShortcutDefaultName") ||
                 !ReadStringMap(data, offset, metadata.desktopShortcutLocalizedNames, "desktopShortcutLocalizedNames") ||
                 !ReadStringList(data,
@@ -288,19 +266,10 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         return metadata;
     }
 
-    if (header->version >= 10) {
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
+    if (header.version >= 10) {
+        if (!ReadString(data, offset, metadata.appWebsite, "appWebsite")) {
             return metadata;
         }
-        uint32_t webUrlLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        if (offset + webUrlLen > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        metadata.appWebsite = std::string(reinterpret_cast<const char*>(data.data() + offset), webUrlLen);
-        offset += webUrlLen;
     } else {
         metadata.appWebsite.clear();
     }
@@ -315,8 +284,8 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         metadata.desktopShortcutDefaultName = metadata.appName;
     }
 
-    if (header->version >= 7) {
-        size_t flagCount = header->version >= 9 ? 4 : 3;
+    if (header.version >= 7) {
+        size_t flagCount = header.version >= 9 ? 4 : 3;
         if (offset + sizeof(uint8_t) * flagCount > data.size()) {
             META_LOG();
             return metadata;
@@ -324,7 +293,7 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         metadata.installAutoStartup = data[offset] != 0;
         metadata.installDesktopIcon = data[offset + 1] != 0;
         metadata.installRequireAdmin = data[offset + 2] != 0;
-        metadata.installAutoCleanOldInstall = header->version >= 9 ? (data[offset + 3] != 0) : false;
+        metadata.installAutoCleanOldInstall = header.version >= 9 ? (data[offset + 3] != 0) : false;
         offset += sizeof(uint8_t) * flagCount;
     } else {
         if (offset + sizeof(uint8_t) * 2 > data.size()) {
@@ -338,30 +307,24 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         offset += sizeof(uint8_t) * 2;
     }
 
-    if (header->version >= 8) {
-        if (offset + sizeof(uint16_t) * 2 + sizeof(uint32_t) > data.size()) {
+    if (header.version >= 8) {
+        if (!ReadPod<uint16_t>(data, offset, metadata.installMinWindowsMajor) ||
+            !ReadPod<uint16_t>(data, offset, metadata.installMinWindowsMinor) ||
+            !ReadPod<uint32_t>(data, offset, metadata.installMinWindowsBuild)) {
             META_LOG();
             return metadata;
         }
-        metadata.installMinWindowsMajor = *reinterpret_cast<const uint16_t*>(data.data() + offset);
-        offset += sizeof(uint16_t);
-        metadata.installMinWindowsMinor = *reinterpret_cast<const uint16_t*>(data.data() + offset);
-        offset += sizeof(uint16_t);
-        metadata.installMinWindowsBuild = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
     } else {
         metadata.installMinWindowsMajor = 0;
         metadata.installMinWindowsMinor = 0;
         metadata.installMinWindowsBuild = 0;
     }
 
-    if (header->version >= 6) {
-        if (offset + sizeof(uint64_t) > data.size()) {
+    if (header.version >= 6) {
+        if (!ReadPod<uint64_t>(data, offset, metadata.installSparseFileThresholdBytes)) {
             META_LOG();
             return metadata;
         }
-        metadata.installSparseFileThresholdBytes = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-        offset += sizeof(uint64_t);
     } else {
         metadata.installSparseFileThresholdBytes = 4 * 1024 * 1024;
     }
@@ -374,164 +337,44 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     metadata.installStateConfig.useMutex = data[offset + 1] != 0;
     offset += sizeof(uint8_t) * 2;
 
-    if (offset + sizeof(uint32_t) > data.size()) {
-        META_LOG();
+    if (!ReadString(data, offset, metadata.installStateConfig.registryPath, "installState.registryPath") ||
+        !ReadString(data, offset, metadata.installStateConfig.registryKey, "installState.registryKey") ||
+        !ReadString(data, offset, metadata.installStateConfig.filePath, "installState.filePath") ||
+        !ReadString(data, offset, metadata.installStateConfig.mutexName, "installState.mutexName") ||
+        !ReadRegistryList(data, offset, metadata.lifecycleInstallRegistry, "lifecycleInstallRegistry")) {
         return metadata;
-    }
-    uint32_t regPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-    offset += sizeof(uint32_t);
-    if (offset + regPathLen > data.size()) {
-        META_LOG();
-        return metadata;
-    }
-    metadata.installStateConfig.registryPath = std::string(reinterpret_cast<const char*>(data.data() + offset), regPathLen);
-    offset += regPathLen;
-
-    if (offset + sizeof(uint32_t) > data.size()) {
-        META_LOG();
-        return metadata;
-    }
-    uint32_t regKeyLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-    offset += sizeof(uint32_t);
-    if (offset + regKeyLen > data.size()) {
-        META_LOG();
-        return metadata;
-    }
-    metadata.installStateConfig.registryKey = std::string(reinterpret_cast<const char*>(data.data() + offset), regKeyLen);
-    offset += regKeyLen;
-
-    if (offset + sizeof(uint32_t) > data.size()) {
-        META_LOG();
-        return metadata;
-    }
-    uint32_t filePathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-    offset += sizeof(uint32_t);
-    if (offset + filePathLen > data.size()) {
-        META_LOG();
-        return metadata;
-    }
-    metadata.installStateConfig.filePath = std::string(reinterpret_cast<const char*>(data.data() + offset), filePathLen);
-    offset += filePathLen;
-
-    if (offset + sizeof(uint32_t) > data.size()) {
-        META_LOG();
-        return metadata;
-    }
-    uint32_t mutexNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-    offset += sizeof(uint32_t);
-    if (offset + mutexNameLen > data.size()) {
-        META_LOG();
-        return metadata;
-    }
-    metadata.installStateConfig.mutexName = std::string(reinterpret_cast<const char*>(data.data() + offset), mutexNameLen);
-    offset += mutexNameLen;
-
-    if (offset + sizeof(uint32_t) > data.size()) {
-        META_LOG();
-        return metadata;
-    }
-    uint32_t lifecycleInstallRegistryCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-    offset += sizeof(uint32_t);
-    metadata.lifecycleInstallRegistry.reserve(lifecycleInstallRegistryCount);
-    for (uint32_t r = 0; r < lifecycleInstallRegistryCount; ++r) {
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        uint32_t pathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        if (offset + pathLen > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        RegistryEntry reg;
-        reg.path = std::string(reinterpret_cast<const char*>(data.data() + offset), pathLen);
-        offset += pathLen;
-        
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        uint32_t keyLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        if (offset + keyLen > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        reg.key = std::string(reinterpret_cast<const char*>(data.data() + offset), keyLen);
-        offset += keyLen;
-        
-        if (offset + sizeof(uint8_t) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        reg.type = static_cast<RegistryValueType>(data[offset]);
-        offset += sizeof(uint8_t);
-        
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        uint32_t valueLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        if (offset + valueLen > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        reg.value = std::string(reinterpret_cast<const char*>(data.data() + offset), valueLen);
-        offset += valueLen;
-        
-        metadata.lifecycleInstallRegistry.push_back(std::move(reg));
     }
     
-    if (header->version >= 12) {
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
+    if (header.version >= 12) {
+        if (!ReadStringList(data, offset, metadata.installKillProcesses, "installKillProcesses")) {
             return metadata;
-        }
-        uint32_t killCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        metadata.installKillProcesses.reserve(killCount);
-        for (uint32_t k = 0; k < killCount; ++k) {
-            if (offset + sizeof(uint32_t) > data.size()) {
-                META_LOG();
-                return metadata;
-            }
-            uint32_t nameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-            offset += sizeof(uint32_t);
-            if (offset + nameLen > data.size()) {
-                META_LOG();
-                return metadata;
-            }
-            metadata.installKillProcesses.emplace_back(reinterpret_cast<const char*>(data.data() + offset), nameLen);
-            offset += nameLen;
         }
     } else {
         metadata.installKillProcesses.clear();
     }
 
-    if (header->version >= 13) {
+    if (header.version >= 13) {
         if (!ReadComponentList(data, offset, metadata.layoutComponents)) {
             return metadata;
         }
         if (!ReadComponentUiConfig(data, offset, metadata.uiComponentSelection)) {
             return metadata;
         }
-        if (header->version >= 14) {
+        if (header.version >= 14) {
             if (!ReadUiLinks(data, offset, metadata.uiLinkBindings)) {
                 return metadata;
             }
         } else {
             metadata.uiLinkBindings.clear();
         }
-        if (header->version >= 18) {
+        if (header.version >= 18) {
             if (!ReadCleanupRules(data, offset, metadata.lifecycleUninstallCleanupRules)) {
                 return metadata;
             }
         } else {
             metadata.lifecycleUninstallCleanupRules.clear();
         }
-        if (header->version >= 21) {
+        if (header.version >= 21) {
             uint8_t deleteFromManifest = 0;
             if (!ReadPod<uint8_t>(data, offset, deleteFromManifest)) {
                 META_LOG();
@@ -556,129 +399,11 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         metadata.lifecycleUpgradeCleanup = UpgradeCleanupConfig{};
     }
 
-    for (uint32_t i = 0; i < header->folderCount; ++i) {
+    for (uint32_t i = 0; i < header.folderCount; ++i) {
         ExtendedFolderMapping mapping;
-        
-        if (offset + sizeof(uint64_t) * 3 + sizeof(uint32_t) > data.size()) {
+        if (!ReadExtendedPayloadMapping(data, offset, mapping)) {
             META_LOG();
             return metadata;
-        }
-        
-        mapping.offset = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-        offset += sizeof(uint64_t);
-        mapping.compressedSize = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-        offset += sizeof(uint64_t);
-        mapping.originalSize = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-        offset += sizeof(uint64_t);
-        mapping.checksum = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        mapping.algorithm = *reinterpret_cast<const CompressionAlgorithm*>(data.data() + offset);
-        offset += sizeof(CompressionAlgorithm);
-        if (!IsSupportedPayloadAlgorithm(mapping.algorithm)) {
-            META_LOG();
-            return metadata;
-        }
-        
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        uint32_t folderIdLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        if (offset + folderIdLen > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        mapping.folderId = std::string(reinterpret_cast<const char*>(data.data() + offset), folderIdLen);
-        offset += folderIdLen;
-
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        uint32_t folderNameLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        if (offset + folderNameLen > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        mapping.folderName = std::string(reinterpret_cast<const char*>(data.data() + offset), folderNameLen);
-        offset += folderNameLen;
-        
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        uint32_t targetPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        if (offset + targetPathLen > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        mapping.targetPath = std::string(reinterpret_cast<const char*>(data.data() + offset), targetPathLen);
-        offset += targetPathLen;
-        
-        if (offset + sizeof(SpecialDirectoryType) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        mapping.targetDirType = *reinterpret_cast<const SpecialDirectoryType*>(data.data() + offset);
-        offset += sizeof(SpecialDirectoryType);
-
-        if (header->version >= 17) {
-            if (offset + sizeof(uint8_t) > data.size()) {
-                META_LOG();
-                return metadata;
-            }
-            mapping.appendDirectoryName = data[offset] != 0;
-            offset += sizeof(uint8_t);
-        } else {
-            mapping.appendDirectoryName = true;
-        }
-        
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        uint32_t customPathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        if (offset + customPathLen > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        mapping.customTargetPath = std::string(reinterpret_cast<const char*>(data.data() + offset), customPathLen);
-        offset += customPathLen;
-        
-        if (offset + sizeof(uint32_t) > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        uint32_t fileCount = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-        offset += sizeof(uint32_t);
-        mapping.fileIndex.reserve(fileCount);
-        for (uint32_t f = 0; f < fileCount; ++f) {
-            if (offset + sizeof(uint32_t) > data.size()) {
-                META_LOG();
-                return metadata;
-            }
-            uint32_t pathLen = *reinterpret_cast<const uint32_t*>(data.data() + offset);
-            offset += sizeof(uint32_t);
-            if (offset + pathLen > data.size()) {
-                META_LOG();
-                return metadata;
-            }
-            FileIndexEntry fileEntry;
-            fileEntry.relativePath = std::string(reinterpret_cast<const char*>(data.data() + offset), pathLen);
-            offset += pathLen;
-            if (offset + sizeof(uint64_t) * 2 > data.size()) {
-                META_LOG();
-                return metadata;
-            }
-            fileEntry.offset = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-            offset += sizeof(uint64_t);
-            fileEntry.size = *reinterpret_cast<const uint64_t*>(data.data() + offset);
-            offset += sizeof(uint64_t);
-            mapping.fileIndex.push_back(std::move(fileEntry));
         }
         
         metadata.extendedPayloadMappings.push_back(mapping);

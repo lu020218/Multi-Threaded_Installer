@@ -13,6 +13,8 @@ namespace MultiThreadedInstaller {
 class TarStreamExtractor : public StreamSink {
 public:
     explicit TarStreamExtractor(const std::string& targetRoot);
+    // Callback is intended to be installed for the lifetime of a single
+    // decompression operation and should be cleared by the caller afterwards.
     void setCurrentFileChangedCallback(std::function<void(const std::string&)> callback);
     bool write(const uint8_t* data, size_t size) override;
     void flush() override;

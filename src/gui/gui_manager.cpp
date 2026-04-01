@@ -82,6 +82,24 @@ static int ResolveInstallPageIndex(const std::string& skin) {
     return -1;
 }
 
+template <typename T>
+bool PostOwnedGuiMessage(HWND hwnd, UINT message, T* payload, const char* tag) {
+    if (!payload) {
+        return false;
+    }
+    if (!hwnd || !::IsWindow(hwnd)) {
+        logInstallerWarning(std::string(tag) + " notify window is invalid; dropping message.");
+        delete payload;
+        return false;
+    }
+    if (!::PostMessage(hwnd, message, 0, reinterpret_cast<LPARAM>(payload))) {
+        logInstallerWarning(std::string(tag) + " PostMessage failed; dropping message.");
+        delete payload;
+        return false;
+    }
+    return true;
+}
+
 static const char* GetInstallPageSkinByIndex(int index) {
     switch (index) {
         case kPageWelcome:
@@ -579,7 +597,7 @@ void GUIManager::OnUninstallConfirmClick() {
         pData->success = false;
         std::wstring text = GUIHelpers::GetLocalizedText(L"msg.uninstall.appname_missing", L"");
         wcsncpy_s(pData->errorMessage, text.c_str(), _TRUNCATE);
-        ::PostMessage(m_hWnd, WM_UNINSTALL_COMPLETE, 0, reinterpret_cast<LPARAM>(pData));
+        PostOwnedGuiMessage(m_hWnd, WM_UNINSTALL_COMPLETE, pData, "[GUI]");
         return;
     }
 

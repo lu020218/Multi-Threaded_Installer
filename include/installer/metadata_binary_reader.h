@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -17,7 +18,7 @@ bool ReadPod(const std::vector<uint8_t>& data, size_t& offset, T& out) {
     if (offset + sizeof(T) > data.size()) {
         return false;
     }
-    out = *reinterpret_cast<const T*>(data.data() + offset);
+    std::memcpy(&out, data.data() + offset, sizeof(T));
     offset += sizeof(T);
     return true;
 }

@@ -13,8 +13,10 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
+#include <thread>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -38,6 +40,7 @@ struct AgentOptions {
     std::string configUrl;
     std::string statePath;
     std::string logPath;
+    bool uninstallMode = false;
 };
 
 struct EnvironmentEntry {
@@ -74,6 +77,7 @@ public:
     explicit Logger(std::string path);
     void info(const std::string& message);
     void error(const std::string& message);
+    void close();
 
 private:
     void write(const char* level, const std::string& message);
@@ -87,6 +91,25 @@ struct ExpansionContext {
     std::string componentInstallDir;
 };
 
+struct PreparedEnvironmentChanges {
+    std::vector<std::pair<std::wstring, std::wstring>> variables;
+    std::wstring joinedPath;
+    std::vector<EnvironmentEntry> appliedEntries;
+};
+
+struct PersistedState {
+    std::vector<EnvironmentEntry> environment;
+    std::string statePath;
+    std::string logPath;
+};
+
+constexpr DWORD kHttpResolveTimeoutMs = 10000;
+constexpr DWORD kHttpConnectTimeoutMs = 10000;
+constexpr DWORD kHttpSendTimeoutMs = 15000;
+constexpr DWORD kHttpReceiveTimeoutMs = 30000;
+constexpr int kHttpMaxAttempts = 3;
+constexpr DWORD kHttpRetryDelayMs = 1000;
+
 std::string ToLowerAscii(std::string value);
 std::string NormalizePathForCompare(std::string value);
 bool StartsWithNoCase(const std::string& value, const std::string& prefix);
@@ -98,6 +121,9 @@ bool ReadFileBytes(const fs::path& path, std::vector<uint8_t>& out, std::string&
 bool ComputeSha256(const std::vector<uint8_t>& data, std::string& out, std::string& error);
 bool ComputeFileSha256(const fs::path& path, std::string& out, std::string& error);
 bool EnsureParentDirectory(const fs::path& path, std::string& error);
+bool HttpDownloadToSink(const std::string& url,
+                       const std::function<bool(const uint8_t*, size_t)>& onChunk,
+                       std::string& error);
 bool HttpGetBytes(const std::string& url, std::vector<uint8_t>& out, std::string& error);
 bool FetchUrlToString(const std::string& url, std::string& out, std::string& error);
 std::string FileUrlToPath(const std::string& url);
@@ -120,10 +146,17 @@ bool WriteRegistryString(HKEY root,
                          const std::wstring& subKey,
                          const std::wstring& valueName,
                          const std::wstring& value);
+bool DeleteRegistryValueIfPresent(HKEY root,
+                                  const std::wstring& subKey,
+                                  const std::wstring& valueName);
 std::vector<std::wstring> SplitPathList(const std::wstring& value);
 std::wstring JoinPathList(const std::vector<std::wstring>& parts);
 std::vector<wchar_t> BuildCurrentEnvironmentBlock(
     const std::vector<std::pair<std::wstring, std::wstring>>& extraEntries);
+bool PrepareEnvironmentChanges(const std::vector<EnvironmentEntry>& entries,
+                               const ExpansionContext& context,
+                               PreparedEnvironmentChanges& prepared,
+                               std::string& error);
 bool ApplyEnvironmentEntries(const std::vector<EnvironmentEntry>& entries,
                              const ExpansionContext& context,
                              std::vector<EnvironmentEntry>& applied,
@@ -141,6 +174,15 @@ bool WriteStateFile(const AgentOptions& options,
                     const std::vector<EnvironmentEntry>& appliedEnv,
                     const std::map<std::string, std::string>& installedComponents,
                     std::string& error);
+bool ReadStateFile(const std::string& statePath,
+                   PersistedState& out,
+                   bool& missing,
+                   std::string& error);
+bool RollbackEnvironmentEntries(const std::vector<EnvironmentEntry>& entries,
+                                std::string& error);
+bool DeleteFileIfExists(const fs::path& path, std::string& error);
+bool RunPostSetupAgentInstall(const AgentOptions& options, Logger& logger);
+bool RunPostSetupAgentUninstall(const AgentOptions& options, Logger& logger);
 
 } // namespace
 
@@ -157,6 +199,7 @@ Logger::Logger(std::string path) {
 
 void Logger::info(const std::string& message) { write("INFO", message); }
 void Logger::error(const std::string& message) { write("ERROR", message); }
+void Logger::close() { file_.close(); }
 
 void Logger::write(const char* level, const std::string& message) {
     const std::string line = "[" + std::string(level) + "] " + message + "\n";
@@ -165,6 +208,33 @@ void Logger::write(const char* level, const std::string& message) {
         file_ << line;
         file_.flush();
     }
+}
+
+std::string FormatWin32ErrorMessage(DWORD errorCode) {
+    LPWSTR buffer = nullptr;
+    const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                        FORMAT_MESSAGE_IGNORE_INSERTS;
+    DWORD len = FormatMessageW(flags,
+                               nullptr,
+                               errorCode,
+                               MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                               reinterpret_cast<LPWSTR>(&buffer),
+                               0,
+                               nullptr);
+    std::string message = "code=" + std::to_string(errorCode);
+    if (len > 0 && buffer) {
+        std::wstring text(buffer, len);
+        while (!text.empty() && (text.back() == L'\r' || text.back() == L'\n' || text.back() == L' ')) {
+            text.pop_back();
+        }
+        if (!text.empty()) {
+            message += " message=" + WideToUtf8(text);
+        }
+    }
+    if (buffer) {
+        LocalFree(buffer);
+    }
+    return message;
 }
 
 std::string ToLowerAscii(std::string value) {
@@ -207,7 +277,9 @@ std::optional<AgentOptions> ParseArgs(int argc, wchar_t** argv, std::string& err
             return true;
         };
 
-        if (arg == L"--install-dir") {
+        if (arg == L"--uninstall") {
+            options.uninstallMode = true;
+        } else if (arg == L"--install-dir") {
             if (!consumeValue(options.installDir)) return std::nullopt;
         } else if (arg == L"--app-version") {
             if (!consumeValue(options.appVersion)) return std::nullopt;
@@ -220,8 +292,14 @@ std::optional<AgentOptions> ParseArgs(int argc, wchar_t** argv, std::string& err
         }
     }
 
-    if (options.installDir.empty() || options.appVersion.empty() ||
-        options.configUrl.empty() || options.statePath.empty()) {
+    if (options.statePath.empty()) {
+        error = "Required arguments: --state-path";
+        return std::nullopt;
+    }
+
+    if (!options.uninstallMode &&
+        (options.installDir.empty() || options.appVersion.empty() ||
+         options.configUrl.empty())) {
         error =
             "Required arguments: --install-dir --app-version --config-url --state-path";
         return std::nullopt;
@@ -344,7 +422,9 @@ bool EnsureParentDirectory(const fs::path& path, std::string& error) {
     return true;
 }
 
-bool HttpGetBytes(const std::string& url, std::vector<uint8_t>& out, std::string& error) {
+bool HttpDownloadToSink(const std::string& url,
+                        const std::function<bool(const uint8_t*, size_t)>& onChunk,
+                        std::string& error) {
     std::wstring urlW = Utf8ToWide(url);
     URL_COMPONENTSW components{};
     components.dwStructSize = sizeof(components);
@@ -363,76 +443,138 @@ bool HttpGetBytes(const std::string& url, std::vector<uint8_t>& out, std::string
         path.append(components.lpszExtraInfo, components.dwExtraInfoLength);
     }
 
-    HINTERNET session = WinHttpOpen(L"post_setup_agent/1.0",
-                                    WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                    WINHTTP_NO_PROXY_NAME,
-                                    WINHTTP_NO_PROXY_BYPASS,
-                                    0);
-    if (!session) {
-        error = "Failed to initialize WinHTTP.";
-        return false;
-    }
-    HINTERNET connection = WinHttpConnect(session, host.c_str(), components.nPort, 0);
-    HINTERNET request = nullptr;
-    bool success = false;
-
-    if (connection) {
-        DWORD flags = components.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
-        request = WinHttpOpenRequest(connection,
-                                     L"GET",
-                                     path.c_str(),
-                                     nullptr,
-                                     WINHTTP_NO_REFERER,
-                                     WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                     flags);
-    }
-    if (!request) {
-        error = "Failed to create HTTP request.";
-    } else if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                   WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-               !WinHttpReceiveResponse(request, nullptr)) {
-        error = "HTTP request failed.";
-    } else {
-        DWORD statusCode = 0;
-        DWORD statusSize = sizeof(statusCode);
-        if (!WinHttpQueryHeaders(request,
-                                 WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                                 WINHTTP_HEADER_NAME_BY_INDEX,
-                                 &statusCode,
-                                 &statusSize,
-                                 WINHTTP_NO_HEADER_INDEX) ||
-            statusCode != 200) {
-            error = "HTTP request returned status " + std::to_string(statusCode) + ".";
+    for (int attempt = 1; attempt <= kHttpMaxAttempts; ++attempt) {
+        HINTERNET session = WinHttpOpen(L"post_setup_agent/1.0",
+                                        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                        WINHTTP_NO_PROXY_NAME,
+                                        WINHTTP_NO_PROXY_BYPASS,
+                                        0);
+        if (!session) {
+            error = "WinHTTP open failed for url=" + url + " " +
+                    FormatWin32ErrorMessage(GetLastError());
         } else {
-            out.clear();
-            success = true;
-            for (;;) {
-                DWORD available = 0;
-                if (!WinHttpQueryDataAvailable(request, &available)) {
-                    error = "Failed while reading HTTP response.";
-                    success = false;
-                    break;
+            WinHttpSetTimeouts(session,
+                               kHttpResolveTimeoutMs,
+                               kHttpConnectTimeoutMs,
+                               kHttpSendTimeoutMs,
+                               kHttpReceiveTimeoutMs);
+
+            HINTERNET connection = WinHttpConnect(session, host.c_str(), components.nPort, 0);
+            HINTERNET request = nullptr;
+            bool success = false;
+            DWORD lastError = ERROR_SUCCESS;
+            DWORD statusCode = 0;
+
+            if (!connection) {
+                lastError = GetLastError();
+                error = "WinHTTP connect failed for url=" + url + " " +
+                        FormatWin32ErrorMessage(lastError);
+            } else {
+                DWORD flags = components.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
+                request = WinHttpOpenRequest(connection,
+                                             L"GET",
+                                             path.c_str(),
+                                             nullptr,
+                                             WINHTTP_NO_REFERER,
+                                             WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                             flags);
+                if (!request) {
+                    lastError = GetLastError();
+                    error = "WinHTTP request creation failed for url=" + url + " " +
+                            FormatWin32ErrorMessage(lastError);
+                } else if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                               WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+                    lastError = GetLastError();
+                    error = "WinHTTP send failed for url=" + url + " " +
+                            FormatWin32ErrorMessage(lastError);
+                } else if (!WinHttpReceiveResponse(request, nullptr)) {
+                    lastError = GetLastError();
+                    error = "WinHTTP receive failed for url=" + url + " " +
+                            FormatWin32ErrorMessage(lastError);
+                } else {
+                    DWORD statusSize = sizeof(statusCode);
+                    if (!WinHttpQueryHeaders(request,
+                                             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                             WINHTTP_HEADER_NAME_BY_INDEX,
+                                             &statusCode,
+                                             &statusSize,
+                                             WINHTTP_NO_HEADER_INDEX)) {
+                        lastError = GetLastError();
+                        error = "WinHTTP query status failed for url=" + url + " " +
+                                FormatWin32ErrorMessage(lastError);
+                    } else if (statusCode != 200) {
+                        error = "HTTP request returned status " + std::to_string(statusCode) +
+                                " for url=" + url;
+                    } else {
+                        success = true;
+                        std::vector<uint8_t> buffer(64 * 1024);
+                        for (;;) {
+                            DWORD available = 0;
+                            if (!WinHttpQueryDataAvailable(request, &available)) {
+                                lastError = GetLastError();
+                                error = "WinHTTP query data failed for url=" + url + " " +
+                                        FormatWin32ErrorMessage(lastError);
+                                success = false;
+                                break;
+                            }
+                            if (available == 0) {
+                                break;
+                            }
+                            const DWORD toRead =
+                                (std::min)(available, static_cast<DWORD>(buffer.size()));
+                            DWORD read = 0;
+                            if (!WinHttpReadData(request, buffer.data(), toRead, &read)) {
+                                lastError = GetLastError();
+                                error = "WinHTTP read failed for url=" + url + " " +
+                                        FormatWin32ErrorMessage(lastError);
+                                success = false;
+                                break;
+                            }
+                            if (read == 0) {
+                                break;
+                            }
+                            if (!onChunk(buffer.data(), read)) {
+                                error = "Failed to persist HTTP response chunk for url=" + url;
+                                success = false;
+                                break;
+                            }
+                        }
+                    }
                 }
-                if (available == 0) {
-                    break;
-                }
-                size_t start = out.size();
-                out.resize(start + available);
-                DWORD read = 0;
-                if (!WinHttpReadData(request, out.data() + start, available, &read)) {
-                    error = "Failed while reading HTTP response body.";
-                    success = false;
-                    break;
-                }
-                out.resize(start + read);
             }
+
+            if (request) WinHttpCloseHandle(request);
+            if (connection) WinHttpCloseHandle(connection);
+            WinHttpCloseHandle(session);
+
+            if (success) {
+                return true;
+            }
+        }
+
+        if (attempt < kHttpMaxAttempts) {
+            error = "attempt=" + std::to_string(attempt) + "/" +
+                    std::to_string(kHttpMaxAttempts) + " " + error;
+            std::this_thread::sleep_for(std::chrono::milliseconds(kHttpRetryDelayMs * attempt));
+        } else {
+            error = "attempt=" + std::to_string(attempt) + "/" +
+                    std::to_string(kHttpMaxAttempts) + " " + error;
         }
     }
 
-    if (request) WinHttpCloseHandle(request);
-    if (connection) WinHttpCloseHandle(connection);
-    WinHttpCloseHandle(session);
-    return success;
+    return false;
+}
+
+bool HttpGetBytes(const std::string& url, std::vector<uint8_t>& out, std::string& error) {
+    out.clear();
+    const bool ok = HttpDownloadToSink(
+        url,
+        [&out](const uint8_t* chunk, size_t size) {
+            out.insert(out.end(), chunk, chunk + size);
+            return true;
+        },
+        error);
+    return ok;
 }
 
 bool FetchUrlToString(const std::string& url, std::string& out, std::string& error) {
@@ -472,17 +614,26 @@ bool FetchComponentToPath(const std::string& url,
         return true;
     }
 
-    std::vector<uint8_t> bytes;
-    if (!HttpGetBytes(url, bytes, error)) {
-        return false;
-    }
     std::ofstream out(savePath, std::ios::binary | std::ios::trunc);
     if (!out) {
         error = "Failed to open download target: " + Utf8FromPath(savePath);
         return false;
     }
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    return static_cast<bool>(out);
+    const bool ok = HttpDownloadToSink(
+        url,
+        [&out](const uint8_t* chunk, size_t size) {
+            out.write(reinterpret_cast<const char*>(chunk), static_cast<std::streamsize>(size));
+            return static_cast<bool>(out);
+        },
+        error);
+    out.flush();
+    if (!ok || !out) {
+        std::error_code removeEc;
+        out.close();
+        fs::remove(savePath, removeEc);
+        return false;
+    }
+    return true;
 }
 
 bool ParseEnvironmentEntry(const json& item, EnvironmentEntry& out, std::string& error) {
@@ -666,6 +817,18 @@ bool WriteRegistryString(HKEY root,
     return status == ERROR_SUCCESS;
 }
 
+bool DeleteRegistryValueIfPresent(HKEY root,
+                                  const std::wstring& subKey,
+                                  const std::wstring& valueName) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(root, subKey.c_str(), 0, KEY_SET_VALUE, &key) != ERROR_SUCCESS) {
+        return true;
+    }
+    const LONG status = RegDeleteValueW(key, valueName.c_str());
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND;
+}
+
 std::vector<std::wstring> SplitPathList(const std::wstring& value) {
     std::vector<std::wstring> parts;
     size_t start = 0;
@@ -746,52 +909,28 @@ bool ApplyEnvironmentEntries(const std::vector<EnvironmentEntry>& entries,
                              const ExpansionContext& context,
                              std::vector<EnvironmentEntry>& applied,
                              std::string& error) {
+    PreparedEnvironmentChanges prepared;
+    if (!PrepareEnvironmentChanges(entries, context, prepared, error)) {
+        return false;
+    }
+
     const std::wstring envKey = L"Environment";
-    std::wstring currentPath;
-    ReadRegistryString(HKEY_CURRENT_USER, envKey, L"Path", currentPath);
-    std::vector<std::wstring> pathParts = SplitPathList(currentPath);
-    std::unordered_set<std::string> seen;
-    for (const auto& part : pathParts) {
-        seen.insert(NormalizePathForCompare(WideToUtf8(part)));
+    for (const auto& variable : prepared.variables) {
+        if (!WriteRegistryString(HKEY_CURRENT_USER, envKey, variable.first, variable.second)) {
+            error = "Failed to write environment variable: " + WideToUtf8(variable.first);
+            return false;
+        }
     }
 
-    for (const auto& entry : entries) {
-        std::string expandedValue = ExpandTokens(entry.value, context);
-        if (expandedValue.empty()) {
-            continue;
-        }
-        if (ToLowerAscii(entry.key) == "path") {
-            const std::string normalized = NormalizePathForCompare(expandedValue);
-            if (seen.find(normalized) == seen.end()) {
-                seen.insert(normalized);
-                std::wstring valueW = Utf8ToWide(expandedValue);
-                if (entry.order == 0) {
-                    pathParts.insert(pathParts.begin(), valueW);
-                } else {
-                    pathParts.push_back(valueW);
-                }
-            }
-        } else {
-            if (!WriteRegistryString(HKEY_CURRENT_USER,
-                                     envKey,
-                                     Utf8ToWide(entry.key),
-                                     Utf8ToWide(expandedValue))) {
-                error = "Failed to write environment variable: " + entry.key;
-                return false;
-            }
-            SetEnvironmentVariableW(Utf8ToWide(entry.key).c_str(), Utf8ToWide(expandedValue).c_str());
-        }
-        EnvironmentEntry appliedEntry = entry;
-        appliedEntry.value = expandedValue;
-        applied.push_back(std::move(appliedEntry));
-    }
-
-    const std::wstring joinedPath = JoinPathList(pathParts);
-    if (!WriteRegistryString(HKEY_CURRENT_USER, envKey, L"Path", joinedPath)) {
+    if (!WriteRegistryString(HKEY_CURRENT_USER, envKey, L"Path", prepared.joinedPath)) {
         error = "Failed to update system PATH.";
         return false;
     }
-    SetEnvironmentVariableW(L"Path", joinedPath.c_str());
+
+    for (const auto& variable : prepared.variables) {
+        SetEnvironmentVariableW(variable.first.c_str(), variable.second.c_str());
+    }
+    SetEnvironmentVariableW(L"Path", prepared.joinedPath.c_str());
 
     SendMessageTimeoutW(HWND_BROADCAST,
                         WM_SETTINGCHANGE,
@@ -800,6 +939,125 @@ bool ApplyEnvironmentEntries(const std::vector<EnvironmentEntry>& entries,
                         SMTO_ABORTIFHUNG,
                         5000,
                         nullptr);
+    applied = std::move(prepared.appliedEntries);
+    return true;
+}
+
+bool RollbackEnvironmentEntries(const std::vector<EnvironmentEntry>& entries,
+                                std::string& error) {
+    const std::wstring envKey = L"Environment";
+    bool touchesPath = false;
+    std::unordered_set<std::string> pathEntriesToRemove;
+    for (const auto& entry : entries) {
+        if (ToLowerAscii(entry.key) == "path") {
+            touchesPath = true;
+            const std::string normalized = NormalizePathForCompare(entry.value);
+            if (!normalized.empty()) {
+                pathEntriesToRemove.insert(normalized);
+            }
+        }
+    }
+
+    std::wstring currentPath;
+    if (touchesPath && !ReadRegistryString(HKEY_CURRENT_USER, envKey, L"Path", currentPath)) {
+        error = "Failed to read current user PATH from HKCU\\Environment during rollback.";
+        return false;
+    }
+
+    for (const auto& entry : entries) {
+        if (ToLowerAscii(entry.key) == "path") {
+            continue;
+        }
+        const std::wstring keyW = Utf8ToWide(entry.key);
+        if (!DeleteRegistryValueIfPresent(HKEY_CURRENT_USER, envKey, keyW)) {
+            error = "Failed to remove environment variable: " + entry.key;
+            return false;
+        }
+    }
+
+    if (touchesPath) {
+        const std::vector<std::wstring> pathParts = SplitPathList(currentPath);
+        std::vector<std::wstring> filteredParts;
+        filteredParts.reserve(pathParts.size());
+        for (const auto& part : pathParts) {
+            const std::string normalized = NormalizePathForCompare(WideToUtf8(part));
+            if (pathEntriesToRemove.find(normalized) == pathEntriesToRemove.end()) {
+                filteredParts.push_back(part);
+            }
+        }
+        const std::wstring joinedPath = JoinPathList(filteredParts);
+        if (!WriteRegistryString(HKEY_CURRENT_USER, envKey, L"Path", joinedPath)) {
+            error = "Failed to update user PATH during rollback.";
+            return false;
+        }
+        SetEnvironmentVariableW(L"Path", joinedPath.c_str());
+    }
+
+    for (const auto& entry : entries) {
+        if (ToLowerAscii(entry.key) == "path") {
+            continue;
+        }
+        const std::wstring keyW = Utf8ToWide(entry.key);
+        SetEnvironmentVariableW(keyW.c_str(), nullptr);
+    }
+
+    SendMessageTimeoutW(HWND_BROADCAST,
+                        WM_SETTINGCHANGE,
+                        0,
+                        reinterpret_cast<LPARAM>(L"Environment"),
+                        SMTO_ABORTIFHUNG,
+                        5000,
+                        nullptr);
+    return true;
+}
+
+bool PrepareEnvironmentChanges(const std::vector<EnvironmentEntry>& entries,
+                               const ExpansionContext& context,
+                               PreparedEnvironmentChanges& prepared,
+                               std::string& error) {
+    const std::wstring envKey = L"Environment";
+    std::wstring currentPath;
+    if (!ReadRegistryString(HKEY_CURRENT_USER, envKey, L"Path", currentPath)) {
+        error = "Failed to read current user PATH from HKCU\\Environment.";
+        return false;
+    }
+
+    std::vector<std::wstring> pathParts = SplitPathList(currentPath);
+    std::unordered_set<std::string> seen;
+    for (const auto& part : pathParts) {
+        seen.insert(NormalizePathForCompare(WideToUtf8(part)));
+    }
+
+    prepared.variables.clear();
+    prepared.appliedEntries.clear();
+
+    for (const auto& entry : entries) {
+        std::string expandedValue = ExpandTokens(entry.value, context);
+        if (expandedValue.empty()) {
+            continue;
+        }
+
+        EnvironmentEntry appliedEntry = entry;
+        appliedEntry.value = expandedValue;
+
+        if (ToLowerAscii(entry.key) == "path") {
+            const std::string normalized = NormalizePathForCompare(expandedValue);
+            if (seen.insert(normalized).second) {
+                std::wstring valueW = Utf8ToWide(expandedValue);
+                if (entry.order == 0) {
+                    pathParts.insert(pathParts.begin(), valueW);
+                } else {
+                    pathParts.push_back(valueW);
+                }
+            }
+        } else {
+            prepared.variables.emplace_back(Utf8ToWide(entry.key), Utf8ToWide(expandedValue));
+        }
+
+        prepared.appliedEntries.push_back(std::move(appliedEntry));
+    }
+
+    prepared.joinedPath = JoinPathList(pathParts);
     return true;
 }
 
@@ -837,7 +1095,8 @@ bool ExecuteComponentInstaller(const fs::path& executablePath,
                                   &startupInfo,
                                   &processInfo);
     if (!started) {
-        error = "Failed to start installer: " + Utf8FromPath(executablePath);
+        error = "Failed to start installer: " + Utf8FromPath(executablePath) + " " +
+                FormatWin32ErrorMessage(GetLastError());
         return false;
     }
 
@@ -853,12 +1112,19 @@ bool ExecuteComponentInstaller(const fs::path& executablePath,
     if (waitResult != WAIT_OBJECT_0) {
         TerminateProcess(processInfo.hProcess, 1);
         CloseHandle(processInfo.hProcess);
-        error = "Installer timed out or wait failed.";
+        if (waitResult == WAIT_TIMEOUT) {
+            error = "Installer timed out after " + std::to_string(timeoutSec) +
+                    " seconds.";
+        } else {
+            error = "Failed while waiting for installer: " +
+                    FormatWin32ErrorMessage(GetLastError());
+        }
         return false;
     }
     if (!GetExitCodeProcess(processInfo.hProcess, &exitCode)) {
         CloseHandle(processInfo.hProcess);
-        error = "Failed to read installer exit code.";
+        error = "Failed to read installer exit code: " +
+                FormatWin32ErrorMessage(GetLastError());
         return false;
     }
     CloseHandle(processInfo.hProcess);
@@ -879,6 +1145,8 @@ bool WriteStateFile(const AgentOptions& options,
     root["configVersion"] = configVersion;
     root["profile"] = profile;
     root["appVersion"] = options.appVersion;
+    root["statePath"] = options.statePath;
+    root["logPath"] = options.logPath;
     json env = json::array();
     for (const auto& entry : appliedEnv) {
         env.push_back({ { "key", entry.key }, { "value", entry.value }, { "order", entry.order } });
@@ -900,18 +1168,78 @@ bool WriteStateFile(const AgentOptions& options,
     return static_cast<bool>(out);
 }
 
-} // namespace
+bool ReadStateFile(const std::string& statePath,
+                   PersistedState& out,
+                   bool& missing,
+                   std::string& error) {
+    out = PersistedState{};
+    missing = false;
 
-int RunPostSetupAgentMain(int argc, wchar_t** argv) {
-    std::string parseError;
-    auto maybeOptions = ParseArgs(argc, argv, parseError);
-    Logger logger(maybeOptions ? maybeOptions->logPath : std::string());
-    if (!maybeOptions) {
-        logger.error(parseError);
-        return 1;
+    const fs::path path = PathFromUtf8(statePath);
+    if (!fs::exists(path)) {
+        missing = true;
+        return true;
     }
 
-    const AgentOptions options = *maybeOptions;
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        error = "Failed to open state file: " + statePath;
+        return false;
+    }
+
+    const std::string payload((std::istreambuf_iterator<char>(input)),
+                              std::istreambuf_iterator<char>());
+    if (payload.empty()) {
+        error = "State file is empty: " + statePath;
+        return false;
+    }
+
+    json root = json::parse(payload, nullptr, false);
+    if (root.is_discarded() || !root.is_object()) {
+        error = "State file is invalid JSON: " + statePath;
+        return false;
+    }
+    if (!root.contains("environment") || !root["environment"].is_array()) {
+        error = "State file missing 'environment' array: " + statePath;
+        return false;
+    }
+
+    out.statePath = root.value("statePath", statePath);
+    out.logPath = root.value("logPath", "");
+    for (const auto& item : root["environment"]) {
+        if (!item.is_object()) {
+            error = "State file contains invalid environment entry.";
+            return false;
+        }
+        EnvironmentEntry entry;
+        entry.key = item.value("key", "");
+        entry.value = item.value("value", "");
+        entry.order = item.value("order", 0);
+        if (entry.key.empty()) {
+            error = "State file contains environment entry with empty key.";
+            return false;
+        }
+        out.environment.push_back(std::move(entry));
+    }
+    return true;
+}
+
+bool DeleteFileIfExists(const fs::path& path, std::string& error) {
+    if (path.empty()) {
+        return true;
+    }
+    std::error_code ec;
+    if (!fs::exists(path, ec)) {
+        return true;
+    }
+    if (!fs::remove(path, ec) && ec) {
+        error = "Failed to delete file: " + Utf8FromPath(path);
+        return false;
+    }
+    return true;
+}
+
+bool RunPostSetupAgentInstall(const AgentOptions& options, Logger& logger) {
     logger.info("post_setup_agent started.");
 
     ExpansionContext context;
@@ -921,14 +1249,14 @@ int RunPostSetupAgentMain(int argc, wchar_t** argv) {
     std::string payload;
     std::string error;
     if (!FetchUrlToString(options.configUrl, payload, error)) {
-        logger.error(error);
-        return 1;
+        logger.error("[ConfigFetch] " + error);
+        return false;
     }
 
     RemoteConfig config;
     if (!ParseRemoteConfig(payload, config, error)) {
-        logger.error(error);
-        return 1;
+        logger.error("[ConfigParse] " + error);
+        return false;
     }
 
     std::string profileName;
@@ -937,8 +1265,8 @@ int RunPostSetupAgentMain(int argc, wchar_t** argv) {
 
     std::vector<EnvironmentEntry> appliedEnvironment;
     if (!ApplyEnvironmentEntries(profile.environment, context, appliedEnvironment, error)) {
-        logger.error(error);
-        return 1;
+        logger.error("[Environment] " + error);
+        return false;
     }
 
     std::map<std::string, std::string> installedComponents;
@@ -951,18 +1279,28 @@ int RunPostSetupAgentMain(int argc, wchar_t** argv) {
 
         const fs::path savePath = PathFromUtf8(ExpandTokens(component.saveAs, context));
         if (!FetchComponentToPath(component.url, savePath, context, error)) {
-            logger.error("Component " + component.id + ": " + error);
-            return 1;
+            logger.error("[ComponentDownload] id=" + component.id +
+                         " url=" + component.url +
+                         " saveAs=" + Utf8FromPath(savePath) +
+                         " installDir=" + context.componentInstallDir +
+                         " error=" + error);
+            return false;
         }
 
         std::string actualHash;
         if (!ComputeFileSha256(savePath, actualHash, error)) {
-            logger.error("Component " + component.id + ": " + error);
-            return 1;
+            logger.error("[ComponentHash] id=" + component.id +
+                         " saveAs=" + Utf8FromPath(savePath) +
+                         " error=" + error);
+            return false;
         }
         if (actualHash != component.sha256) {
-            logger.error("Component " + component.id + ": SHA256 mismatch.");
-            return 1;
+            logger.error("[ComponentHash] id=" + component.id +
+                         " saveAs=" + Utf8FromPath(savePath) +
+                         " expected=" + component.sha256 +
+                         " actual=" + actualHash +
+                         " error=SHA256 mismatch");
+            return false;
         }
 
         DWORD exitCode = 0;
@@ -974,24 +1312,98 @@ int RunPostSetupAgentMain(int argc, wchar_t** argv) {
                                        component.timeoutSec,
                                        exitCode,
                                        error)) {
-            logger.error("Component " + component.id + ": " + error);
-            return 1;
+            logger.error("[ComponentExecute] id=" + component.id +
+                         " saveAs=" + Utf8FromPath(savePath) +
+                         " installDir=" + context.componentInstallDir +
+                         " wait=" + std::string(component.wait ? "true" : "false") +
+                         " timeoutSec=" + std::to_string(component.timeoutSec) +
+                         " error=" + error);
+            return false;
         }
         if (component.wait && exitCode != 0) {
-            logger.error("Component " + component.id +
-                         ": installer exited with code " + std::to_string(exitCode));
-            return 1;
+            logger.error("[ComponentExecute] id=" + component.id +
+                         " saveAs=" + Utf8FromPath(savePath) +
+                         " installDir=" + context.componentInstallDir +
+                         " wait=true timeoutSec=" + std::to_string(component.timeoutSec) +
+                         " exitCode=" + std::to_string(exitCode));
+            return false;
         }
         installedComponents[component.id] = actualHash;
     }
 
-    if (!WriteStateFile(options, config.version, profileName, appliedEnvironment, installedComponents, error)) {
-        logger.error(error);
-        return 1;
+    if (!WriteStateFile(options,
+                        config.version,
+                        profileName,
+                        appliedEnvironment,
+                        installedComponents,
+                        error)) {
+        logger.error("[StateWrite] " + error);
+        return false;
     }
 
     logger.info("post_setup_agent completed successfully.");
-    return 0;
+    return true;
+}
+
+bool RunPostSetupAgentUninstall(const AgentOptions& options, Logger& logger) {
+    logger.info("post_setup_agent uninstall started.");
+
+    PersistedState state;
+    bool missing = false;
+    std::string error;
+    if (!ReadStateFile(options.statePath, state, missing, error)) {
+        logger.error("[PostSetup][Uninstall][State] " + error);
+        return false;
+    }
+    if (missing) {
+        logger.info("[PostSetup][Uninstall][State] state file not found; nothing to rollback.");
+        return true;
+    }
+
+    if (!RollbackEnvironmentEntries(state.environment, error)) {
+        logger.error("[PostSetup][Uninstall][Env] " + error);
+        return false;
+    }
+    logger.info("[PostSetup][Uninstall][Env] rolled back environment entries successfully.");
+
+    const fs::path persistedStatePath =
+        PathFromUtf8(state.statePath.empty() ? options.statePath : state.statePath);
+    if (!DeleteFileIfExists(persistedStatePath, error)) {
+        logger.error("[PostSetup][Uninstall][Cleanup] " + error);
+        return false;
+    }
+    logger.info("[PostSetup][Uninstall][Cleanup] removed state file: " +
+                Utf8FromPath(persistedStatePath));
+
+    const fs::path persistedLogPath =
+        PathFromUtf8(!options.logPath.empty() ? options.logPath : state.logPath);
+    logger.info("[PostSetup][Uninstall][Cleanup] rollback completed.");
+    logger.close();
+
+    std::string logDeleteError;
+    if (!DeleteFileIfExists(persistedLogPath, logDeleteError)) {
+        std::cerr << "[WARN] [PostSetup][Uninstall][Cleanup] " << logDeleteError << "\n";
+    }
+
+    return true;
+}
+
+} // namespace
+
+int RunPostSetupAgentMain(int argc, wchar_t** argv) {
+    std::string parseError;
+    auto maybeOptions = ParseArgs(argc, argv, parseError);
+    Logger logger(maybeOptions ? maybeOptions->logPath : std::string());
+    if (!maybeOptions) {
+        logger.error(parseError);
+        return 1;
+    }
+
+    const AgentOptions options = *maybeOptions;
+    return (options.uninstallMode ? RunPostSetupAgentUninstall(options, logger)
+                                  : RunPostSetupAgentInstall(options, logger))
+               ? 0
+               : 1;
 }
 
 } // namespace MultiThreadedInstaller

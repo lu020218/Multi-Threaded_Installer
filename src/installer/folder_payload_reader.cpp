@@ -5,6 +5,8 @@
 #include "installer/installer_helpers.h"
 
 #include <fstream>
+#include <limits>
+#include <new>
 
 namespace MultiThreadedInstaller {
 
@@ -106,6 +108,19 @@ std::vector<uint8_t> FolderPayloadReader::readPayload(uint64_t offset,
         }
         return {};
     }
+    if (size > FolderPayloadReader::kMaxPayloadSizeBytes) {
+        if (errorMessage) {
+            *errorMessage = "Payload exceeds maximum allowed size.";
+        }
+        return {};
+    }
+    if (size > static_cast<uint64_t>((std::numeric_limits<size_t>::max)()) ||
+        size > static_cast<uint64_t>((std::numeric_limits<std::streamsize>::max)())) {
+        if (errorMessage) {
+            *errorMessage = "Payload size cannot be represented safely on this platform.";
+        }
+        return {};
+    }
 
     const uint64_t absoluteOffset = dataOffset + offset;
     file.seekg(static_cast<std::streamoff>(absoluteOffset), std::ios::beg);
@@ -116,7 +131,21 @@ std::vector<uint8_t> FolderPayloadReader::readPayload(uint64_t offset,
         return {};
     }
 
-    std::vector<uint8_t> payload(static_cast<size_t>(size));
+    std::vector<uint8_t> payload;
+    try {
+        payload.resize(static_cast<size_t>(size));
+    } catch (const std::bad_alloc&) {
+        if (errorMessage) {
+            *errorMessage = "Failed to allocate memory for folder payload.";
+        }
+        return {};
+    } catch (...) {
+        if (errorMessage) {
+            *errorMessage = "Unexpected exception while allocating folder payload buffer.";
+        }
+        return {};
+    }
+
     file.read(reinterpret_cast<char*>(payload.data()), static_cast<std::streamsize>(size));
     if (file.gcount() != static_cast<std::streamsize>(size)) {
         if (errorMessage) {

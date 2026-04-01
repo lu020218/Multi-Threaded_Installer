@@ -112,6 +112,21 @@ lzma_ret InitializeLzmaDecoder(const LzmaLoader& loader,
 }
 #endif
 
+class ScopedTarExtractorCallbackReset {
+public:
+    explicit ScopedTarExtractorCallbackReset(TarStreamExtractor* extractor)
+        : extractor_(extractor) {}
+
+    ~ScopedTarExtractorCallbackReset() {
+        if (extractor_) {
+            extractor_->setCurrentFileChangedCallback({});
+        }
+    }
+
+private:
+    TarStreamExtractor* extractor_;
+};
+
 } // namespace
 
 DecompressionEngine::DecompressionEngine() = default;
@@ -149,7 +164,9 @@ bool DecompressionEngine::decompressLzma(const DecompressionTask& task,
                                          DecompressionTiming* timing) {
 #ifdef LibLZMA_FOUND
     std::string currentFile;
-    if (auto* extractor = dynamic_cast<TarStreamExtractor*>(&sink)) {
+    TarStreamExtractor* extractor = dynamic_cast<TarStreamExtractor*>(&sink);
+    ScopedTarExtractorCallbackReset callbackReset(extractor);
+    if (extractor) {
         extractor->setCurrentFileChangedCallback([&currentFile](const std::string& path) {
             currentFile = path;
         });
@@ -256,7 +273,9 @@ bool DecompressionEngine::decompressZstd(const DecompressionTask& task,
                                          DecompressionTiming* timing) {
 #ifdef ZSTD_FOUND
     std::string currentFile;
-    if (auto* extractor = dynamic_cast<TarStreamExtractor*>(&sink)) {
+    TarStreamExtractor* extractor = dynamic_cast<TarStreamExtractor*>(&sink);
+    ScopedTarExtractorCallbackReset callbackReset(extractor);
+    if (extractor) {
         extractor->setCurrentFileChangedCallback([&currentFile](const std::string& path) {
             currentFile = path;
         });

@@ -17,6 +17,8 @@ public:
                                      std::string* errorMessage = nullptr) const;
 
 private:
+    static constexpr uint64_t kMaxPayloadSizeBytes = 4ull * 1024ull * 1024ull * 1024ull;
+
     std::string dataPackagePath_;
 };
 

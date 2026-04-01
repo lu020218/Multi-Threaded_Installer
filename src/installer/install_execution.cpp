@@ -148,6 +148,44 @@ std::wstring QuoteProcessPath(const std::wstring& value) {
     return L"\"" + value + L"\"";
 }
 
+std::wstring ExtractArgValueFromCommandLine(const std::string& argsUtf8, const std::wstring& flag) {
+    if (argsUtf8.empty()) {
+        return {};
+    }
+
+    std::wstring synthetic = L"placeholder.exe ";
+    synthetic += Utf8ToWide(argsUtf8);
+    int argc = 0;
+    LPWSTR* argvW = CommandLineToArgvW(synthetic.c_str(), &argc);
+    if (!argvW) {
+        return {};
+    }
+
+    std::wstring value;
+    for (int i = 1; i + 1 < argc; ++i) {
+        std::wstring current = argvW[i] ? argvW[i] : L"";
+        std::transform(current.begin(), current.end(), current.begin(),
+                       [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+        if (current == flag) {
+            value = argvW[i + 1] ? argvW[i + 1] : L"";
+            break;
+        }
+    }
+    LocalFree(argvW);
+    return value;
+}
+
+bool IsPostSetupAgentComponent(const ComponentConfig& component) {
+    std::wstring installer = Utf8ToWide(component.source.local.installer);
+    std::transform(installer.begin(), installer.end(), installer.begin(),
+                   [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    return installer.find(L"post_setup_agent.exe") != std::wstring::npos;
+}
+
+std::string QuoteForCommand(const std::string& value) {
+    return "\"" + value + "\"";
+}
+
 bool IsBatchScriptPath(const std::filesystem::path& executablePath) {
     std::wstring extension = executablePath.extension().wstring();
     std::transform(extension.begin(), extension.end(), extension.begin(),
@@ -458,20 +496,38 @@ bool ExecuteLocalComponent(const ComponentConfig& component,
         } else if (component.source.local.wait && exitCode != 0) {
             componentError = "Local component installer failed with exit code " +
                              std::to_string(exitCode);
-        } else if (!component.source.local.uninstall.empty()) {
+        } else if (!component.source.local.uninstall.empty() || IsPostSetupAgentComponent(component)) {
             ComponentExecutionRecord record;
             record.componentId = component.id;
             record.sourceType = "local";
-            record.uninstallCommand =
-                ExpandRuntimeTokens(component.source.local.uninstall,
-                                    installRootForComponents,
-                                    metadata,
-                                    pathResolver,
-                                    componentInstallDir);
+            if (!component.source.local.uninstall.empty()) {
+                record.uninstallCommand =
+                    ExpandRuntimeTokens(component.source.local.uninstall,
+                                        installRootForComponents,
+                                        metadata,
+                                        pathResolver,
+                                        componentInstallDir);
+            } else {
+                const std::wstring statePathW =
+                    ExtractArgValueFromCommandLine(expandedArgs, L"--state-path");
+                const std::wstring logPathW =
+                    ExtractArgValueFromCommandLine(expandedArgs, L"--log-path");
+                if (!statePathW.empty()) {
+                    record.uninstallCommand =
+                        QuoteForCommand(Utf8FromPath(installerPath)) + " --uninstall --state-path " +
+                        QuoteForCommand(WideToUtf8(statePathW));
+                    if (!logPathW.empty()) {
+                        record.uninstallCommand +=
+                            " --log-path " + QuoteForCommand(WideToUtf8(logPathW));
+                    }
+                }
+            }
             record.workingDirectory = Utf8FromPath(basePath);
             record.wait = component.source.local.wait;
             record.timeoutSec = component.source.local.timeoutSec;
-            componentActions.push_back(std::move(record));
+            if (!record.uninstallCommand.empty()) {
+                componentActions.push_back(std::move(record));
+            }
         }
     }
 #else

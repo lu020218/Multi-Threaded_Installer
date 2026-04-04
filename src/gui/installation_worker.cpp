@@ -160,10 +160,13 @@ void InstallationWorker::PostProgressMessage(const std::wstring& folder, float p
     PostOwnedWorkerMessage(m_hNotifyWindow, WM_INSTALLATION_PROGRESS, pData, "[GUI][Worker]");
 }
 
-void InstallationWorker::PostCompletionMessage(bool success, const std::wstring& errorMsg) {
+void InstallationWorker::PostCompletionMessage(bool success,
+                                               bool rebootRequired,
+                                               const std::wstring& errorMsg) {
     CompletionMessageData* pData = new CompletionMessageData();
 
     pData->success = success;
+    pData->rebootRequired = rebootRequired;
 
     size_t copyLen = errorMsg.length();
     if (copyLen >= 512) {
@@ -181,6 +184,7 @@ void InstallationWorker::PostCompletionMessage(bool success, const std::wstring&
 
 void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
     bool success = false;
+    bool rebootRequired = false;
     std::wstring errorMessage;
     ExtendedInstallationMetadata metadata;
     InstallerPathResolver pathResolver;
@@ -295,7 +299,7 @@ if (m_cancellationRequested) {
                          (serviceResult.success ? "true" : "false"));
         logElapsed("decompression_complete");
 
-        if (!serviceResult.success) {
+        if (!serviceResult.success && !serviceResult.rebootRequired) {
             if (serviceResult.cancelled || m_cancellationRequested.load()) {
                 throw std::runtime_error(WideToUtf8(
                     GUIHelpers::GetLocalizedText(L"msg.error.cancelled", L"")));
@@ -315,9 +319,12 @@ if (m_cancellationRequested) {
             throw std::runtime_error(allErrors);
         }
 
-        success = true;
+        success = serviceResult.success;
+        rebootRequired = serviceResult.rebootRequired;
         errorMessage = L"";
-        logInstallerInfo("[GUI] Installation completed successfully.");
+        logInstallerInfo(std::string("[GUI] Installation completed. success=") +
+                         (success ? "true" : "false") +
+                         " rebootRequired=" + (rebootRequired ? "true" : "false"));
         logElapsed("success");
     } catch (const std::filesystem::filesystem_error& e) {
         success = false;
@@ -354,7 +361,7 @@ success = false;
     }
     
     m_running = false;
-    PostCompletionMessage(success, errorMessage);
+    PostCompletionMessage(success, rebootRequired, errorMessage);
 }
 
 void InstallationWorker::JoinFinishedThreadIfNeeded() {

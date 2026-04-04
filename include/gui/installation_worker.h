@@ -69,7 +69,7 @@ private:
     void PostProgressMessage(const std::wstring& folder, float progress);
     
 
-    void PostCompletionMessage(bool success, const std::wstring& errorMsg);
+    void PostCompletionMessage(bool success, bool rebootRequired, const std::wstring& errorMsg);
 
     void JoinFinishedThreadIfNeeded();
     

@@ -542,7 +542,10 @@ int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
 
     InstallServiceResult result = ExecuteInstallService(
         metadata, parser, pathResolver, options, BuildConsoleServiceCallbacks(console));
-    console.showInstallationResult(result.success, result.errors);
+    console.showInstallationResult(result.success, result.rebootRequired, result.errors);
+    if (result.rebootRequired) {
+        return INSTALLER_EXIT_REBOOT_REQUIRED;
+    }
     if (result.success) {
         return INSTALLER_EXIT_SUCCESS;
     }

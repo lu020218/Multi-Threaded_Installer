@@ -153,6 +153,7 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
 
     std::mutex resultMutex;
     std::vector<std::string> errors;
+    std::vector<std::string> pendingReplaceFiles;
     std::vector<FolderTiming> folderTimings;
     std::atomic<bool> overallSuccess(true);
     std::atomic<bool> cancelled(false);
@@ -213,6 +214,12 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
             std::lock_guard<std::mutex> lock(resultMutex);
             folderTimings.push_back(std::move(timing));
             errors.insert(errors.end(), folderResult.errors.begin(), folderResult.errors.end());
+            if (folderResult.rebootRequired) {
+                result.rebootRequired = true;
+            }
+            pendingReplaceFiles.insert(pendingReplaceFiles.end(),
+                                       folderResult.pendingReplaceFiles.begin(),
+                                       folderResult.pendingReplaceFiles.end());
         });
     }
 
@@ -221,6 +228,7 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     result.errors = std::move(errors);
     result.cancelled = cancelled.load();
     result.success = overallSuccess.load() && result.errors.empty() && !result.cancelled;
+    result.pendingReplaceFiles = std::move(pendingReplaceFiles);
     result.timing.payloadReadSec = static_cast<double>(totalReadNs.load()) / 1e9;
     result.timing.decompressSec = static_cast<double>(totalDecompressNs.load()) / 1e9;
     result.timing.writeSec = static_cast<double>(totalWriteNs.load()) / 1e9;

@@ -46,6 +46,32 @@ void ShowInstallCompletion(CPaintManagerUI& manager,
         static_cast<CCheckBoxUI*>(manager.FindControl(_T("open_web_checkbox")));
     CButtonUI* runButton = static_cast<CButtonUI*>(manager.FindControl(_T("btnRun")));
 
+    if (data.rebootRequired) {
+        if (completionTitle) {
+            completionTitle->SetText(WStringToTStr(
+                GUIHelpers::GetLocalizedText(L"msg.install.reboot_required", L"")));
+            completionTitle->SetTextColor(0xFFE67E22);
+        }
+        if (resultMessageLabel) {
+            resultMessageLabel->SetText(WStringToTStr(
+                GUIHelpers::GetLocalizedText(L"msg.install.reboot_required_detail", L"")));
+            resultMessageLabel->SetTextColor(0xFFE67E22);
+        }
+        if (successIcon) {
+            successIcon->SetVisible(false);
+        }
+        if (failureIcon) {
+            failureIcon->SetVisible(true);
+        }
+        if (runButton) {
+            runButton->SetVisible(false);
+        }
+        if (openWebCheckbox) {
+            openWebCheckbox->SetVisible(false);
+        }
+        return;
+    }
+
     if (data.success) {
         if (completionTitle) {
             completionTitle->SetText(WStringToTStr(

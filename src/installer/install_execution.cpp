@@ -754,6 +754,8 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
     output.installRootPath = parallelResult.installRootPath;
     output.installedRoots = std::move(parallelResult.installedRoots);
     output.cancelled = parallelResult.cancelled;
+    output.rebootRequired = parallelResult.rebootRequired;
+    output.pendingReplaceFiles = std::move(parallelResult.pendingReplaceFiles);
 
     if (!parallelResult.success) {
         logInstallerError("[InstallFlow][Extract] failed, aborting installation");
@@ -768,6 +770,11 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
             reporter.EmitMessage(InstallServiceEventType::Error, error);
         }
         return false;
+    }
+
+    if (output.rebootRequired) {
+        reporter.EmitMessage(InstallServiceEventType::Warning,
+                             "Some locked files were scheduled for replacement after reboot.");
     }
 
     if (output.installRootPath.empty()) {

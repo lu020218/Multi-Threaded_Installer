@@ -17,15 +17,23 @@ public:
         long long writeNs = 0;
     };
 
+    struct DecompressionOutcome {
+        bool rebootRequired = false;
+        std::vector<std::string> pendingReplaceFiles;
+    };
+
     DecompressionEngine();
     ~DecompressionEngine();
 
-    bool decompressFolder(const DecompressionTask& task, DecompressionTiming* timing = nullptr);
+    bool decompressFolder(const DecompressionTask& task,
+                          DecompressionTiming* timing = nullptr,
+                          DecompressionOutcome* outcome = nullptr);
 
     bool decompressToStream(const DecompressionTask& task,
                             StreamSink& sink,
                             Crc32Stream* checksum = nullptr,
-                            DecompressionTiming* timing = nullptr);
+                            DecompressionTiming* timing = nullptr,
+                            DecompressionOutcome* outcome = nullptr);
 
     void registerProgressCallback(ProgressCallback callback);
 

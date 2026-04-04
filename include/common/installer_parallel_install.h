@@ -30,8 +30,10 @@ struct ParallelInstallSummary {
 struct ParallelInstallResult {
     bool success = false;
     bool cancelled = false;
+    bool rebootRequired = false;
     std::string installRootPath;
     std::vector<std::string> installedRoots;
+    std::vector<std::string> pendingReplaceFiles;
     std::vector<std::string> errors;
     ParallelInstallSummary timing;
 };

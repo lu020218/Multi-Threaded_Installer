@@ -1,5 +1,6 @@
 #include "installer/install_precheck.h"
 
+#include "common/installer_logger.h"
 #include "installer/install_state_utils.h"
 #include "installer/installer_helpers.h"
 
@@ -65,7 +66,7 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
                 }
                 joined += running[i];
             }
-            reporter.EmitMessage(InstallServiceEventType::Info, "Terminating processes: " + joined);
+            logInstallerInfo("[PROC] Attempting pre-install termination for: " + joined);
             terminateProcessesByName(running);
             Sleep(500);
             std::vector<std::string> remaining = getRunningProcessesByName(processNames);
@@ -77,8 +78,8 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
                     }
                     unresolved += remaining[i];
                 }
-                error = "Failed to terminate processes: " + unresolved;
-                return false;
+                logInstallerWarning("[PROC] Processes still detected after terminate attempt: " +
+                                    unresolved);
             }
         }
     }

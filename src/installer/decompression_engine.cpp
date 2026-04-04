@@ -132,16 +132,27 @@ private:
 DecompressionEngine::DecompressionEngine() = default;
 DecompressionEngine::~DecompressionEngine() = default;
 
-bool DecompressionEngine::decompressFolder(const DecompressionTask& task, DecompressionTiming* timing) {
+bool DecompressionEngine::decompressFolder(const DecompressionTask& task,
+                                          DecompressionTiming* timing,
+                                          DecompressionOutcome* outcome) {
     TarStreamExtractor extractor(task.targetPath);
     Crc32Stream checksum;
-    return decompressToStream(task, extractor, &checksum, timing);
+    const bool ok = decompressToStream(task, extractor, &checksum, timing, outcome);
+    if (ok && outcome) {
+        outcome->rebootRequired = !extractor.pendingReplaceFiles().empty();
+        outcome->pendingReplaceFiles = extractor.pendingReplaceFiles();
+    }
+    return ok;
 }
 
 bool DecompressionEngine::decompressToStream(const DecompressionTask& task,
                                              StreamSink& sink,
                                              Crc32Stream* checksum,
-                                             DecompressionTiming* timing) {
+                                             DecompressionTiming* timing,
+                                             DecompressionOutcome* outcome) {
+    if (outcome) {
+        *outcome = DecompressionOutcome{};
+    }
     switch (task.algorithm) {
     case CompressionAlgorithm::LZMA2_XZ:
         return decompressLzma(task, sink, checksum, timing);

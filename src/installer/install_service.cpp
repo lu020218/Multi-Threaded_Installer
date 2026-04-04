@@ -178,6 +178,8 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         result.installRootPath = executionOutput.installRootPath;
         result.installedRoots = std::move(executionOutput.installedRoots);
         result.cancelled = executionOutput.cancelled;
+        result.rebootRequired = executionOutput.rebootRequired;
+        result.pendingReplaceFiles = std::move(executionOutput.pendingReplaceFiles);
 
         if (!ExecuteInstallFinalization(metadata,
                                         plan,
@@ -210,6 +212,22 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             logInstallerWarning(std::string("[InstallFlow][Done] success=false cancelled=") +
                                 (result.cancelled ? "true" : "false") +
                                 " errors=" + std::to_string(result.errors.size()) +
+                                " installRootPath=" + result.installRootPath);
+            return result;
+        }
+
+        if (result.rebootRequired) {
+            result.success = false;
+            reporter.EmitStatus(InstallServiceStatus::RebootRequired,
+                                InstallServicePhase::Finalizing,
+                                1.0f,
+                                "Installation requires a system reboot to finish replacing locked files.");
+            reporter.EmitMessage(InstallServiceEventType::Warning,
+                                 "Some files were scheduled for replacement after reboot.");
+            logInstallerWarning(std::string("[InstallFlow][Done] rebootRequired=true cancelled=") +
+                                (result.cancelled ? "true" : "false") +
+                                " pendingReplaceFiles=" +
+                                std::to_string(result.pendingReplaceFiles.size()) +
                                 " installRootPath=" + result.installRootPath);
             return result;
         }

@@ -78,8 +78,9 @@ FolderInstallResult FolderInstallExecutor::execute(const FolderInstallRequest& r
 
     DecompressionEngine::DecompressionTiming timing{};
     bool ok = false;
+    DecompressionEngine::DecompressionOutcome outcome;
     try {
-        ok = decompressionEngine_.decompressFolder(task, &timing);
+        ok = decompressionEngine_.decompressFolder(task, &timing, &outcome);
     } catch (const std::exception& e) {
         logError(std::string("Folder payload installation aborted for '") +
                  request.folderName + "': " + e.what());
@@ -91,11 +92,17 @@ FolderInstallResult FolderInstallExecutor::execute(const FolderInstallRequest& r
     }
     result.decompressSec = static_cast<double>(timing.decompressNs) / 1e9;
     result.writeSec = static_cast<double>(timing.writeNs) / 1e9;
+    result.rebootRequired = outcome.rebootRequired;
+    result.pendingReplaceFiles = std::move(outcome.pendingReplaceFiles);
 
     if (!ok) {
         logError("Failed to install folder payload: " + request.folderName);
     } else {
         result.success = true;
+        if (result.rebootRequired && request.infoCallback) {
+            request.infoCallback("Folder payload '" + request.folderName +
+                                 "' scheduled locked files for replacement after reboot.");
+        }
     }
 
     if (request.cancellationCallback && request.cancellationCallback()) {

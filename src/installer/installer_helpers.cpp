@@ -3,6 +3,7 @@
 #include "installer/registry_utils.h"
 #include "installer/shortcut_startup_utils.h"
 #include "installer/uninstall_manager.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
@@ -710,6 +711,35 @@ bool terminateProcessByName(const std::string& exeName) {
     if (exeName.empty()) {
         return false;
     }
+
+    auto formatWin32Error = [](DWORD errorCode) {
+        LPWSTR buffer = nullptr;
+        const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                            FORMAT_MESSAGE_IGNORE_INSERTS;
+        DWORD len = FormatMessageW(flags,
+                                   nullptr,
+                                   errorCode,
+                                   MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                                   reinterpret_cast<LPWSTR>(&buffer),
+                                   0,
+                                   nullptr);
+        std::string message = "code=" + std::to_string(errorCode);
+        if (len > 0 && buffer) {
+            std::wstring text(buffer, len);
+            while (!text.empty() &&
+                   (text.back() == L'\r' || text.back() == L'\n' || text.back() == L' ')) {
+                text.pop_back();
+            }
+            if (!text.empty()) {
+                message += " message=" + WideToUtf8(text);
+            }
+        }
+        if (buffer) {
+            LocalFree(buffer);
+        }
+        return message;
+    };
+
     std::string target = exeName;
     std::transform(target.begin(), target.end(), target.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -739,11 +769,35 @@ bool terminateProcessByName(const std::string& exeName) {
 
             HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, entry.th32ProcessID);
             if (!process) {
+                const DWORD openError = GetLastError();
+                logInstallerWarning("[PROC] Failed to open process for termination name=" + exeName +
+                                    " pid=" + std::to_string(entry.th32ProcessID) +
+                                    " error=" + formatWin32Error(openError));
                 continue;
             }
             if (TerminateProcess(process, 1)) {
-                WaitForSingleObject(process, 5000);
-                terminatedAny = true;
+                const DWORD waitResult = WaitForSingleObject(process, 5000);
+                if (waitResult == WAIT_OBJECT_0) {
+                    logInstallerInfo("[PROC] Terminated process name=" + exeName +
+                                     " pid=" + std::to_string(entry.th32ProcessID));
+                    terminatedAny = true;
+                } else if (waitResult == WAIT_TIMEOUT) {
+                    logInstallerWarning("[PROC] TerminateProcess returned success but wait timed out name=" +
+                                        exeName +
+                                        " pid=" + std::to_string(entry.th32ProcessID));
+                    terminatedAny = true;
+                } else {
+                    logInstallerWarning("[PROC] TerminateProcess returned success but wait failed name=" +
+                                        exeName +
+                                        " pid=" + std::to_string(entry.th32ProcessID) +
+                                        " error=" + formatWin32Error(GetLastError()));
+                    terminatedAny = true;
+                }
+            } else {
+                const DWORD terminateError = GetLastError();
+                logInstallerWarning("[PROC] Failed to terminate process name=" + exeName +
+                                    " pid=" + std::to_string(entry.th32ProcessID) +
+                                    " error=" + formatWin32Error(terminateError));
             }
             CloseHandle(process);
         } while (Process32NextW(snapshot, &entry));
@@ -802,6 +856,7 @@ bool terminateProcessesByName(const std::vector<std::string>& exeNames) {
     bool any = false;
     for (const auto& name : exeNames) {
         if (!name.empty()) {
+            logInstallerInfo("[PROC] Attempting to terminate process by name=" + name);
             any = terminateProcessByName(name) || any;
         }
     }

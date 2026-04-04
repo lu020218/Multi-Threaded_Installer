@@ -78,9 +78,10 @@ struct ProgressMessageData {
 
 struct CompletionMessageData {
     bool success;
+    bool rebootRequired;
     wchar_t errorMessage[512];
     
-    CompletionMessageData() : success(false) {
+    CompletionMessageData() : success(false), rebootRequired(false) {
         errorMessage[0] = L'\0';
     }
 };

@@ -80,6 +80,8 @@ const char* InstallServiceStatusName(InstallServiceStatus status) {
             return "Finalizing";
         case InstallServiceStatus::Completed:
             return "Completed";
+        case InstallServiceStatus::RebootRequired:
+            return "RebootRequired";
         case InstallServiceStatus::Failed:
             return "Failed";
         case InstallServiceStatus::Cancelled:

@@ -25,8 +25,10 @@ struct FolderInstallRequest {
 struct FolderInstallResult {
     bool success = false;
     bool cancelled = false;
+    bool rebootRequired = false;
     std::string folderName;
     std::string targetPath;
+    std::vector<std::string> pendingReplaceFiles;
     std::vector<std::string> errors;
     double readSec = 0.0;
     double decompressSec = 0.0;

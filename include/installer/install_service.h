@@ -27,6 +27,7 @@ enum class InstallServiceStatus {
     Installing,
     Finalizing,
     Completed,
+    RebootRequired,
     Failed,
     Cancelled,
 };
@@ -81,10 +82,12 @@ struct InstallServiceCallbacks {
 struct InstallServiceResult {
     bool success = false;
     bool cancelled = false;
+    bool rebootRequired = false;
     std::string installRootPath;
     std::vector<std::string> installedRoots;
     std::vector<std::string> installedFiles;
     std::string uninstallPath;
+    std::vector<std::string> pendingReplaceFiles;
     std::vector<std::string> errors;
     ParallelInstallSummary timing;
 };

@@ -57,6 +57,8 @@
   <Text id="msg.uninstall_done_msg" value="Uninstall completed successfully."/>
   <Text id="msg.install.success" value="Installation successful!"/>
   <Text id="msg.install.failed" value="Installation failed: "/>
+  <Text id="msg.install.reboot_required" value="Restart Required"/>
+  <Text id="msg.install.reboot_required_detail" value="Some files are locked by the system. Their replacement has been scheduled for after a reboot. Please restart your computer to finish installation."/>
   <Text id="msg.progress.processing" value="Processing: "/>
   <Text id="msg.progress.eta" value="Estimated time remaining: Calculating..."/>
   <Text id="msg.space.required" value="Required: "/>

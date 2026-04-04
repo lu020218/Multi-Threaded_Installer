@@ -52,9 +52,17 @@ void CliSupport::showInstallationProgress(const std::string& currentFolder, floa
     std::cout.flush();
 }
 
-void CliSupport::showInstallationResult(bool success, const std::vector<std::string>& errors) {
+void CliSupport::showInstallationResult(bool success,
+                                        bool rebootRequired,
+                                        const std::vector<std::string>& errors) {
     std::cout << std::endl;
     
+    if (rebootRequired) {
+        std::cout << "WARNING: Installation requires a system reboot to finish replacing locked files." << std::endl;
+        logInstallerWarning("[CLI] Installation requires reboot to complete locked file replacement.");
+        return;
+    }
+
     if (success) {
         std::cout << "OK: Installation completed successfully!" << std::endl;
         logInstallerInfo("[CLI] Installation completed successfully.");

@@ -20,7 +20,9 @@ public:
     
 
     void showInstallationProgress(const std::string& currentFolder, float progress);
-    void showInstallationResult(bool success, const std::vector<std::string>& errors);
+    void showInstallationResult(bool success,
+                                bool rebootRequired,
+                                const std::vector<std::string>& errors);
     
 
     void showError(const std::string& message);

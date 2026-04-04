@@ -16,6 +16,12 @@ namespace {
 
 std::vector<std::string> CollectFilesRecursive(const std::vector<std::string>& roots) {
     std::vector<std::string> files;
+    auto isInstallerTransientFile = [](const std::filesystem::path& path) {
+        const std::wstring filename = path.filename().wstring();
+        return filename.size() >= 10 &&
+               (filename.find(L".__mti_old") != std::wstring::npos ||
+                filename.find(L".__mti_reboot_new") != std::wstring::npos);
+    };
     for (const auto& rootPath : roots) {
         if (rootPath.empty()) {
             continue;
@@ -25,7 +31,7 @@ std::vector<std::string> CollectFilesRecursive(const std::vector<std::string>& r
             continue;
         }
         for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
-            if (entry.is_regular_file()) {
+            if (entry.is_regular_file() && !isInstallerTransientFile(entry.path())) {
                 files.push_back(Utf8FromPath(entry.path()));
             }
         }

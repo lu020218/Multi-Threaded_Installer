@@ -10,6 +10,7 @@
 #include <cstring>
 #ifdef _WIN32
 #include <Windows.h>
+#include <RestartManager.h>
 #endif
 
 namespace MultiThreadedInstaller {
@@ -55,6 +56,52 @@ bool IsRetriableOpenError(DWORD errorCode) {
     return errorCode == ERROR_SHARING_VIOLATION ||
            errorCode == ERROR_LOCK_VIOLATION ||
            errorCode == ERROR_ACCESS_DENIED;
+}
+
+// Uses the Restart Manager API to identify which processes hold a lock on the
+// given file.  Returns a human-readable summary suitable for log output.
+// If the query fails or no locking processes are found, returns an empty string.
+std::string QueryLockingProcesses(const std::filesystem::path& filePath) {
+    DWORD session = 0;
+    WCHAR sessionKey[CCH_RM_SESSION_KEY + 1] = {};
+    if (RmStartSession(&session, 0, sessionKey) != ERROR_SUCCESS) {
+        return {};
+    }
+
+    LPCWSTR pathStr = filePath.c_str();
+    if (RmRegisterResources(session, 1, &pathStr, 0, nullptr, 0, nullptr) != ERROR_SUCCESS) {
+        RmEndSession(session);
+        return {};
+    }
+
+    UINT needed = 0;
+    UINT count = 0;
+    DWORD reason = 0;
+    DWORD rc = RmGetList(session, &needed, &count, nullptr, &reason);
+    if (rc != ERROR_MORE_DATA || needed == 0) {
+        RmEndSession(session);
+        return {};
+    }
+
+    std::vector<RM_PROCESS_INFO> procs(needed);
+    count = needed;
+    rc = RmGetList(session, &needed, &count, procs.data(), &reason);
+    RmEndSession(session);
+
+    if (rc != ERROR_SUCCESS || count == 0) {
+        return {};
+    }
+
+    std::string result = "locking_processes=[";
+    for (UINT i = 0; i < count; ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += WideToUtf8(procs[i].strAppName);
+        result += "(pid=" + std::to_string(procs[i].Process.dwProcessId) + ")";
+    }
+    result += "]";
+    return result;
 }
 
 std::filesystem::path BuildBackupPath(const std::filesystem::path& fullPath) {
@@ -105,6 +152,13 @@ bool RenameExistingFileWithRetry(const std::filesystem::path& fullPath,
         }
         lastError = GetLastError();
         if (!IsRetriableOpenError(lastError) || attempt == kOpenFileRetryCount) {
+            std::string lockInfo = QueryLockingProcesses(fullPath);
+            if (!lockInfo.empty()) {
+                logInstallerWarning("[DECOMP][PayloadWrite] rename_failed path=" +
+                                    Utf8FromPath(fullPath) + " attempt=" + std::to_string(attempt) +
+                                    " error=" + FormatWin32ErrorMessageLocal(lastError) +
+                                    " " + lockInfo);
+            }
             return false;
         }
         Sleep(kOpenFileRetryDelayMs);
@@ -158,6 +212,14 @@ HANDLE OpenOutputHandleWithRetry(const std::filesystem::path& fullPath,
         }
         lastError = GetLastError();
         if (!IsRetriableOpenError(lastError) || attempt == kOpenFileRetryCount) {
+            // On final failure, query which processes are locking the file.
+            std::string lockInfo = QueryLockingProcesses(fullPath);
+            if (!lockInfo.empty()) {
+                logInstallerWarning("[DECOMP][PayloadWrite] open_handle_failed path=" +
+                                    Utf8FromPath(fullPath) + " attempt=" + std::to_string(attempt) +
+                                    " error=" + FormatWin32ErrorMessageLocal(lastError) +
+                                    " " + lockInfo);
+            }
             return INVALID_HANDLE_VALUE;
         }
         Sleep(kOpenFileRetryDelayMs);
@@ -245,6 +307,7 @@ bool TarStreamExtractor::writeToFile(const uint8_t* data, size_t size) {
             return false;
         }
         if (written == 0) {
+            SetLastError(ERROR_WRITE_FAULT);
             return false;
         }
         ptr += written;
@@ -350,11 +413,22 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                 
                 size_t toWrite = (std::min)(static_cast<size_t>(remaining_), available);
                 if (!writeToFile(bufferData(), toWrite)) {
+#ifdef _WIN32
+                    const DWORD writeError = GetLastError();
+#endif
                     finalizeCurrentFileFailure();
+#ifdef _WIN32
+                    logInstallerError("[DECOMP][PayloadWrite] file write failed targetRoot=" + targetRoot_ +
+                                      " relativePath=" + currentPath_ +
+                                      " remaining=" + std::to_string(remaining_) +
+                                      " writeSize=" + std::to_string(toWrite) +
+                                      " error=" + FormatWin32ErrorMessageLocal(writeError));
+#else
                     logInstallerError("[DECOMP][PayloadWrite] file write failed targetRoot=" + targetRoot_ +
                                       " relativePath=" + currentPath_ +
                                       " remaining=" + std::to_string(remaining_) +
                                       " writeSize=" + std::to_string(toWrite));
+#endif
                     return false;
                 }
                 

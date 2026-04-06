@@ -39,3 +39,4 @@ build/ZERO_CHECK.vcxproj.filters
 /build/uninstaller.dir
 *.vcxproj
 *.filters
+/test/build

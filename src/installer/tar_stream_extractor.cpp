@@ -88,33 +88,6 @@ void ClearReadonlyAttributeIfNeeded(const std::filesystem::path& fullPath) {
     SetFileAttributesW(longPath.c_str(), attributes & ~FILE_ATTRIBUTE_READONLY);
 }
 
-bool PrepareFileForOverwrite(const std::filesystem::path& fullPath,
-                             DWORD& lastError) {
-    const std::filesystem::path longPath = toLongPath(fullPath);
-    HANDLE handle = CreateFileW(longPath.c_str(),
-                                GENERIC_WRITE,
-                                FILE_SHARE_READ,
-                                nullptr,
-                                OPEN_ALWAYS,
-                                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
-                                nullptr);
-    if (handle == INVALID_HANDLE_VALUE) {
-        lastError = GetLastError();
-        return false;
-    }
-
-    LARGE_INTEGER zero{};
-    if (!SetFilePointerEx(handle, zero, nullptr, FILE_BEGIN) || !SetEndOfFile(handle)) {
-        lastError = GetLastError();
-        CloseHandle(handle);
-        return false;
-    }
-
-    CloseHandle(handle);
-    lastError = ERROR_SUCCESS;
-    return true;
-}
-
 bool RenameExistingFileWithRetry(const std::filesystem::path& fullPath,
                                  const std::filesystem::path& backupPath,
                                  DWORD& lastError) {
@@ -163,26 +136,33 @@ bool DeletePathBestEffort(const std::filesystem::path& path,
     return false;
 }
 
-bool OpenOutputFileWithRetry(const std::filesystem::path& fullPath,
-                             std::ofstream& stream,
-                             DWORD& lastError) {
-    bool opened = false;
+// Opens a file for writing using a single CreateFileW call and keeps the handle.
+// This eliminates the gap between PrepareFileForOverwrite (close) and ofstream::open
+// that allowed antivirus/indexer to lock the file.
+HANDLE OpenOutputHandleWithRetry(const std::filesystem::path& fullPath,
+                                 DWORD& lastError) {
+    const std::filesystem::path longPath = toLongPath(fullPath);
     for (int attempt = 1; attempt <= kOpenFileRetryCount; ++attempt) {
-        if (PrepareFileForOverwrite(fullPath, lastError)) {
-            stream.open(toLongPath(fullPath), std::ios::binary | std::ios::out);
-            if (stream.is_open()) {
-                opened = true;
-                break;
-            }
-            lastError = GetLastError();
+        ClearReadonlyAttributeIfNeeded(fullPath);
+        SetLastError(ERROR_SUCCESS);
+        HANDLE handle = CreateFileW(longPath.c_str(),
+                                    GENERIC_WRITE,
+                                    FILE_SHARE_READ | FILE_SHARE_DELETE,
+                                    nullptr,
+                                    CREATE_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+                                    nullptr);
+        if (handle != INVALID_HANDLE_VALUE) {
+            lastError = ERROR_SUCCESS;
+            return handle;
         }
-
+        lastError = GetLastError();
         if (!IsRetriableOpenError(lastError) || attempt == kOpenFileRetryCount) {
-            break;
+            return INVALID_HANDLE_VALUE;
         }
         Sleep(kOpenFileRetryDelayMs);
     }
-    return opened;
+    return INVALID_HANDLE_VALUE;
 }
 
 bool ScheduleDeleteOnReboot(const std::filesystem::path& path, DWORD& lastError) {
@@ -221,10 +201,75 @@ TarStreamExtractor::TarStreamExtractor(const std::string& targetRoot)
     , remaining_(0)
     , currentFileRenamed_(false) {}
 
+TarStreamExtractor::~TarStreamExtractor() {
+    closeFile();
+}
+
 void TarStreamExtractor::setCurrentFileChangedCallback(
     std::function<void(const std::string&)> callback) {
     currentFileChangedCallback_ = std::move(callback);
 }
+
+// --- Platform-abstracted file I/O helpers ---
+
+bool TarStreamExtractor::isFileOpen() const {
+#ifdef _WIN32
+    return currentFileHandle_ != INVALID_HANDLE_VALUE;
+#else
+    return currentFile_.is_open();
+#endif
+}
+
+void TarStreamExtractor::closeFile() {
+#ifdef _WIN32
+    if (currentFileHandle_ != INVALID_HANDLE_VALUE) {
+        CloseHandle(currentFileHandle_);
+        currentFileHandle_ = INVALID_HANDLE_VALUE;
+    }
+#else
+    if (currentFile_.is_open()) {
+        currentFile_.close();
+    }
+#endif
+}
+
+bool TarStreamExtractor::writeToFile(const uint8_t* data, size_t size) {
+#ifdef _WIN32
+    const uint8_t* ptr = data;
+    size_t remaining = size;
+    while (remaining > 0) {
+        // WriteFile takes a DWORD (max ~4GB), chunk to be safe.
+        const DWORD chunk = static_cast<DWORD>((std::min)(remaining, static_cast<size_t>(0x7FFF0000u)));
+        DWORD written = 0;
+        if (!WriteFile(currentFileHandle_, ptr, chunk, &written, nullptr)) {
+            return false;
+        }
+        if (written == 0) {
+            return false;
+        }
+        ptr += written;
+        remaining -= written;
+    }
+    return true;
+#else
+    currentFile_.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+    return static_cast<bool>(currentFile_);
+#endif
+}
+
+void TarStreamExtractor::flushFile() {
+#ifdef _WIN32
+    if (currentFileHandle_ != INVALID_HANDLE_VALUE) {
+        FlushFileBuffers(currentFileHandle_);
+    }
+#else
+    if (currentFile_.is_open()) {
+        currentFile_.flush();
+    }
+#endif
+}
+
+// --- Core streaming logic ---
 
 bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
     if (!data || size == 0) {
@@ -291,9 +336,7 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
             }
             case State::ReadFileContent: {
                 if (remaining_ == 0) {
-                    if (currentFile_.is_open()) {
-                        currentFile_.close();
-                    }
+                    closeFile();
                     if (!finalizeCurrentFileSuccess()) {
                         return false;
                     }
@@ -305,9 +348,8 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                     return true;
                 }
                 
-                size_t toWrite = std::min(static_cast<size_t>(remaining_), available);
-                currentFile_.write(reinterpret_cast<const char*>(bufferData()), static_cast<std::streamsize>(toWrite));
-                if (!currentFile_) {
+                size_t toWrite = (std::min)(static_cast<size_t>(remaining_), available);
+                if (!writeToFile(bufferData(), toWrite)) {
                     finalizeCurrentFileFailure();
                     logInstallerError("[DECOMP][PayloadWrite] file write failed targetRoot=" + targetRoot_ +
                                       " relativePath=" + currentPath_ +
@@ -320,7 +362,7 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                 remaining_ -= static_cast<uint32_t>(toWrite);
                 
                 if (remaining_ == 0) {
-                    currentFile_.close();
+                    closeFile();
                     if (!finalizeCurrentFileSuccess()) {
                         return false;
                     }
@@ -337,9 +379,7 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
 }
 
 void TarStreamExtractor::flush() {
-    if (currentFile_.is_open()) {
-        currentFile_.flush();
-    }
+    flushFile();
 }
 
 bool TarStreamExtractor::openCurrentFile() {
@@ -383,7 +423,8 @@ bool TarStreamExtractor::openCurrentFile() {
                     currentStagingPath_ = BuildRebootReplaceStagingPath(fullPath);
                     DWORD cleanupError = ERROR_SUCCESS;
                     DeletePathBestEffort(currentStagingPath_, cleanupError);
-                    if (!OpenOutputFileWithRetry(currentStagingPath_, currentFile_, lastError)) {
+                    currentFileHandle_ = OpenOutputHandleWithRetry(currentStagingPath_, lastError);
+                    if (currentFileHandle_ == INVALID_HANDLE_VALUE) {
                         logInstallerError("[DECOMP][PayloadWrite] rename_old_failed path=" +
                                           Utf8FromPath(fullPath) + " backupPath=" +
                                           Utf8FromPath(currentBackupPath_) + " currentPath=" + currentPath_ +
@@ -393,7 +434,8 @@ bool TarStreamExtractor::openCurrentFile() {
                     logInstallerWarning("[DECOMP][RebootReplace] staging_after_rename_conflict path=" +
                                         Utf8FromPath(fullPath) + " stagingPath=" +
                                         Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_ +
-                                        " error=" + FormatWin32ErrorMessageLocal(lastError));
+                                        " error=" + FormatWin32ErrorMessageLocal(
+                                                      static_cast<DWORD>(lastFailureInfo_.errorCode)));
                     if (currentFileChangedCallback_) {
                         currentFileChangedCallback_(currentPath_);
                     }
@@ -408,9 +450,9 @@ bool TarStreamExtractor::openCurrentFile() {
             currentFileRenamed_ = true;
         }
 
-        const bool opened = OpenOutputFileWithRetry(fullPath, currentFile_, lastError);
+        currentFileHandle_ = OpenOutputHandleWithRetry(fullPath, lastError);
 
-        if (!opened) {
+        if (currentFileHandle_ == INVALID_HANDLE_VALUE) {
             lastFailureInfo_.hasFailure = true;
             lastFailureInfo_.errorCode = lastError;
             lastFailureInfo_.stage = "open_new_failed";
@@ -421,7 +463,8 @@ bool TarStreamExtractor::openCurrentFile() {
                 currentStagingPath_ = BuildRebootReplaceStagingPath(fullPath);
                 DWORD cleanupError = ERROR_SUCCESS;
                 DeletePathBestEffort(currentStagingPath_, cleanupError);
-                if (OpenOutputFileWithRetry(currentStagingPath_, currentFile_, lastError)) {
+                currentFileHandle_ = OpenOutputHandleWithRetry(currentStagingPath_, lastError);
+                if (currentFileHandle_ != INVALID_HANDLE_VALUE) {
                     logInstallerWarning("[DECOMP][RebootReplace] staging_after_open_conflict path=" +
                                         Utf8FromPath(fullPath) + " stagingPath=" +
                                         Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_ +
@@ -523,15 +566,15 @@ void TarStreamExtractor::finalizeCurrentFileFailure() {
 #ifdef _WIN32
     const std::filesystem::path pathToDelete =
         currentPendingRebootReplace_ ? currentStagingPath_ : currentFullPath_;
-    if (!currentFile_.is_open() && !pathToDelete.empty()) {
+    if (!isFileOpen() && !pathToDelete.empty()) {
         DWORD lastError = ERROR_SUCCESS;
         if (!DeletePathBestEffort(pathToDelete, lastError) && lastError != ERROR_SUCCESS) {
             logInstallerWarning("[DECOMP][PayloadWrite] cleanup_new_failed path=" +
                                 Utf8FromPath(pathToDelete) + " currentPath=" + currentPath_ +
                                 " error=" + FormatWin32ErrorMessageLocal(lastError));
         }
-    } else if (currentFile_.is_open()) {
-        currentFile_.close();
+    } else if (isFileOpen()) {
+        closeFile();
         DWORD lastError = ERROR_SUCCESS;
         if (!DeletePathBestEffort(pathToDelete, lastError) && lastError != ERROR_SUCCESS) {
             logInstallerWarning("[DECOMP][PayloadWrite] cleanup_new_failed path=" +
@@ -549,6 +592,7 @@ void TarStreamExtractor::finalizeCurrentFileFailure() {
 }
 
 void TarStreamExtractor::resetCurrentFileState() {
+    closeFile();
     currentFullPath_.clear();
     currentBackupPath_.clear();
     currentStagingPath_.clear();

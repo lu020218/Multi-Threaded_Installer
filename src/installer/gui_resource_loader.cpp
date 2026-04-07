@@ -588,9 +588,6 @@ void ApplyGuiResources(const GuiResourceContext& context, bool verboseLogs) {
                          WideToUtf8(TCharToWide((context.resourcePath + _T("resources.zip")).GetData())));
     }
     logInstallerInfo("[GUI][RES] Resource zip enabled: true");
-    CDuiString zipPath = context.resourcePath + _T("resources.zip");
-    LogZipEntryCheck(zipPath, BuildResourceZipChecks());
-    LogZipResourceDiagnostics(zipPath, 96, "ApplyGuiResources", nullptr);
 }
 
 void LogGuiResourceDiagnostics(const GuiResourceContext& context,
@@ -651,6 +648,18 @@ void LogActiveGuiResourceDiagnosticsForXmlEntries(unsigned int dpi,
     CDuiString resourcePath(g_activeDiagnosticsContext.resourcePath.c_str());
     CDuiString zipPath = resourcePath + _T("resources.zip");
     LogZipResourceDiagnostics(zipPath, dpi, stage, &xmlEntries);
+}
+
+void RunDeferredGuiResourceDiagnostics() {
+    if (!g_activeDiagnosticsContext.valid || !g_activeDiagnosticsContext.useZip ||
+        g_activeDiagnosticsContext.resourcePath.empty()) {
+        return;
+    }
+
+    CDuiString resourcePath(g_activeDiagnosticsContext.resourcePath.c_str());
+    CDuiString zipPath = resourcePath + _T("resources.zip");
+    LogZipEntryCheck(zipPath, BuildResourceZipChecks());
+    LogZipResourceDiagnostics(zipPath, 96, "DeferredApplyGuiResources", nullptr);
 }
 
 } // namespace MultiThreadedInstaller

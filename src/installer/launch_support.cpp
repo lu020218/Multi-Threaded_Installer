@@ -382,6 +382,17 @@ int RunGuiWindow(GUIManager& frame,
     logInstallerInfo("[GUI] Centered window.");
     frame.ShowWindow(true);
     logInstallerInfo("[GUI] Showed window, entering message loop.");
+
+    // Run heavy zip diagnostics after the window is visible so they don't
+    // block the user from seeing the UI.  A short timer lets the paint
+    // message through first.
+    const UINT_PTR kDeferredDiagTimerId = 0xD1A9;
+    ::SetTimer(hwnd, kDeferredDiagTimerId, 0, [](HWND hWnd, UINT, UINT_PTR id, DWORD) {
+        ::KillTimer(hWnd, id);
+        RunDeferredGuiResourceDiagnostics();
+        logInstallerInfo("[GUI][RES] Deferred resource diagnostics completed.");
+    });
+
     CPaintManagerUI::MessageLoop();
     logInstallerInfo("[GUI] Message loop exited.");
     CPaintManagerUI::SetResourceZip(_T(""), true);
@@ -607,6 +618,7 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, boo
     frame->SetUninstallMode(false);
     frame->SetRepairMode(repairMode);
     frame->SetInstallConfig(config);
+    frame->SetInstallMetadata(metadata);
 
     const std::wstring title = repairMode
                                    ? GetRepairTitle(config.languageCode)

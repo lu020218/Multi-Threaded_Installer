@@ -97,6 +97,7 @@ public:
     
 
     void SetInstallConfig(const InstallConfig& config);
+    void SetInstallMetadata(const ExtendedInstallationMetadata& metadata);
     void PrepareInitialDpi(unsigned int dpi);
     
 

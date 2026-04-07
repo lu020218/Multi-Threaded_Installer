@@ -190,6 +190,17 @@ void GUIManager::SetInstallConfig(const InstallConfig& config) {
     m_repairMode = config.repairMode;
 }
 
+void GUIManager::SetInstallMetadata(const ExtendedInstallationMetadata& metadata) {
+    m_installMetadata = metadata;
+    m_uiLinks.clear();
+    for (const auto& link : m_installMetadata.uiLinkBindings) {
+        if (!link.control.empty() && !link.url.empty()) {
+            m_uiLinks[link.control] = Utf8ToWide(link.url);
+        }
+    }
+    m_installMetadataLoaded = true;
+}
+
 void GUIManager::PrepareInitialDpi(unsigned int dpi) {
     if (dpi == 0) {
         return;

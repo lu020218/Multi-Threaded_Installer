@@ -57,23 +57,24 @@ std::string EmbeddedResourceManager::extractResources() {
     logInstallerInfo(std::string("[GUI][RES] Extracting embedded resources to: ") + m_resourcePath);
 
     bool anyExtracted = false;
-    
 
+    // Try the packed zip first -- if it exists we can skip everything else
+    // (including DUILIB_DLL which is statically linked).
+    auto packedZip = getEmbeddedResource("RES_ZIP");
+    if (!packedZip.empty()) {
+        if (extractFile("resources.zip", packedZip)) {
+            logInstallerInfo("[GUI][RES] Extracted: resources.zip");
+            m_extracted = true;
+            return m_resourcePath;
+        }
+    }
+
+    // Fallback: extract individual resources when RES_ZIP is not available.
     auto duilib = getEmbeddedResource("DUILIB_DLL");
     if (!duilib.empty()) {
         if (extractFile("DuiLib.dll", duilib)) {
             logInstallerInfo("[GUI][RES] Extracted: DuiLib.dll");
             anyExtracted = true;
-        }
-    }
-
-    auto packedZip = getEmbeddedResource("RES_ZIP");
-    if (!packedZip.empty()) {
-        if (extractFile("resources.zip", packedZip)) {
-            logInstallerInfo("[GUI][RES] Extracted: resources.zip");
-            anyExtracted = true;
-            m_extracted = true;
-            return m_resourcePath;
         }
     }
     

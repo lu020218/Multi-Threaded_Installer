@@ -51,4 +51,9 @@ void LogActiveGuiResourceDiagnosticsForXmlEntries(unsigned int dpi,
                                                  const char* stage,
                                                  const std::vector<std::string>& xmlEntries);
 
+// Runs the heavy zip-entry-check and DPI diagnostics that were deferred from
+// ApplyGuiResources so they don't block window creation.  Call once after the
+// GUI message loop is running (e.g. via PostMessage / timer).
+void RunDeferredGuiResourceDiagnostics();
+
 } // namespace MultiThreadedInstaller

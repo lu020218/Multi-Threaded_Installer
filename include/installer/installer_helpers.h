@@ -32,6 +32,10 @@ bool setAutoStartup(const std::string& appName, const std::filesystem::path& exe
 bool removeAutoStartup(const std::string& appName);
 bool createDesktopShortcut(const std::string& appName, const std::filesystem::path& exePath);
 bool deleteDesktopShortcut(const std::string& appName);
+bool createStartMenuShortcut(const std::string& appName,
+                             const std::filesystem::path& exePath,
+                             const std::string& uninstallDisplayName);
+bool deleteStartMenuShortcut(const std::string& appName);
 std::string normalizePathForCompare(const std::string& path);
 bool isCancellationText(const std::string& message);
 bool readFileBytesAt(std::ifstream& file, uint64_t offset, void* out, size_t size);

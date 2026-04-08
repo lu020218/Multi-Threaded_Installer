@@ -233,11 +233,6 @@ void GUIManager::InitWindow() {
         m_pm.Invalidate();
     }
     InitControls();
-    const unsigned int effectiveDpi = windowDpi > 0 ? static_cast<unsigned int>(windowDpi) : 96U;
-    const std::vector<std::string> xmlScope = BuildCurrentGuiXmlScope(m_pTabPages, m_uninstallMode);
-    LogActiveGuiResourceDiagnosticsForXmlEntries(
-        effectiveDpi, "GUIManager::InitWindow", xmlScope);
-    LogCurrentPageControlImageSnapshot(m_pTabPages, m_uninstallMode, "GUIManager::InitWindow");
     
     if (m_pTabPages && !m_uninstallMode) {
         m_pPageController = new PageController(m_pTabPages);
@@ -275,7 +270,6 @@ void GUIManager::InitWindow() {
         ::GetWindowRect(m_hWnd, &rcWindow);
         m_baseWindowWidth = rcWindow.right - rcWindow.left;
     }
-    CenterWindow();
 }
 
 void GUIManager::InitControls() {
@@ -505,6 +499,14 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         CompletionMessageData* pData = reinterpret_cast<CompletionMessageData*>(lParam);
         if (pData) {
             HandleUninstallCompletionMessage(pData);
+            delete pData;
+        }
+        return 0;
+    }
+    else if (uMsg == WM_UNINSTALL_PROGRESS) {
+        ProgressMessageData* pData = reinterpret_cast<ProgressMessageData*>(lParam);
+        if (pData) {
+            HandleProgressMessage(pData);
             delete pData;
         }
         return 0;

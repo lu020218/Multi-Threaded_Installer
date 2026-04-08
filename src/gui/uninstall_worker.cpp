@@ -66,7 +66,12 @@ void UninstallWorker::WorkerThreadFunc(const std::vector<std::string>& identityC
             throw std::runtime_error("Manifest not found for uninstall");
         }
 
-        bool ok = uninstallFromManifest(manifestPath, resolver, console);
+        UninstallProgressCallback progressCb = [this](const UninstallProgressInfo& info) {
+            std::wstring item = Utf8ToWide(info.currentItem);
+            PostProgressMessage(info.progress, item);
+        };
+
+        bool ok = uninstallFromManifest(manifestPath, resolver, console, progressCb);
         if (!ok) {
             throw std::runtime_error("Uninstall failed");
         }
@@ -76,6 +81,20 @@ void UninstallWorker::WorkerThreadFunc(const std::vector<std::string>& identityC
     }
 
     PostCompletionMessage(success, errorMessage);
+}
+
+void UninstallWorker::PostProgressMessage(float progress, const std::wstring& currentItem) {
+    ProgressMessageData* pData = new ProgressMessageData();
+
+    size_t copyLen = currentItem.length();
+    if (copyLen >= 256) {
+        copyLen = 255;
+    }
+    wcsncpy_s(pData->currentFolder, 256, currentItem.c_str(), copyLen);
+    pData->currentFolder[copyLen] = L'\0';
+    pData->percentage = progress * 100.0f;
+
+    PostOwnedWorkerMessage(m_hNotifyWindow, WM_UNINSTALL_PROGRESS, pData, "[GUI][UninstallWorker]");
 }
 
 void UninstallWorker::PostCompletionMessage(bool success, const std::wstring& errorMsg) {
@@ -91,4 +110,3 @@ void UninstallWorker::PostCompletionMessage(bool success, const std::wstring& er
 }
 
 } // namespace MultiThreadedInstaller
-

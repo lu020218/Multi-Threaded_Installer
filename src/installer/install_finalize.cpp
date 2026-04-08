@@ -92,6 +92,10 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                     reporter.EmitMessage(InstallServiceEventType::Info,
                                          "Removed legacy desktop shortcut: " + shortcutName);
                 }
+                if (deleteStartMenuShortcut(shortcutName)) {
+                    reporter.EmitMessage(InstallServiceEventType::Info,
+                                         "Removed legacy start menu shortcut: " + shortcutName);
+                }
             }
         }
 
@@ -115,6 +119,12 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                 } else {
                     reporter.EmitMessage(InstallServiceEventType::Warning,
                                          "Failed to create desktop icon");
+                }
+                if (createStartMenuShortcut(desktopShortcutDisplayName, exePath, metadata.appName)) {
+                    reporter.EmitMessage(InstallServiceEventType::Info, "Start menu shortcut created");
+                } else {
+                    reporter.EmitMessage(InstallServiceEventType::Warning,
+                                         "Failed to create start menu shortcut");
                 }
             }
         }

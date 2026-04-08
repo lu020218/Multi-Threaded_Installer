@@ -530,6 +530,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
 
         for (const auto& shortcutName : shortcutNames) {
             deleteDesktopShortcut(shortcutName);
+            deleteStartMenuShortcut(shortcutName);
             completeWorkUnit("Removing desktop shortcut: " + shortcutName);
         }
     }

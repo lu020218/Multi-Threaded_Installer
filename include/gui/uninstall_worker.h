@@ -17,6 +17,7 @@ public:
 
 private:
     void WorkerThreadFunc(const std::vector<std::string>& identityCandidates);
+    void PostProgressMessage(float progress, const std::wstring& currentItem);
     void PostCompletionMessage(bool success, const std::wstring& errorMsg);
 
     HWND m_hNotifyWindow;

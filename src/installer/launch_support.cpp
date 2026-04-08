@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <mutex>
 #include <sstream>
+#include <thread>
 
 #pragma comment(lib, "Shlwapi.lib")
 
@@ -383,15 +384,13 @@ int RunGuiWindow(GUIManager& frame,
     frame.ShowWindow(true);
     logInstallerInfo("[GUI] Showed window, entering message loop.");
 
-    // Run heavy zip diagnostics after the window is visible so they don't
-    // block the user from seeing the UI.  A short timer lets the paint
-    // message through first.
-    const UINT_PTR kDeferredDiagTimerId = 0xD1A9;
-    ::SetTimer(hwnd, kDeferredDiagTimerId, 0, [](HWND hWnd, UINT, UINT_PTR id, DWORD) {
-        ::KillTimer(hWnd, id);
+    // Run heavy zip diagnostics on a background thread so they never block
+    // the UI message loop.
+    std::thread convergeDiagThread([]() {
         RunDeferredGuiResourceDiagnostics();
         logInstallerInfo("[GUI][RES] Deferred resource diagnostics completed.");
     });
+    convergeDiagThread.detach();
 
     CPaintManagerUI::MessageLoop();
     logInstallerInfo("[GUI] Message loop exited.");
@@ -570,6 +569,8 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, boo
         return 1;
     }
 
+    EnsureInstallerLoggingInitialized();
+
     MetadataParser parser;
     ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
     if (!parser.validateMetadata(metadata)) {
@@ -587,9 +588,6 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, boo
         return 1;
     }
 
-    SetInstallerAppNameEnv(metadata.appName);
-    EnsureInstallerLoggingInitialized();
-
     if (metadata.installRequireAdmin && !isRunningAsAdmin()) {
         if (relaunchSelfAsAdmin()) {
             return 0;
@@ -605,6 +603,9 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, boo
     if (repairMode) {
         config.defaultInstallPath = Utf8ToWide(repairInstallDir);
     }
+
+    // Deferred: only needed by child processes spawned during installation.
+    SetInstallerAppNameEnv(metadata.appName);
 
     GuiResourceContext resources;
     PrepareGuiResources(hInstance, resources, true);

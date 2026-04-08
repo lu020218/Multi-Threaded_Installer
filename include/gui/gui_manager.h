@@ -64,6 +64,7 @@ struct InstallConfig {
 #define WM_INSTALLATION_PROGRESS (WM_USER + 1)
 #define WM_INSTALLATION_COMPLETE (WM_USER + 2)
 #define WM_UNINSTALL_COMPLETE (WM_USER + 3)
+#define WM_UNINSTALL_PROGRESS (WM_USER + 4)
 
 
 struct ProgressMessageData {

@@ -433,6 +433,7 @@ bool readRegistryStringValue(const std::string& path, const std::string& key, st
 
 
 bool writeUninstallRegistryEntry(const std::string& appName,
+                                 const std::string& displayName,
                                  const std::string& version,
                                  const std::string& installDir,
                                  const std::string& uninstallExePath,
@@ -451,8 +452,10 @@ bool writeUninstallRegistryEntry(const std::string& appName,
     RegistryEntry entry;
     entry.path = fullPath;
 
+    // DisplayName uses the user-visible name, not the internal appId.
+    const std::string& effectiveDisplayName = displayName.empty() ? appName : displayName;
     entry.key = "DisplayName";
-    if (!writeRegistryValue(entry, appName, RegistryValueType::STRING)) {
+    if (!writeRegistryValue(entry, effectiveDisplayName, RegistryValueType::STRING)) {
         return false;
     }
 
@@ -487,6 +490,7 @@ bool writeUninstallRegistryEntry(const std::string& appName,
     return true;
 #else
     (void)appName;
+    (void)displayName;
     (void)version;
     (void)installDir;
     (void)uninstallExePath;

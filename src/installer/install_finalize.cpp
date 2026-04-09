@@ -189,6 +189,7 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
     if (options.writeUninstallRegistry && !result.uninstallPath.empty()) {
         bool perMachine = isRunningAsAdmin();
         if (!writeUninstallRegistryEntry(plan.effectiveAppId,
+                                         desktopShortcutDisplayName,
                                          metadata.appVersion,
                                          result.installRootPath,
                                          result.uninstallPath,

@@ -1,0 +1,365 @@
+# -----------------------------------------------------------------------------
+# Multi-Threaded Installer 打包配置文件
+#
+# 本文件尽量保持“声明式配置”：
+# - 描述产品身份信息
+# - 描述打包目录与目标落点
+# - 描述默认安装行为
+# - 描述显式的升级清理与卸载清理目标
+#
+# 不建议在本文件中编码复杂运行时决策逻辑，例如：
+# - 复杂的旧版本识别流程
+# - 隐式路径补齐与推导逻辑
+# - 回滚顺序与异常恢复策略
+# -----------------------------------------------------------------------------
+
+# 当前 packager 使用的配置版本
+schemaVersion: 2
+
+app:
+  # 产品显示名称
+  name: SampleDesktopApp
+
+  # 稳定的应用标识
+  id: sample_desktop_app
+
+  # 产品版本号
+  version: 1.0.0
+
+  # 默认安装目录名称
+  # 可用于界面展示或默认路径推导，不再参与 appendDirectoryName 之类
+  # 的隐式路径补齐逻辑
+  directoryName: SampleDesktopApp
+
+  # 产品官网
+  website: https://example.com/sample-desktop-app
+
+  product:
+    # 安装器/版本资源图标
+    icon: app.ico
+
+    # Windows 版本资源字段
+    productName: SampleDesktopApp
+    fileVersion: 1.0.0.0
+    productVersion: 1.0.0.0
+    companyName: Example Company
+    fileDescription: SampleDesktopApp Installer
+    copyright: Copyright (c) 2026 Example Company
+
+package:
+  compression:
+    # 支持 xz | zstd
+    algorithm: zstd
+
+    # 压缩级别
+    level: 3
+
+    # 压缩线程数，auto 表示自动选择
+    threads: auto
+
+install:
+  # 默认安装根目录
+  # 由于 layout.folders 已使用显式 target，这里主要作为界面初始值
+  # 或默认安装根目录使用
+  defaultDir: "%ProgramFiles%"
+
+  # 是否默认要求管理员权限
+  requireAdmin: true
+
+  # 是否自动执行 cleanup.onUpgrade 中定义的升级清理动作
+  autoCleanOldInstall: false
+
+  # 默认是否启用开机自启动
+  autoStartup: false
+
+  # 默认是否创建桌面快捷方式
+  desktopIcon: true
+
+  minWindows:
+    # 最低支持的 Windows 版本
+    major: 10
+    minor: 0
+    build: 19041
+
+  # 大文件处理阈值，供安装器内部策略使用
+  sparseFileThresholdBytes: 4194304
+
+  # 安装/升级前需要尝试关闭的进程
+  killProcesses:
+    - SampleDesktopApp.exe
+    - SampleDesktopAppTray.exe
+
+  # 是否使用命名互斥量避免并发安装/卸载
+  useMutex: true
+
+  # 命名互斥量名称
+  mutexName: Global\\SampleDesktopApp_Install
+
+  installInfo:
+    # 核心安装信息仅使用注册表持久化
+    mode: registry
+
+    # 核心安装信息统一写入的注册表路径
+    path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp
+
+    values:
+      # 下列 value 支持安装器内置模板变量：
+      # - %InstallDir%
+      # - %AppName%
+      # - %Version%
+      # - %InstallState%
+
+      # 安装目录
+      installDir:
+        key: InstallDir
+        value: "%InstallDir%"
+        type: expand
+
+      # 程序显示名称
+      displayName:
+        key: DisplayName
+        value: "%AppName%"
+        type: string
+
+      # 程序版本
+      displayVersion:
+        key: Version
+        value: "%Version%"
+        type: string
+
+      # 主程序完整路径
+      executablePath:
+        key: ExecutablePath
+        value: "%InstallDir%\\SampleDesktopApp.exe"
+        type: expand
+
+      # 安装状态
+      # 建议由安装器统一维护以下状态值：
+      # installing / install_failed / installed
+      # uninstalling / uninstall_failed / uninstalled
+      installState:
+        key: InstallState
+        value: "%InstallState%"
+        type: string
+
+ui:
+  # 默认界面语言
+  defaultLanguage: zh_CN
+
+  desktopShortcut:
+    # 默认快捷方式显示名称
+    defaultName: SampleDesktopApp
+
+    # 快捷方式名称的多语言映射
+    i18n:
+      zh_CN: SampleDesktopApp
+      en_US: SampleDesktopApp
+
+  # 安装器界面可绑定的链接按钮
+  links:
+    - control: btnHelp
+      url: https://example.com/help
+    - control: btnReleaseNotes
+      url: https://example.com/release-notes
+
+  componentSelection:
+    # 组件选择界面的展示模式
+    mode: dedicatedPage
+
+    binding:
+      # UI 控件与组件 ID 的绑定方式
+      strategy: xml_userdata
+
+      # UI 控件标识组件时使用的前缀
+      tokenPrefix: "component:"
+
+      # 参与组件选择的页面与控件列表
+      pages:
+        - skin: welcome_page.xml
+          controls:
+            - chkCoreRuntime
+            - chkOfficePlugin
+            - chkBrowserPlugin
+
+layout:
+  folders:
+    # 主程序二进制目录
+    - id: app
+      source: bin
+      # 显式指定最终落盘位置
+      target: "%InstallDir%"
+
+    # 程序静态资源目录
+    - id: resources
+      source: resources
+      target: "%InstallDir%\\resources"
+
+    # 用户模板或用户级初始化内容
+    - id: user_templates
+      source: templates
+      target: "%AppData%\\SampleDesktopApp"
+
+  components:
+    # 必装核心组件，内容来自嵌入式 payload
+    - id: core_runtime
+      name: Core Runtime
+      description: Main desktop application binaries and resources.
+      required: true
+      defaultSelected: true
+      sizeHintMB: 180
+      folders:
+        - app
+        - resources
+      source:
+        type: embedded
+
+    # 可选 Office 插件组件，通过本地安装脚本执行
+    - id: office_plugin
+      name: Office Plugin
+      description: Optional Office integration plugin.
+      required: false
+      defaultSelected: false
+      sizeHintMB: 25
+      dependsOn:
+        - core_runtime
+      folders: []
+      source:
+        type: local
+        local:
+          base: "%InstallDir%\\components"
+          installer: "office_plugin\\install_office_plugin.bat"
+          args: ""
+          wait: true
+          timeoutSec: 900
+          uninstall: "%InstallDir%\\components\\office_plugin\\uninstall_office_plugin.bat"
+      install:
+        killProcesses:
+          - WINWORD.EXE
+          - EXCEL.EXE
+
+    # 可选浏览器插件组件
+    - id: browser_plugin
+      name: Browser Plugin
+      description: Optional browser extension bootstrapper.
+      required: false
+      defaultSelected: false
+      sizeHintMB: 15
+      dependsOn:
+        - core_runtime
+      folders:
+        - user_templates
+      source:
+        type: local
+        local:
+          base: "%InstallDir%\\components"
+          installer: "browser_plugin\\install_browser_plugin.bat"
+          args: ""
+          wait: true
+          timeoutSec: 900
+          uninstall: "%InstallDir%\\components\\browser_plugin\\uninstall_browser_plugin.bat"
+
+lifecycle:
+  registry:
+    onInstall:
+      # 安装时额外写入的注册表信息
+      # 这里只放核心安装信息之外的扩展注册表项
+      - path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp
+        key: Publisher
+        value: "Example Company"
+        type: string
+
+      - path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp
+        key: InstallSource
+        value: "MultiThreadedInstaller"
+        type: string
+
+  cleanup:
+    onUpgrade:
+      # 显式定义旧安装根目录的发现规则
+      # 每一项表示：从指定注册表 path 下读取 key 的值，作为旧安装目录候选
+      installRoots:
+        - path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp
+          key: InstallDir
+        - path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopAppLegacy1
+          key: InstallDir
+        - path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopAppLegacy2
+          key: InstallDir
+
+      registry:
+        # 升级时需要删除的旧注册表项或旧注册表值
+        legacyKeys:
+          - path: HKEY_CURRENT_USER\\Software\\SampleDesktopAppLegacy
+            key: ""
+          - path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopAppLegacy
+            key: ""
+
+      uninstallEntries:
+        # 升级时需要删除的旧系统卸载入口
+        # 对应“设置 -> 应用/程序”以及“控制面板 -> 程序和功能”
+        entries:
+          - name: SampleDesktopAppLegacy
+            scope: any
+          - name: SampleDesktopAppLegacy1
+            scope: any
+          - name: SampleDesktopAppLegacy2
+            scope: any
+
+      # 升级时需要删除的旧快捷方式名称
+      shortcuts:
+        - name: Sample Desktop App
+        - name: SampleDesktopApp Legacy
+
+      # 升级时需要删除的旧开机启动项名称
+      startup:
+        - name: SampleDesktopAppLegacy
+
+      # 升级时需要额外删除的残留路径
+      extraPaths:
+        - path: "%LocalAppData%\\SampleDesktopAppLegacy"
+          recursive: true
+          onlyIfEmpty: false
+        - path: "%AppData%\\SampleDesktopAppLegacy"
+          recursive: true
+          onlyIfEmpty: false
+
+    onUninstall:
+      # 卸载前需要尝试结束的相关进程
+      processes:
+        - name: SampleDesktopApp.exe
+        - name: SampleDesktopAppTray.exe
+
+      registry:
+        # 卸载时需要删除的产品注册表项或注册表值
+        legacyKeys:
+          - path: HKEY_CURRENT_USER\\Software\\SampleDesktopApp
+            key: ""
+          - path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp
+            key: ""
+
+      uninstallEntries:
+        # 卸载时需要删除的当前产品系统卸载入口
+        entries:
+          - name: SampleDesktopApp
+            scope: any
+
+      # 卸载时需要删除的快捷方式名称
+      shortcuts:
+        - name: SampleDesktopApp
+
+      # 卸载时需要删除的开机启动项名称
+      startup:
+        - name: SampleDesktopApp
+
+      # 这里只放额外补充清理路径
+      # 当前产品主安装根目录、已安装文件、manifest 等内容
+      # 应由卸载主流程和安装清单负责处理
+      paths:
+        - path: "%LocalAppData%\\SampleDesktopApp\\Cache"
+          recursive: true
+          onlyIfEmpty: false
+        - path: "%LocalAppData%\\SampleDesktopApp\\Logs"
+          recursive: true
+          onlyIfEmpty: false
+        - path: "%AppData%\\SampleDesktopApp"
+          recursive: true
+          onlyIfEmpty: true

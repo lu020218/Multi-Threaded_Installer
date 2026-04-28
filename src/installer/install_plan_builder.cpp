@@ -1,13 +1,16 @@
 #include "installer/install_plan_builder.h"
 
+#include "common/utf8_utils.h"
 #include "installer/installer_helpers.h"
 #include "installer/path_resolver.h"
+#include "installer/registry_utils.h"
 #include "installer/uninstall_manager.h"
 
 #include <Windows.h>
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -30,19 +33,13 @@ std::string TrimAsciiCopy(const std::string& value) {
 
 InstallPathDecision ResolveInstallPathDecision(InstallerPathResolver& pathResolver,
                                                const std::string& requestedInstallPath,
-                                               const std::string& effectiveDirectoryName,
-                                               bool installDirectoryAppendName,
                                                bool installPathExplicit,
                                                bool cleanupOldInstallRequested,
                                                bool hasPreviousInstall,
                                                const std::string& previousInstallDir,
                                                bool repairMode) {
     InstallPathDecision decision;
-    decision.requestedInstallRoot = pathResolver.resolveFinalPath(
-        requestedInstallPath,
-        SpecialDirectoryType::INSTALL_DIRECTORY,
-        effectiveDirectoryName,
-        installDirectoryAppendName);
+    decision.requestedInstallRoot = pathResolver.expandEnvironmentVariables(requestedInstallPath);
     decision.resolvedInstallRoot = decision.requestedInstallRoot;
 
     if (repairMode) {
@@ -110,16 +107,10 @@ void AppendShortcutNameCandidate(std::vector<std::string>& target,
     }
 }
 
-std::vector<std::string> CollectLegacyDesktopShortcutCandidates(
-    const ExtendedInstallationMetadata& metadata,
-    const std::string& previousManifest) {
+std::vector<std::string> CollectLegacyDesktopShortcutCandidates(const std::string& previousManifest) {
     std::vector<std::string> candidates;
     std::unordered_set<std::string> seen;
-    seen.reserve(metadata.compatibilityLegacyDesktopShortcutNames.size() + 2);
-
-    for (const auto& legacyName : metadata.compatibilityLegacyDesktopShortcutNames) {
-        AppendShortcutNameCandidate(candidates, seen, legacyName);
-    }
+    seen.reserve(2);
 
     nlohmann::json manifest;
     if (readManifest(previousManifest, manifest)) {
@@ -285,6 +276,47 @@ bool ShouldInstallEmbeddedFolder(const ComponentSelectionPlan& plan,
                      mapping.folderId) != plan.embeddedFolders.end();
 }
 
+bool ResolvePreviousInstallFromConfiguredRoots(const ExtendedInstallationMetadata& metadata,
+                                               std::string& manifestPath,
+                                               std::string& installDir) {
+    for (const auto& entry : metadata.lifecycleUpgradeCleanup.installRoots) {
+        if (entry.path.empty() || entry.key.empty()) {
+            continue;
+        }
+        std::string candidateInstallDir;
+        if (!readRegistryStringValue(entry.path, entry.key, candidateInstallDir) ||
+            candidateInstallDir.empty()) {
+            continue;
+        }
+        std::filesystem::path candidatePath = PathFromUtf8(candidateInstallDir);
+        if (!std::filesystem::exists(candidatePath)) {
+            continue;
+        }
+        installDir = candidateInstallDir;
+        std::filesystem::path candidateManifest = candidatePath / "install.manifest.json";
+        if (std::filesystem::exists(candidateManifest)) {
+            manifestPath = Utf8FromPath(candidateManifest);
+        } else {
+            manifestPath.clear();
+        }
+        return true;
+    }
+    return false;
+}
+
+bool ResolvePreviousInstallFromCurrentInstallInfo(const ExtendedInstallationMetadata& metadata,
+                                                  std::string& manifestPath,
+                                                  std::string& installDir) {
+    const auto installDirIt = metadata.installInfo.values.find("installDir");
+    if (installDirIt == metadata.installInfo.values.end()) {
+        return false;
+    }
+    return resolveInstallInfoFromRegistry(metadata.installInfo.path,
+                                          installDirIt->second.key,
+                                          manifestPath,
+                                          installDir);
+}
+
 } // namespace
 
 const char* InstallTargetModeName(InstallTargetMode mode) {
@@ -365,25 +397,15 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
     plan.effectiveAppId = resolveEffectiveAppId(metadata.appId, metadata.appName);
     plan.effectiveDirectoryName =
         resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName);
-    for (const auto& mapping : metadata.extendedPayloadMappings) {
-        if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
-            plan.installDirectoryAppendName = mapping.appendDirectoryName;
-            break;
-        }
-    }
-
-    const std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(metadata.appId, metadata.compatibilityLegacyAppIds, metadata.appName);
-    plan.hasPreviousInstall = resolveExistingInstallInfo(identityCandidates,
-                                                         pathResolver,
-                                                         plan.previousManifest,
-                                                         plan.previousInstallDir,
-                                                         nullptr);
+    plan.hasPreviousInstall = ResolvePreviousInstallFromConfiguredRoots(metadata,
+                                                                       plan.previousManifest,
+                                                                       plan.previousInstallDir) ||
+                              ResolvePreviousInstallFromCurrentInstallInfo(metadata,
+                                                                          plan.previousManifest,
+                                                                          plan.previousInstallDir);
 
     plan.pathDecision = ResolveInstallPathDecision(pathResolver,
                                                    options.installPath,
-                                                   plan.effectiveDirectoryName,
-                                                   plan.installDirectoryAppendName,
                                                    options.installPathExplicit,
                                                    options.cleanupOldInstallRequested,
                                                    plan.hasPreviousInstall,
@@ -404,8 +426,8 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
          options.cleanupOldInstallRequested);
     const std::string previousManifestForShortcutCleanup =
         shouldCollectPreviousManifestShortcutName ? plan.previousManifest : std::string();
-    plan.legacyDesktopShortcutCandidates =
-        CollectLegacyDesktopShortcutCandidates(metadata, previousManifestForShortcutCleanup);
+    plan.legacyDesktopShortcutCandidates = CollectLegacyDesktopShortcutCandidates(
+        previousManifestForShortcutCleanup);
 
     if (!BuildComponentSelectionPlan(metadata, options, plan.componentPlan, error)) {
         return false;

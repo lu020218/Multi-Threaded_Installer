@@ -59,17 +59,7 @@ bool ReadExtendedPayloadMapping(const std::vector<uint8_t>& data,
         !ReadString(data, offset, mapping.folderId, "folderId") ||
         !ReadString(data, offset, mapping.folderName, "folderName") ||
         !ReadString(data, offset, mapping.targetPath, "targetPath") ||
-        !ReadPod<SpecialDirectoryType>(data, offset, mapping.targetDirType)) {
-        return false;
-    }
-
-    uint8_t appendDirectoryName = 0;
-    if (!ReadPod<uint8_t>(data, offset, appendDirectoryName)) {
-        return false;
-    }
-    mapping.appendDirectoryName = appendDirectoryName != 0;
-
-    if (!ReadString(data, offset, mapping.customTargetPath, "customTargetPath")) {
+        !ReadString(data, offset, mapping.target, "target")) {
         return false;
     }
 
@@ -232,46 +222,17 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     if (!ReadString(data, offset, metadata.appName, "appName")) {
         return metadata;
     }
-    if (header.version >= 15) {
-        if (!ReadString(data, offset, metadata.appId, "appId") ||
-            (header.version >= 16 &&
-             !ReadString(data, offset, metadata.appDirectoryName, "appDirectoryName")) ||
-            !ReadStringList(data, offset, metadata.compatibilityLegacyAppIds, "compatibilityLegacyAppIds")) {
-            return metadata;
-        }
-        if (header.version >= 19) {
-            if (!ReadString(data, offset, metadata.desktopShortcutDefaultName, "desktopShortcutDefaultName") ||
-                !ReadStringMap(data, offset, metadata.desktopShortcutLocalizedNames, "desktopShortcutLocalizedNames") ||
-                !ReadStringList(data,
-                                offset,
-                                metadata.compatibilityLegacyDesktopShortcutNames,
-                                "compatibilityLegacyDesktopShortcutNames")) {
-                return metadata;
-            }
-        } else {
-            metadata.desktopShortcutDefaultName.clear();
-            metadata.desktopShortcutLocalizedNames.clear();
-            metadata.compatibilityLegacyDesktopShortcutNames.clear();
-        }
-    } else {
-        metadata.appId.clear();
-        metadata.appDirectoryName.clear();
-        metadata.compatibilityLegacyAppIds.clear();
-        metadata.desktopShortcutDefaultName.clear();
-        metadata.desktopShortcutLocalizedNames.clear();
-        metadata.compatibilityLegacyDesktopShortcutNames.clear();
+    if (!ReadString(data, offset, metadata.appId, "appId") ||
+        !ReadString(data, offset, metadata.appDirectoryName, "appDirectoryName")) {
+        return metadata;
     }
     if (!ReadString(data, offset, metadata.installDefaultDir, "installDefaultDir") ||
         !ReadString(data, offset, metadata.appVersion, "appVersion")) {
         return metadata;
     }
 
-    if (header.version >= 10) {
-        if (!ReadString(data, offset, metadata.appWebsite, "appWebsite")) {
-            return metadata;
-        }
-    } else {
-        metadata.appWebsite.clear();
+    if (!ReadString(data, offset, metadata.appWebsite, "appWebsite")) {
+        return metadata;
     }
 
     if (metadata.appId.empty()) {
@@ -280,123 +241,62 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
     if (metadata.appDirectoryName.empty()) {
         metadata.appDirectoryName = metadata.appName;
     }
-    if (metadata.desktopShortcutDefaultName.empty()) {
-        metadata.desktopShortcutDefaultName = metadata.appName;
-    }
 
-    if (header.version >= 7) {
-        size_t flagCount = header.version >= 9 ? 4 : 3;
-        if (offset + sizeof(uint8_t) * flagCount > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        metadata.installAutoStartup = data[offset] != 0;
-        metadata.installDesktopIcon = data[offset + 1] != 0;
-        metadata.installRequireAdmin = data[offset + 2] != 0;
-        metadata.installAutoCleanOldInstall = header.version >= 9 ? (data[offset + 3] != 0) : false;
-        offset += sizeof(uint8_t) * flagCount;
-    } else {
-        if (offset + sizeof(uint8_t) * 2 > data.size()) {
-            META_LOG();
-            return metadata;
-        }
-        metadata.installAutoStartup = data[offset] != 0;
-        metadata.installDesktopIcon = data[offset + 1] != 0;
-        metadata.installRequireAdmin = false;
-        metadata.installAutoCleanOldInstall = false;
-        offset += sizeof(uint8_t) * 2;
-    }
-
-    if (header.version >= 8) {
-        if (!ReadPod<uint16_t>(data, offset, metadata.installMinWindowsMajor) ||
-            !ReadPod<uint16_t>(data, offset, metadata.installMinWindowsMinor) ||
-            !ReadPod<uint32_t>(data, offset, metadata.installMinWindowsBuild)) {
-            META_LOG();
-            return metadata;
-        }
-    } else {
-        metadata.installMinWindowsMajor = 0;
-        metadata.installMinWindowsMinor = 0;
-        metadata.installMinWindowsBuild = 0;
-    }
-
-    if (header.version >= 6) {
-        if (!ReadPod<uint64_t>(data, offset, metadata.installSparseFileThresholdBytes)) {
-            META_LOG();
-            return metadata;
-        }
-    } else {
-        metadata.installSparseFileThresholdBytes = 4 * 1024 * 1024;
-    }
-
-    if (offset + sizeof(uint8_t) * 2 > data.size()) {
+    if (offset + sizeof(uint8_t) * 4 > data.size()) {
         META_LOG();
         return metadata;
     }
-    metadata.installStateConfig.mode = static_cast<InstallStateMode>(data[offset]);
-    metadata.installStateConfig.useMutex = data[offset + 1] != 0;
-    offset += sizeof(uint8_t) * 2;
+    metadata.installAutoStartup = data[offset] != 0;
+    metadata.installDesktopIcon = data[offset + 1] != 0;
+    metadata.installRequireAdmin = data[offset + 2] != 0;
+    metadata.installAutoCleanOldInstall = data[offset + 3] != 0;
+    offset += sizeof(uint8_t) * 4;
 
-    if (!ReadString(data, offset, metadata.installStateConfig.registryPath, "installState.registryPath") ||
-        !ReadString(data, offset, metadata.installStateConfig.registryKey, "installState.registryKey") ||
-        !ReadString(data, offset, metadata.installStateConfig.filePath, "installState.filePath") ||
-        !ReadString(data, offset, metadata.installStateConfig.mutexName, "installState.mutexName") ||
+    if (!ReadPod<uint16_t>(data, offset, metadata.installMinWindowsMajor) ||
+        !ReadPod<uint16_t>(data, offset, metadata.installMinWindowsMinor) ||
+        !ReadPod<uint32_t>(data, offset, metadata.installMinWindowsBuild) ||
+        !ReadPod<uint64_t>(data, offset, metadata.installSparseFileThresholdBytes)) {
+        META_LOG();
+        return metadata;
+    }
+
+    if (offset + sizeof(uint8_t) > data.size()) {
+        META_LOG();
+        return metadata;
+    }
+    metadata.installUseMutex = data[offset] != 0;
+    offset += sizeof(uint8_t);
+
+    if (!ReadString(data, offset, metadata.installMutexName, "installMutexName") ||
+        !ReadInstallInfoConfig(data, offset, metadata.installInfo) ||
         !ReadRegistryList(data, offset, metadata.lifecycleInstallRegistry, "lifecycleInstallRegistry")) {
         return metadata;
     }
-    
-    if (header.version >= 12) {
-        if (!ReadStringList(data, offset, metadata.installKillProcesses, "installKillProcesses")) {
-            return metadata;
-        }
-    } else {
-        metadata.installKillProcesses.clear();
+
+    if (!ReadStringList(data, offset, metadata.installKillProcesses, "installKillProcesses")) {
+        return metadata;
     }
 
-    if (header.version >= 13) {
-        if (!ReadComponentList(data, offset, metadata.layoutComponents)) {
-            return metadata;
-        }
-        if (!ReadComponentUiConfig(data, offset, metadata.uiComponentSelection)) {
-            return metadata;
-        }
-        if (header.version >= 14) {
-            if (!ReadUiLinks(data, offset, metadata.uiLinkBindings)) {
-                return metadata;
-            }
-        } else {
-            metadata.uiLinkBindings.clear();
-        }
-        if (header.version >= 18) {
-            if (!ReadCleanupRules(data, offset, metadata.lifecycleUninstallCleanupRules)) {
-                return metadata;
-            }
-        } else {
-            metadata.lifecycleUninstallCleanupRules.clear();
-        }
-        if (header.version >= 21) {
-            uint8_t deleteFromManifest = 0;
-            if (!ReadPod<uint8_t>(data, offset, deleteFromManifest)) {
-                META_LOG();
-                return metadata;
-            }
-            metadata.lifecycleUpgradeCleanup.registry.deleteFromManifest = deleteFromManifest != 0;
-            if (!ReadRegistryList(data,
-                                  offset,
-                                  metadata.lifecycleUpgradeCleanup.registry.legacyKeys,
-                                  "lifecycleUpgradeCleanup.registry.legacyKeys") ||
-                !ReadCleanupRules(data, offset, metadata.lifecycleUpgradeCleanup.extraPaths)) {
-                return metadata;
-            }
-        } else {
-            metadata.lifecycleUpgradeCleanup = UpgradeCleanupConfig{};
-        }
-    } else {
-        metadata.layoutComponents.clear();
-        metadata.uiComponentSelection = UiComponentSelectionConfig();
-        metadata.uiLinkBindings.clear();
-        metadata.lifecycleUninstallCleanupRules.clear();
-        metadata.lifecycleUpgradeCleanup = UpgradeCleanupConfig{};
+    if (!ReadComponentList(data, offset, metadata.layoutComponents)) {
+        return metadata;
+    }
+    if (!ReadComponentUiConfig(data, offset, metadata.uiComponentSelection)) {
+        return metadata;
+    }
+    if (!ReadUiLinks(data, offset, metadata.uiLinkBindings) ||
+        !ReadNamedCleanupList(data, offset, metadata.lifecycleUninstallCleanup.processes) ||
+        !ReadRegistryList(data, offset, metadata.lifecycleUninstallCleanup.registry.legacyKeys, "onUninstall.registry.legacyKeys") ||
+        !ReadUninstallEntryCleanupList(data, offset, metadata.lifecycleUninstallCleanup.uninstallEntries) ||
+        !ReadNamedCleanupList(data, offset, metadata.lifecycleUninstallCleanup.shortcuts) ||
+        !ReadNamedCleanupList(data, offset, metadata.lifecycleUninstallCleanup.startup) ||
+        !ReadCleanupRules(data, offset, metadata.lifecycleUninstallCleanup.paths) ||
+        !ReadRegistryLookupList(data, offset, metadata.lifecycleUpgradeCleanup.installRoots) ||
+        !ReadRegistryList(data, offset, metadata.lifecycleUpgradeCleanup.registry.legacyKeys, "onUpgrade.registry.legacyKeys") ||
+        !ReadUninstallEntryCleanupList(data, offset, metadata.lifecycleUpgradeCleanup.uninstallEntries) ||
+        !ReadNamedCleanupList(data, offset, metadata.lifecycleUpgradeCleanup.shortcuts) ||
+        !ReadNamedCleanupList(data, offset, metadata.lifecycleUpgradeCleanup.startup) ||
+        !ReadCleanupRules(data, offset, metadata.lifecycleUpgradeCleanup.extraPaths)) {
+        return metadata;
     }
 
     for (uint32_t i = 0; i < header.folderCount; ++i) {

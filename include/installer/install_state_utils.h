@@ -10,15 +10,18 @@
 #include <windows.h>
 #endif
 
+#include <string>
+
 namespace MultiThreadedInstaller {
 
-bool applyInstallStateRegistry(const InstallStateConfig& config, const std::string& stateValue);
-bool applyInstallStateFile(const InstallStateConfig& config, const std::string& stateValue,
-                           InstallerPathResolver& resolver);
-HANDLE acquireInstallMutex(const InstallStateConfig& config);
+bool applyCoreInstallInfo(const InstallInfoConfig& config,
+                          const std::string& installDir,
+                          const std::string& version,
+                          const std::string& appName,
+                          const std::string& stateValue,
+                          InstallerPathResolver& resolver);
+HANDLE acquireInstallMutex(bool useMutex, const std::string& mutexName);
 void releaseInstallMutex(HANDLE handle);
-void applyInstallState(const InstallStateConfig& config, const std::string& stateValue,
-                       InstallerPathResolver& resolver);
-bool removeInstallStateArtifacts(const InstallStateConfig& config, InstallerPathResolver& resolver);
+bool removeInstallInfoArtifacts(const InstallInfoConfig& config);
 
 } // namespace MultiThreadedInstaller

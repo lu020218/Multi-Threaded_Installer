@@ -97,21 +97,6 @@ bool registryPathRequiresAdmin(const std::string& path) {
            startsWithNoCase(path, "HKLM");
 }
 
-void appendIdentityCandidate(std::vector<std::string>& out,
-                             std::unordered_set<std::string>& seen,
-                             const std::string& rawValue) {
-    std::string value = trimAscii(rawValue);
-    if (value.empty()) {
-        return;
-    }
-    std::string lowered = value;
-    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (seen.insert(lowered).second) {
-        out.push_back(std::move(value));
-    }
-}
-
 std::wstring quoteArgument(const std::wstring& arg) {
     if (arg.empty()) {
         return L"\"\"";
@@ -184,20 +169,6 @@ std::string resolveEffectiveDirectoryName(const std::string& directoryName,
         return trimmedDirectoryName;
     }
     return trimAscii(applicationName);
-}
-
-std::vector<std::string> buildIdentityCandidates(const std::string& appId,
-                                                 const std::vector<std::string>& legacyAppIds,
-                                                 const std::string& applicationName) {
-    std::vector<std::string> candidates;
-    std::unordered_set<std::string> seen;
-    seen.reserve(legacyAppIds.size() + 2);
-    appendIdentityCandidate(candidates, seen, appId);
-    for (const auto& legacy : legacyAppIds) {
-        appendIdentityCandidate(candidates, seen, legacy);
-    }
-    appendIdentityCandidate(candidates, seen, applicationName);
-    return candidates;
 }
 
 std::string normalizePathForCompare(const std::string& path) {
@@ -474,26 +445,6 @@ std::string getLocalManifestPath(const std::string& exePath) {
     return Utf8FromPath(parent);
 }
 
-std::string resolveInstalledManifestPath(const std::vector<std::string>& identityCandidates,
-                                         const std::string& exePath,
-                                         InstallerPathResolver& resolver) {
-    std::string localManifest = getLocalManifestPath(exePath);
-    if (!localManifest.empty() && std::filesystem::exists(PathFromUtf8(localManifest))) {
-        return localManifest;
-    }
-
-    std::string resolvedManifestPath;
-    std::string resolvedInstallDir;
-    if (resolveExistingInstallInfo(identityCandidates,
-                                   resolver,
-                                   resolvedManifestPath,
-                                   resolvedInstallDir,
-                                   nullptr)) {
-        return resolvedManifestPath;
-    }
-    return {};
-}
-
 bool isRunningAsAdmin() {
 #ifdef _WIN32
     BOOL isAdmin = FALSE;
@@ -524,11 +475,9 @@ bool requiresAdminForInstall(const std::string& installPath,
         return true;
     }
 
-    if (metadata.installStateConfig.mode == InstallStateMode::REGISTRY ||
-        metadata.installStateConfig.mode == InstallStateMode::BOTH) {
-        if (registryPathRequiresAdmin(metadata.installStateConfig.registryPath)) {
-            return true;
-        }
+    if (!metadata.installInfo.path.empty() &&
+        registryPathRequiresAdmin(metadata.installInfo.path)) {
+        return true;
     }
 
     for (const auto& entry : metadata.lifecycleInstallRegistry) {

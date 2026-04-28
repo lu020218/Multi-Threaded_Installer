@@ -603,9 +603,14 @@ void GUIManager::OnUninstallConfirmClick() {
         m_pUninstallWorker = new UninstallWorker(m_hWnd);
     }
 
-    std::vector<std::string> identityCandidates =
-        GUIInstallActions::BuildIdentityCandidatesFromConfig(m_config);
-    if (identityCandidates.empty()) {
+    std::string manifestPath;
+    std::string installDir;
+    if (m_config.registryPath.empty() || m_config.registryKey.empty() ||
+        !resolveInstallInfoFromRegistry(WideToUtf8(m_config.registryPath),
+                                        WideToUtf8(m_config.registryKey),
+                                        manifestPath,
+                                        installDir) ||
+        manifestPath.empty()) {
         CompletionMessageData* pData = new CompletionMessageData();
         pData->success = false;
         std::wstring text = GUIHelpers::GetLocalizedText(L"msg.uninstall.appname_missing", L"");
@@ -614,7 +619,7 @@ void GUIManager::OnUninstallConfirmClick() {
         return;
     }
 
-    m_pUninstallWorker->StartUninstall(identityCandidates);
+    m_pUninstallWorker->StartUninstall(manifestPath);
 }
 
 void GUIManager::OnCancelButtonClick() {

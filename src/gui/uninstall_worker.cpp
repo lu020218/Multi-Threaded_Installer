@@ -41,27 +41,24 @@ UninstallWorker::~UninstallWorker() {
     }
 }
 
-void UninstallWorker::StartUninstall(const std::vector<std::string>& identityCandidates) {
+void UninstallWorker::StartUninstall(const std::string& manifestPath) {
     if (m_thread.joinable()) {
         m_thread.join();
     }
-    m_thread = std::thread(&UninstallWorker::WorkerThreadFunc, this, identityCandidates);
+    m_thread = std::thread(&UninstallWorker::WorkerThreadFunc, this, manifestPath);
 }
 
 bool UninstallWorker::Joinable() const {
     return m_thread.joinable();
 }
 
-void UninstallWorker::WorkerThreadFunc(const std::vector<std::string>& identityCandidates) {
+void UninstallWorker::WorkerThreadFunc(const std::string& manifestPath) {
     bool success = false;
     std::wstring errorMessage;
 
     try {
         InstallerPathResolver resolver;
         CliSupport console;
-        std::string exePath = getCurrentExecutablePath();
-        std::string manifestPath = resolveInstalledManifestPath(identityCandidates, exePath, resolver);
-
         if (manifestPath.empty()) {
             throw std::runtime_error("Manifest not found for uninstall");
         }

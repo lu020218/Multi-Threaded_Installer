@@ -30,19 +30,17 @@ using UninstallProgressCallback = std::function<void(const UninstallProgressInfo
 bool writeManifest(const std::string& manifestPath,
                    const std::string& appId,
                    const std::string& displayName,
-                   const std::vector<std::string>& legacyAppIds,
-                   const std::vector<std::string>& legacyDesktopShortcutNames,
                    const std::string& configVersion,
                    const std::string& installDir,
                    const std::vector<std::string>& cleanupRoots,
-                   const std::vector<UninstallCleanupRule>& uninstallCleanupRules,
+                   const UninstallCleanupConfig& uninstallCleanup,
                    const std::vector<std::string>& filePaths,
                    const std::vector<RegistryEntry>& registry,
                    const std::vector<std::string>& installKillProcesses,
                    bool autoStartup,
                    bool desktopIcons,
                    const std::string& desktopShortcutDisplayName,
-                   const InstallStateConfig& installState,
+                   const InstallInfoConfig& installInfo,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
                    const std::vector<ComponentExecutionRecord>& componentActions = {});
@@ -52,6 +50,10 @@ bool resolveExistingInstallInfo(const std::vector<std::string>& identityCandidat
                                 std::string& manifestPath,
                                 std::string& installDir,
                                 std::string* matchedIdentity = nullptr);
+bool resolveInstallInfoFromRegistry(const std::string& registryPath,
+                                    const std::string& registryKey,
+                                    std::string& manifestPath,
+                                    std::string& installDir);
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
                            CliSupport& console);

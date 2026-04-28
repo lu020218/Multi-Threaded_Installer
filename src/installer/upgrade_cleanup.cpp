@@ -90,10 +90,10 @@ std::vector<std::string> CollectManifestFiles(const json& manifest) {
 
 std::vector<RegistryEntry> CollectManifestRegistryEntries(const json& manifest) {
     std::vector<RegistryEntry> entries;
-    if (!manifest.contains("registry") || !manifest["registry"].is_array()) {
+    if (!manifest.contains("lifecycleInstallRegistry") || !manifest["lifecycleInstallRegistry"].is_array()) {
         return entries;
     }
-    for (const auto& item : manifest["registry"]) {
+    for (const auto& item : manifest["lifecycleInstallRegistry"]) {
         if (!item.is_object()) {
             continue;
         }
@@ -396,20 +396,15 @@ bool cleanupUpgradeSystemArtifacts(
 
     std::vector<std::string> installAutoStartupNames;
     std::set<std::string> seenNames;
-    if (hasManifest) {
-        AppendUniqueName(installAutoStartupNames, seenNames, GetManifestDisplayName(manifest));
+    for (const auto& startup : metadata.lifecycleUpgradeCleanup.startup) {
+        AppendUniqueName(installAutoStartupNames, seenNames, startup.name);
     }
-    for (const auto& legacyId : metadata.compatibilityLegacyAppIds) {
-        AppendUniqueName(installAutoStartupNames, seenNames, legacyId);
-    }
-    AppendUniqueName(installAutoStartupNames, seenNames, metadata.appName);
 
     const size_t totalSteps = installAutoStartupNames.size() +
+                              metadata.lifecycleUpgradeCleanup.shortcuts.size() +
+                              metadata.lifecycleUpgradeCleanup.uninstallEntries.size() +
                               metadata.lifecycleUpgradeCleanup.registry.legacyKeys.size() +
-                              metadata.lifecycleUpgradeCleanup.extraPaths.size() +
-                              (metadata.lifecycleUpgradeCleanup.registry.deleteFromManifest
-                                   ? CollectManifestRegistryEntries(manifest).size()
-                                   : 0);
+                              metadata.lifecycleUpgradeCleanup.extraPaths.size();
     size_t completedSteps = 0;
     auto emitStep = [&](const std::string& item) {
         ++completedSteps;
@@ -430,18 +425,43 @@ bool cleanupUpgradeSystemArtifacts(
         emitStep("Removing legacy auto startup: " + name);
     }
 
-    std::vector<RegistryEntry> registryEntries;
-    std::set<std::string> seenRegistry;
-    if (metadata.lifecycleUpgradeCleanup.registry.deleteFromManifest && hasManifest) {
-        for (const auto& entry : CollectManifestRegistryEntries(manifest)) {
-            AppendUniqueRegistryEntry(registryEntries, seenRegistry, entry);
+    for (const auto& shortcut : metadata.lifecycleUpgradeCleanup.shortcuts) {
+        if (IsCancelled(cancellationCallback)) {
+            console.showWarning("Upgrade system cleanup cancelled while removing shortcuts.");
+            return false;
         }
-    }
-    for (const auto& entry : metadata.lifecycleUpgradeCleanup.registry.legacyKeys) {
-        AppendUniqueRegistryEntry(registryEntries, seenRegistry, entry);
+        if (!shortcut.name.empty()) {
+            deleteDesktopShortcut(shortcut.name);
+            deleteStartMenuShortcut(shortcut.name);
+        }
+        emitStep("Removing legacy shortcut");
     }
 
-    for (const auto& entry : registryEntries) {
+#ifdef _WIN32
+    for (const auto& entry : metadata.lifecycleUpgradeCleanup.uninstallEntries) {
+        if (IsCancelled(cancellationCallback)) {
+            console.showWarning("Upgrade system cleanup cancelled while removing uninstall entries.");
+            return false;
+        }
+        switch (entry.scope) {
+        case UninstallEntryScope::CURRENT_USER:
+            deleteUninstallRegistryEntry(entry.name, false);
+            break;
+        case UninstallEntryScope::LOCAL_MACHINE:
+        case UninstallEntryScope::WOW6432:
+            deleteUninstallRegistryEntry(entry.name, true);
+            break;
+        case UninstallEntryScope::ANY:
+        default:
+            deleteUninstallRegistryEntry(entry.name, false);
+            deleteUninstallRegistryEntry(entry.name, true);
+            break;
+        }
+        emitStep("Removing uninstall entry");
+    }
+#endif
+
+    for (const auto& entry : metadata.lifecycleUpgradeCleanup.registry.legacyKeys) {
         if (IsCancelled(cancellationCallback)) {
             console.showWarning("Upgrade system cleanup cancelled while removing registry.");
             return false;

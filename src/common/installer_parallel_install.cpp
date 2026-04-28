@@ -23,6 +23,18 @@ struct FolderDispatch {
     ExtendedFolderMapping mapping;
 };
 
+std::string ReplaceAll(std::string value, const std::string& token, const std::string& replacement) {
+    if (token.empty()) {
+        return value;
+    }
+    size_t pos = 0;
+    while ((pos = value.find(token, pos)) != std::string::npos) {
+        value.replace(pos, token.size(), replacement);
+        pos += replacement.size();
+    }
+    return value;
+}
+
 } // namespace
 
 ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& metadata,
@@ -86,33 +98,8 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         }
 
         if (targetPath.empty()) {
-            const std::string directoryName =
-                resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName);
-            std::string basePath;
-            if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
-                basePath = pathResolver.resolveFinalPath(
-                    userSelectedPath,
-                    mapping.targetDirType,
-                    directoryName,
-                    mapping.appendDirectoryName);
-            } else {
-                basePath = pathResolver.resolveFinalPath(
-                    mapping.customTargetPath.empty() ? mapping.targetPath : mapping.customTargetPath,
-                    mapping.targetDirType,
-                    directoryName,
-                    mapping.appendDirectoryName);
-            }
-
-            if (!basePath.empty()) {
-                if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
-                    targetPath = basePath;
-                } else {
-                    if (basePath.back() != '\\' && basePath.back() != '/') {
-                        basePath.push_back('\\');
-                    }
-                    targetPath = basePath + mapping.folderName;
-                }
-            }
+            std::string expandedTarget = ReplaceAll(mapping.target, "%InstallDir%", userSelectedPath);
+            targetPath = pathResolver.expandEnvironmentVariables(expandedTarget);
         }
 
         if (targetPath.empty()) {
@@ -123,7 +110,7 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         }
 
         if (result.installRootPath.empty() &&
-            mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
+            mapping.target.find("%InstallDir%") != std::string::npos) {
             result.installRootPath = targetPath;
         }
 

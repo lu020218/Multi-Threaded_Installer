@@ -39,7 +39,6 @@ struct ComponentSelectionPlan {
 struct InstallExecutionPlan {
     std::string effectiveAppId;
     std::string effectiveDirectoryName;
-    bool installDirectoryAppendName = true;
     bool hasPreviousInstall = false;
     std::string previousManifest;
     std::string previousInstallDir;

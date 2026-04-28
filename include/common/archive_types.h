@@ -47,16 +47,12 @@ struct FolderMapping {
 };
 
 struct ExtendedFolderMapping : public FolderMapping {
-    SpecialDirectoryType targetDirType;
-    std::string customTargetPath;
-    bool appendDirectoryName;
+    std::string target;
     // File manifest for logging, validation, and post-install bookkeeping only.
     std::vector<FileIndexEntry> fileIndex;
 
     ExtendedFolderMapping()
-        : FolderMapping(),
-          targetDirType(SpecialDirectoryType::INSTALL_DIRECTORY),
-          appendDirectoryName(true) {}
+        : FolderMapping() {}
 };
 
 struct InstallationMetadata {
@@ -72,10 +68,8 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::string appName;
     std::string appId;
     std::string appDirectoryName;
-    std::vector<std::string> compatibilityLegacyAppIds;
     std::string desktopShortcutDefaultName;
     std::unordered_map<std::string, std::string> desktopShortcutLocalizedNames;
-    std::vector<std::string> compatibilityLegacyDesktopShortcutNames;
     std::string appVersion;
     std::string installDefaultDir;
     std::string appWebsite;
@@ -87,14 +81,16 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     uint16_t installMinWindowsMinor;
     uint32_t installMinWindowsBuild;
     uint64_t installSparseFileThresholdBytes;
-    InstallStateConfig installStateConfig;
+    bool installUseMutex;
+    std::string installMutexName;
+    InstallInfoConfig installInfo;
     std::vector<ExtendedFolderMapping> extendedPayloadMappings;
     std::vector<RegistryEntry> lifecycleInstallRegistry;
     std::vector<std::string> installKillProcesses;
     std::vector<ComponentConfig> layoutComponents;
     UiComponentSelectionConfig uiComponentSelection;
     std::vector<UiLinkBinding> uiLinkBindings;
-    std::vector<UninstallCleanupRule> lifecycleUninstallCleanupRules;
+    UninstallCleanupConfig lifecycleUninstallCleanup;
     UpgradeCleanupConfig lifecycleUpgradeCleanup;
 
     ExtendedInstallationMetadata()
@@ -113,6 +109,7 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
           installMinWindowsMajor(0),
           installMinWindowsMinor(0),
           installMinWindowsBuild(0),
+          installUseMutex(true),
           installSparseFileThresholdBytes(4 * 1024 * 1024) {}
 };
 

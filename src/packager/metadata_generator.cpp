@@ -80,61 +80,54 @@ std::string ResolveEffectiveDirectoryNameLocal(const std::string& appDirectoryNa
     return appDirectoryName.empty() ? appName : appDirectoryName;
 }
 
-SpecialDirectoryType MapDestinationType(const std::string& type) {
-    if (type == "custom") {
-        return SpecialDirectoryType::CUSTOM;
-    }
-    if (type == "programFiles") {
-        return SpecialDirectoryType::PROGRAM_FILES;
-    }
-    if (type == "programFilesX86") {
-        return SpecialDirectoryType::PROGRAM_FILES_X86;
-    }
-    if (type == "appDataRoaming") {
-        return SpecialDirectoryType::APPDATA_ROAMING;
-    }
-    if (type == "appDataLocal") {
-        return SpecialDirectoryType::APPDATA_LOCAL;
-    }
-    if (type == "programData") {
-        return SpecialDirectoryType::PROGRAM_DATA;
-    }
-    if (type == "userProfile") {
-        return SpecialDirectoryType::USER_PROFILE;
-    }
-    return SpecialDirectoryType::INSTALL_DIRECTORY;
-}
-
-std::string DestinationTypeToPathToken(const LayoutFolderDestination& destination) {
-    if (destination.type == "install") {
-        return "installDirectory";
-    }
-    if (destination.type == "custom") {
-        return destination.path;
-    }
-    if (destination.type == "programFiles") {
-        return "%ProgramFiles%";
-    }
-    if (destination.type == "programFilesX86") {
-        return "%ProgramFiles(x86)%";
-    }
-    if (destination.type == "appDataRoaming") {
-        return "%AppData%";
-    }
-    if (destination.type == "appDataLocal") {
-        return "%LocalAppData%";
-    }
-    if (destination.type == "programData") {
-        return "%ProgramData%";
-    }
-    if (destination.type == "userProfile") {
-        return "%USERPROFILE%";
-    }
-    return destination.path;
-}
-
 std::string FolderSourceName(const std::string& source) {
     return Utf8FromPath(PathFromUtf8(source).filename());
+}
+
+void AppendRegistryLookupList(std::vector<uint8_t>& out,
+                              const std::vector<RegistryLookupEntry>& values) {
+    uint32_t count = static_cast<uint32_t>(values.size());
+    AppendPod(out, count);
+    for (const auto& entry : values) {
+        AppendString(out, entry.path);
+        AppendString(out, entry.key);
+    }
+}
+
+void AppendNamedCleanupList(std::vector<uint8_t>& out,
+                            const std::vector<NamedCleanupEntry>& values) {
+    uint32_t count = static_cast<uint32_t>(values.size());
+    AppendPod(out, count);
+    for (const auto& entry : values) {
+        AppendString(out, entry.name);
+    }
+}
+
+void AppendUninstallEntryCleanupList(std::vector<uint8_t>& out,
+                                     const std::vector<UninstallEntryCleanup>& values) {
+    uint32_t count = static_cast<uint32_t>(values.size());
+    AppendPod(out, count);
+    for (const auto& entry : values) {
+        AppendString(out, entry.name);
+        out.push_back(static_cast<uint8_t>(entry.scope));
+    }
+}
+
+void AppendInstallInfoConfig(std::vector<uint8_t>& out, const InstallInfoConfig& installInfo) {
+    out.push_back(static_cast<uint8_t>(installInfo.mode));
+    AppendString(out, installInfo.path);
+    std::vector<std::pair<std::string, InstallInfoValueConfig>> ordered(installInfo.values.begin(),
+                                                                        installInfo.values.end());
+    std::sort(ordered.begin(), ordered.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    uint32_t count = static_cast<uint32_t>(ordered.size());
+    AppendPod(out, count);
+    for (const auto& item : ordered) {
+        AppendString(out, item.first);
+        AppendString(out, item.second.key);
+        out.push_back(static_cast<uint8_t>(item.second.type));
+        AppendString(out, item.second.value);
+    }
 }
 
 } // namespace
@@ -169,13 +162,10 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.appId = ResolveEffectiveAppIdLocal(config.app.id, config.app.name);
     metadata.appDirectoryName =
         ResolveEffectiveDirectoryNameLocal(config.app.directoryName, config.app.name);
-    metadata.compatibilityLegacyAppIds = config.lifecycle.compatibility.legacyAppIds;
     metadata.desktopShortcutDefaultName = config.ui.desktopShortcut.defaultName.empty()
                                        ? config.app.name
                                        : config.ui.desktopShortcut.defaultName;
     metadata.desktopShortcutLocalizedNames = config.ui.desktopShortcut.i18n;
-    metadata.compatibilityLegacyDesktopShortcutNames =
-        config.lifecycle.compatibility.legacyDesktopShortcutNames;
     metadata.appVersion = config.app.version;
     metadata.installDefaultDir = config.install.defaultDir;
     metadata.appWebsite = config.app.website;
@@ -187,13 +177,15 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     metadata.installMinWindowsMinor = config.install.minWindows.minor;
     metadata.installMinWindowsBuild = config.install.minWindows.build;
     metadata.installSparseFileThresholdBytes = config.install.sparseFileThresholdBytes;
-    metadata.installStateConfig = config.install.installState;
+    metadata.installUseMutex = config.install.useMutex;
+    metadata.installMutexName = config.install.mutexName;
+    metadata.installInfo = config.install.installInfo;
     metadata.lifecycleInstallRegistry = config.lifecycle.registry.onInstall;
     metadata.installKillProcesses = config.install.killProcesses;
     metadata.layoutComponents = config.layout.components;
     metadata.uiComponentSelection = config.ui.componentSelection;
     metadata.uiLinkBindings = config.ui.links;
-    metadata.lifecycleUninstallCleanupRules = config.lifecycle.cleanup.onUninstallPaths;
+    metadata.lifecycleUninstallCleanup = config.lifecycle.cleanup.onUninstall;
     metadata.lifecycleUpgradeCleanup = config.lifecycle.cleanup.onUpgrade;
     
     uint64_t currentOffset = 0;
@@ -292,25 +284,11 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     AppendPod(serialized, extendedMarker);
     
     AppendString(serialized, metadata.appName);
-    if (header.version >= 15) {
-        AppendString(serialized, metadata.appId);
-        if (header.version >= 16) {
-            AppendString(serialized, metadata.appDirectoryName);
-        }
-        AppendStringList(serialized, metadata.compatibilityLegacyAppIds);
-        if (header.version >= 19) {
-            AppendString(serialized, metadata.desktopShortcutDefaultName);
-            AppendStringMap(serialized, metadata.desktopShortcutLocalizedNames);
-            AppendStringList(serialized, metadata.compatibilityLegacyDesktopShortcutNames);
-        }
-    }
-    
+    AppendString(serialized, metadata.appId);
+    AppendString(serialized, metadata.appDirectoryName);
     AppendString(serialized, metadata.installDefaultDir);
-
     AppendString(serialized, metadata.appVersion);
-
     AppendString(serialized, metadata.appWebsite);
-
     uint8_t installAutoStartupFlag = metadata.installAutoStartup ? 1 : 0;
     uint8_t installDesktopIconFlag = metadata.installDesktopIcon ? 1 : 0;
     uint8_t installRequireAdminFlag = metadata.installRequireAdmin ? 1 : 0;
@@ -325,81 +303,72 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     AppendPod(serialized, metadata.installMinWindowsBuild);
 
     AppendPod(serialized, metadata.installSparseFileThresholdBytes);
-
-    uint8_t installMode = static_cast<uint8_t>(metadata.installStateConfig.mode);
-    uint8_t installMutex = metadata.installStateConfig.useMutex ? 1 : 0;
-    serialized.push_back(installMode);
-    serialized.push_back(installMutex);
-    
-    AppendString(serialized, metadata.installStateConfig.registryPath);
-    AppendString(serialized, metadata.installStateConfig.registryKey);
-    AppendString(serialized, metadata.installStateConfig.filePath);
-    AppendString(serialized, metadata.installStateConfig.mutexName);
-
+    serialized.push_back(metadata.installUseMutex ? 1 : 0);
+    AppendString(serialized, metadata.installMutexName);
+    AppendInstallInfoConfig(serialized, metadata.installInfo);
     AppendRegistryList(serialized, metadata.lifecycleInstallRegistry);
     AppendStringList(serialized, metadata.installKillProcesses);
+    uint32_t componentCount = static_cast<uint32_t>(metadata.layoutComponents.size());
+    AppendPod(serialized, componentCount);
+    for (const auto& component : metadata.layoutComponents) {
+        AppendString(serialized, component.id);
+        AppendString(serialized, component.name);
+        AppendString(serialized, component.description);
 
-    if (header.version >= 13) {
-        uint32_t componentCount = static_cast<uint32_t>(metadata.layoutComponents.size());
-        AppendPod(serialized, componentCount);
-        for (const auto& component : metadata.layoutComponents) {
-            AppendString(serialized, component.id);
-            AppendString(serialized, component.name);
-            AppendString(serialized, component.description);
+        serialized.push_back(component.required ? 1 : 0);
+        serialized.push_back(component.defaultSelected ? 1 : 0);
+        AppendPod(serialized, component.sizeHintMB);
 
-            serialized.push_back(component.required ? 1 : 0);
-            serialized.push_back(component.defaultSelected ? 1 : 0);
-            AppendPod(serialized, component.sizeHintMB);
+        AppendStringList(serialized, component.dependsOn);
+        AppendStringList(serialized, component.folders);
 
-            AppendStringList(serialized, component.dependsOn);
-            AppendStringList(serialized, component.folders);
+        serialized.push_back(static_cast<uint8_t>(component.source.type));
 
-            serialized.push_back(static_cast<uint8_t>(component.source.type));
+        AppendString(serialized, component.source.local.base);
+        AppendString(serialized, component.source.local.installer);
+        AppendString(serialized, component.source.local.args);
+        serialized.push_back(component.source.local.wait ? 1 : 0);
+        AppendPod(serialized, component.source.local.timeoutSec);
+        AppendString(serialized, component.source.local.uninstall);
 
-            AppendString(serialized, component.source.local.base);
-            AppendString(serialized, component.source.local.installer);
-            AppendString(serialized, component.source.local.args);
-            serialized.push_back(component.source.local.wait ? 1 : 0);
-            AppendPod(serialized, component.source.local.timeoutSec);
-            AppendString(serialized, component.source.local.uninstall);
+        AppendString(serialized, component.source.download.url);
+        AppendString(serialized, component.source.download.sha256);
+        AppendString(serialized, component.source.download.saveAs);
+        AppendString(serialized, component.source.download.args);
+        serialized.push_back(component.source.download.wait ? 1 : 0);
+        AppendPod(serialized, component.source.download.timeoutSec);
+        AppendString(serialized, component.source.download.uninstall);
 
-            AppendString(serialized, component.source.download.url);
-            AppendString(serialized, component.source.download.sha256);
-            AppendString(serialized, component.source.download.saveAs);
-            AppendString(serialized, component.source.download.args);
-            serialized.push_back(component.source.download.wait ? 1 : 0);
-            AppendPod(serialized, component.source.download.timeoutSec);
-            AppendString(serialized, component.source.download.uninstall);
+        AppendRegistryList(serialized, component.registry);
+        AppendStringList(serialized, component.killProcesses);
 
-            AppendRegistryList(serialized, component.registry);
-            AppendStringList(serialized, component.killProcesses);
-
-            serialized.push_back(component.createDesktopShortcut ? 1 : 0);
-            serialized.push_back(component.autoStartup ? 1 : 0);
-        }
-
-        AppendString(serialized, metadata.uiComponentSelection.mode);
-        AppendString(serialized, metadata.uiComponentSelection.strategy);
-        AppendString(serialized, metadata.uiComponentSelection.tokenPrefix);
-        uint32_t pageCount = static_cast<uint32_t>(metadata.uiComponentSelection.pages.size());
-        AppendPod(serialized, pageCount);
-        for (const auto& page : metadata.uiComponentSelection.pages) {
-            AppendString(serialized, page.skin);
-            AppendStringList(serialized, page.controls);
-        }
-
-        if (header.version >= 14) {
-            AppendUiLinks(serialized, metadata.uiLinkBindings);
-        }
-        if (header.version >= 18) {
-            AppendCleanupRules(serialized, metadata.lifecycleUninstallCleanupRules);
-        }
-        if (header.version >= 21) {
-            serialized.push_back(metadata.lifecycleUpgradeCleanup.registry.deleteFromManifest ? 1 : 0);
-            AppendRegistryList(serialized, metadata.lifecycleUpgradeCleanup.registry.legacyKeys);
-            AppendCleanupRules(serialized, metadata.lifecycleUpgradeCleanup.extraPaths);
-        }
+        serialized.push_back(component.createDesktopShortcut ? 1 : 0);
+        serialized.push_back(component.autoStartup ? 1 : 0);
     }
+
+    AppendString(serialized, metadata.uiComponentSelection.mode);
+    AppendString(serialized, metadata.uiComponentSelection.strategy);
+    AppendString(serialized, metadata.uiComponentSelection.tokenPrefix);
+    uint32_t pageCount = static_cast<uint32_t>(metadata.uiComponentSelection.pages.size());
+    AppendPod(serialized, pageCount);
+    for (const auto& page : metadata.uiComponentSelection.pages) {
+        AppendString(serialized, page.skin);
+        AppendStringList(serialized, page.controls);
+    }
+
+    AppendUiLinks(serialized, metadata.uiLinkBindings);
+    AppendNamedCleanupList(serialized, metadata.lifecycleUninstallCleanup.processes);
+    AppendRegistryList(serialized, metadata.lifecycleUninstallCleanup.registry.legacyKeys);
+    AppendUninstallEntryCleanupList(serialized, metadata.lifecycleUninstallCleanup.uninstallEntries);
+    AppendNamedCleanupList(serialized, metadata.lifecycleUninstallCleanup.shortcuts);
+    AppendNamedCleanupList(serialized, metadata.lifecycleUninstallCleanup.startup);
+    AppendCleanupRules(serialized, metadata.lifecycleUninstallCleanup.paths);
+    AppendRegistryLookupList(serialized, metadata.lifecycleUpgradeCleanup.installRoots);
+    AppendRegistryList(serialized, metadata.lifecycleUpgradeCleanup.registry.legacyKeys);
+    AppendUninstallEntryCleanupList(serialized, metadata.lifecycleUpgradeCleanup.uninstallEntries);
+    AppendNamedCleanupList(serialized, metadata.lifecycleUpgradeCleanup.shortcuts);
+    AppendNamedCleanupList(serialized, metadata.lifecycleUpgradeCleanup.startup);
+    AppendCleanupRules(serialized, metadata.lifecycleUpgradeCleanup.extraPaths);
 
     for (size_t i = 0; i < metadata.extendedPayloadMappings.size(); ++i) {
         const auto& extMapping = metadata.extendedPayloadMappings[i];
@@ -434,17 +403,10 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
         serialized.insert(serialized.end(), targetPathLenBytes, targetPathLenBytes + sizeof(uint32_t));
         serialized.insert(serialized.end(), extMapping.targetPath.begin(), extMapping.targetPath.end());
         
-        const uint8_t* dirTypeBytes = reinterpret_cast<const uint8_t*>(&extMapping.targetDirType);
-        serialized.insert(serialized.end(), dirTypeBytes, dirTypeBytes + sizeof(SpecialDirectoryType));
-
-        if (header.version >= 17) {
-            serialized.push_back(extMapping.appendDirectoryName ? 1 : 0);
-        }
-        
-        uint32_t customPathLen = static_cast<uint32_t>(extMapping.customTargetPath.length());
-        const uint8_t* customPathLenBytes = reinterpret_cast<const uint8_t*>(&customPathLen);
-        serialized.insert(serialized.end(), customPathLenBytes, customPathLenBytes + sizeof(uint32_t));
-        serialized.insert(serialized.end(), extMapping.customTargetPath.begin(), extMapping.customTargetPath.end());
+        uint32_t targetLen = static_cast<uint32_t>(extMapping.target.length());
+        const uint8_t* targetLenBytes = reinterpret_cast<const uint8_t*>(&targetLen);
+        serialized.insert(serialized.end(), targetLenBytes, targetLenBytes + sizeof(uint32_t));
+        serialized.insert(serialized.end(), extMapping.target.begin(), extMapping.target.end());
         
         uint32_t fileCount = static_cast<uint32_t>(extMapping.fileIndex.size());
         const uint8_t* fileCountBytes = reinterpret_cast<const uint8_t*>(&fileCount);
@@ -513,17 +475,12 @@ ExtendedFolderMapping MetadataGenerator::createExtendedFolderMapping(const Compr
     mapping.fileIndex = result.fileIndex;
     
 
-    mapping.targetDirType = SpecialDirectoryType::INSTALL_DIRECTORY;
-    mapping.customTargetPath = "";
-    mapping.appendDirectoryName = true;
-    
     const std::string folderId = mapping.folderId;
     for (const auto& folderTarget : config.layout.folders) {
         if ((!folderId.empty() && folderTarget.id == folderId) ||
             FolderSourceName(folderTarget.source) == folderName) {
-            mapping.targetDirType = MapDestinationType(folderTarget.destination.type);
-            mapping.customTargetPath = DestinationTypeToPathToken(folderTarget.destination);
-            mapping.appendDirectoryName = folderTarget.destination.appendDirectoryName;
+            mapping.target = folderTarget.target;
+            mapping.targetPath = folderTarget.target;
             break;
         }
     }

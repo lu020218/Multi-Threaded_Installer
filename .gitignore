@@ -40,3 +40,4 @@ build/ZERO_CHECK.vcxproj.filters
 *.vcxproj
 *.filters
 /test/build
+/build_codex

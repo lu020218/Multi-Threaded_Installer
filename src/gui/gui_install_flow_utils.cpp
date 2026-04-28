@@ -32,30 +32,16 @@ bool ConfirmCleanupOldInstall(HWND hWnd,
 
     InstallerPathResolver pathResolver;
     const std::string installPathUtf8 = WideToUtf8(installPath);
-    bool installDirectoryAppendName = true;
-    for (const auto& mapping : metadata.extendedPayloadMappings) {
-        if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
-            installDirectoryAppendName = mapping.appendDirectoryName;
-            break;
-        }
-    }
-
-    const std::string resolvedInstallRoot = pathResolver.resolveFinalPath(
-        installPathUtf8,
-        SpecialDirectoryType::INSTALL_DIRECTORY,
-        resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName),
-        installDirectoryAppendName);
+    const std::string resolvedInstallRoot = pathResolver.expandEnvironmentVariables(installPathUtf8);
 
     std::string previousManifest;
     std::string previousInstallDir;
-    const std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(metadata.appId,
-                                metadata.compatibilityLegacyAppIds,
-                                metadata.appName);
-    if (!resolveExistingInstallInfo(identityCandidates,
-                                    pathResolver,
-                                    previousManifest,
-                                    previousInstallDir)) {
+    const auto installDirIt = metadata.installInfo.values.find("installDir");
+    if (installDirIt == metadata.installInfo.values.end() ||
+        !resolveInstallInfoFromRegistry(metadata.installInfo.path,
+                                        installDirIt->second.key,
+                                        previousManifest,
+                                        previousInstallDir)) {
         return false;
     }
 
@@ -82,20 +68,8 @@ bool ConfirmCleanupOldInstall(HWND hWnd,
 
 std::wstring ResolveSelectedInstallPath(const InstallConfig& config,
                                         const std::wstring& selectedPath) {
-    std::wstring finalPath = selectedPath;
-    const std::wstring effectiveDirectoryName = ResolveEffectiveDirectoryNameFromConfig(config);
-    if (!config.installDirectoryAppendName || effectiveDirectoryName.empty()) {
-        return finalPath;
-    }
-
-    const std::filesystem::path selectedFs = selectedPath;
-    const std::wstring appNameLower = ToLowerString(effectiveDirectoryName);
-    const std::wstring selectedNameLower = ToLowerString(selectedFs.filename().wstring());
-    if (selectedNameLower == appNameLower) {
-        return selectedFs.wstring();
-    }
-
-    return (selectedFs / effectiveDirectoryName).wstring();
+    (void)config;
+    return selectedPath;
 }
 
 void UpdateInstallButtonEnabled(CButtonUI* installButton,

@@ -142,16 +142,111 @@ bool ParseInstallStateModeValue(const std::string& raw,
         out = InstallStateMode::REGISTRY;
         return true;
     }
-    if (normalized == "file") {
-        out = InstallStateMode::FILE;
-        return true;
-    }
-    if (normalized == "both") {
-        out = InstallStateMode::BOTH;
-        return true;
-    }
-    lastError = "Invalid field 'install.installState.mode': expected 'registry', 'file', or 'both'";
+    lastError = "Invalid field 'install.installInfo.mode': expected 'registry'";
     return false;
+}
+
+bool ParseUninstallEntryScopeValue(const std::string& raw,
+                                   UninstallEntryScope& out,
+                                   std::string& lastError,
+                                   const std::string& fieldLabel) {
+    const std::string normalized = ToLowerCopy(raw);
+    if (normalized == "currentuser") {
+        out = UninstallEntryScope::CURRENT_USER;
+        return true;
+    }
+    if (normalized == "localmachine") {
+        out = UninstallEntryScope::LOCAL_MACHINE;
+        return true;
+    }
+    if (normalized == "wow6432") {
+        out = UninstallEntryScope::WOW6432;
+        return true;
+    }
+    if (normalized == "any") {
+        out = UninstallEntryScope::ANY;
+        return true;
+    }
+    lastError = "Invalid field '" + fieldLabel + "': expected 'currentUser', 'localMachine', 'wow6432', or 'any'";
+    return false;
+}
+
+bool ParseRegistryLookupArray(const json& arrayValue,
+                              const std::string& fieldLabel,
+                              std::vector<RegistryLookupEntry>& out,
+                              std::string& lastError) {
+    if (!arrayValue.is_array()) {
+        lastError = "Invalid field '" + fieldLabel + "': expected array";
+        return false;
+    }
+    out.clear();
+    for (const auto& item : arrayValue) {
+        if (!item.is_object()) {
+            lastError = "Invalid field '" + fieldLabel + "[]': expected object";
+            return false;
+        }
+        RegistryLookupEntry entry;
+        if (!GetRequiredString(item, "path", entry.path, lastError) ||
+            !GetRequiredString(item, "key", entry.key, lastError)) {
+            lastError = "Invalid field '" + fieldLabel + "[]': missing required 'path' or 'key'";
+            return false;
+        }
+        out.push_back(std::move(entry));
+    }
+    return true;
+}
+
+bool ParseNamedCleanupArray(const json& arrayValue,
+                            const std::string& fieldLabel,
+                            std::vector<NamedCleanupEntry>& out,
+                            std::string& lastError) {
+    if (!arrayValue.is_array()) {
+        lastError = "Invalid field '" + fieldLabel + "': expected array";
+        return false;
+    }
+    out.clear();
+    for (const auto& item : arrayValue) {
+        if (!item.is_object()) {
+            lastError = "Invalid field '" + fieldLabel + "[]': expected object";
+            return false;
+        }
+        NamedCleanupEntry entry;
+        if (!GetRequiredString(item, "name", entry.name, lastError)) {
+            lastError = "Invalid field '" + fieldLabel + "[]': missing required 'name'";
+            return false;
+        }
+        out.push_back(std::move(entry));
+    }
+    return true;
+}
+
+bool ParseUninstallEntryCleanupArray(const json& arrayValue,
+                                     const std::string& fieldLabel,
+                                     std::vector<UninstallEntryCleanup>& out,
+                                     std::string& lastError) {
+    if (!arrayValue.is_array()) {
+        lastError = "Invalid field '" + fieldLabel + "': expected array";
+        return false;
+    }
+    out.clear();
+    for (const auto& item : arrayValue) {
+        if (!item.is_object()) {
+            lastError = "Invalid field '" + fieldLabel + "[]': expected object";
+            return false;
+        }
+        UninstallEntryCleanup entry;
+        if (!GetRequiredString(item, "name", entry.name, lastError)) {
+            lastError = "Invalid field '" + fieldLabel + "[]': missing required 'name'";
+            return false;
+        }
+        std::string scope = "any";
+        if (!GetOptionalString(item, "scope", scope, lastError) ||
+            !ParseUninstallEntryScopeValue(scope, entry.scope, lastError, fieldLabel + "[].scope")) {
+            return false;
+        }
+        out.push_back(std::move(entry));
+    }
+    return true;
 }
 
 bool ParseComponentSourceTypeValue(const std::string& raw,
@@ -256,6 +351,8 @@ bool ParseInstallConfig(const json& root, PackagerInstallConfig& out, std::strin
         !GetOptionalBool(section, "autoCleanOldInstall", out.autoCleanOldInstall, lastError) ||
         !GetOptionalBool(section, "autoStartup", out.autoStartup, lastError) ||
         !GetOptionalBool(section, "desktopIcon", out.desktopIcon, lastError) ||
+        !GetOptionalBool(section, "useMutex", out.useMutex, lastError) ||
+        !GetOptionalString(section, "mutexName", out.mutexName, lastError) ||
         !GetOptionalUInt64(section, "sparseFileThresholdBytes", out.sparseFileThresholdBytes, lastError) ||
         !GetOptionalStringList(section, "killProcesses", out.killProcesses, lastError)) {
         return false;
@@ -276,21 +373,57 @@ bool ParseInstallConfig(const json& root, PackagerInstallConfig& out, std::strin
         out.minWindows.build = static_cast<uint32_t>(build);
     }
 
-    json installState;
-    if (GetOptionalObject(section, "installState", installState)) {
-        if (installState.contains("mode")) {
+    json installInfo;
+    if (GetOptionalObject(section, "installInfo", installInfo)) {
+        if (installInfo.contains("mode")) {
             std::string mode;
-            if (!JsonValueToString(installState["mode"], mode) ||
-                !ParseInstallStateModeValue(mode, out.installState.mode, lastError)) {
+            if (!JsonValueToString(installInfo["mode"], mode) ||
+                !ParseInstallStateModeValue(mode, out.installInfo.mode, lastError)) {
                 return false;
             }
         }
-        if (!GetOptionalString(installState, "registryPath", out.installState.registryPath, lastError) ||
-            !GetOptionalString(installState, "registryKey", out.installState.registryKey, lastError) ||
-            !GetOptionalString(installState, "filePath", out.installState.filePath, lastError) ||
-            !GetOptionalBool(installState, "useMutex", out.installState.useMutex, lastError) ||
-            !GetOptionalString(installState, "mutexName", out.installState.mutexName, lastError)) {
+        if (!GetOptionalString(installInfo, "path", out.installInfo.path, lastError)) {
             return false;
+        }
+        json values;
+        if (GetOptionalObject(installInfo, "values", values)) {
+            out.installInfo.values.clear();
+            for (auto it = values.begin(); it != values.end(); ++it) {
+                if (!it.value().is_object()) {
+                    lastError = "Invalid field 'install.installInfo.values." + it.key() + "': expected object";
+                    return false;
+                }
+                InstallInfoValueConfig entry;
+                if (!GetRequiredString(it.value(), "key", entry.key, lastError)) {
+                    lastError = "Missing required field 'install.installInfo.values." + it.key() + ".key'";
+                    return false;
+                }
+                if (it.value().contains("value")) {
+                    if (it.value()["value"].is_number_integer() || it.value()["value"].is_number_unsigned()) {
+                        entry.type = RegistryValueType::DWORD;
+                        entry.value = std::to_string(it.value()["value"].get<uint32_t>());
+                    } else if (!JsonValueToString(it.value()["value"], entry.value)) {
+                        lastError = "Invalid field 'install.installInfo.values." + it.key() + ".value': expected string or integer";
+                        return false;
+                    }
+                }
+                if (it.value().contains("type")) {
+                    std::string type;
+                    if (!JsonValueToString(it.value()["type"], type)) {
+                        lastError = "Invalid field 'install.installInfo.values." + it.key() + ".type': expected string";
+                        return false;
+                    }
+                    type = ToLowerCopy(type);
+                    if (type == "dword") {
+                        entry.type = RegistryValueType::DWORD;
+                    } else if (type == "expand" || type == "expand_string") {
+                        entry.type = RegistryValueType::EXPAND_STRING;
+                    } else {
+                        entry.type = RegistryValueType::STRING;
+                    }
+                }
+                out.installInfo.values.emplace(it.key(), std::move(entry));
+            }
         }
     }
 
@@ -393,14 +526,8 @@ bool ParseLayoutConfig(const json& root, LayoutConfig& out, std::string& lastErr
             !GetRequiredString(folderJson, "source", folder.source, lastError)) {
             return false;
         }
-        json destination;
-        if (!GetRequiredObject(folderJson, "destination", destination, lastError)) {
-            lastError = "Missing required field 'layout.folders[].destination'";
-            return false;
-        }
-        if (!GetRequiredString(destination, "type", folder.destination.type, lastError) ||
-            !GetOptionalString(destination, "path", folder.destination.path, lastError) ||
-            !GetOptionalBool(destination, "appendDirectoryName", folder.destination.appendDirectoryName, lastError)) {
+        if (!GetRequiredString(folderJson, "target", folder.target, lastError)) {
+            lastError = "Missing required field 'layout.folders[].target'";
             return false;
         }
         out.folders.push_back(std::move(folder));
@@ -513,17 +640,6 @@ bool ParseLifecycleConfig(const json& root, LifecycleConfig& out, std::string& l
         return false;
     }
 
-    json compatibility;
-    if (GetOptionalObject(section, "compatibility", compatibility)) {
-        if (!GetOptionalStringList(compatibility, "legacyAppIds", out.compatibility.legacyAppIds, lastError) ||
-            !GetOptionalStringList(compatibility,
-                                   "legacyDesktopShortcutNames",
-                                   out.compatibility.legacyDesktopShortcutNames,
-                                   lastError)) {
-            return false;
-        }
-    }
-
     json registry;
     if (GetOptionalObject(section, "registry", registry) && registry.contains("onInstall")) {
         if (!ParseRegistryEntryArray(registry["onInstall"],
@@ -538,14 +654,15 @@ bool ParseLifecycleConfig(const json& root, LifecycleConfig& out, std::string& l
     if (GetOptionalObject(section, "cleanup", cleanup)) {
         json onUpgrade;
         if (GetOptionalObject(cleanup, "onUpgrade", onUpgrade)) {
+            if (onUpgrade.contains("installRoots") &&
+                !ParseRegistryLookupArray(onUpgrade["installRoots"],
+                                          "lifecycle.cleanup.onUpgrade.installRoots",
+                                          out.cleanup.onUpgrade.installRoots,
+                                          lastError)) {
+                return false;
+            }
             json registryJson;
             if (GetOptionalObject(onUpgrade, "registry", registryJson)) {
-                if (!GetOptionalBool(registryJson,
-                                     "deleteFromManifest",
-                                     out.cleanup.onUpgrade.registry.deleteFromManifest,
-                                     lastError)) {
-                    return false;
-                }
                 if (registryJson.contains("legacyKeys") &&
                     !ParseRegistryEntryArray(registryJson["legacyKeys"],
                                              "lifecycle.cleanup.onUpgrade.registry.legacyKeys",
@@ -553,6 +670,32 @@ bool ParseLifecycleConfig(const json& root, LifecycleConfig& out, std::string& l
                                              lastError)) {
                     return false;
                 }
+            }
+
+            json uninstallEntries;
+            if (GetOptionalObject(onUpgrade, "uninstallEntries", uninstallEntries) &&
+                uninstallEntries.contains("entries") &&
+                !ParseUninstallEntryCleanupArray(uninstallEntries["entries"],
+                                                 "lifecycle.cleanup.onUpgrade.uninstallEntries.entries",
+                                                 out.cleanup.onUpgrade.uninstallEntries,
+                                                 lastError)) {
+                return false;
+            }
+
+            if (onUpgrade.contains("shortcuts") &&
+                !ParseNamedCleanupArray(onUpgrade["shortcuts"],
+                                        "lifecycle.cleanup.onUpgrade.shortcuts",
+                                        out.cleanup.onUpgrade.shortcuts,
+                                        lastError)) {
+                return false;
+            }
+
+            if (onUpgrade.contains("startup") &&
+                !ParseNamedCleanupArray(onUpgrade["startup"],
+                                        "lifecycle.cleanup.onUpgrade.startup",
+                                        out.cleanup.onUpgrade.startup,
+                                        lastError)) {
+                return false;
             }
 
             if (onUpgrade.contains("extraPaths") &&
@@ -565,10 +708,55 @@ bool ParseLifecycleConfig(const json& root, LifecycleConfig& out, std::string& l
         }
 
         json onUninstall;
-        if (GetOptionalObject(cleanup, "onUninstall", onUninstall) && onUninstall.contains("paths")) {
-            if (!ParseCleanupRuleArray(onUninstall["paths"],
+        if (GetOptionalObject(cleanup, "onUninstall", onUninstall)) {
+            if (onUninstall.contains("processes") &&
+                !ParseNamedCleanupArray(onUninstall["processes"],
+                                        "lifecycle.cleanup.onUninstall.processes",
+                                        out.cleanup.onUninstall.processes,
+                                        lastError)) {
+                return false;
+            }
+
+            json uninstallRegistry;
+            if (GetOptionalObject(onUninstall, "registry", uninstallRegistry) &&
+                uninstallRegistry.contains("legacyKeys") &&
+                !ParseRegistryEntryArray(uninstallRegistry["legacyKeys"],
+                                         "lifecycle.cleanup.onUninstall.registry.legacyKeys",
+                                         out.cleanup.onUninstall.registry.legacyKeys,
+                                         lastError)) {
+                return false;
+            }
+
+            json uninstallEntries;
+            if (GetOptionalObject(onUninstall, "uninstallEntries", uninstallEntries) &&
+                uninstallEntries.contains("entries") &&
+                !ParseUninstallEntryCleanupArray(uninstallEntries["entries"],
+                                                 "lifecycle.cleanup.onUninstall.uninstallEntries.entries",
+                                                 out.cleanup.onUninstall.uninstallEntries,
+                                                 lastError)) {
+                return false;
+            }
+
+            if (onUninstall.contains("shortcuts") &&
+                !ParseNamedCleanupArray(onUninstall["shortcuts"],
+                                        "lifecycle.cleanup.onUninstall.shortcuts",
+                                        out.cleanup.onUninstall.shortcuts,
+                                        lastError)) {
+                return false;
+            }
+
+            if (onUninstall.contains("startup") &&
+                !ParseNamedCleanupArray(onUninstall["startup"],
+                                        "lifecycle.cleanup.onUninstall.startup",
+                                        out.cleanup.onUninstall.startup,
+                                        lastError)) {
+                return false;
+            }
+
+            if (onUninstall.contains("paths") &&
+                !ParseCleanupRuleArray(onUninstall["paths"],
                                        "lifecycle.cleanup.onUninstall.paths",
-                                       out.cleanup.onUninstallPaths,
+                                       out.cleanup.onUninstall.paths,
                                        lastError)) {
                 return false;
             }

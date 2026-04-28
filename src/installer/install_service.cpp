@@ -31,8 +31,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                            const InstallServiceCallbacks& callbacks) {
     InstallServiceResult result;
     HANDLE installMutex = nullptr;
-    bool installStateConfigApplied = false;
+    bool coreInstallInfoApplied = false;
     InstallProgressReporter reporter(callbacks);
+    InstallExecutionPlan plan;
 
     auto releaseResources = [&]() {
         if (installMutex) {
@@ -56,9 +57,14 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                             reporter.CurrentPhase(),
                             reporter.CurrentPhaseProgress(),
                             cancelled ? "Installation cancelled." : "Installation failed.");
-        if (installStateConfigApplied) {
-            applyInstallState(metadata.installStateConfig, "failed", pathResolver);
-            installStateConfigApplied = false;
+        if (coreInstallInfoApplied) {
+            applyCoreInstallInfo(metadata.installInfo,
+                                 plan.pathDecision.resolvedInstallRoot,
+                                 metadata.appVersion,
+                                 metadata.appName,
+                                 "install_failed",
+                                 pathResolver);
+            coreInstallInfoApplied = false;
         }
         releaseResources();
     };
@@ -79,7 +85,6 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                             0.0f,
                             "Running installation prechecks...");
 
-        InstallExecutionPlan plan;
         std::string planError;
         if (!BuildInstallExecutionPlan(metadata, pathResolver, options, plan, planError)) {
             markFailed(planError.empty() ? "Failed to resolve install execution plan."
@@ -154,8 +159,13 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             return result;
         }
 
-        applyInstallState(metadata.installStateConfig, "installing", pathResolver);
-        installStateConfigApplied = true;
+        applyCoreInstallInfo(metadata.installInfo,
+                             plan.pathDecision.resolvedInstallRoot,
+                             metadata.appVersion,
+                             metadata.appName,
+                             "installing",
+                             pathResolver);
+        coreInstallInfoApplied = true;
 
         InstallExecutionOutput executionOutput;
         if (!ExecuteInstallExecution(metadata,
@@ -195,7 +205,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             markFailed("Installation finalization failed.", false, true);
             return result;
         }
-        installStateConfigApplied = false;
+        coreInstallInfoApplied = false;
         releaseResources();
 
         if (!executionOutput.failedOptionalComponentMessages.empty()) {

@@ -14,21 +14,8 @@ enum class CompressionAlgorithm {
     ZSTD
 };
 
-enum class SpecialDirectoryType {
-    INSTALL_DIRECTORY,
-    CUSTOM,
-    PROGRAM_FILES,
-    PROGRAM_FILES_X86,
-    APPDATA_ROAMING,
-    APPDATA_LOCAL,
-    PROGRAM_DATA,
-    USER_PROFILE
-};
-
 enum class InstallStateMode {
-    REGISTRY,
-    FILE,
-    BOTH
+    REGISTRY
 };
 
 enum class RegistryValueType {
@@ -41,20 +28,6 @@ enum class ComponentSourceType : uint8_t {
     EMBEDDED = 0,
     LOCAL = 1,
     DOWNLOAD = 2
-};
-
-struct InstallStateConfig {
-    InstallStateMode mode;
-    std::string registryPath;
-    std::string registryKey;
-    std::string filePath;
-    bool useMutex;
-    std::string mutexName;
-
-    InstallStateConfig()
-        : mode(InstallStateMode::REGISTRY),
-          registryKey("InstallState"),
-          useMutex(true) {}
 };
 
 struct FolderInfo {
@@ -78,6 +51,48 @@ struct RegistryEntry {
 
     RegistryEntry()
         : type(RegistryValueType::STRING) {}
+};
+
+struct RegistryLookupEntry {
+    std::string path;
+    std::string key;
+};
+
+enum class UninstallEntryScope : uint8_t {
+    CURRENT_USER = 0,
+    LOCAL_MACHINE = 1,
+    WOW6432 = 2,
+    ANY = 3
+};
+
+struct UninstallEntryCleanup {
+    std::string name;
+    UninstallEntryScope scope;
+
+    UninstallEntryCleanup()
+        : scope(UninstallEntryScope::ANY) {}
+};
+
+struct NamedCleanupEntry {
+    std::string name;
+};
+
+struct InstallInfoValueConfig {
+    std::string key;
+    std::string value;
+    RegistryValueType type;
+
+    InstallInfoValueConfig()
+        : type(RegistryValueType::STRING) {}
+};
+
+struct InstallInfoConfig {
+    InstallStateMode mode;
+    std::string path;
+    std::unordered_map<std::string, InstallInfoValueConfig> values;
+
+    InstallInfoConfig()
+        : mode(InstallStateMode::REGISTRY) {}
 };
 
 struct LocalInstallerConfig {
@@ -155,16 +170,26 @@ struct UninstallCleanupRule {
     UninstallCleanupRule() : recursive(true), onlyIfEmpty(false) {}
 };
 
-struct UpgradeCleanupRegistryConfig {
-    bool deleteFromManifest;
+struct CleanupRegistryConfig {
     std::vector<RegistryEntry> legacyKeys;
-
-    UpgradeCleanupRegistryConfig() : deleteFromManifest(true) {}
 };
 
 struct UpgradeCleanupConfig {
-    UpgradeCleanupRegistryConfig registry;
+    std::vector<RegistryLookupEntry> installRoots;
+    CleanupRegistryConfig registry;
+    std::vector<UninstallEntryCleanup> uninstallEntries;
+    std::vector<NamedCleanupEntry> shortcuts;
+    std::vector<NamedCleanupEntry> startup;
     std::vector<UninstallCleanupRule> extraPaths;
+};
+
+struct UninstallCleanupConfig {
+    std::vector<NamedCleanupEntry> processes;
+    CleanupRegistryConfig registry;
+    std::vector<UninstallEntryCleanup> uninstallEntries;
+    std::vector<NamedCleanupEntry> shortcuts;
+    std::vector<NamedCleanupEntry> startup;
+    std::vector<UninstallCleanupRule> paths;
 };
 
 struct UiComponentSelectionConfig {
@@ -234,7 +259,9 @@ struct PackagerInstallConfig {
     MinWindowsConfig minWindows;
     uint64_t sparseFileThresholdBytes;
     std::vector<std::string> killProcesses;
-    InstallStateConfig installState;
+    bool useMutex;
+    std::string mutexName;
+    InstallInfoConfig installInfo;
 
     PackagerInstallConfig()
         : defaultDir("%ProgramFiles%"),
@@ -242,7 +269,8 @@ struct PackagerInstallConfig {
           autoCleanOldInstall(false),
           autoStartup(false),
           desktopIcon(false),
-          sparseFileThresholdBytes(4 * 1024 * 1024) {}
+          sparseFileThresholdBytes(4 * 1024 * 1024),
+          useMutex(true) {}
 };
 
 struct UiDesktopShortcutConfig {
@@ -257,30 +285,15 @@ struct UiConfig {
     UiComponentSelectionConfig componentSelection;
 };
 
-struct LayoutFolderDestination {
-    std::string type;
-    std::string path;
-    bool appendDirectoryName;
-
-    LayoutFolderDestination()
-        : type("install"),
-          appendDirectoryName(true) {}
-};
-
 struct LayoutFolderConfig {
     std::string id;
     std::string source;
-    LayoutFolderDestination destination;
+    std::string target;
 };
 
 struct LayoutConfig {
     std::vector<LayoutFolderConfig> folders;
     std::vector<ComponentConfig> components;
-};
-
-struct LifecycleCompatibilityConfig {
-    std::vector<std::string> legacyAppIds;
-    std::vector<std::string> legacyDesktopShortcutNames;
 };
 
 struct LifecycleRegistryConfig {
@@ -289,11 +302,10 @@ struct LifecycleRegistryConfig {
 
 struct LifecycleCleanupConfig {
     UpgradeCleanupConfig onUpgrade;
-    std::vector<UninstallCleanupRule> onUninstallPaths;
+    UninstallCleanupConfig onUninstall;
 };
 
 struct LifecycleConfig {
-    LifecycleCompatibilityConfig compatibility;
     LifecycleRegistryConfig registry;
     LifecycleCleanupConfig cleanup;
 };

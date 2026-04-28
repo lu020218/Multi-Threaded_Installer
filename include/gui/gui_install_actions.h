@@ -16,7 +16,6 @@ bool TryBuildInstallStartRequest(HWND hWnd,
                                  CEditUI* installPathEdit,
                                  const InstallConfig& config,
                                  InstallStartRequest& request);
-std::vector<std::string> BuildIdentityCandidatesFromConfig(const InstallConfig& config);
 void RunPostInstallActions(HWND hWnd,
                            CPaintManagerUI& manager,
                            CEditUI* installPathEdit,

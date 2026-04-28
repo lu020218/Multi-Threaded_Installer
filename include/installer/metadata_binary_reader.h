@@ -58,5 +58,17 @@ bool ReadUiLinks(const std::vector<uint8_t>& data,
 bool ReadCleanupRules(const std::vector<uint8_t>& data,
                       size_t& offset,
                       std::vector<UninstallCleanupRule>& out);
+bool ReadRegistryLookupList(const std::vector<uint8_t>& data,
+                            size_t& offset,
+                            std::vector<RegistryLookupEntry>& out);
+bool ReadNamedCleanupList(const std::vector<uint8_t>& data,
+                          size_t& offset,
+                          std::vector<NamedCleanupEntry>& out);
+bool ReadUninstallEntryCleanupList(const std::vector<uint8_t>& data,
+                                   size_t& offset,
+                                   std::vector<UninstallEntryCleanup>& out);
+bool ReadInstallInfoConfig(const std::vector<uint8_t>& data,
+                           size_t& offset,
+                           InstallInfoConfig& out);
 
 }  // namespace MultiThreadedInstaller

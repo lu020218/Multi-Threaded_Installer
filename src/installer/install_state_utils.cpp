@@ -1,159 +1,89 @@
 #include "installer/install_state_utils.h"
-#include "installer/file_system_operator.h"
-#include "installer/installer_helpers.h"
+
 #include "installer/registry_utils.h"
 #include "common/utf8_utils.h"
-#include <algorithm>
-#include <cctype>
-#include <filesystem>
-#include <fstream>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace MultiThreadedInstaller {
 
 namespace {
 
-std::string normalizeRegistrySubkey(const std::string& rawSubkey) {
-    std::string normalized;
-    normalized.reserve(rawSubkey.size());
-
-    bool previousSlash = false;
-    for (char ch : rawSubkey) {
-        char current = (ch == '/') ? '\\' : ch;
-        if (current == '\\') {
-            if (previousSlash) {
-                continue;
-            }
-            previousSlash = true;
-        } else {
-            previousSlash = false;
-        }
-        normalized.push_back(current);
+std::string replaceAll(std::string value, const std::string& token, const std::string& replacement) {
+    if (token.empty()) {
+        return value;
     }
-
-    size_t start = 0;
-    while (start < normalized.size() && normalized[start] == '\\') {
-        ++start;
+    size_t pos = 0;
+    while ((pos = value.find(token, pos)) != std::string::npos) {
+        value.replace(pos, token.size(), replacement);
+        pos += replacement.size();
     }
+    return value;
+}
 
-    size_t end = normalized.size();
-    while (end > start && normalized[end - 1] == '\\') {
-        --end;
-    }
-
-    return normalized.substr(start, end - start);
+std::string expandInstallInfoValue(const std::string& rawValue,
+                                   const std::string& installDir,
+                                   const std::string& version,
+                                   const std::string& appName,
+                                   const std::string& stateValue,
+                                   InstallerPathResolver& resolver) {
+    std::string expanded = rawValue;
+    expanded = replaceAll(expanded, "%InstallDir%", installDir);
+    expanded = replaceAll(expanded, "%Version%", version);
+    expanded = replaceAll(expanded, "%AppName%", appName);
+    expanded = replaceAll(expanded, "%InstallState%", stateValue);
+    return resolver.expandEnvironmentVariables(expanded);
 }
 
 } // namespace
 
-bool applyInstallStateRegistry(const InstallStateConfig& config, const std::string& stateValue) {
-#ifdef _WIN32
-    if (config.registryPath.empty()) {
-        return false;
-    }
-    
-    std::string path = config.registryPath;
-    std::string pathUpper = path;
-    std::transform(pathUpper.begin(), pathUpper.end(), pathUpper.begin(), ::toupper);
-    
-    HKEY root = nullptr;
-    std::string subkey;
-    const std::string hkcu = "HKEY_CURRENT_USER\\";
-    const std::string hklm = "HKEY_LOCAL_MACHINE\\";
-    const std::string hkcuShort = "HKCU\\";
-    const std::string hklmShort = "HKLM\\";
-    
-    if (pathUpper.rfind(hkcu, 0) == 0) {
-        root = HKEY_CURRENT_USER;
-        subkey = path.substr(hkcu.size());
-    } else if (pathUpper.rfind(hklm, 0) == 0) {
-        root = HKEY_LOCAL_MACHINE;
-        subkey = path.substr(hklm.size());
-    } else if (pathUpper.rfind(hkcuShort, 0) == 0) {
-        root = HKEY_CURRENT_USER;
-        subkey = path.substr(hkcuShort.size());
-    } else if (pathUpper.rfind(hklmShort, 0) == 0) {
-        root = HKEY_LOCAL_MACHINE;
-        subkey = path.substr(hklmShort.size());
-    } else {
+bool applyCoreInstallInfo(const InstallInfoConfig& config,
+                          const std::string& installDir,
+                          const std::string& version,
+                          const std::string& appName,
+                          const std::string& stateValue,
+                          InstallerPathResolver& resolver) {
+    if (config.path.empty()) {
         return false;
     }
 
-    subkey = normalizeRegistrySubkey(subkey);
-    if (subkey.empty()) {
-        return false;
-    }
-
-    std::wstring subkeyW = Utf8ToWide(subkey);
-    if (subkeyW.empty()) {
-        return false;
-    }
-    HKEY key = nullptr;
-    DWORD disposition = 0;
-    LONG status = RegCreateKeyExW(root, subkeyW.c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, &disposition);
-    if (status != ERROR_SUCCESS) {
-        return false;
-    }
-    
-    const std::string& name = config.registryKey.empty() ? std::string("InstallState") : config.registryKey;
-    std::wstring nameW = Utf8ToWide(name);
-    std::wstring valueW = Utf8ToWide(stateValue);
-    if (nameW.empty()) {
-        RegCloseKey(key);
-        return false;
-    }
-    status = RegSetValueExW(key, nameW.c_str(), 0, REG_SZ,
-                            reinterpret_cast<const BYTE*>(valueW.c_str()),
-                            static_cast<DWORD>((valueW.size() + 1) * sizeof(wchar_t)));
-    RegCloseKey(key);
-    return status == ERROR_SUCCESS;
-#else
-    (void)config;
-    (void)stateValue;
-    return false;
-#endif
-}
-
-bool applyInstallStateFile(const InstallStateConfig& config, const std::string& stateValue,
-                           InstallerPathResolver& resolver) {
-    if (config.filePath.empty()) {
-        return false;
-    }
-    
-    std::string expandedPath = resolver.expandEnvironmentVariables(config.filePath);
-    if (expandedPath.empty()) {
-        return false;
-    }
-    
-    std::filesystem::path filePath = PathFromUtf8(expandedPath);
-    std::filesystem::path parent = filePath.parent_path();
-    if (!parent.empty()) {
-        FileSystemOperator fs;
-        if (!fs.createDirectoryRecursive(Utf8FromPath(parent))) {
-            return false;
+    bool wroteAny = false;
+    bool ok = true;
+    for (const auto& pair : config.values) {
+        const auto& valueConfig = pair.second;
+        if (valueConfig.key.empty()) {
+            continue;
         }
+        RegistryEntry entry;
+        entry.path = config.path;
+        entry.key = valueConfig.key;
+        entry.type = valueConfig.type;
+        entry.value = valueConfig.value;
+
+        const std::string expandedValue =
+            expandInstallInfoValue(valueConfig.value, installDir, version, appName, stateValue, resolver);
+        wroteAny = true;
+        ok = writeRegistryValue(entry, expandedValue, entry.type) && ok;
     }
-    
-    std::ofstream out(toLongPath(filePath), std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return false;
-    }
-    out.write(stateValue.c_str(), static_cast<std::streamsize>(stateValue.size()));
-    return static_cast<bool>(out);
+
+    return wroteAny && ok;
 }
 
-HANDLE acquireInstallMutex(const InstallStateConfig& config) {
+HANDLE acquireInstallMutex(bool useMutex, const std::string& mutexName) {
 #ifdef _WIN32
-    if (config.mutexName.empty()) {
+    if (!useMutex || mutexName.empty()) {
         return nullptr;
     }
-    std::wstring name = Utf8ToWide(config.mutexName);
+    std::wstring name = Utf8ToWide(mutexName);
     if (name.empty()) {
         return nullptr;
     }
-    HANDLE handle = CreateMutexW(nullptr, FALSE, name.c_str());
-    return handle;
+    return CreateMutexW(nullptr, FALSE, name.c_str());
 #else
-    (void)config;
+    (void)useMutex;
+    (void)mutexName;
     return nullptr;
 #endif
 }
@@ -168,29 +98,21 @@ void releaseInstallMutex(HANDLE handle) {
 #endif
 }
 
-void applyInstallState(const InstallStateConfig& config, const std::string& stateValue,
-                       InstallerPathResolver& resolver) {
-    if (config.mode == InstallStateMode::REGISTRY || config.mode == InstallStateMode::BOTH) {
-        applyInstallStateRegistry(config, stateValue);
+bool removeInstallInfoArtifacts(const InstallInfoConfig& config) {
+    if (config.path.empty()) {
+        return false;
     }
-    if (config.mode == InstallStateMode::FILE || config.mode == InstallStateMode::BOTH) {
-        applyInstallStateFile(config, stateValue, resolver);
-    }
-}
 
-bool removeInstallStateArtifacts(const InstallStateConfig& config, InstallerPathResolver& resolver) {
     bool ok = true;
-    if (config.mode == InstallStateMode::REGISTRY || config.mode == InstallStateMode::BOTH) {
-        RegistryEntry entry;
-        entry.path = config.registryPath;
-        entry.key = config.registryKey.empty() ? "InstallState" : config.registryKey;
-        ok = deleteRegistryValue(entry) && ok;
-    }
-    if (config.mode == InstallStateMode::FILE || config.mode == InstallStateMode::BOTH) {
-        std::string expanded = resolver.expandEnvironmentVariables(config.filePath);
-        if (!expanded.empty()) {
-            std::filesystem::remove(toLongPath(PathFromUtf8(expanded)));
+    for (const auto& pair : config.values) {
+        const auto& valueConfig = pair.second;
+        if (valueConfig.key.empty()) {
+            continue;
         }
+        RegistryEntry entry;
+        entry.path = config.path;
+        entry.key = valueConfig.key;
+        ok = deleteRegistryValue(entry) && ok;
     }
     return ok;
 }

@@ -8,6 +8,7 @@
 #include "installer/registry_utils.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 
 namespace MultiThreadedInstaller {
@@ -39,6 +40,26 @@ std::vector<std::string> CollectFilesRecursive(const std::vector<std::string>& r
     std::sort(files.begin(), files.end());
     files.erase(std::unique(files.begin(), files.end()), files.end());
     return files;
+}
+
+void AppendNamedCleanupEntry(std::vector<NamedCleanupEntry>& entries, const std::string& name) {
+    if (name.empty()) {
+        return;
+    }
+    std::string lowered = name;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    auto it = std::find_if(entries.begin(), entries.end(), [&](const NamedCleanupEntry& entry) {
+        std::string candidate = entry.name;
+        std::transform(candidate.begin(), candidate.end(), candidate.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return candidate == lowered;
+    });
+    if (it == entries.end()) {
+        NamedCleanupEntry entry;
+        entry.name = name;
+        entries.push_back(std::move(entry));
+    }
 }
 
 } // namespace
@@ -84,6 +105,13 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
     const std::string languageCode = ResolveLanguageCode(options.languageCode);
     const std::string desktopShortcutDisplayName =
         ResolveDesktopShortcutDisplayName(metadata, languageCode);
+    UninstallCleanupConfig manifestCleanup = metadata.lifecycleUninstallCleanup;
+    if (!plan.effectiveAppId.empty()) {
+        UninstallEntryCleanup uninstallEntry;
+        uninstallEntry.name = plan.effectiveAppId;
+        uninstallEntry.scope = UninstallEntryScope::ANY;
+        manifestCleanup.uninstallEntries.push_back(std::move(uninstallEntry));
+    }
 
     if (!result.installRootPath.empty()) {
         if (!plan.legacyDesktopShortcutCandidates.empty()) {
@@ -108,6 +136,7 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
             if (effectiveAutoStartup) {
                 if (setAutoStartup(metadata.appName, exePath)) {
                     reporter.EmitMessage(InstallServiceEventType::Info, "installAutoStartup enabled");
+                    AppendNamedCleanupEntry(manifestCleanup.startup, metadata.appName);
                 } else {
                     reporter.EmitMessage(InstallServiceEventType::Warning,
                                          "Failed to enable installAutoStartup");
@@ -116,12 +145,14 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
             if (effectiveDesktopIcons) {
                 if (createDesktopShortcut(desktopShortcutDisplayName, exePath)) {
                     reporter.EmitMessage(InstallServiceEventType::Info, "Desktop icon created");
+                    AppendNamedCleanupEntry(manifestCleanup.shortcuts, desktopShortcutDisplayName);
                 } else {
                     reporter.EmitMessage(InstallServiceEventType::Warning,
                                          "Failed to create desktop icon");
                 }
                 if (createStartMenuShortcut(desktopShortcutDisplayName, exePath, metadata.appName)) {
                     reporter.EmitMessage(InstallServiceEventType::Info, "Start menu shortcut created");
+                    AppendNamedCleanupEntry(manifestCleanup.shortcuts, desktopShortcutDisplayName);
                 } else {
                     reporter.EmitMessage(InstallServiceEventType::Warning,
                                          "Failed to create start menu shortcut");
@@ -156,19 +187,17 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
         if (!writeManifest(Utf8FromPath(localPath),
                            plan.effectiveAppId,
                            metadata.appName,
-                           metadata.compatibilityLegacyAppIds,
-                           metadata.compatibilityLegacyDesktopShortcutNames,
                            metadata.appVersion,
                            result.installRootPath,
                            result.installedRoots,
-                           metadata.lifecycleUninstallCleanupRules,
+                           manifestCleanup,
                            result.installedFiles,
                            effectiveRegistry,
                            effectiveKillProcesses,
                            effectiveAutoStartup,
                            effectiveDesktopIcons,
                            desktopShortcutDisplayName,
-                           metadata.installStateConfig,
+                           metadata.installInfo,
                            result.uninstallPath,
                            languageCode,
                            componentActions)) {
@@ -197,21 +226,16 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
             reporter.EmitMessage(InstallServiceEventType::Warning,
                                  "Failed to write uninstall registry entry");
         }
-        for (const auto& legacyId : metadata.compatibilityLegacyAppIds) {
-            deleteUninstallRegistryEntry(legacyId, perMachine);
-            deleteUninstallRegistryEntry(legacyId, !perMachine);
-        }
-        if (!metadata.appName.empty() &&
-            normalizePathForCompare(metadata.appName) !=
-                normalizePathForCompare(plan.effectiveAppId)) {
-            deleteUninstallRegistryEntry(metadata.appName, perMachine);
-            deleteUninstallRegistryEntry(metadata.appName, !perMachine);
-        }
     }
 #endif
     advanceFinalize(0.90f, "Writing uninstall registry");
 
-    applyInstallState(metadata.installStateConfig, "installed", pathResolver);
+    applyCoreInstallInfo(metadata.installInfo,
+                         result.installRootPath,
+                         metadata.appVersion,
+                         metadata.appName,
+                         "installed",
+                         pathResolver);
     advanceFinalize(1.0f, "Finalization complete");
     return true;
 }

@@ -298,18 +298,12 @@ InstallConfig CreateInstallConfigFromMetadata(const ExtendedInstallationMetadata
     config.appId = Utf8ToWide(resolveEffectiveAppId(metadata.appId, metadata.appName));
     config.directoryName =
         Utf8ToWide(resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName));
-    config.legacyAppIds.reserve(metadata.compatibilityLegacyAppIds.size());
-    for (const auto& legacyId : metadata.compatibilityLegacyAppIds) {
-        config.legacyAppIds.push_back(Utf8ToWide(legacyId));
-    }
     config.version = Utf8ToWide(metadata.appVersion);
     config.defaultInstallPath = Utf8ToWide(metadata.installDefaultDir);
-    for (const auto& entry : metadata.lifecycleInstallRegistry) {
-        if (entry.key == "InstallDir") {
-            config.registryPath = Utf8ToWide(entry.path);
-            config.registryKey = Utf8ToWide(entry.key);
-            break;
-        }
+    const auto installDirIt = metadata.installInfo.values.find("installDir");
+    if (installDirIt != metadata.installInfo.values.end()) {
+        config.registryPath = Utf8ToWide(metadata.installInfo.path);
+        config.registryKey = Utf8ToWide(installDirIt->second.key);
     }
     config.webPageUrl = Utf8ToWide(metadata.appWebsite);
     config.executableName = Utf8ToWide(metadata.appName + ".exe");
@@ -323,13 +317,6 @@ InstallConfig CreateInstallConfigFromMetadata(const ExtendedInstallationMetadata
         totalSize += mapping.originalSize;
     }
     config.requiredDiskSpace = totalSize;
-    config.installDirectoryAppendName = true;
-    for (const auto& mapping : metadata.extendedPayloadMappings) {
-        if (mapping.targetDirType == SpecialDirectoryType::INSTALL_DIRECTORY) {
-            config.installDirectoryAppendName = mapping.appendDirectoryName;
-            break;
-        }
-    }
     return config;
 }
 
@@ -412,9 +399,15 @@ bool TryResolveRepairInstallDir(const ExtendedInstallationMetadata& metadata,
                                 InstallerPathResolver& pathResolver,
                                 std::string& manifestPath,
                                 std::string& installDir) {
-    const std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(metadata.appId, metadata.compatibilityLegacyAppIds, metadata.appName);
-    return resolveExistingInstallInfo(identityCandidates, pathResolver, manifestPath, installDir) &&
+    (void)pathResolver;
+    const auto installDirIt = metadata.installInfo.values.find("installDir");
+    if (installDirIt == metadata.installInfo.values.end()) {
+        return false;
+    }
+    return resolveInstallInfoFromRegistry(metadata.installInfo.path,
+                                          installDirIt->second.key,
+                                          manifestPath,
+                                          installDir) &&
            !installDir.empty();
 }
 
@@ -477,9 +470,20 @@ std::string ResolveUninstallManifestPath(const ExtendedInstallationMetadata* met
     if (!metadata) {
         return {};
     }
-    const std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(metadata->appId, metadata->compatibilityLegacyAppIds, metadata->appName);
-    return resolveInstalledManifestPath(identityCandidates, exePath, resolver);
+    const auto installDirIt = metadata->installInfo.values.find("installDir");
+    if (installDirIt == metadata->installInfo.values.end()) {
+        return {};
+    }
+    std::string manifestPath;
+    std::string installDir;
+    if (resolveInstallInfoFromRegistry(metadata->installInfo.path,
+                                       installDirIt->second.key,
+                                       manifestPath,
+                                       installDir) &&
+        !manifestPath.empty()) {
+        return manifestPath;
+    }
+    return {};
 }
 
 InstallConfig BuildUninstallConfigFromManifest(const std::string& manifestPath) {
@@ -498,13 +502,6 @@ InstallConfig BuildUninstallConfigFromManifest(const std::string& manifestPath) 
         }
         if (!lang.empty()) {
             config.languageCode = Utf8ToWide(lang);
-        }
-        if (manifest.contains("compatibilityLegacyAppIds") && manifest["compatibilityLegacyAppIds"].is_array()) {
-            for (const auto& item : manifest["compatibilityLegacyAppIds"]) {
-                if (item.is_string()) {
-                    config.legacyAppIds.push_back(Utf8ToWide(item.get<std::string>()));
-                }
-            }
         }
     }
     return config;

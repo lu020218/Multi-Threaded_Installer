@@ -155,4 +155,29 @@ bool resolveExistingInstallInfo(const std::vector<std::string>& identityCandidat
     return false;
 }
 
+bool resolveInstallInfoFromRegistry(const std::string& registryPath,
+                                    const std::string& registryKey,
+                                    std::string& manifestPath,
+                                    std::string& installDir) {
+    manifestPath.clear();
+    installDir.clear();
+    if (registryPath.empty() || registryKey.empty()) {
+        return false;
+    }
+
+    std::string candidateInstallDir;
+    if (!readRegistryStringValue(registryPath, registryKey, candidateInstallDir) ||
+        !ExistingInstallDirectoryLooksValid(candidateInstallDir)) {
+        return false;
+    }
+
+    installDir = candidateInstallDir;
+    std::filesystem::path localManifest = PathFromUtf8(candidateInstallDir) / "install.manifest.json";
+    if (std::filesystem::exists(localManifest)) {
+        manifestPath = Utf8FromPath(localManifest);
+    }
+
+    return true;
+}
+
 }  // namespace MultiThreadedInstaller

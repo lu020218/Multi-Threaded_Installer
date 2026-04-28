@@ -35,45 +35,77 @@ static std::string GetManifestDisplayName(const json& manifest) {
     return manifest.value("appName", "");
 }
 
-static std::vector<std::string> GetManifestLegacyAppIds(const json& manifest) {
-    std::vector<std::string> legacyAppIds;
-    if (manifest.contains("legacyAppIds") && manifest["legacyAppIds"].is_array()) {
-        for (const auto& item : manifest["legacyAppIds"]) {
-            if (item.is_string()) {
-                legacyAppIds.push_back(item.get<std::string>());
-            }
+static std::vector<NamedCleanupEntry> GetManifestNamedEntries(const json& node) {
+    std::vector<NamedCleanupEntry> entries;
+    if (!node.is_array()) {
+        return entries;
+    }
+    for (const auto& item : node) {
+        if (!item.is_object()) {
+            continue;
+        }
+        NamedCleanupEntry entry;
+        entry.name = item.value("name", "");
+        if (!entry.name.empty()) {
+            entries.push_back(std::move(entry));
         }
     }
-    return legacyAppIds;
+    return entries;
 }
 
-static std::vector<std::string> GetManifestLegacyDesktopShortcutNames(const json& manifest) {
-    std::vector<std::string> names;
-    if (manifest.contains("legacyDesktopShortcutNames") &&
-        manifest["legacyDesktopShortcutNames"].is_array()) {
-        for (const auto& item : manifest["legacyDesktopShortcutNames"]) {
-            if (item.is_string()) {
-                names.push_back(item.get<std::string>());
-            }
+static std::vector<RegistryEntry> GetManifestRegistryEntries(const json& node) {
+    std::vector<RegistryEntry> entries;
+    if (!node.is_array()) {
+        return entries;
+    }
+    for (const auto& item : node) {
+        if (!item.is_object()) {
+            continue;
+        }
+        RegistryEntry entry;
+        entry.path = item.value("path", "");
+        entry.key = item.value("key", "");
+        entry.value = item.value("value", "");
+        entry.type = static_cast<RegistryValueType>(
+            item.value("type", static_cast<int>(RegistryValueType::STRING)));
+        if (!entry.path.empty()) {
+            entries.push_back(std::move(entry));
         }
     }
-    return names;
+    return entries;
 }
 
-static std::vector<UninstallCleanupRule> GetManifestCleanupRules(const json& manifest) {
+static std::vector<UninstallEntryCleanup> GetManifestUninstallEntries(const json& node) {
+    std::vector<UninstallEntryCleanup> entries;
+    if (!node.is_array()) {
+        return entries;
+    }
+    for (const auto& item : node) {
+        if (!item.is_object()) {
+            continue;
+        }
+        UninstallEntryCleanup entry;
+        entry.name = item.value("name", "");
+        entry.scope = static_cast<UninstallEntryScope>(
+            item.value("scope", static_cast<int>(UninstallEntryScope::ANY)));
+        if (!entry.name.empty()) {
+            entries.push_back(std::move(entry));
+        }
+    }
+    return entries;
+}
+
+static std::vector<UninstallCleanupRule> GetManifestCleanupRules(const json& node) {
     std::vector<UninstallCleanupRule> rules;
-    if (!manifest.contains("lifecycleUninstallCleanupRules") || !manifest["lifecycleUninstallCleanupRules"].is_array()) {
+    if (!node.is_array()) {
         return rules;
     }
-    for (const auto& item : manifest["lifecycleUninstallCleanupRules"]) {
+    for (const auto& item : node) {
         if (!item.is_object()) {
             continue;
         }
         UninstallCleanupRule rule;
-        if (!item.contains("path") || !item["path"].is_string()) {
-            continue;
-        }
-        rule.path = item["path"].get<std::string>();
+        rule.path = item.value("path", "");
         rule.recursive = item.value("recursive", true);
         rule.onlyIfEmpty = item.value("onlyIfEmpty", false);
         if (!rule.path.empty()) {
@@ -81,6 +113,62 @@ static std::vector<UninstallCleanupRule> GetManifestCleanupRules(const json& man
         }
     }
     return rules;
+}
+
+static UninstallCleanupConfig GetManifestUninstallCleanup(const json& manifest) {
+    UninstallCleanupConfig cleanup;
+    if (!manifest.contains("lifecycleUninstallCleanup") ||
+        !manifest["lifecycleUninstallCleanup"].is_object()) {
+        return cleanup;
+    }
+
+    const auto& node = manifest["lifecycleUninstallCleanup"];
+    if (node.contains("processes")) {
+        cleanup.processes = GetManifestNamedEntries(node["processes"]);
+    }
+    if (node.contains("registry") && node["registry"].is_object() &&
+        node["registry"].contains("legacyKeys")) {
+        cleanup.registry.legacyKeys = GetManifestRegistryEntries(node["registry"]["legacyKeys"]);
+    }
+    if (node.contains("uninstallEntries") && node["uninstallEntries"].is_object() &&
+        node["uninstallEntries"].contains("entries")) {
+        cleanup.uninstallEntries = GetManifestUninstallEntries(node["uninstallEntries"]["entries"]);
+    }
+    if (node.contains("shortcuts")) {
+        cleanup.shortcuts = GetManifestNamedEntries(node["shortcuts"]);
+    }
+    if (node.contains("startup")) {
+        cleanup.startup = GetManifestNamedEntries(node["startup"]);
+    }
+    if (node.contains("paths")) {
+        cleanup.paths = GetManifestCleanupRules(node["paths"]);
+    }
+    return cleanup;
+}
+
+static InstallInfoConfig GetManifestInstallInfo(const json& manifest) {
+    InstallInfoConfig config;
+    if (!manifest.contains("installInfo") || !manifest["installInfo"].is_object()) {
+        return config;
+    }
+    const auto& node = manifest["installInfo"];
+    config.mode = static_cast<InstallStateMode>(
+        node.value("mode", static_cast<int>(InstallStateMode::REGISTRY)));
+    config.path = node.value("path", "");
+    if (node.contains("values") && node["values"].is_object()) {
+        for (auto it = node["values"].begin(); it != node["values"].end(); ++it) {
+            if (!it.value().is_object()) {
+                continue;
+            }
+            InstallInfoValueConfig value;
+            value.key = it.value().value("key", "");
+            value.value = it.value().value("value", "");
+            value.type = static_cast<RegistryValueType>(
+                it.value().value("type", static_cast<int>(RegistryValueType::STRING)));
+            config.values[it.key()] = std::move(value);
+        }
+    }
+    return config;
 }
 
 static std::string ExpandInstallDirTokenLocal(const std::string& text,
@@ -109,6 +197,22 @@ static std::string ExpandCleanupRulePath(const UninstallCleanupRule& rule,
     std::string expanded = ExpandInstallDirTokenLocal(rule.path, installDir);
     return resolver.expandEnvironmentVariables(expanded);
 }
+
+#ifdef _WIN32
+static bool DeleteUninstallEntryByScope(const UninstallEntryCleanup& entry) {
+    switch (entry.scope) {
+    case UninstallEntryScope::CURRENT_USER:
+        return deleteUninstallRegistryEntry(entry.name, false);
+    case UninstallEntryScope::LOCAL_MACHINE:
+    case UninstallEntryScope::WOW6432:
+        return deleteUninstallRegistryEntry(entry.name, true);
+    case UninstallEntryScope::ANY:
+    default:
+        return deleteUninstallRegistryEntry(entry.name, false) ||
+               deleteUninstallRegistryEntry(entry.name, true);
+    }
+}
+#endif
 
 #ifdef _WIN32
 static bool executeShellCommandWithTimeout(const std::string& command,
@@ -266,11 +370,6 @@ bool uninstallFromManifest(const std::string& manifestPath,
 
     std::string appId = GetManifestAppId(manifest);
     std::string displayName = GetManifestDisplayName(manifest);
-    std::vector<std::string> compatibilityLegacyAppIds = GetManifestLegacyAppIds(manifest);
-    std::vector<std::string> compatibilityLegacyDesktopShortcutNames =
-        GetManifestLegacyDesktopShortcutNames(manifest);
-    std::vector<std::string> identityCandidates =
-        buildIdentityCandidates(appId, compatibilityLegacyAppIds, displayName);
     std::string installDir = manifest.value("installDir", "");
     bool installAutoStartup = manifest.value("installAutoStartup", false);
     bool installDesktopIcon = manifest.value("installDesktopIcon", false);
@@ -291,16 +390,8 @@ bool uninstallFromManifest(const std::string& manifestPath,
         }
     }
 
-    InstallStateConfig installStateConfig;
-    if (manifest.contains("installStateConfig")) {
-        const auto& state = manifest["installStateConfig"];
-        installStateConfig.mode = static_cast<InstallStateMode>(state.value("mode", 0));
-        installStateConfig.registryPath = state.value("registryPath", "");
-        installStateConfig.registryKey = state.value("registryKey", "");
-        installStateConfig.filePath = state.value("filePath", "");
-        installStateConfig.useMutex = state.value("useMutex", true);
-        installStateConfig.mutexName = state.value("mutexName", "");
-    }
+    InstallInfoConfig installInfo = GetManifestInstallInfo(manifest);
+    UninstallCleanupConfig uninstallCleanup = GetManifestUninstallCleanup(manifest);
 
     std::vector<ComponentExecutionRecord> componentActions;
     if (manifest.contains("componentActions") && manifest["componentActions"].is_array()) {
@@ -340,8 +431,6 @@ bool uninstallFromManifest(const std::string& manifestPath,
         }
     }
     console.showInfo("Manifest files: " + std::to_string(files.size()));
-    std::vector<UninstallCleanupRule> lifecycleUninstallCleanupRules = GetManifestCleanupRules(manifest);
-
     std::vector<std::string> cleanupRoots;
     if (manifest.contains("cleanupRoots") && manifest["cleanupRoots"].is_array()) {
         for (const auto& item : manifest["cleanupRoots"]) {
@@ -383,31 +472,29 @@ bool uninstallFromManifest(const std::string& manifestPath,
         console.showInfo("Cleanup root: " + root);
     }
 
+    std::vector<std::string> explicitProcessNames;
+    explicitProcessNames.reserve(uninstallCleanup.processes.size());
+    for (const auto& process : uninstallCleanup.processes) {
+        explicitProcessNames.push_back(process.name);
+    }
     std::vector<std::string> killTargets = buildKillProcessList(displayName, installKillProcesses);
+    for (const auto& processName : explicitProcessNames) {
+        killTargets.push_back(normalizeProcessName(processName));
+    }
+    std::sort(killTargets.begin(), killTargets.end());
+    killTargets.erase(std::unique(killTargets.begin(), killTargets.end()), killTargets.end());
 
-    addWorkUnits(2); // install state: uninstalling + uninstalled
+    addWorkUnits(2); // install info: uninstalling + uninstalled
     if (!killTargets.empty()) {
         addWorkUnits(1);
     }
-    if (installAutoStartup && !displayName.empty()) {
-        addWorkUnits(1);
-    }
-    size_t desktopShortcutRemovalCount = 0;
-    if (installDesktopIcon) {
-        if (!desktopShortcutDisplayName.empty()) {
-            ++desktopShortcutRemovalCount;
-        } else if (!displayName.empty()) {
-            ++desktopShortcutRemovalCount;
-        }
-        desktopShortcutRemovalCount += compatibilityLegacyDesktopShortcutNames.size();
-    }
-    if (desktopShortcutRemovalCount > 0) {
-        addWorkUnits(desktopShortcutRemovalCount);
-    }
+    addWorkUnits(uninstallCleanup.startup.size());
+    addWorkUnits(uninstallCleanup.shortcuts.size());
     addWorkUnits(componentActions.size());
     addWorkUnits(manifestRegistryEntries.size());
+    addWorkUnits(uninstallCleanup.registry.legacyKeys.size());
 #ifdef _WIN32
-    if (!identityCandidates.empty()) {
+    if (!uninstallCleanup.uninstallEntries.empty()) {
         addWorkUnits(1);
     }
 #endif
@@ -419,9 +506,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
     if (!manifestPath.empty()) {
         addWorkUnits(1);
     }
-    if (!identityCandidates.empty()) {
-        addWorkUnits(1);
-    }
+    addWorkUnits(uninstallCleanup.paths.size());
 
     emitProgress("Preparing old installation cleanup");
 
@@ -462,7 +547,12 @@ bool uninstallFromManifest(const std::string& manifestPath,
         return false;
     }
 
-    applyInstallState(installStateConfig, "uninstalling", resolver);
+    applyCoreInstallInfo(installInfo,
+                         installDir,
+                         manifest.value("appVersion", ""),
+                         displayName,
+                         "uninstalling",
+                         resolver);
     completeWorkUnit("Marking uninstalling state");
 
     for (const auto& action : componentActions) {
@@ -501,38 +591,21 @@ bool uninstallFromManifest(const std::string& manifestPath,
         completeWorkUnit("Replaying component uninstall action: " + label);
     }
 
-    if (installAutoStartup && !displayName.empty()) {
-        removeAutoStartup(displayName);
-        completeWorkUnit("Removing auto startup entry");
+    for (const auto& startup : uninstallCleanup.startup) {
+        if (startup.name.empty()) {
+            continue;
+        }
+        removeAutoStartup(startup.name);
+        completeWorkUnit("Removing auto startup entry: " + startup.name);
     }
-    if (installDesktopIcon) {
-        std::vector<std::string> shortcutNames;
-        std::unordered_set<std::string> seenShortcutNames;
-        auto appendShortcutName = [&](const std::string& name) {
-            if (name.empty()) {
-                return;
-            }
-            std::string lowered = name;
-            std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (seenShortcutNames.insert(lowered).second) {
-                shortcutNames.push_back(name);
-            }
-        };
 
-        appendShortcutName(desktopShortcutDisplayName);
-        for (const auto& name : compatibilityLegacyDesktopShortcutNames) {
-            appendShortcutName(name);
+    for (const auto& shortcut : uninstallCleanup.shortcuts) {
+        if (shortcut.name.empty()) {
+            continue;
         }
-        if (shortcutNames.empty()) {
-            appendShortcutName(displayName);
-        }
-
-        for (const auto& shortcutName : shortcutNames) {
-            deleteDesktopShortcut(shortcutName);
-            deleteStartMenuShortcut(shortcutName);
-            completeWorkUnit("Removing desktop shortcut: " + shortcutName);
-        }
+        deleteDesktopShortcut(shortcut.name);
+        deleteStartMenuShortcut(shortcut.name);
+        completeWorkUnit("Removing desktop shortcut: " + shortcut.name);
     }
 
     for (const auto& entry : manifestRegistryEntries) {
@@ -545,18 +618,25 @@ bool uninstallFromManifest(const std::string& manifestPath,
         completeWorkUnit("Removing registry value: " + keyName);
     }
 
-#ifdef _WIN32
-    if (!identityCandidates.empty()) {
-        bool perMachine = isRunningAsAdmin();
-        for (size_t i = 0; i < identityCandidates.size(); ++i) {
-            const bool removedPrimary = deleteUninstallRegistryEntry(identityCandidates[i], perMachine);
-            const bool removedSecondary = deleteUninstallRegistryEntry(identityCandidates[i], !perMachine);
-            if (i == 0) {
-                removedUninstall = removedPrimary || removedSecondary;
-            }
+    for (const auto& entry : uninstallCleanup.registry.legacyKeys) {
+        if (isCancelled()) {
+            console.showWarning("Uninstall cancelled while removing legacy registry items");
+            return false;
         }
-        deleteMatchingUninstallRegistryEntries(installDir, uninstallPath, perMachine);
-        deleteMatchingUninstallRegistryEntries(installDir, uninstallPath, !perMachine);
+        if (entry.key.empty()) {
+            deleteRegistryPath(entry.path);
+        } else {
+            deleteRegistryValue(entry);
+        }
+        std::string keyName = entry.key.empty() ? entry.path : (entry.path + "\\" + entry.key);
+        completeWorkUnit("Removing legacy registry item: " + keyName);
+    }
+
+#ifdef _WIN32
+    if (!uninstallCleanup.uninstallEntries.empty()) {
+        for (const auto& entry : uninstallCleanup.uninstallEntries) {
+            removedUninstall = DeleteUninstallEntryByScope(entry) || removedUninstall;
+        }
         completeWorkUnit("Removing uninstall registry entry");
     }
 #endif
@@ -704,7 +784,7 @@ bool uninstallFromManifest(const std::string& manifestPath,
         completeWorkUnit("Removing install root: " + root);
     }
 
-    for (const auto& rule : lifecycleUninstallCleanupRules) {
+    for (const auto& rule : uninstallCleanup.paths) {
         if (isCancelled()) {
             console.showWarning("Uninstall cancelled while running cleanup rules");
             return false;
@@ -739,12 +819,15 @@ bool uninstallFromManifest(const std::string& manifestPath,
         } else {
             console.showInfo("Removed cleanup path: " + expandedPath);
         }
+        completeWorkUnit("Removing cleanup path: " + expandedPath);
     }
 
-    removeInstallStateArtifacts(installStateConfig, resolver);
-    completeWorkUnit("Removing install state artifacts");
-
-    applyInstallState(installStateConfig, "uninstalled", resolver);
+    applyCoreInstallInfo(installInfo,
+                         installDir,
+                         manifest.value("appVersion", ""),
+                         displayName,
+                         "uninstalled",
+                         resolver);
     completeWorkUnit("Marking uninstalled state");
 
     if (!manifestPath.empty()) {

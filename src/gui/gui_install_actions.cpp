@@ -147,16 +147,6 @@ bool TryBuildInstallStartRequest(HWND hWnd,
     return true;
 }
 
-std::vector<std::string> BuildIdentityCandidatesFromConfig(const InstallConfig& config) {
-    std::vector<std::string> legacyIds;
-    legacyIds.reserve(config.legacyAppIds.size());
-    for (const auto& legacyId : config.legacyAppIds) {
-        legacyIds.push_back(WideToUtf8(legacyId));
-    }
-    return buildIdentityCandidates(
-        WideToUtf8(config.appId), legacyIds, WideToUtf8(config.applicationName));
-}
-
 void RunPostInstallActions(HWND hWnd,
                            CPaintManagerUI& manager,
                            CEditUI* installPathEdit,

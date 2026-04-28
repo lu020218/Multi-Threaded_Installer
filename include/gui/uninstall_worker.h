@@ -12,11 +12,11 @@ public:
     explicit UninstallWorker(HWND hNotifyWindow);
     ~UninstallWorker();
 
-    void StartUninstall(const std::vector<std::string>& identityCandidates);
+    void StartUninstall(const std::string& manifestPath);
     bool Joinable() const;
 
 private:
-    void WorkerThreadFunc(const std::vector<std::string>& identityCandidates);
+    void WorkerThreadFunc(const std::string& manifestPath);
     void PostProgressMessage(float progress, const std::wstring& currentItem);
     void PostCompletionMessage(bool success, const std::wstring& errorMsg);
 

@@ -3,7 +3,6 @@
 #include "../../include/gui/gui_install_actions.h"
 #include "../../include/gui/gui_manager.h"
 #include "../../include/gui/gui_runtime_utils.h"
-#include "../../include/installer/installer_helpers.h"
 #include "../../include/installer/path_resolver.h"
 #include "../../include/installer/registry_utils.h"
 #include "../../include/installer/uninstall_manager.h"
@@ -38,38 +37,6 @@ std::wstring ExpandEnvVars(const std::wstring& value) {
 #endif
 }
 
-std::wstring NormalizeInstallPath(const std::wstring& basePath,
-                                  const std::wstring& appName) {
-    if (basePath.empty() || appName.empty()) {
-        return basePath;
-    }
-
-    std::filesystem::path selectedFs = basePath;
-    std::wstring appNameLower = ToLowerString(appName);
-    std::wstring selectedNameLower = ToLowerString(selectedFs.filename().wstring());
-
-    if (selectedNameLower == appNameLower) {
-        return selectedFs.wstring();
-    }
-
-    std::filesystem::path childPath = selectedFs / appName;
-    return childPath.wstring();
-}
-
-std::wstring ResolveEffectiveDirectoryNameFromConfig(const InstallConfig& config) {
-    const std::string directoryName = resolveEffectiveDirectoryName(
-        WideToUtf8(config.directoryName),
-        WideToUtf8(config.applicationName));
-    return Utf8ToWide(directoryName);
-}
-
-std::wstring ApplyInstallDirectoryRule(const std::wstring& basePath, const InstallConfig& config) {
-    if (!config.installDirectoryAppendName) {
-        return basePath;
-    }
-    return NormalizeInstallPath(basePath, ResolveEffectiveDirectoryNameFromConfig(config));
-}
-
 } // namespace
 
 std::wstring ResolveInitialInstallPath(const InstallConfig& config) {
@@ -96,20 +63,7 @@ std::wstring ResolveInitialInstallPath(const InstallConfig& config) {
         }
     }
 
-    InstallerPathResolver identityResolver;
-    std::string previousManifest;
-    std::string previousInstallDir;
-    std::vector<std::string> identityCandidates =
-        GUIInstallActions::BuildIdentityCandidatesFromConfig(config);
-    if (resolveExistingInstallInfo(identityCandidates,
-                                   identityResolver,
-                                   previousManifest,
-                                   previousInstallDir) &&
-        !previousInstallDir.empty()) {
-        return Utf8ToWide(previousInstallDir);
-    }
-
-    return ApplyInstallDirectoryRule(installPath, config);
+    return installPath;
 }
 
 void ApplyInitialInstallPathUi(CPaintManagerUI& paintManager,

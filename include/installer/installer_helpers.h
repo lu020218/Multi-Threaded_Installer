@@ -61,13 +61,7 @@ std::string getCurrentExecutablePath();
 std::string resolveEffectiveAppId(const std::string& appId, const std::string& applicationName);
 std::string resolveEffectiveDirectoryName(const std::string& directoryName,
                                           const std::string& applicationName);
-std::vector<std::string> buildIdentityCandidates(const std::string& appId,
-                                                 const std::vector<std::string>& legacyAppIds,
-                                                 const std::string& applicationName);
 std::string getLocalManifestPath(const std::string& exePath);
-std::string resolveInstalledManifestPath(const std::vector<std::string>& identityCandidates,
-                                         const std::string& exePath,
-                                         InstallerPathResolver& resolver);
 bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath);
 
 bool isRunningAsAdmin();

@@ -97,9 +97,9 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
                         0.85f,
                         "Precheck almost complete...");
 
-    if (metadata.installStateConfig.useMutex) {
+    if (metadata.installUseMutex) {
         reporter.EmitMessage(InstallServiceEventType::Info, "Acquiring install mutex...");
-        installMutex = acquireInstallMutex(metadata.installStateConfig);
+        installMutex = acquireInstallMutex(metadata.installUseMutex, metadata.installMutexName);
     }
 
     reporter.EmitProgress("", "Precheck completed", 1.0f);

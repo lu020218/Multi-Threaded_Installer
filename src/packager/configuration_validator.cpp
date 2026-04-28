@@ -65,20 +65,6 @@ const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
     }
 }
 
-bool IsSupportedDestinationType(const std::string& type) {
-    static const std::unordered_set<std::string> kTypes = {
-        "install",
-        "programFiles",
-        "programFilesX86",
-        "appDataRoaming",
-        "appDataLocal",
-        "programData",
-        "userProfile",
-        "custom"
-    };
-    return kTypes.find(type) != kTypes.end();
-}
-
 } // namespace
 
 ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
@@ -145,22 +131,122 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         }
     }
 
-    if ((config.install.installState.mode == InstallStateMode::REGISTRY ||
-         config.install.installState.mode == InstallStateMode::BOTH) &&
-        config.install.installState.registryPath.empty()) {
-        result.errors.push_back("ERROR: install.installState.registryPath is required for registry mode");
+    if (config.install.useMutex && config.install.mutexName.empty()) {
+        result.errors.push_back("ERROR: install.mutexName is required when install.useMutex is true");
         result.isValid = false;
     }
 
-    if ((config.install.installState.mode == InstallStateMode::FILE ||
-         config.install.installState.mode == InstallStateMode::BOTH) &&
-        config.install.installState.filePath.empty()) {
-        result.errors.push_back("ERROR: install.installState.filePath is required for file mode");
+    if (config.install.installInfo.path.empty()) {
+        result.errors.push_back("ERROR: install.installInfo.path is required");
         result.isValid = false;
     }
 
-    if (config.install.installState.useMutex && config.install.installState.mutexName.empty()) {
-        result.errors.push_back("ERROR: install.installState.mutexName is required when useMutex is true");
+    static const std::vector<std::string> kRequiredInstallInfoFields = {
+        "installDir", "displayName", "displayVersion", "executablePath", "installState"
+    };
+    for (const auto& field : kRequiredInstallInfoFields) {
+        auto it = config.install.installInfo.values.find(field);
+        if (it == config.install.installInfo.values.end() || it->second.key.empty()) {
+            result.errors.push_back("ERROR: install.installInfo.values." + field + ".key is required");
+            result.isValid = false;
+        }
+    }
+
+    for (const auto& entry : config.lifecycle.cleanup.onUpgrade.installRoots) {
+        if (entry.path.empty() || entry.key.empty()) {
+            result.errors.push_back("ERROR: lifecycle.cleanup.onUpgrade.installRoots[] requires path and key");
+            result.isValid = false;
+            break;
+        }
+    }
+
+    for (const auto& entry : config.lifecycle.cleanup.onUpgrade.uninstallEntries) {
+        if (entry.name.empty()) {
+            result.errors.push_back("ERROR: lifecycle.cleanup.onUpgrade.uninstallEntries.entries[].name is required");
+            result.isValid = false;
+            break;
+        }
+    }
+
+    for (const auto& entry : config.lifecycle.cleanup.onUninstall.uninstallEntries) {
+        if (entry.name.empty()) {
+            result.errors.push_back("ERROR: lifecycle.cleanup.onUninstall.uninstallEntries.entries[].name is required");
+            result.isValid = false;
+            break;
+        }
+    }
+
+    for (const auto& entry : config.lifecycle.cleanup.onUninstall.processes) {
+        if (entry.name.empty()) {
+            result.errors.push_back("ERROR: lifecycle.cleanup.onUninstall.processes[].name is required");
+            result.isValid = false;
+            break;
+        }
+    }
+
+    for (const auto& entry : config.lifecycle.cleanup.onUninstall.shortcuts) {
+        if (entry.name.empty()) {
+            result.errors.push_back("ERROR: lifecycle.cleanup.onUninstall.shortcuts[].name is required");
+            result.isValid = false;
+            break;
+        }
+    }
+
+    for (const auto& entry : config.lifecycle.cleanup.onUninstall.startup) {
+        if (entry.name.empty()) {
+            result.errors.push_back("ERROR: lifecycle.cleanup.onUninstall.startup[].name is required");
+            result.isValid = false;
+            break;
+        }
+    }
+
+    for (const auto& entry : config.lifecycle.cleanup.onUninstall.registry.legacyKeys) {
+        if (entry.path.empty()) {
+            result.errors.push_back("ERROR: lifecycle.cleanup.onUninstall.registry.legacyKeys[].path is required");
+            result.isValid = false;
+            break;
+        }
+    }
+
+    for (const auto& entry : config.lifecycle.cleanup.onUpgrade.registry.legacyKeys) {
+        if (entry.path.empty()) {
+            result.errors.push_back("ERROR: lifecycle.cleanup.onUpgrade.registry.legacyKeys[].path is required");
+            result.isValid = false;
+            break;
+        }
+    }
+
+    for (const auto& folder : config.layout.folders) {
+        if (folder.target.empty()) {
+            result.errors.push_back("ERROR: layout.folders[].target is required");
+            result.isValid = false;
+            continue;
+        }
+        if (!validateTargetDirectory(folder.target, result.errors)) {
+            result.isValid = false;
+        }
+    }
+
+    for (const auto& reg : config.lifecycle.registry.onInstall) {
+        if (reg.path == config.install.installInfo.path) {
+            for (const auto& pair : config.install.installInfo.values) {
+                if (reg.key == pair.second.key) {
+                    result.errors.push_back("ERROR: lifecycle.registry.onInstall must not duplicate install.installInfo field key '" + reg.key + "'");
+                    result.isValid = false;
+                }
+            }
+        }
+    }
+
+    for (const auto& pair : config.install.installInfo.values) {
+        if (pair.second.value.empty()) {
+            result.errors.push_back("ERROR: install.installInfo.values." + pair.first + ".value is required");
+            result.isValid = false;
+        }
+    }
+
+    if (config.install.installInfo.mode != InstallStateMode::REGISTRY) {
+        result.errors.push_back("ERROR: install.installInfo.mode must be 'registry'");
         result.isValid = false;
     }
 
@@ -178,20 +264,6 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         }
         if (!validateFolderExists(folder.source, inputDirectory, result.errors)) {
             result.isValid = false;
-        }
-        if (!IsSupportedDestinationType(folder.destination.type)) {
-            result.errors.push_back("ERROR: Invalid field 'layout.folders[].destination.type': " +
-                                    folder.destination.type);
-            result.isValid = false;
-        }
-        if (folder.destination.type == "custom") {
-            if (folder.destination.path.empty()) {
-                result.errors.push_back(
-                    "ERROR: layout.folders[].destination.path is required when destination.type is 'custom'");
-                result.isValid = false;
-            } else if (!validateTargetDirectory(folder.destination.path, result.errors)) {
-                result.isValid = false;
-            }
         }
     }
 
@@ -250,11 +322,11 @@ bool ConfigurationValidator::validateTargetDirectory(const std::string& targetDi
         return false;
     }
 
-    if (targetDir == "installDirectory") {
-        return true;
-    }
-
     const std::vector<std::string> validEnvVars = {
+        "%InstallDir%",
+        "%AppName%",
+        "%Version%",
+        "%InstallState%",
         "%ProgramFiles%",
         "%ProgramFiles(x86)%",
         "%AppData%",

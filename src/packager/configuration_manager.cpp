@@ -8,37 +8,8 @@ namespace fs = std::filesystem;
 namespace MultiThreadedInstaller {
 namespace {
 
-std::string ResolveInstallStateIdentity(const PackagerConfiguration& config) {
+std::string ResolveInstallIdentity(const PackagerConfiguration& config) {
     return config.app.id.empty() ? config.app.name : config.app.id;
-}
-
-std::string DestinationTypeToPathToken(const LayoutFolderDestination& destination) {
-    const std::string type = destination.type;
-    if (type == "install") {
-        return "installDirectory";
-    }
-    if (type == "custom") {
-        return destination.path;
-    }
-    if (type == "programFiles") {
-        return "%ProgramFiles%";
-    }
-    if (type == "programFilesX86") {
-        return "%ProgramFiles(x86)%";
-    }
-    if (type == "appDataRoaming") {
-        return "%AppData%";
-    }
-    if (type == "appDataLocal") {
-        return "%LocalAppData%";
-    }
-    if (type == "programData") {
-        return "%ProgramData%";
-    }
-    if (type == "userProfile") {
-        return "%USERPROFILE%";
-    }
-    return destination.path;
 }
 
 std::string FolderSourceName(const std::string& source) {
@@ -52,16 +23,13 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory) {
     
 
     auto configOpt = loader_.loadConfiguration(inputDirectory);
-    auto applyInstallStateDefaults = [](PackagerConfiguration& config) {
-        const std::string identity = ResolveInstallStateIdentity(config);
-        if (config.install.installState.registryPath.empty()) {
-            config.install.installState.registryPath = "HKEY_CURRENT_USER\\Software\\" + identity;
+    auto applyInstallDefaults = [](PackagerConfiguration& config) {
+        const std::string identity = ResolveInstallIdentity(config);
+        if (config.install.mutexName.empty()) {
+            config.install.mutexName = "Global\\" + identity + "_Install";
         }
-        if (config.install.installState.filePath.empty()) {
-            config.install.installState.filePath = "%ProgramData%\\" + identity + "\\install.state";
-        }
-        if (config.install.installState.mutexName.empty()) {
-            config.install.installState.mutexName = "Global\\" + identity + "_Install";
+        if (config.install.installInfo.path.empty()) {
+            config.install.installInfo.path = "HKEY_CURRENT_USER\\Software\\" + identity;
         }
     };
     
@@ -70,7 +38,7 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory) {
         hasConfigFile_ = true;
         configFilePath_ = loader_.getLoadedConfigPath();
         config_ = configOpt.value();
-        applyInstallStateDefaults(config_);
+        applyInstallDefaults(config_);
         
 
         auto validationResult = validator_.validate(config_, inputDirectory);
@@ -96,7 +64,7 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory) {
         hasConfigFile_ = false;
         configFilePath_.clear();
         config_ = PackagerConfiguration();
-        applyInstallStateDefaults(config_);
+        applyInstallDefaults(config_);
         
 
         std::string loaderError = loader_.getLastError();
@@ -127,7 +95,7 @@ void ConfigurationManager::applyFolderTargets(std::vector<FolderInfo>& folders) 
 
         if (it != config_.layout.folders.end()) {
             folder.id = it->id;
-            folder.targetPath = DestinationTypeToPathToken(it->destination);
+            folder.targetPath = it->target;
         }
     }
 }

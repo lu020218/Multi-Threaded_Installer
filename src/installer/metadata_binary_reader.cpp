@@ -283,4 +283,110 @@ bool ReadCleanupRules(const std::vector<uint8_t>& data,
     return true;
 }
 
+bool ReadRegistryLookupList(const std::vector<uint8_t>& data,
+                            size_t& offset,
+                            std::vector<RegistryLookupEntry>& out) {
+    uint32_t count = 0;
+    if (!ReadPod<uint32_t>(data, offset, count)) {
+        META_LOG();
+        return false;
+    }
+    out.clear();
+    out.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        RegistryLookupEntry entry;
+        if (!ReadString(data, offset, entry.path, "installRoots.path") ||
+            !ReadString(data, offset, entry.key, "installRoots.key")) {
+            return false;
+        }
+        out.push_back(std::move(entry));
+    }
+    return true;
+}
+
+bool ReadNamedCleanupList(const std::vector<uint8_t>& data,
+                          size_t& offset,
+                          std::vector<NamedCleanupEntry>& out) {
+    uint32_t count = 0;
+    if (!ReadPod<uint32_t>(data, offset, count)) {
+        META_LOG();
+        return false;
+    }
+    out.clear();
+    out.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        NamedCleanupEntry entry;
+        if (!ReadString(data, offset, entry.name, "namedCleanup.name")) {
+            return false;
+        }
+        out.push_back(std::move(entry));
+    }
+    return true;
+}
+
+bool ReadUninstallEntryCleanupList(const std::vector<uint8_t>& data,
+                                   size_t& offset,
+                                   std::vector<UninstallEntryCleanup>& out) {
+    uint32_t count = 0;
+    if (!ReadPod<uint32_t>(data, offset, count)) {
+        META_LOG();
+        return false;
+    }
+    out.clear();
+    out.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        UninstallEntryCleanup entry;
+        if (!ReadString(data, offset, entry.name, "uninstallEntries.name")) {
+            return false;
+        }
+        uint8_t scope = 0;
+        if (!ReadPod<uint8_t>(data, offset, scope)) {
+            META_LOG();
+            return false;
+        }
+        entry.scope = static_cast<UninstallEntryScope>(scope);
+        out.push_back(std::move(entry));
+    }
+    return true;
+}
+
+bool ReadInstallInfoConfig(const std::vector<uint8_t>& data,
+                           size_t& offset,
+                           InstallInfoConfig& out) {
+    uint8_t mode = 0;
+    if (!ReadPod<uint8_t>(data, offset, mode)) {
+        META_LOG();
+        return false;
+    }
+    out.mode = static_cast<InstallStateMode>(mode);
+    if (!ReadString(data, offset, out.path, "installInfo.path")) {
+        return false;
+    }
+    uint32_t count = 0;
+    if (!ReadPod<uint32_t>(data, offset, count)) {
+        META_LOG();
+        return false;
+    }
+    out.values.clear();
+    for (uint32_t i = 0; i < count; ++i) {
+        std::string name;
+        InstallInfoValueConfig entry;
+        if (!ReadString(data, offset, name, "installInfo.values.name") ||
+            !ReadString(data, offset, entry.key, "installInfo.values.key")) {
+            return false;
+        }
+        uint8_t type = 0;
+        if (!ReadPod<uint8_t>(data, offset, type)) {
+            META_LOG();
+            return false;
+        }
+        entry.type = static_cast<RegistryValueType>(type);
+        if (!ReadString(data, offset, entry.value, "installInfo.values.value")) {
+            return false;
+        }
+        out.values.emplace(std::move(name), std::move(entry));
+    }
+    return true;
+}
+
 }  // namespace MultiThreadedInstaller

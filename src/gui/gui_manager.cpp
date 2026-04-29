@@ -15,10 +15,8 @@
 #include "../../include/gui/installation_worker.h"
 #include "../../include/gui/uninstall_worker.h"
 #include "../../include/installer/metadata_parser.h"
-#include "../../include/installer/path_resolver.h"
+#include "../../include/installer/installed_instance_resolver.h"
 #include "../../include/installer/installer_helpers.h"
-#include "../../include/installer/uninstall_manager.h"
-#include "../../include/installer/registry_utils.h"
 #include "../../include/installer/gui_resource_loader.h"
 #include "common/utf8_utils.h"
 #include "common/installer_logger.h"
@@ -151,7 +149,7 @@ GUIManager::GUIManager()
         m_pPageController(nullptr),
         m_pWorker(nullptr),
         m_pUninstallWorker(nullptr),
-        m_repairMode(false),
+        m_overwriteMode(false),
         m_baseClientHeight(0),
         m_baseClientWidth(0),
         m_expandedClientHeight(0),
@@ -187,7 +185,7 @@ GUIManager::~GUIManager() {
 
 void GUIManager::SetInstallConfig(const InstallConfig& config) {
     m_config = config;
-    m_repairMode = config.repairMode;
+    m_overwriteMode = config.overwriteMode;
 }
 
 void GUIManager::SetInstallMetadata(const ExtendedInstallationMetadata& metadata) {
@@ -245,7 +243,7 @@ void GUIManager::InitWindow() {
                      (m_uninstallMode ? "true" : "false"));
 
     std::wstring installPath = ResolveInitialInstallPath(m_config);
-    ApplyInitialInstallPathUi(m_pm, m_pInstallPathEdit, installPath, m_repairMode);
+    ApplyInitialInstallPathUi(m_pm, m_pInstallPathEdit, installPath, m_overwriteMode);
 
     UpdateDiskSpaceInfo(installPath);
     
@@ -330,7 +328,7 @@ void GUIManager::InitControls() {
     
     GUITextPresenter::BindStaticAppTexts(m_pm, m_config);
 
-    if (m_repairMode) {
+    if (false && m_overwriteMode) {
         const bool isChinese = m_config.languageCode.find(L"zh") != std::wstring::npos;
         const std::wstring repairText = isChinese ? L"修复" : L"Repair";
         const std::wstring repairTitle = isChinese ? L"修复向导" : L"Repair Wizard";
@@ -564,11 +562,6 @@ void GUIManager::OnInstallButtonClick() {
     const ExtendedInstallationMetadata& metadata = m_installMetadata;
     std::vector<std::string> selectedComponents = CollectSelectedComponentsFromUi();
 
-    bool cleanupOldInstall = m_repairMode
-                                 ? true
-                                 : GUIInstallFlowUtils::ConfirmCleanupOldInstall(
-                                       m_hWnd, metadata, request.installPath);
-
     std::vector<std::string> processNames = buildKillProcessList(
         metadata.appName,
         metadata.installKillProcesses);
@@ -583,8 +576,6 @@ void GUIManager::OnInstallButtonClick() {
                                  request.autoRun,
                                  request.desktopIcons,
                                  request.languageCode,
-                                 m_repairMode,
-                                 cleanupOldInstall,
                                  selectedComponents);
 
     if (m_pTabPages) {
@@ -603,14 +594,10 @@ void GUIManager::OnUninstallConfirmClick() {
         m_pUninstallWorker = new UninstallWorker(m_hWnd);
     }
 
-    std::string manifestPath;
-    std::string installDir;
-    if (m_config.registryPath.empty() || m_config.registryKey.empty() ||
-        !resolveInstallInfoFromRegistry(WideToUtf8(m_config.registryPath),
-                                        WideToUtf8(m_config.registryKey),
-                                        manifestPath,
-                                        installDir) ||
-        manifestPath.empty()) {
+    InstalledInstanceInfo installedInstance;
+    if (!m_installMetadataLoaded ||
+        !resolveInstalledInstanceFromInstallRoots(m_installMetadata, installedInstance) ||
+        installedInstance.manifestPath.empty()) {
         CompletionMessageData* pData = new CompletionMessageData();
         pData->success = false;
         std::wstring text = GUIHelpers::GetLocalizedText(L"msg.uninstall.appname_missing", L"");
@@ -619,7 +606,7 @@ void GUIManager::OnUninstallConfirmClick() {
         return;
     }
 
-    m_pUninstallWorker->StartUninstall(manifestPath);
+    m_pUninstallWorker->StartUninstall(installedInstance.manifestPath);
 }
 
 void GUIManager::OnCancelButtonClick() {
@@ -631,7 +618,7 @@ void GUIManager::OnCancelButtonClick() {
 }
 
 void GUIManager::OnBrowseButtonClick() {
-    if (m_repairMode) {
+    if (m_overwriteMode) {
         return;
     }
 

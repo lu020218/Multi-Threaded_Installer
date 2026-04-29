@@ -1,4 +1,4 @@
-#include "installer/uninstall_manager.h"
+#include "installer/self_delete_scheduler.h"
 
 #include "installer/installer_helpers.h"
 #include "common/utf8_utils.h"

@@ -48,7 +48,6 @@ public:
         std::vector<std::string> selectedComponents;
         bool installAllComponents = false;
         bool silent = false;
-        bool repair = false;
         bool autoStartupSpecified = false;
         bool autoStartupEnabled = false;
         bool desktopIconSpecified = false;

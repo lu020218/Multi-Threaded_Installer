@@ -31,8 +31,6 @@ public:
                            bool autoRun,
                            bool desktopIcons,
                            const std::wstring& languageCode,
-                           bool repairMode,
-                           bool cleanupOldInstall,
                            const std::vector<std::string>& selectedComponents);
     
 
@@ -50,8 +48,6 @@ private:
     std::atomic<bool> m_cancellationRequested;
     bool m_autoRun;
     bool m_desktopIcons;
-    bool m_repairMode;
-    bool m_cleanupOldInstallRequested;
     std::wstring m_languageCode;
     std::vector<std::string> m_selectedComponents;
     std::atomic<uint64_t> m_totalBytes;

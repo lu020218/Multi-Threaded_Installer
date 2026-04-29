@@ -2,13 +2,9 @@
 
 #include "gui/gui_helpers.h"
 #include "gui/gui_runtime_utils.h"
-#include "installer/path_resolver.h"
-#include "installer/installer_helpers.h"
-#include "installer/uninstall_manager.h"
-#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
+#include "installer/installer_helpers.h"
 
-#include <filesystem>
 #include <sstream>
 
 namespace MultiThreadedInstaller::GUIInstallFlowUtils {
@@ -22,50 +18,6 @@ std::wstring ResolveEffectiveDirectoryNameFromConfig(const InstallConfig& config
 }
 
 } // namespace
-
-bool ConfirmCleanupOldInstall(HWND hWnd,
-                              const ExtendedInstallationMetadata& metadata,
-                              const std::wstring& installPath) {
-    if (metadata.installAutoCleanOldInstall) {
-        return true;
-    }
-
-    InstallerPathResolver pathResolver;
-    const std::string installPathUtf8 = WideToUtf8(installPath);
-    const std::string resolvedInstallRoot = pathResolver.expandEnvironmentVariables(installPathUtf8);
-
-    std::string previousManifest;
-    std::string previousInstallDir;
-    const auto installDirIt = metadata.installInfo.values.find("installDir");
-    if (installDirIt == metadata.installInfo.values.end() ||
-        !resolveInstallInfoFromRegistry(metadata.installInfo.path,
-                                        installDirIt->second.key,
-                                        previousManifest,
-                                        previousInstallDir)) {
-        return false;
-    }
-
-    const std::string newPath = resolvedInstallRoot.empty() ? installPathUtf8 : resolvedInstallRoot;
-    const std::string normalizedOld = normalizePathForCompare(previousInstallDir);
-    const std::string normalizedNew = normalizePathForCompare(newPath);
-    if (normalizedOld.empty() || normalizedNew.empty() || normalizedOld == normalizedNew) {
-        return false;
-    }
-
-    if (previousManifest.empty()) {
-        logInstallerInfo("[GUI] Old install manifest not found; skipping cleanup prompt.");
-        return false;
-    }
-
-    std::wstring title = GUIHelpers::GetLocalizedText(L"msg.dialog.cleanup_old.title", L"");
-    std::wstring yesText = GUIHelpers::GetLocalizedText(L"msg.dialog.cleanup_old.yes", L"");
-    std::wstring noText = GUIHelpers::GetLocalizedText(L"msg.dialog.cleanup_old.no", L"");
-    std::wstring message = GUIHelpers::GetLocalizedText(L"msg.dialog.cleanup_old.message", L"");
-    DialogResult result =
-        GUIHelpers::ShowCustomDialog(hWnd, title, message, yesText, noText, L"");
-    return result == DialogResult::Ok;
-}
-
 std::wstring ResolveSelectedInstallPath(const InstallConfig& config,
                                         const std::wstring& selectedPath) {
     (void)config;

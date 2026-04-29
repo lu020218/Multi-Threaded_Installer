@@ -180,8 +180,6 @@ CliSupport::InstallerArgs CliSupport::parseInstallerArgs(int argc, char* argv[])
             args.showHelp = true;
         } else if (arg == "-s" || arg == "--silent") {
             args.silent = true;
-        } else if (arg == "--repair") {
-            args.repair = true;
         } else if (arg == "--components" && i + 1 < argc) {
             std::string value = trim(argv[++i]);
             std::string lowered = value;
@@ -237,7 +235,6 @@ void CliSupport::showInstallerHelp() {
     std::cout << "Options:" << std::endl;
     std::cout << "  -d, --destination <directory>  Default installation directory" << std::endl;
     std::cout << "  -s, --silent                   Silent installation mode" << std::endl;
-    std::cout << "  --repair                       Repair an existing installation" << std::endl;
     std::cout << "  --components <id1,id2,...|all> Select optional components or all" << std::endl;
     std::cout << "  --auto-startup <true|false>    Enable or disable auto startup" << std::endl;
     std::cout << "  --desktop-icon <true|false>    Enable or disable desktop icon" << std::endl;
@@ -246,7 +243,6 @@ void CliSupport::showInstallerHelp() {
     std::cout << "Examples:" << std::endl;
     std::cout << "  installer -d C:\\Program Files\\MyApp" << std::endl;
     std::cout << "  installer -s -d C:\\Program Files\\MyApp" << std::endl;
-    std::cout << "  installer --repair" << std::endl;
     std::cout << "  installer -s --components main_app,chrome_plugin" << std::endl;
     std::cout << "  installer -s --components all" << std::endl;
     std::cout << "  installer -s --auto-startup true --desktop-icon false" << std::endl;

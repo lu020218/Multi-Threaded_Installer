@@ -4,9 +4,6 @@
 
 namespace MultiThreadedInstaller::GUIInstallFlowUtils {
 
-bool ConfirmCleanupOldInstall(HWND hWnd,
-                              const ExtendedInstallationMetadata& metadata,
-                              const std::wstring& installPath);
 std::wstring ResolveSelectedInstallPath(const InstallConfig& config,
                                         const std::wstring& selectedPath);
 void UpdateInstallButtonEnabled(CButtonUI* installButton,

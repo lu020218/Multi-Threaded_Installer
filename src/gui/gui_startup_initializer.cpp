@@ -5,7 +5,6 @@
 #include "../../include/gui/gui_runtime_utils.h"
 #include "../../include/installer/path_resolver.h"
 #include "../../include/installer/registry_utils.h"
-#include "../../include/installer/uninstall_manager.h"
 #include "common/utf8_utils.h"
 
 #include <algorithm>
@@ -51,7 +50,7 @@ std::wstring ResolveInitialInstallPath(const InstallConfig& config) {
     }
 #endif
 
-    if (!config.registryPath.empty() && !config.registryKey.empty()) {
+    if (config.overwriteMode && !config.registryPath.empty() && !config.registryKey.empty()) {
         std::string regPath = WideToUtf8(config.registryPath);
         std::string regKey = WideToUtf8(config.registryKey);
         std::string regValue;
@@ -69,16 +68,16 @@ std::wstring ResolveInitialInstallPath(const InstallConfig& config) {
 void ApplyInitialInstallPathUi(CPaintManagerUI& paintManager,
                                CEditUI* installPathEdit,
                                const std::wstring& installPath,
-                               bool repairMode) {
+                               bool lockInstallPath) {
     if (installPathEdit) {
         installPathEdit->SetText(WStringToTStr(installPath));
-        if (repairMode) {
+        if (lockInstallPath) {
             installPathEdit->SetReadOnly(true);
             installPathEdit->SetEnabled(false);
         }
     }
 
-    if (!repairMode) {
+    if (!lockInstallPath) {
         return;
     }
 

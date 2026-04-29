@@ -13,8 +13,7 @@ class InstallerPathResolver;
 
 enum class InstallTargetMode {
     FreshInstall,
-    UpgradeMigration,
-    Repair,
+    OverwriteInstall,
 };
 
 struct InstallPathDecision {
@@ -23,7 +22,6 @@ struct InstallPathDecision {
     std::string resolvedInstallRoot;
     std::string diskCheckPath;
     std::string cleanupTargetInstallRoot;
-    std::string shortcutCleanupTargetRoot;
 };
 
 struct ComponentSelectionPlan {

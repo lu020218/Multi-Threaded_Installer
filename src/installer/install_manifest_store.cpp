@@ -1,4 +1,4 @@
-#include "installer/uninstall_manager.h"
+#include "installer/install_manifest_store.h"
 
 #include "installer/file_system_operator.h"
 #include "installer/installer_helpers.h"

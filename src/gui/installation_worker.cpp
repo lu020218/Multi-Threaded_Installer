@@ -60,8 +60,6 @@ InstallationWorker::InstallationWorker(HWND hNotifyWindow)
     , m_cancellationRequested(false)
     , m_autoRun(false)
     , m_desktopIcons(false)
-    , m_repairMode(false)
-    , m_cleanupOldInstallRequested(false)
     , m_totalBytes(0)
     , m_completedBytes(0)
     , m_currentFolderBytes(0)
@@ -83,8 +81,6 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
                                            bool autoRun,
                                            bool desktopIcons,
                                            const std::wstring& languageCode,
-                                           bool repairMode,
-                                           bool cleanupOldInstall,
                                            const std::vector<std::string>& selectedComponents) {
     if (m_running.load()) {
         return;
@@ -96,8 +92,6 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
     m_autoRun = autoRun;
     m_desktopIcons = desktopIcons;
     m_languageCode = languageCode;
-    m_repairMode = repairMode;
-    m_cleanupOldInstallRequested = cleanupOldInstall;
     m_selectedComponents = selectedComponents;
     
     m_workerThread = std::thread(&InstallationWorker::WorkerThreadFunc, this, installPath);
@@ -279,8 +273,6 @@ if (m_cancellationRequested) {
         serviceOptions.applyRegistryBeforeFinalize = true;
         serviceOptions.preRegistryInstallPath = installPathStr;
         serviceOptions.writeUninstallRegistry = true;
-        serviceOptions.repairMode = m_repairMode;
-        serviceOptions.cleanupOldInstallRequested = m_cleanupOldInstallRequested;
         serviceOptions.cancellationCallback = [this]() {
             return m_cancellationRequested.load();
         };

@@ -34,17 +34,8 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         plan.pathDecision.cleanupTargetInstallRoot.empty()
             ? options.installPath
             : plan.pathDecision.cleanupTargetInstallRoot);
-    if (normalizedOld.empty() || normalizedNew.empty() || normalizedOld == normalizedNew) {
-        return true;
-    }
-
     reporter.EmitMessage(InstallServiceEventType::Info,
                          "Detected previous install at: " + plan.previousInstallDir);
-    if (!(metadata.installAutoCleanOldInstall || options.cleanupOldInstallRequested)) {
-        reporter.EmitMessage(InstallServiceEventType::Info,
-                             "Skipping cleanup of previous installation.");
-        return true;
-    }
 
     logInstallerInfo(std::string("[InstallFlow][Cleanup] start previousManifest=") +
                      plan.previousManifest + " previousInstallDir=" + plan.previousInstallDir +
@@ -62,22 +53,30 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         reporter.EmitProgress("cleanup", detail, info.progress);
     };
 
-    if (!cleanupPreviousInstallForUpgrade(plan.previousManifest,
-                                          plan.previousInstallDir,
-                                          plan.pathDecision.cleanupTargetInstallRoot,
-                                          console,
-                                          cleanupProgress,
-                                          options.cancellationCallback)) {
-        if (IsCancellationRequested(options)) {
-            cancelled = true;
-            error = "Installation cancelled.";
-            return false;
+    const bool sameInstallRoot =
+        !normalizedOld.empty() && !normalizedNew.empty() && normalizedOld == normalizedNew;
+
+    if (!sameInstallRoot) {
+        if (!cleanupPreviousInstallForUpgrade(plan.previousManifest,
+                                              plan.previousInstallDir,
+                                              plan.pathDecision.cleanupTargetInstallRoot,
+                                              console,
+                                              cleanupProgress,
+                                              options.cancellationCallback)) {
+            if (IsCancellationRequested(options)) {
+                cancelled = true;
+                error = "Installation cancelled.";
+                return false;
+            }
+            reporter.EmitMessage(InstallServiceEventType::Warning,
+                                 "Previous install cleanup reported failure.");
+            logInstallerWarning("[InstallFlow][Cleanup] finished with failure");
+        } else {
+            logInstallerInfo("[InstallFlow][Cleanup] finished successfully");
         }
-        reporter.EmitMessage(InstallServiceEventType::Warning,
-                             "Previous install cleanup reported failure.");
-        logInstallerWarning("[InstallFlow][Cleanup] finished with failure");
     } else {
-        logInstallerInfo("[InstallFlow][Cleanup] finished successfully");
+        reporter.EmitMessage(InstallServiceEventType::Info,
+                             "Overwrite install will reuse the existing install root.");
     }
 
     if (!cleanupUpgradeSystemArtifacts(plan.previousManifest,

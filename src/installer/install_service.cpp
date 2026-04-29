@@ -97,8 +97,6 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         logInstallerInfo(std::string("[InstallFlow][Plan] requestedPath=") + options.installPath +
                          " installPathExplicit=" +
                          (options.installPathExplicit ? "true" : "false") +
-                         " cleanupOldInstallRequested=" +
-                         (options.cleanupOldInstallRequested ? "true" : "false") +
                          " selectedComponents=" + std::to_string(options.selectedComponentIds.size()) +
                          " hasPreviousInstall=" + (plan.hasPreviousInstall ? "true" : "false"));
         logInstallerInfo(std::string("[InstallFlow][Path] mode=") +

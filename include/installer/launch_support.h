@@ -17,11 +17,8 @@ enum class LaunchBinary {
 enum class LaunchMode {
     InstallGui,
     InstallSilent,
-    RepairGui,
-    RepairSilent,
     UninstallGui,
     UninstallSilent,
-    CleanupSelf,
 };
 
 struct LaunchContext {

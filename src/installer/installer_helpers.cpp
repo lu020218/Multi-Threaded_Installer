@@ -2,7 +2,6 @@
 #include "installer/file_system_operator.h"
 #include "installer/registry_utils.h"
 #include "installer/shortcut_startup_utils.h"
-#include "installer/uninstall_manager.h"
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <algorithm>

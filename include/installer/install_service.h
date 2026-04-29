@@ -66,8 +66,6 @@ struct InstallServiceOptions {
     std::string preRegistryInstallPath;
     bool applyRegistryAfterInstall = true;
     bool writeUninstallRegistry = false;
-    bool cleanupOldInstallRequested = false;
-    bool repairMode = false;
     bool overrideAutoStartup = false;
     bool autoStartupEnabled = false;
     bool overrideDesktopIcons = false;

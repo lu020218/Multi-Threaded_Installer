@@ -389,6 +389,7 @@ set(COMMON_SOURCES
     src/common/installer_logger.cpp
     src/common/lzma_loader.cpp
     src/common/utf8_utils.cpp
+    src/common/version_utils.cpp
 )
 
 set(POST_SETUP_AGENT_SOURCES
@@ -501,4 +502,9 @@ message(STATUS "GUI support enabled for installer")
 message(STATUS "  - DuiLib library: ${DUILIB_LIB}")
 message(STATUS "  - Windows GUI libraries: ${GUI_WINDOWS_LIBS}")
 message(STATUS "  - Resources will be copied from: ${CMAKE_SOURCE_DIR}/resources")
+
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(test)
+endif()
 

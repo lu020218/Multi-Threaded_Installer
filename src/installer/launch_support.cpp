@@ -3,10 +3,13 @@
 #include "common/installer_exit_codes.h"
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
+#include "common/version_utils.h"
 #include "gui/gui_helpers.h"
 #include "installer/embedded_resources.h"
 #include "installer/gui_resource_loader.h"
+#include "installer/install_manifest_store.h"
 #include "installer/install_service.h"
+#include "installer/installed_instance_resolver.h"
 #include "installer/installer_helpers.h"
 #include "installer/metadata_parser.h"
 #include "installer/path_resolver.h"
@@ -309,7 +312,7 @@ InstallConfig CreateInstallConfigFromMetadata(const ExtendedInstallationMetadata
     config.executableName = Utf8ToWide(metadata.appName + ".exe");
     config.autoStartup = metadata.installAutoStartup;
     config.desktopIcons = metadata.installDesktopIcon;
-    config.repairMode = false;
+    config.overwriteMode = false;
     config.postSetupStatePath = ResolvePostSetupStatePathTemplate(metadata);
 
     uint64_t totalSize = 0;
@@ -385,7 +388,7 @@ int RunGuiWindow(GUIManager& frame,
     return 0;
 }
 
-std::wstring GetRepairTitle(const std::wstring& languageCode) {
+std::wstring GetOverwriteTitle(const std::wstring& languageCode) {
     std::wstring lowered = languageCode;
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),
                    [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
@@ -395,33 +398,30 @@ std::wstring GetRepairTitle(const std::wstring& languageCode) {
     return L"Repair Wizard";
 }
 
-bool TryResolveRepairInstallDir(const ExtendedInstallationMetadata& metadata,
-                                InstallerPathResolver& pathResolver,
-                                std::string& manifestPath,
-                                std::string& installDir) {
-    (void)pathResolver;
-    const auto installDirIt = metadata.installInfo.values.find("installDir");
-    if (installDirIt == metadata.installInfo.values.end()) {
+bool TryResolveInstalledInstanceDir(const ExtendedInstallationMetadata& metadata,
+                                    std::string& manifestPath,
+                                    std::string& installDir) {
+    InstalledInstanceInfo installedInstance;
+    if (!resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) ||
+        !installedInstance.found ||
+        installedInstance.installDir.empty()) {
         return false;
     }
-    return resolveInstallInfoFromRegistry(metadata.installInfo.path,
-                                          installDirIt->second.key,
-                                          manifestPath,
-                                          installDir) &&
-           !installDir.empty();
+    manifestPath = installedInstance.manifestPath;
+    installDir = installedInstance.installDir;
+    return true;
 }
 
 std::string ResolveInstallPathForSilentRun(const ExtendedInstallationMetadata& metadata,
                                            InstallerPathResolver& pathResolver,
                                            const LaunchContext& context,
-                                           bool repairMode,
                                            std::string& existingManifest) {
-    if (repairMode) {
-        std::string existingDir;
-        if (!TryResolveRepairInstallDir(metadata, pathResolver, existingManifest, existingDir)) {
-            return {};
-        }
-        return existingDir;
+    InstalledInstanceInfo installedInstance;
+    if (resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
+        installedInstance.found &&
+        !installedInstance.installDir.empty()) {
+        existingManifest = installedInstance.manifestPath;
+        return installedInstance.installDir;
     }
     if (!context.args.defaultDestination.empty()) {
         return context.args.defaultDestination;
@@ -470,18 +470,10 @@ std::string ResolveUninstallManifestPath(const ExtendedInstallationMetadata* met
     if (!metadata) {
         return {};
     }
-    const auto installDirIt = metadata->installInfo.values.find("installDir");
-    if (installDirIt == metadata->installInfo.values.end()) {
-        return {};
-    }
-    std::string manifestPath;
-    std::string installDir;
-    if (resolveInstallInfoFromRegistry(metadata->installInfo.path,
-                                       installDirIt->second.key,
-                                       manifestPath,
-                                       installDir) &&
-        !manifestPath.empty()) {
-        return manifestPath;
+    InstalledInstanceInfo installedInstance;
+    if (resolveInstalledInstanceFromInstallRoots(*metadata, installedInstance) &&
+        !installedInstance.manifestPath.empty()) {
+        return installedInstance.manifestPath;
     }
     return {};
 }
@@ -508,6 +500,7 @@ InstallConfig BuildUninstallConfigFromManifest(const std::string& manifestPath) 
 }
 
 int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
+    (void)repairMode;
     CliSupport console;
     InstallerPathResolver pathResolver;
     MetadataParser parser;
@@ -520,10 +513,25 @@ int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
     SetInstallerAppNameEnv(metadata.appName);
     EnsureInstallerLoggingInitialized();
 
+    InstalledInstanceInfo installedInstance;
+    const bool hasInstalledInstance =
+        resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
+        installedInstance.found;
+
+    if (hasInstalledInstance) {
+        const int versionOrder =
+            compareSemanticVersion(metadata.appVersion, installedInstance.installedVersion);
+        if (versionOrder <= 0) {
+            console.showError("Silent install only supports upgrading to a higher version.");
+            return INSTALLER_EXIT_FAILED;
+        }
+    }
+
     std::string existingManifest;
-    std::string installPath = ResolveInstallPathForSilentRun(metadata, pathResolver, context, repairMode, existingManifest);
+    std::string installPath =
+        ResolveInstallPathForSilentRun(metadata, pathResolver, context, existingManifest);
     if (installPath.empty()) {
-        console.showError(repairMode ? "Repair target not found." : "Silent install requires a valid installation path.");
+        console.showError("Silent install requires a valid installation path.");
         return INSTALLER_EXIT_FAILED;
     }
 
@@ -541,7 +549,6 @@ int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
     options.selectedComponentIds = context.args.selectedComponents;
     options.installAllComponents = context.args.installAllComponents;
     options.writeUninstallRegistry = true;
-    options.cleanupOldInstallRequested = repairMode;
     options.overrideAutoStartup = context.args.autoStartupSpecified;
     options.autoStartupEnabled = context.args.autoStartupEnabled;
     options.overrideDesktopIcons = context.args.desktopIconSpecified;
@@ -560,6 +567,7 @@ int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
 }
 
 int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, bool repairMode) {
+    (void)repairMode;
     ScopedComInit com;
     if (!com.ok()) {
         GUIHelpers::ShowErrorDialog(nullptr, L"Error", L"Failed to initialize COM.");
@@ -578,12 +586,10 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, boo
     }
 
     InstallerPathResolver pathResolver;
-    std::string repairManifest;
-    std::string repairInstallDir;
-    if (repairMode && !TryResolveRepairInstallDir(metadata, pathResolver, repairManifest, repairInstallDir)) {
-        GUIHelpers::ShowErrorDialog(nullptr, GetRepairTitle(L""), L"Repair target not found.");
-        return 1;
-    }
+    InstalledInstanceInfo installedInstance;
+    const bool overwriteMode =
+        resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
+        installedInstance.found;
 
     if (metadata.installRequireAdmin && !isRunningAsAdmin()) {
         if (relaunchSelfAsAdmin()) {
@@ -596,9 +602,9 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, boo
     }
 
     InstallConfig config = CreateInstallConfigFromMetadata(metadata);
-    config.repairMode = repairMode;
-    if (repairMode) {
-        config.defaultInstallPath = Utf8ToWide(repairInstallDir);
+    config.overwriteMode = overwriteMode;
+    if (overwriteMode && !installedInstance.installDir.empty()) {
+        config.defaultInstallPath = Utf8ToWide(installedInstance.installDir);
     }
 
     // Deferred: only needed by child processes spawned during installation.
@@ -614,13 +620,11 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, boo
 
     auto frame = std::make_unique<GUIManager>();
     frame->SetUninstallMode(false);
-    frame->SetRepairMode(repairMode);
+    frame->SetOverwriteMode(overwriteMode);
     frame->SetInstallConfig(config);
     frame->SetInstallMetadata(metadata);
 
-    const std::wstring title = repairMode
-                                   ? GetRepairTitle(config.languageCode)
-                                   : GUIHelpers::GetLocalizedText(L"msg.title.install", L"");
+    const std::wstring title = GUIHelpers::GetLocalizedText(L"msg.title.install", L"");
     return RunGuiWindow(*frame, title, resources, false, WindowSize{800, 600});
 }
 
@@ -690,6 +694,9 @@ int RunGuiUninstallMode(HINSTANCE hInstance) {
     auto frame = std::make_unique<GUIManager>();
     frame->SetUninstallMode(true);
     frame->SetInstallConfig(BuildUninstallConfigFromManifest(manifestPath));
+    if (metadataPtr) {
+        frame->SetInstallMetadata(*metadataPtr);
+    }
     return RunGuiWindow(*frame,
                         GUIHelpers::GetLocalizedText(L"msg.title.uninstall", L""),
                         resources,
@@ -713,17 +720,8 @@ LaunchContext BuildLaunchContextFromCommandLine(LaunchBinary binary) {
     std::vector<char*> argv = BuildArgv(context.utf8Args);
     context.args = console.parseInstallerArgs(static_cast<int>(context.utf8Args.size()), argv.data());
 
-    if (HasFlag(wideArgs, std::wstring(L"--cleanup-self"))) {
-        context.mode = LaunchMode::CleanupSelf;
-        return context;
-    }
-
     if (binary == LaunchBinary::Installer) {
-        if (context.args.repair) {
-            context.mode = context.args.silent ? LaunchMode::RepairSilent : LaunchMode::RepairGui;
-        } else {
-            context.mode = context.args.silent ? LaunchMode::InstallSilent : LaunchMode::InstallGui;
-        }
+        context.mode = context.args.silent ? LaunchMode::InstallSilent : LaunchMode::InstallGui;
     } else {
         context.mode = context.args.silent ? LaunchMode::UninstallSilent : LaunchMode::UninstallGui;
     }
@@ -744,24 +742,16 @@ int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
         return INSTALLER_EXIT_SUCCESS;
     }
 
-    if (context.binary == LaunchBinary::Installer &&
-        context.args.silent &&
-        context.args.repair) {
-        console.showError("Silent mode does not support --repair.");
-        return INSTALLER_EXIT_FAILED;
+    const std::vector<std::wstring> wideArgs = GetWideArgs();
+    if (HasFlag(wideArgs, std::wstring(L"--cleanup-self"))) {
+        return RunCleanupHelper(wideArgs);
     }
 
     switch (context.mode) {
-        case LaunchMode::CleanupSelf:
-            return RunCleanupHelper(GetWideArgs());
         case LaunchMode::InstallGui:
             return RunGuiInstallLikeMode(hInstance, context, false);
         case LaunchMode::InstallSilent:
             return RunSilentInstallLikeMode(context, false);
-        case LaunchMode::RepairGui:
-            return RunGuiInstallLikeMode(hInstance, context, true);
-        case LaunchMode::RepairSilent:
-            return RunSilentInstallLikeMode(context, true);
         case LaunchMode::UninstallGui:
             return RunGuiUninstallMode(hInstance);
         case LaunchMode::UninstallSilent:

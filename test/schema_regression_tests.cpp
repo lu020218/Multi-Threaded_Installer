@@ -496,6 +496,12 @@ void TestBuildInstallExecutionPlanUsesConfiguredInstallRoots() {
             "Previous install dir should come from configured installRoots");
     Require(plan.pathDecision.mode == InstallTargetMode::OverwriteInstall,
             "Plan should enter overwrite mode when previous install is found");
+    Require(normalizePathForCompare(plan.pathDecision.resolvedInstallRoot) ==
+                normalizePathForCompare("C:\\NewInstallPath"),
+            "Overwrite install should preserve the requested install root");
+    Require(normalizePathForCompare(plan.pathDecision.cleanupTargetInstallRoot) ==
+                normalizePathForCompare(previousInstallDir.string()),
+            "Overwrite cleanup target should remain the previous install root");
 }
 
 void TestInstallRootsAreOnlyDiscoverySource() {
@@ -534,6 +540,17 @@ void TestCompareSemanticVersion() {
     Require(compareSemanticVersion("1.2.4", "1.2.3") > 0, "Higher patch version should compare greater");
     Require(compareSemanticVersion("1.2.3", "1.2.3") == 0, "Equal versions should compare equal");
     Require(compareSemanticVersion("1.2.3", "1.2.4") < 0, "Lower patch version should compare smaller");
+}
+
+void TestAppendPathLeafIfMissing() {
+    Require(normalizePathForCompare(
+                appendPathLeafIfMissing("C:\\Apps", "SampleDesktopApp")) ==
+                normalizePathForCompare("C:\\Apps\\SampleDesktopApp"),
+            "Selected install directory should be completed with app id when leaf differs");
+    Require(normalizePathForCompare(
+                appendPathLeafIfMissing("C:\\Apps\\SampleDesktopApp", "SampleDesktopApp")) ==
+                normalizePathForCompare("C:\\Apps\\SampleDesktopApp"),
+            "Selected install directory should not duplicate app id when leaf already matches");
 }
 
 void TestCleanupUpgradeSystemArtifactsExecutesExplicitRules() {
@@ -727,6 +744,8 @@ int main() {
          &TestInstallRootsAreOnlyDiscoverySource},
         {"compare_semantic_version",
          &TestCompareSemanticVersion},
+        {"append_path_leaf_if_missing",
+         &TestAppendPathLeafIfMissing},
         {"cleanup_upgrade_system_artifacts_executes_explicit_rules",
          &TestCleanupUpgradeSystemArtifactsExecutesExplicitRules},
         {"uninstall_from_manifest_executes_explicit_cleanup",

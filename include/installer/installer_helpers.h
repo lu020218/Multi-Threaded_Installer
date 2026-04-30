@@ -61,6 +61,7 @@ std::string getCurrentExecutablePath();
 std::string resolveEffectiveAppId(const std::string& appId, const std::string& applicationName);
 std::string resolveEffectiveDirectoryName(const std::string& directoryName,
                                           const std::string& applicationName);
+std::string appendPathLeafIfMissing(const std::string& basePath, const std::string& expectedLeaf);
 std::string getLocalManifestPath(const std::string& exePath);
 bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath);
 

@@ -42,12 +42,14 @@ InstallPathDecision ResolveInstallPathDecision(InstallerPathResolver& pathResolv
 
     if (hasPreviousInstall && !previousInstallDir.empty()) {
         decision.mode = InstallTargetMode::OverwriteInstall;
-        decision.resolvedInstallRoot = previousInstallDir;
+        decision.cleanupTargetInstallRoot = previousInstallDir;
     }
 
     decision.diskCheckPath =
         decision.resolvedInstallRoot.empty() ? decision.requestedInstallRoot : decision.resolvedInstallRoot;
-    decision.cleanupTargetInstallRoot = decision.resolvedInstallRoot;
+    if (decision.cleanupTargetInstallRoot.empty()) {
+        decision.cleanupTargetInstallRoot = decision.resolvedInstallRoot;
+    }
     return decision;
 }
 

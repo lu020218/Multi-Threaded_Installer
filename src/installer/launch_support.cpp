@@ -1,4 +1,4 @@
-#include "installer/launch_support.h"
+﻿#include "installer/launch_support.h"
 
 #include "common/installer_exit_codes.h"
 #include "common/installer_logger.h"
@@ -388,43 +388,20 @@ int RunGuiWindow(GUIManager& frame,
     return 0;
 }
 
-std::wstring GetOverwriteTitle(const std::wstring& languageCode) {
-    std::wstring lowered = languageCode;
-    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                   [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
-    if (lowered.find(L"zh") != std::wstring::npos) {
-        return L"修复向导";
-    }
-    return L"Repair Wizard";
-}
-
-bool TryResolveInstalledInstanceDir(const ExtendedInstallationMetadata& metadata,
-                                    std::string& manifestPath,
-                                    std::string& installDir) {
-    InstalledInstanceInfo installedInstance;
-    if (!resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) ||
-        !installedInstance.found ||
-        installedInstance.installDir.empty()) {
-        return false;
-    }
-    manifestPath = installedInstance.manifestPath;
-    installDir = installedInstance.installDir;
-    return true;
-}
-
 std::string ResolveInstallPathForSilentRun(const ExtendedInstallationMetadata& metadata,
                                            InstallerPathResolver& pathResolver,
                                            const LaunchContext& context,
                                            std::string& existingManifest) {
+    if (!context.args.defaultDestination.empty()) {
+        return context.args.defaultDestination;
+    }
+
     InstalledInstanceInfo installedInstance;
     if (resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
         installedInstance.found &&
         !installedInstance.installDir.empty()) {
         existingManifest = installedInstance.manifestPath;
         return installedInstance.installDir;
-    }
-    if (!context.args.defaultDestination.empty()) {
-        return context.args.defaultDestination;
     }
     return pathResolver.expandEnvironmentVariables(metadata.installDefaultDir);
 }
@@ -499,8 +476,7 @@ InstallConfig BuildUninstallConfigFromManifest(const std::string& manifestPath) 
     return config;
 }
 
-int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
-    (void)repairMode;
+int RunSilentInstallLikeMode(const LaunchContext& context) {
     CliSupport console;
     InstallerPathResolver pathResolver;
     MetadataParser parser;
@@ -566,8 +542,7 @@ int RunSilentInstallLikeMode(const LaunchContext& context, bool repairMode) {
     return result.cancelled ? INSTALLER_EXIT_CANCELLED : INSTALLER_EXIT_FAILED;
 }
 
-int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, bool repairMode) {
-    (void)repairMode;
+int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     ScopedComInit com;
     if (!com.ok()) {
         GUIHelpers::ShowErrorDialog(nullptr, L"Error", L"Failed to initialize COM.");
@@ -624,7 +599,7 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context, boo
     frame->SetInstallConfig(config);
     frame->SetInstallMetadata(metadata);
 
-    const std::wstring title = GUIHelpers::GetLocalizedText(L"msg.title.install", L"");
+    const std::wstring title = config.applicationName.empty() ? L"Installer" : config.applicationName;
     return RunGuiWindow(*frame, title, resources, false, WindowSize{800, 600});
 }
 
@@ -693,12 +668,13 @@ int RunGuiUninstallMode(HINSTANCE hInstance) {
 
     auto frame = std::make_unique<GUIManager>();
     frame->SetUninstallMode(true);
-    frame->SetInstallConfig(BuildUninstallConfigFromManifest(manifestPath));
     if (metadataPtr) {
         frame->SetInstallMetadata(*metadataPtr);
     }
+    const InstallConfig uninstallConfig = BuildUninstallConfigFromManifest(manifestPath);
+    frame->SetInstallConfig(uninstallConfig);
     return RunGuiWindow(*frame,
-                        GUIHelpers::GetLocalizedText(L"msg.title.uninstall", L""),
+                        uninstallConfig.applicationName.empty() ? L"Uninstaller" : uninstallConfig.applicationName,
                         resources,
                         true,
                         WindowSize{560, 350});
@@ -749,9 +725,9 @@ int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
 
     switch (context.mode) {
         case LaunchMode::InstallGui:
-            return RunGuiInstallLikeMode(hInstance, context, false);
+            return RunGuiInstallLikeMode(hInstance, context);
         case LaunchMode::InstallSilent:
-            return RunSilentInstallLikeMode(context, false);
+            return RunSilentInstallLikeMode(context);
         case LaunchMode::UninstallGui:
             return RunGuiUninstallMode(hInstance);
         case LaunchMode::UninstallSilent:
@@ -762,3 +738,4 @@ int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
 }
 
 } // namespace MultiThreadedInstaller
+

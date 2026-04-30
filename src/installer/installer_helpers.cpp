@@ -170,6 +170,32 @@ std::string resolveEffectiveDirectoryName(const std::string& directoryName,
     return trimAscii(applicationName);
 }
 
+std::string appendPathLeafIfMissing(const std::string& basePath, const std::string& expectedLeaf) {
+    const std::string trimmedLeaf = trimAscii(expectedLeaf);
+    if (basePath.empty() || trimmedLeaf.empty()) {
+        return basePath;
+    }
+
+    std::filesystem::path normalized = PathFromUtf8(basePath).lexically_normal();
+    std::filesystem::path leafProbe = normalized;
+    while (!leafProbe.empty() && leafProbe.filename().empty() && leafProbe.has_parent_path()) {
+        leafProbe = leafProbe.parent_path();
+    }
+
+    std::string currentLeaf = Utf8FromPath(leafProbe.filename());
+    std::transform(currentLeaf.begin(), currentLeaf.end(), currentLeaf.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    std::string loweredExpected = trimmedLeaf;
+    std::transform(loweredExpected.begin(), loweredExpected.end(), loweredExpected.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    if (currentLeaf == loweredExpected) {
+        return Utf8FromPath(normalized);
+    }
+    return Utf8FromPath(normalized / PathFromUtf8(trimmedLeaf));
+}
+
 std::string normalizePathForCompare(const std::string& path) {
     std::string normalized = path;
     std::replace(normalized.begin(), normalized.end(), '/', '\\');

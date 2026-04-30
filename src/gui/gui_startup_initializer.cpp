@@ -5,6 +5,7 @@
 #include "../../include/gui/gui_runtime_utils.h"
 #include "../../include/installer/path_resolver.h"
 #include "../../include/installer/registry_utils.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 
 #include <algorithm>
@@ -50,18 +51,6 @@ std::wstring ResolveInitialInstallPath(const InstallConfig& config) {
     }
 #endif
 
-    if (config.overwriteMode && !config.registryPath.empty() && !config.registryKey.empty()) {
-        std::string regPath = WideToUtf8(config.registryPath);
-        std::string regKey = WideToUtf8(config.registryKey);
-        std::string regValue;
-        if (readRegistryStringValue(regPath, regKey, regValue)) {
-            std::wstring regPathW = Utf8ToWide(regValue);
-            if (!regPathW.empty()) {
-                installPath = regPathW;
-            }
-        }
-    }
-
     return installPath;
 }
 
@@ -69,26 +58,18 @@ void ApplyInitialInstallPathUi(CPaintManagerUI& paintManager,
                                CEditUI* installPathEdit,
                                const std::wstring& installPath,
                                bool lockInstallPath) {
+    logInstallerInfo(std::string("[GUI][Startup] ApplyInitialInstallPathUi begin lockInstallPath=") +
+                     (lockInstallPath ? "true" : "false") +
+                     " hasEdit=" + (installPathEdit ? "true" : "false"));
     if (installPathEdit) {
+        logInstallerInfo("[GUI][Startup] Setting install path text.");
         installPathEdit->SetText(WStringToTStr(installPath));
-        if (lockInstallPath) {
-            installPathEdit->SetReadOnly(true);
-            installPathEdit->SetEnabled(false);
-        }
     }
-
-    if (!lockInstallPath) {
-        return;
+    if (lockInstallPath) {
+        logInstallerInfo("[GUI][Startup] Overwrite mode uses previous install path as the default editable value.");
     }
-
-    if (CControlUI* browseButton = paintManager.FindControl(_T("browse_button"))) {
-        browseButton->SetEnabled(false);
-        browseButton->SetVisible(false);
-    }
-    if (CControlUI* browseButton = paintManager.FindControl(_T("btnSelectDir"))) {
-        browseButton->SetEnabled(false);
-        browseButton->SetVisible(false);
-    }
+    (void)paintManager;
+    logInstallerInfo("[GUI][Startup] ApplyInitialInstallPathUi end.");
 }
 
 } // namespace MultiThreadedInstaller

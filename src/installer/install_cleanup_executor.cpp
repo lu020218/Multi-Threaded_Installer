@@ -30,15 +30,13 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
     }
 
     std::string normalizedOld = normalizePathForCompare(plan.previousInstallDir);
-    std::string normalizedNew = normalizePathForCompare(
-        plan.pathDecision.cleanupTargetInstallRoot.empty()
-            ? options.installPath
-            : plan.pathDecision.cleanupTargetInstallRoot);
+    std::string normalizedNew = normalizePathForCompare(plan.pathDecision.resolvedInstallRoot);
     reporter.EmitMessage(InstallServiceEventType::Info,
                          "Detected previous install at: " + plan.previousInstallDir);
 
     logInstallerInfo(std::string("[InstallFlow][Cleanup] start previousManifest=") +
                      plan.previousManifest + " previousInstallDir=" + plan.previousInstallDir +
+                     " resolvedInstallRoot=" + plan.pathDecision.resolvedInstallRoot +
                      " targetInstallRoot=" + plan.pathDecision.cleanupTargetInstallRoot);
     reporter.EmitStatus(InstallServiceStatus::Precheck,
                         InstallServicePhase::CleanupOldInstall,
@@ -59,7 +57,7 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
     if (!sameInstallRoot) {
         if (!cleanupPreviousInstallForUpgrade(plan.previousManifest,
                                               plan.previousInstallDir,
-                                              plan.pathDecision.cleanupTargetInstallRoot,
+                                              plan.pathDecision.resolvedInstallRoot,
                                               console,
                                               cleanupProgress,
                                               options.cancellationCallback)) {

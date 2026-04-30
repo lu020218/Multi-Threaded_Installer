@@ -11,17 +11,22 @@ namespace MultiThreadedInstaller::GUIInstallFlowUtils {
 
 namespace {
 
-std::wstring ResolveEffectiveDirectoryNameFromConfig(const InstallConfig& config) {
-    const std::string directoryName = resolveEffectiveDirectoryName(
-        WideToUtf8(config.directoryName), WideToUtf8(config.applicationName));
-    return Utf8ToWide(directoryName);
+std::wstring ResolveEffectiveAppIdFromConfig(const InstallConfig& config) {
+    return Utf8ToWide(resolveEffectiveAppId(WideToUtf8(config.appId),
+                                            WideToUtf8(config.applicationName)));
 }
 
 } // namespace
 std::wstring ResolveSelectedInstallPath(const InstallConfig& config,
                                         const std::wstring& selectedPath) {
-    (void)config;
-    return selectedPath;
+    const std::wstring effectiveAppId = ResolveEffectiveAppIdFromConfig(config);
+    if (selectedPath.empty() || effectiveAppId.empty()) {
+        return selectedPath;
+    }
+
+    const std::string adjustedPath =
+        appendPathLeafIfMissing(WideToUtf8(selectedPath), WideToUtf8(effectiveAppId));
+    return Utf8ToWide(adjustedPath);
 }
 
 void UpdateInstallButtonEnabled(CButtonUI* installButton,

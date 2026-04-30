@@ -1,4 +1,4 @@
-#include "../../include/gui/gui_manager.h"
+﻿#include "../../include/gui/gui_manager.h"
 #include "../../include/gui/page_controller.h"
 #include "../../include/gui/gui_helpers.h"
 #include "../../include/gui/gui_install_actions.h"
@@ -242,19 +242,26 @@ void GUIManager::InitWindow() {
     logInstallerInfo(std::string("[GUI] GUI mode uninstall=") +
                      (m_uninstallMode ? "true" : "false"));
 
+    logInstallerInfo("[GUI] Resolving initial install path.");
     std::wstring installPath = ResolveInitialInstallPath(m_config);
+    logInstallerInfo("[GUI] Applying initial install path UI.");
     ApplyInitialInstallPathUi(m_pm, m_pInstallPathEdit, installPath, m_overwriteMode);
 
+    logInstallerInfo("[GUI] Updating disk space info.");
     UpdateDiskSpaceInfo(installPath);
     
+    logInstallerInfo("[GUI] Updating install button state.");
     UpdateInstallButtonState();
     
     if (m_pInstallPathEdit) {
+        logInstallerInfo("[GUI] Setting install path focus.");
         m_pInstallPathEdit->SetFocus();
     }
 
     if (!m_uninstallMode) {
+        logInstallerInfo("[GUI] Initializing component selection UI.");
         InitializeComponentSelectionUi();
+        logInstallerInfo("[GUI] Component selection UI initialized.");
     }
     
 
@@ -327,19 +334,6 @@ void GUIManager::InitControls() {
     }
     
     GUITextPresenter::BindStaticAppTexts(m_pm, m_config);
-
-    if (false && m_overwriteMode) {
-        const bool isChinese = m_config.languageCode.find(L"zh") != std::wstring::npos;
-        const std::wstring repairText = isChinese ? L"修复" : L"Repair";
-        const std::wstring repairTitle = isChinese ? L"修复向导" : L"Repair Wizard";
-        if (m_pInstallButton) {
-            m_pInstallButton->SetText(WStringToTStr(repairText));
-        }
-        if (auto* title = static_cast<CLabelUI*>(m_pm.FindControl(_T("title")))) {
-            title->SetText(WStringToTStr(repairTitle));
-        }
-    }
-    
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetWelcomePageIndex());
     }
@@ -618,10 +612,6 @@ void GUIManager::OnCancelButtonClick() {
 }
 
 void GUIManager::OnBrowseButtonClick() {
-    if (m_overwriteMode) {
-        return;
-    }
-
     std::wstring currentPath;
     if (m_pInstallPathEdit) {
         currentPath = m_pInstallPathEdit->GetText().GetData();
@@ -813,6 +803,17 @@ void GUIManager::RefreshLocalizedText() {
     UpdateDiskSpaceInfo(currentPath);
 }
 
+void GUIManager::UpdateWindowTitle() {
+    if (!m_hWnd || !::IsWindow(m_hWnd)) {
+        return;
+    }
+
+    const std::wstring fallback = m_config.applicationName.empty() ? L"Installer" : m_config.applicationName;
+    const std::wstring titleKey = m_uninstallMode ? L"msg.title.uninstall" : L"msg.title.install";
+    const std::wstring title = GUIHelpers::GetLocalizedText(titleKey, fallback);
+    ::SetWindowTextW(m_hWnd, title.c_str());
+}
+
 void GUIManager::HandleProgressMessage(ProgressMessageData* pData) {
     if (!pData) {
         return;
@@ -917,7 +918,9 @@ void GUIManager::ApplyLanguageByCode(const std::wstring& code) {
     if (!GUITextPresenter::ApplyLanguage(m_pm, m_config, code)) {
         return;
     }
+    RefreshLocalizedText();
     RefreshLicenseText();
+    UpdateWindowTitle();
 }
 
 void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) {
@@ -935,3 +938,4 @@ void GUIManager::HandleUninstallCompletionMessage(CompletionMessageData* pData) 
 }
 
 } // namespace MultiThreadedInstaller
+

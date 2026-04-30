@@ -179,6 +179,7 @@ private:
     void HandleCompletionMessage(CompletionMessageData* pData);
     void HandleUninstallCompletionMessage(CompletionMessageData* pData);
     void RefreshLocalizedText();
+    void UpdateWindowTitle();
     void StartProgressTimer();
     void StopProgressTimer();
     void TickProgressAnimation();

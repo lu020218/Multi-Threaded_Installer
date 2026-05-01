@@ -1,10 +1,12 @@
 #include "packager/folder_scanner.h"
 #include "packager/compression_module.h"
 #include "packager/metadata_generator.h"
+#include "packager/package_manifest_builder.h"
 #include "packager/installer_generator.h"
 #include "packager/configuration_manager.h"
 #include "packager/icon_updater.h"
 #include "packager/version_info_updater.h"
+#include "common/package_manifest_codec.h"
 #include "installer/console_interface.h"
 #include "common/utf8_utils.h"
 #include <iostream>
@@ -362,10 +364,10 @@ int main(int argc, char* argv[]) {
     console.showPackagingProgress("Finalizing", 1.0f);
     
 
-    MetadataGenerator metadataGen;
     auto metadataStart = std::chrono::steady_clock::now();
-    auto extendedMetadata = metadataGen.generateExtendedMetadata(compressionResults, folders, config);
-    auto serializedMetadata = metadataGen.serializeExtendedMetadata(extendedMetadata);
+    PackageManifestBuilder manifestBuilder;
+    PackageManifest manifest = manifestBuilder.build(compressionResults, folders, config);
+    auto serializedMetadata = SerializePackageManifest(manifest);
     timings.metadataSec = ElapsedSeconds(metadataStart, std::chrono::steady_clock::now());
     
 

@@ -270,6 +270,7 @@ set(PACKAGER_SOURCES
     src/packager/compression_module.cpp
     src/packager/folder_payload_compressor.cpp
     src/packager/metadata_generator.cpp
+    src/packager/package_manifest_builder.cpp
     src/packager/installer_generator.cpp
     src/packager/icon_updater.cpp
     src/packager/version_info_updater.cpp
@@ -290,6 +291,7 @@ set(PACKAGER_SOURCES
 set(INSTALLER_SOURCES
     src/installer/metadata_parser.cpp
     src/installer/metadata_binary_reader.cpp
+    src/installer/package_manifest_validator.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp
     src/installer/folder_payload_reader.cpp
@@ -324,6 +326,7 @@ set(INSTALLER_SOURCES
 set(UNINSTALLER_SOURCES
     src/installer/metadata_parser.cpp
     src/installer/metadata_binary_reader.cpp
+    src/installer/package_manifest_validator.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp
     src/installer/folder_payload_reader.cpp
@@ -390,6 +393,8 @@ set(COMMON_SOURCES
     src/common/lzma_loader.cpp
     src/common/utf8_utils.cpp
     src/common/version_utils.cpp
+    src/common/package_manifest.cpp
+    src/common/package_manifest_codec.cpp
 )
 
 set(POST_SETUP_AGENT_SOURCES

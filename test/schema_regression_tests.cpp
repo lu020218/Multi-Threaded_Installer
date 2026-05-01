@@ -2,7 +2,10 @@
 #include "packager/configuration_manager.h"
 #include "packager/configuration_loader.h"
 #include "packager/metadata_generator.h"
+#include "packager/package_manifest_builder.h"
 #include "installer/metadata_parser.h"
+#include "common/package_manifest_codec.h"
+#include "installer/package_manifest_validator.h"
 #include "installer/install_plan_builder.h"
 #include "installer/install_manifest_store.h"
 #include "installer/installer_helpers.h"
@@ -246,6 +249,13 @@ PackagerConfiguration BuildConfigFixture() {
     config.app.version = "1.2.3";
     config.app.directoryName = "SampleDesktopApp";
     config.app.website = "https://example.com";
+    config.ui.desktopShortcut.defaultName = "Sample Shortcut";
+    config.ui.desktopShortcut.i18n["zh_CN"] = "示例应用";
+    config.ui.desktopShortcut.i18n["en_US"] = "Sample Shortcut";
+    UiLinkBinding link;
+    link.control = "websiteLink";
+    link.url = "https://example.com";
+    config.ui.links.push_back(link);
 
     config.install.defaultDir = "%ProgramFiles%\\SampleDesktopApp";
     config.install.requireAdmin = true;
@@ -285,6 +295,15 @@ PackagerConfiguration BuildConfigFixture() {
     appFolder.source = "bin";
     appFolder.target = "%InstallDir%";
     config.layout.folders.push_back(appFolder);
+
+    ComponentConfig component;
+    component.id = "core";
+    component.name = "Core";
+    component.required = true;
+    component.defaultSelected = true;
+    component.folders.push_back("app");
+    component.source.type = ComponentSourceType::EMBEDDED;
+    config.layout.components.push_back(component);
 
     RegistryEntry installRegistry;
     installRegistry.path = "HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp";
@@ -367,8 +386,103 @@ void TestMetadataRoundTrip() {
     Require(parsed.installMutexName == config.install.mutexName, "mutex name lost in metadata");
     Require(parsed.extendedPayloadMappings.size() == 1, "Expected one extended payload mapping");
     Require(parsed.extendedPayloadMappings[0].target == "%InstallDir%", "Folder target lost in metadata");
+    Require(parsed.desktopShortcutDefaultName == "Sample Shortcut",
+            "Desktop shortcut default name lost in metadata");
+    Require(parsed.desktopShortcutLocalizedNames.at("zh_CN") == "示例应用",
+            "Desktop shortcut localized names lost in metadata");
+    Require(parsed.uiLinkBindings.size() == 1, "UI links lost in metadata");
+    Require(parsed.layoutComponents.size() == 1, "Components lost in metadata");
     Require(parsed.lifecycleUpgradeCleanup.installRoots.size() == 1, "Upgrade installRoots lost in metadata");
     Require(parsed.lifecycleUninstallCleanup.processes.size() == 1, "Uninstall processes lost in metadata");
+}
+
+void TestPackageManifestBuilderAndCodecRoundTrip() {
+    PackagerConfiguration config = BuildConfigFixture();
+
+    FolderInfo folder;
+    folder.id = "app";
+    folder.sourcePath = "bin";
+    folder.targetPath = "%InstallDir%";
+
+    CompressionResult result;
+    result.originalSize = 123;
+    result.compressedSize = 45;
+    result.checksum = 0x12345678;
+    result.algorithm = CompressionAlgorithm::ZSTD;
+    result.fileIndex.push_back({"SampleDesktopApp.exe", 0, 123});
+
+    PackageManifestBuilder builder;
+    PackageManifest manifest = builder.build({result}, {folder}, config);
+    Require(manifest.identity.appName == config.app.name, "Manifest identity app name mismatch");
+    Require(manifest.payload.folders.size() == 1, "Manifest payload folder count mismatch");
+    Require(manifest.payload.folders[0].target == "%InstallDir%", "Manifest folder target mismatch");
+    Require(manifest.ui.desktopShortcutLocalizedNames.at("zh_CN") == "示例应用",
+            "Manifest UI localized shortcut mismatch");
+
+    std::string validationError;
+    Require(ValidatePackageManifest(manifest, validationError),
+            validationError.empty() ? "Manifest should validate" : validationError);
+
+    std::vector<uint8_t> bytes = SerializePackageManifest(manifest);
+    PackageManifest parsed;
+    std::string parseError;
+    Require(DeserializePackageManifest(bytes, parsed, parseError),
+            parseError.empty() ? "Manifest should deserialize" : parseError);
+    Require(parsed.payload.folders[0].algorithm == CompressionAlgorithm::ZSTD,
+            "Manifest payload algorithm lost after codec round-trip");
+    Require(parsed.ui.desktopShortcutDefaultName == "Sample Shortcut",
+            "Manifest UI default shortcut lost after codec round-trip");
+    Require(parsed.components.components.size() == 1,
+            "Manifest components lost after codec round-trip");
+
+    MetadataParser parser;
+    ExtendedInstallationMetadata projected = parser.deserializeExtendedMetadata(bytes);
+    Require(parser.validateMetadata(projected), "Projected manifest should validate as metadata");
+    Require(projected.extendedPayloadMappings[0].target == "%InstallDir%",
+            "Projected metadata target mismatch");
+}
+
+void TestPackageManifestValidatorRejectsInvalidPayloadAndComponents() {
+    PackagerConfiguration config = BuildConfigFixture();
+    FolderInfo folder;
+    folder.id = "app";
+    folder.sourcePath = "bin";
+    folder.targetPath = "%InstallDir%";
+    CompressionResult result;
+    result.originalSize = 10;
+    result.compressedSize = 5;
+    result.algorithm = CompressionAlgorithm::LZMA2_XZ;
+
+    PackageManifestBuilder builder;
+    PackageManifest manifest = builder.build({result}, {folder}, config);
+    std::string error;
+    Require(ValidatePackageManifest(manifest, error), "Baseline manifest should validate");
+
+    PackageManifest badRange = manifest;
+    badRange.payload.folders[0].offset = 10;
+    badRange.payload.folders[0].compressedSize = 10;
+    Require(!ValidatePackageManifest(badRange, error),
+            "Validator should reject payload range outside data area");
+
+    PackageManifest badFolderRef = manifest;
+    badFolderRef.components.components[0].folders[0] = "missing";
+    Require(!ValidatePackageManifest(badFolderRef, error),
+            "Validator should reject unknown component folder reference");
+
+    PackageManifest badDependency = manifest;
+    ComponentConfig extra = badDependency.components.components[0];
+    extra.id = "addon";
+    extra.dependsOn.push_back("addon");
+    badDependency.components.components.push_back(extra);
+    Require(!ValidatePackageManifest(badDependency, error),
+            "Validator should reject component dependency cycle");
+
+    PackageManifest badDownload = manifest;
+    badDownload.components.components[0].source.type = ComponentSourceType::DOWNLOAD;
+    badDownload.components.components[0].source.download.url = "http://example.com/setup.exe";
+    badDownload.components.components[0].source.download.sha256 = "not-a-sha";
+    Require(!ValidatePackageManifest(badDownload, error),
+            "Validator should reject invalid download component metadata");
 }
 
 void TestPathResolverExpandEnvironmentVariables() {
@@ -736,6 +850,9 @@ int main() {
         {"load_valid_schema", &TestLoadValidSchema},
         {"reject_old_schema", &TestRejectOldSchema},
         {"metadata_round_trip", &TestMetadataRoundTrip},
+        {"package_manifest_builder_and_codec_round_trip", &TestPackageManifestBuilderAndCodecRoundTrip},
+        {"package_manifest_validator_rejects_invalid_payload_and_components",
+         &TestPackageManifestValidatorRejectsInvalidPayloadAndComponents},
         {"path_resolver_expand_environment_variables", &TestPathResolverExpandEnvironmentVariables},
         {"write_manifest_preserves_explicit_cleanup_schema", &TestWriteManifestPreservesExplicitCleanupSchema},
         {"build_install_execution_plan_uses_configured_install_roots",

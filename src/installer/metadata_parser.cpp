@@ -1,5 +1,7 @@
 #include "installer/metadata_parser.h"
 #include "installer/metadata_binary_reader.h"
+#include "common/package_manifest_codec.h"
+#include "installer/package_manifest_validator.h"
 #include "installer/installer_helpers.h"
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
@@ -84,16 +86,6 @@ bool ReadExtendedPayloadMapping(const std::vector<uint8_t>& data,
 
 } // namespace
 
-InstallationMetadata MetadataParser::parseEmbeddedMetadata() {
-    std::vector<uint8_t> embeddedData = dataPackagePath_.empty() ? readEmbeddedData() : readExternalMetadata();
-    if (embeddedData.empty()) {
-        META_LOG();
-        return InstallationMetadata{};
-    }
-    
-    return deserializeMetadata(embeddedData);
-}
-
 ExtendedInstallationMetadata MetadataParser::parseExtendedEmbeddedMetadata() {
     std::vector<uint8_t> embeddedData = dataPackagePath_.empty() ? readEmbeddedData() : readExternalMetadata();
     if (embeddedData.empty()) {
@@ -158,42 +150,18 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
     return metadata;
 }
 
-InstallationMetadata MetadataParser::deserializeMetadata(const std::vector<uint8_t>& data) {
-    InstallationMetadata metadata;
-    
-    if (data.size() < sizeof(BinaryMetadata)) {
-        META_LOG();
-        return metadata;
-    }
-    
-
-    BinaryMetadata header{};
-    size_t offset = 0;
-    if (!ReadPod<BinaryMetadata>(data, offset, header) || !validateHeader(header)) {
-        return metadata;
-    }
-    metadata.version = header.version;
-    metadata.folderCount = header.folderCount;
-
-    for (uint32_t i = 0; i < header.folderCount; ++i) {
-        FolderMapping mapping;
-        if (!ReadPayloadMapping(data, offset, mapping)) {
-            META_LOG();
-            break;
-        }
-        metadata.payloadMappings.push_back(mapping);
-    }
-    
-
-    metadata.totalPayloadCompressedSize = 0;
-    for (const auto& mapping : metadata.payloadMappings) {
-        metadata.totalPayloadCompressedSize += mapping.compressedSize;
-    }
-    
-    return metadata;
-}
-
 ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const std::vector<uint8_t>& data) {
+    PackageManifest manifest;
+    std::string manifestError;
+    if (DeserializePackageManifest(data, manifest, manifestError)) {
+        std::string validationError;
+        if (!ValidatePackageManifest(manifest, validationError)) {
+            META_LOG();
+            return ExtendedInstallationMetadata{};
+        }
+        return PackageManifestToExtendedMetadata(manifest);
+    }
+
     ExtendedInstallationMetadata metadata;
     
     if (data.size() < sizeof(BinaryMetadata)) {
@@ -231,7 +199,9 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         return metadata;
     }
 
-    if (!ReadString(data, offset, metadata.appWebsite, "appWebsite")) {
+    if (!ReadString(data, offset, metadata.appWebsite, "appWebsite") ||
+        !ReadString(data, offset, metadata.desktopShortcutDefaultName, "desktopShortcutDefaultName") ||
+        !ReadStringMap(data, offset, metadata.desktopShortcutLocalizedNames, "desktopShortcutLocalizedNames")) {
         return metadata;
     }
 
@@ -365,6 +335,18 @@ bool MetadataParser::validateHeader(const BinaryMetadata& header) {
         return false;
     }
     
+    return true;
+}
+
+bool MetadataParser::validateMetadata(const ExtendedInstallationMetadata& metadata) {
+    std::string error;
+    if (!ValidateExtendedInstallationMetadata(metadata, error)) {
+        META_LOG();
+        if (!error.empty()) {
+            logInstallerError("[Metadata] Validation failed: " + error);
+        }
+        return false;
+    }
     return true;
 }
 

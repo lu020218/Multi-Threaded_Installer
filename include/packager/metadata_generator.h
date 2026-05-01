@@ -10,18 +10,9 @@ public:
     MetadataGenerator() = default;
     ~MetadataGenerator() = default;
     
-
-    InstallationMetadata generateMetadata(const std::vector<CompressionResult>& results,
-                                        const std::vector<FolderInfo>& folderInfos);
-    
-
     ExtendedInstallationMetadata generateExtendedMetadata(const std::vector<CompressionResult>& results,
                                                          const std::vector<FolderInfo>& folderInfos,
                                                          const PackagerConfiguration& config);
-    
-
-    std::vector<uint8_t> serializeMetadata(const InstallationMetadata& metadata);
-    
 
     std::vector<uint8_t> serializeExtendedMetadata(const ExtendedInstallationMetadata& metadata);
     

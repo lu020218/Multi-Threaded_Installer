@@ -14,8 +14,10 @@ add_executable(SchemaRegressionTests
     ../src/packager/configuration_validator.cpp
     ../src/packager/configuration_manager.cpp
     ../src/packager/metadata_generator.cpp
+    ../src/packager/package_manifest_builder.cpp
     ../src/installer/metadata_parser.cpp
     ../src/installer/metadata_binary_reader.cpp
+    ../src/installer/package_manifest_validator.cpp
     ../src/installer/path_resolver.cpp
     ../src/installer/installer_helpers.cpp
     ../src/installer/file_io_utils.cpp
@@ -33,6 +35,8 @@ add_executable(SchemaRegressionTests
     ../src/common/types.cpp
     ../src/common/utf8_utils.cpp
     ../src/common/version_utils.cpp
+    ../src/common/package_manifest.cpp
+    ../src/common/package_manifest_codec.cpp
     ../src/common/installer_logger.cpp
 )
 

@@ -10,19 +10,12 @@ public:
     MetadataParser() = default;
     ~MetadataParser() = default;
     
-
-    InstallationMetadata parseEmbeddedMetadata();
-    
-
     ExtendedInstallationMetadata parseExtendedEmbeddedMetadata();
     
 
     bool validateMetadata(const InstallationMetadata& metadata);
+    bool validateMetadata(const ExtendedInstallationMetadata& metadata);
     
-
-    InstallationMetadata deserializeMetadata(const std::vector<uint8_t>& data);
-    
-
     ExtendedInstallationMetadata deserializeExtendedMetadata(const std::vector<uint8_t>& data);
 
     void setDataPackagePath(const std::string& dataPackagePath) { dataPackagePath_ = dataPackagePath; }

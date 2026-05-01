@@ -132,23 +132,6 @@ void AppendInstallInfoConfig(std::vector<uint8_t>& out, const InstallInfoConfig&
 
 } // namespace
 
-InstallationMetadata MetadataGenerator::generateMetadata(const std::vector<CompressionResult>& results,
-                                                       const std::vector<FolderInfo>& folderInfos) {
-    InstallationMetadata metadata;
-    metadata.version = Constants::VERSION;
-    metadata.folderCount = static_cast<uint32_t>(results.size());
-    metadata.totalPayloadCompressedSize = calculateTotalPayloadCompressedSize(results);
-    
-    uint64_t currentOffset = 0;
-    for (size_t i = 0; i < results.size() && i < folderInfos.size(); ++i) {
-        FolderMapping mapping = createFolderMapping(results[i], folderInfos[i], currentOffset);
-        metadata.payloadMappings.push_back(mapping);
-        currentOffset += results[i].compressedSize;
-    }
-    
-    return metadata;
-}
-
 ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const std::vector<CompressionResult>& results,
                                                                         const std::vector<FolderInfo>& folderInfos,
                                                                         const PackagerConfiguration& config) {
@@ -204,69 +187,6 @@ ExtendedInstallationMetadata MetadataGenerator::generateExtendedMetadata(const s
     return metadata;
 }
 
-std::vector<uint8_t> MetadataGenerator::serializeMetadata(const InstallationMetadata& metadata) {
-    std::vector<uint8_t> serialized;
-    
-
-    size_t stringDataSize = 0;
-    for (const auto& mapping : metadata.payloadMappings) {
-        stringDataSize += mapping.folderId.length() + 1; // +1 for null terminator
-        stringDataSize += mapping.folderName.length() + 1; // +1 for null terminator
-        stringDataSize += mapping.targetPath.length() + 1; // +1 for null terminator
-    }
-    
-
-    BinaryMetadata header;
-    header.magic = Constants::MAGIC_NUMBER;
-    header.version = metadata.version;
-    header.folderCount = metadata.folderCount;
-    header.metadataSize = sizeof(BinaryMetadata) + 
-                         metadata.payloadMappings.size() * (sizeof(uint64_t) * 4 + sizeof(uint32_t) * 3) + 
-                         stringDataSize;
-    header.dataOffset = header.metadataSize;
-    
-
-    const uint8_t* headerBytes = reinterpret_cast<const uint8_t*>(&header);
-    serialized.insert(serialized.end(), headerBytes, headerBytes + sizeof(BinaryMetadata));
-    
-
-    for (const auto& mapping : metadata.payloadMappings) {
-
-        const uint8_t* offsetBytes = reinterpret_cast<const uint8_t*>(&mapping.offset);
-        serialized.insert(serialized.end(), offsetBytes, offsetBytes + sizeof(uint64_t));
-        
-        const uint8_t* compressedSizeBytes = reinterpret_cast<const uint8_t*>(&mapping.compressedSize);
-        serialized.insert(serialized.end(), compressedSizeBytes, compressedSizeBytes + sizeof(uint64_t));
-        
-        const uint8_t* originalSizeBytes = reinterpret_cast<const uint8_t*>(&mapping.originalSize);
-        serialized.insert(serialized.end(), originalSizeBytes, originalSizeBytes + sizeof(uint64_t));
-        
-        const uint8_t* checksumBytes = reinterpret_cast<const uint8_t*>(&mapping.checksum);
-        serialized.insert(serialized.end(), checksumBytes, checksumBytes + sizeof(uint32_t));
-        
-        const uint8_t* algorithmBytes = reinterpret_cast<const uint8_t*>(&mapping.algorithm);
-        serialized.insert(serialized.end(), algorithmBytes, algorithmBytes + sizeof(CompressionAlgorithm));
-        
-
-        uint32_t folderIdLen = static_cast<uint32_t>(mapping.folderId.length());
-        const uint8_t* folderIdLenBytes = reinterpret_cast<const uint8_t*>(&folderIdLen);
-        serialized.insert(serialized.end(), folderIdLenBytes, folderIdLenBytes + sizeof(uint32_t));
-        serialized.insert(serialized.end(), mapping.folderId.begin(), mapping.folderId.end());
-
-        uint32_t folderNameLen = static_cast<uint32_t>(mapping.folderName.length());
-        const uint8_t* folderNameLenBytes = reinterpret_cast<const uint8_t*>(&folderNameLen);
-        serialized.insert(serialized.end(), folderNameLenBytes, folderNameLenBytes + sizeof(uint32_t));
-        serialized.insert(serialized.end(), mapping.folderName.begin(), mapping.folderName.end());
-        
-        uint32_t targetPathLen = static_cast<uint32_t>(mapping.targetPath.length());
-        const uint8_t* targetPathLenBytes = reinterpret_cast<const uint8_t*>(&targetPathLen);
-        serialized.insert(serialized.end(), targetPathLenBytes, targetPathLenBytes + sizeof(uint32_t));
-        serialized.insert(serialized.end(), mapping.targetPath.begin(), mapping.targetPath.end());
-    }
-    
-    return serialized;
-}
-
 std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const ExtendedInstallationMetadata& metadata) {
     std::vector<uint8_t> serialized;
     
@@ -289,6 +209,8 @@ std::vector<uint8_t> MetadataGenerator::serializeExtendedMetadata(const Extended
     AppendString(serialized, metadata.installDefaultDir);
     AppendString(serialized, metadata.appVersion);
     AppendString(serialized, metadata.appWebsite);
+    AppendString(serialized, metadata.desktopShortcutDefaultName);
+    AppendStringMap(serialized, metadata.desktopShortcutLocalizedNames);
     uint8_t installAutoStartupFlag = metadata.installAutoStartup ? 1 : 0;
     uint8_t installDesktopIconFlag = metadata.installDesktopIcon ? 1 : 0;
     uint8_t installRequireAdminFlag = metadata.installRequireAdmin ? 1 : 0;

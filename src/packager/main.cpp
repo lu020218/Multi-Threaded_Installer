@@ -383,67 +383,69 @@ int main(int argc, char* argv[]) {
     fs::path tempTemplatePath;
     bool usesTempTemplate = false;
     auto templateStart = std::chrono::steady_clock::now();
-    if (!config.app.product.iconPath.empty() ||
-        !config.app.product.productName.empty() ||
-        !config.app.product.fileDescription.empty() ||
-        !config.app.product.companyName.empty() ||
-        !config.app.product.copyright.empty() ||
-        !config.app.product.fileVersion.empty() ||
-        !config.app.product.productVersion.empty()) {
-        std::string baseTemplate = installerGen.findDefaultInstallerTemplatePath();
-        if (baseTemplate.empty()) {
-            console.showError("Failed to locate installer template for resource updates");
-            return 1;
+    std::string baseTemplate = installerGen.findDefaultInstallerTemplatePath();
+    if (baseTemplate.empty()) {
+        console.showError("Failed to locate installer template for resource updates");
+        return 1;
+    }
+
+    tempTemplatePath = makeTempTemplatePath(outputFilePath);
+    std::error_code copyError;
+    fs::copy_file(PathFromUtf8(baseTemplate), tempTemplatePath, fs::copy_options::overwrite_existing, copyError);
+    if (copyError) {
+        console.showError("Failed to create temporary installer template: " + copyError.message());
+        return 1;
+    }
+
+    if (!installerGen.embedInstallerTemplate(Utf8FromPath(tempTemplatePath))) {
+        console.showError("Failed to use temporary installer template");
+        return 1;
+    }
+
+    usesTempTemplate = true;
+
+    std::string manifestError;
+    if (!UpdateInstallerExecutionLevel(Utf8FromPath(tempTemplatePath),
+                                       config.install.requireAdmin,
+                                       manifestError)) {
+        console.showError("Failed to apply installer execution level: " + manifestError);
+        return 1;
+    }
+    console.showInfo(std::string("Applied installer execution level: ") +
+                     (config.install.requireAdmin ? "requireAdministrator" : "asInvoker"));
+
+    if (!config.app.product.iconPath.empty()) {
+        fs::path iconPath = PathFromUtf8(config.app.product.iconPath);
+        if (!iconPath.is_absolute()) {
+            iconPath = PathFromUtf8(configPath) / iconPath;
         }
-
-        tempTemplatePath = makeTempTemplatePath(outputFilePath);
-        std::error_code copyError;
-        fs::copy_file(PathFromUtf8(baseTemplate), tempTemplatePath, fs::copy_options::overwrite_existing, copyError);
-        if (copyError) {
-            console.showError("Failed to create temporary installer template: " + copyError.message());
-            return 1;
-        }
-
-        if (!installerGen.embedInstallerTemplate(Utf8FromPath(tempTemplatePath))) {
-            console.showError("Failed to use temporary installer template");
-            return 1;
-        }
-
-        usesTempTemplate = true;
-
-        if (!config.app.product.iconPath.empty()) {
-            fs::path iconPath = PathFromUtf8(config.app.product.iconPath);
-            if (!iconPath.is_absolute()) {
-                iconPath = PathFromUtf8(configPath) / iconPath;
-            }
-            std::string iconError;
-            if (UpdateInstallerIcon(Utf8FromPath(tempTemplatePath), Utf8FromPath(iconPath), iconError)) {
-                console.showInfo("Applied installer icon: " + Utf8FromPath(iconPath));
-            } else {
-                console.showWarning("Failed to apply installer icon: " + iconError);
-            }
-        }
-
-        VersionInfoData versionInfo;
-        versionInfo.productName =
-            config.app.product.productName.empty() ? config.app.name : config.app.product.productName;
-        versionInfo.fileDescription = config.app.product.fileDescription.empty()
-            ? (config.app.name + " Installer")
-            : config.app.product.fileDescription;
-        versionInfo.companyName = config.app.product.companyName;
-        versionInfo.copyright = config.app.product.copyright;
-        versionInfo.fileVersion =
-            config.app.product.fileVersion.empty() ? config.app.version : config.app.product.fileVersion;
-        versionInfo.productVersion =
-            config.app.product.productVersion.empty() ? config.app.version : config.app.product.productVersion;
-        versionInfo.originalFilename = Utf8FromPath(PathFromUtf8(outputPath).filename());
-
-        std::string versionError;
-        if (UpdateInstallerVersionInfo(Utf8FromPath(tempTemplatePath), versionInfo, versionError)) {
-            console.showInfo("Applied installer version info");
+        std::string iconError;
+        if (UpdateInstallerIcon(Utf8FromPath(tempTemplatePath), Utf8FromPath(iconPath), iconError)) {
+            console.showInfo("Applied installer icon: " + Utf8FromPath(iconPath));
         } else {
-            console.showWarning("Failed to apply installer version info: " + versionError);
+            console.showWarning("Failed to apply installer icon: " + iconError);
         }
+    }
+
+    VersionInfoData versionInfo;
+    versionInfo.productName =
+        config.app.product.productName.empty() ? config.app.name : config.app.product.productName;
+    versionInfo.fileDescription = config.app.product.fileDescription.empty()
+        ? (config.app.name + " Installer")
+        : config.app.product.fileDescription;
+    versionInfo.companyName = config.app.product.companyName;
+    versionInfo.copyright = config.app.product.copyright;
+    versionInfo.fileVersion =
+        config.app.product.fileVersion.empty() ? config.app.version : config.app.product.fileVersion;
+    versionInfo.productVersion =
+        config.app.product.productVersion.empty() ? config.app.version : config.app.product.productVersion;
+    versionInfo.originalFilename = Utf8FromPath(PathFromUtf8(outputPath).filename());
+
+    std::string versionError;
+    if (UpdateInstallerVersionInfo(Utf8FromPath(tempTemplatePath), versionInfo, versionError)) {
+        console.showInfo("Applied installer version info");
+    } else {
+        console.showWarning("Failed to apply installer version info: " + versionError);
     }
     timings.templatePrepSec = ElapsedSeconds(templateStart, std::chrono::steady_clock::now());
     

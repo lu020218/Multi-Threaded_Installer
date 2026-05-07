@@ -40,18 +40,7 @@ std::wstring ExpandEnvVars(const std::wstring& value) {
 } // namespace
 
 std::wstring ResolveInitialInstallPath(const InstallConfig& config) {
-    std::wstring installPath = ExpandEnvVars(config.defaultInstallPath);
-
-#ifdef _WIN32
-    wchar_t envPath[MAX_PATH];
-    DWORD envLen = GetEnvironmentVariableW(L"MTINSTALLER_INSTALL_PATH", envPath, MAX_PATH);
-    if (envLen > 0 && envLen < MAX_PATH) {
-        installPath = envPath;
-        SetEnvironmentVariableW(L"MTINSTALLER_INSTALL_PATH", nullptr);
-    }
-#endif
-
-    return installPath;
+    return ExpandEnvVars(config.defaultInstallPath);
 }
 
 void ApplyInitialInstallPathUi(CPaintManagerUI& paintManager,

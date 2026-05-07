@@ -3,9 +3,11 @@
 #include "packager/configuration_loader.h"
 #include "packager/metadata_generator.h"
 #include "packager/package_manifest_builder.h"
+#include "packager/version_info_updater.h"
 #include "installer/metadata_parser.h"
 #include "installer/console_interface.h"
 #include "common/package_manifest_codec.h"
+#include "common/utf8_utils.h"
 #include "installer/package_manifest_validator.h"
 #include "installer/install_plan_builder.h"
 #include "installer/install_manifest_store.h"
@@ -24,6 +26,10 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 namespace fs = std::filesystem;
 using namespace MultiThreadedInstaller;
@@ -55,6 +61,14 @@ fs::path CreateTestRoot(const std::string& name) {
     fs::remove_all(root, ec);
     fs::create_directories(root);
     return root;
+}
+
+void ReplaceAll(std::string& text, const std::string& from, const std::string& to) {
+    size_t position = 0;
+    while ((position = text.find(from, position)) != std::string::npos) {
+        text.replace(position, from.size(), to);
+        position += to.size();
+    }
 }
 
 std::string MinimalValidYaml() {
@@ -276,6 +290,115 @@ void TestConfigurationLoadsOnlyFromConfigDirectoryAndResolvesIconThere() {
     Require(manager.getConfiguration().app.product.iconPath == "app.ico",
             "Icon path should be read from config directory packager.yaml");
 }
+
+void TestRequireAdminFalseRejectsAdminOnlyConfiguration() {
+    {
+        fs::path root = CreateTestRoot("require_admin_false_program_files");
+        fs::path inputDir = root / "payload";
+        fs::path configDir = root / "config";
+        fs::create_directories(inputDir / "bin");
+        fs::create_directories(inputDir / "templates");
+        fs::create_directories(configDir);
+        std::string yaml = MinimalValidYaml();
+        ReplaceAll(yaml, "  requireAdmin: true", "  requireAdmin: false");
+        WriteTextFile(configDir / "packager.yaml", yaml);
+
+        ConfigurationManager manager;
+        Require(!manager.initialize(inputDir.string(), configDir.string()),
+                "requireAdmin=false should reject Program Files defaultDir");
+    }
+    {
+        fs::path root = CreateTestRoot("require_admin_false_hklm_install_info");
+        fs::path inputDir = root / "payload";
+        fs::path configDir = root / "config";
+        fs::create_directories(inputDir / "bin");
+        fs::create_directories(inputDir / "templates");
+        fs::create_directories(configDir);
+        std::string yaml = MinimalValidYaml();
+        ReplaceAll(yaml, "  requireAdmin: true", "  requireAdmin: false");
+        ReplaceAll(yaml, "  defaultDir: \"%ProgramFiles%\\\\SampleDesktopApp\"",
+                   "  defaultDir: \"%LocalAppData%\\\\SampleDesktopApp\"");
+        WriteTextFile(configDir / "packager.yaml", yaml);
+
+        ConfigurationManager manager;
+        Require(!manager.initialize(inputDir.string(), configDir.string()),
+                "requireAdmin=false should reject HKLM installInfo path");
+    }
+    {
+        fs::path root = CreateTestRoot("require_admin_false_hklm_on_install");
+        fs::path inputDir = root / "payload";
+        fs::path configDir = root / "config";
+        fs::create_directories(inputDir / "bin");
+        fs::create_directories(inputDir / "templates");
+        fs::create_directories(configDir);
+        std::string yaml = MinimalValidYaml();
+        ReplaceAll(yaml, "  requireAdmin: true", "  requireAdmin: false");
+        ReplaceAll(yaml, "  defaultDir: \"%ProgramFiles%\\\\SampleDesktopApp\"",
+                   "  defaultDir: \"%LocalAppData%\\\\SampleDesktopApp\"");
+        ReplaceAll(yaml, "    path: HKEY_LOCAL_MACHINE\\\\Software\\\\SampleDesktopApp",
+                   "    path: HKEY_CURRENT_USER\\\\Software\\\\SampleDesktopApp");
+        WriteTextFile(configDir / "packager.yaml", yaml);
+
+        ConfigurationManager manager;
+        Require(!manager.initialize(inputDir.string(), configDir.string()),
+                "requireAdmin=false should reject HKLM lifecycle registry path");
+    }
+}
+
+#ifdef _WIN32
+std::string ReadManifestResourceText(const fs::path& exePath) {
+    HMODULE module = LoadLibraryExW(exePath.wstring().c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE);
+    if (!module) {
+        throw TestFailure("Failed to load test executable as data file");
+    }
+
+    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(1), RT_MANIFEST);
+    if (!resource) {
+        FreeLibrary(module);
+        throw TestFailure("Manifest resource not found");
+    }
+
+    HGLOBAL loaded = LoadResource(module, resource);
+    DWORD size = SizeofResource(module, resource);
+    const char* data = loaded ? static_cast<const char*>(LockResource(loaded)) : nullptr;
+    if (!data || size == 0) {
+        FreeLibrary(module);
+        throw TestFailure("Manifest resource is empty");
+    }
+
+    std::string text(data, data + size);
+    FreeLibrary(module);
+    return text;
+}
+
+fs::path ResolveBuiltInstallerTemplateForTest() {
+    fs::path currentExe = PathFromUtf8(getCurrentExecutablePath());
+    fs::path buildRoot = currentExe.parent_path().parent_path().parent_path();
+    return buildRoot / "Release" / "installer.exe";
+}
+
+void TestUpdateInstallerExecutionLevelWritesManifest() {
+    fs::path source = ResolveBuiltInstallerTemplateForTest();
+    Require(fs::exists(source), "Built installer template should exist for manifest update test");
+
+    fs::path root = CreateTestRoot("execution_level_manifest");
+    fs::path elevated = root / "elevated.exe";
+    fs::path asInvoker = root / "as_invoker.exe";
+    fs::copy_file(source, elevated, fs::copy_options::overwrite_existing);
+    fs::copy_file(source, asInvoker, fs::copy_options::overwrite_existing);
+
+    std::string error;
+    Require(UpdateInstallerExecutionLevel(elevated.string(), true, error),
+            error.empty() ? "requireAdministrator manifest update should succeed" : error);
+    Require(UpdateInstallerExecutionLevel(asInvoker.string(), false, error),
+            error.empty() ? "asInvoker manifest update should succeed" : error);
+
+    Require(ReadManifestResourceText(elevated).find("requireAdministrator") != std::string::npos,
+            "Elevated installer manifest should contain requireAdministrator");
+    Require(ReadManifestResourceText(asInvoker).find("asInvoker") != std::string::npos,
+            "Non-elevated installer manifest should contain asInvoker");
+}
+#endif
 
 void TestPackagerArgsNamedOrderIndependent() {
     CliSupport console;
@@ -974,6 +1097,12 @@ int main() {
         {"reject_old_schema", &TestRejectOldSchema},
         {"configuration_loads_only_from_config_directory_and_resolves_icon_there",
          &TestConfigurationLoadsOnlyFromConfigDirectoryAndResolvesIconThere},
+        {"require_admin_false_rejects_admin_only_configuration",
+         &TestRequireAdminFalseRejectsAdminOnlyConfiguration},
+#ifdef _WIN32
+        {"update_installer_execution_level_writes_manifest",
+         &TestUpdateInstallerExecutionLevelWritesManifest},
+#endif
         {"packager_args_named_order_independent", &TestPackagerArgsNamedOrderIndependent},
         {"packager_args_reject_legacy_and_positional", &TestPackagerArgsRejectLegacyAndPositional},
         {"metadata_round_trip", &TestMetadataRoundTrip},

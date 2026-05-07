@@ -65,6 +65,18 @@ const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
     }
 }
 
+bool RegistryPathRequiresAdmin(const std::string& path) {
+    const std::string lowered = ToLowerCopy(path);
+    return lowered.rfind("hkey_local_machine", 0) == 0 ||
+           lowered.rfind("hklm", 0) == 0;
+}
+
+bool InstallDirectoryRequiresAdmin(const std::string& path) {
+    const std::string lowered = ToLowerCopy(path);
+    return lowered.find("%programfiles%") != std::string::npos ||
+           lowered.find("%programfiles(x86)%") != std::string::npos;
+}
+
 } // namespace
 
 ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
@@ -110,6 +122,19 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         result.isValid = false;
     }
 
+    if (!config.install.requireAdmin) {
+        if (InstallDirectoryRequiresAdmin(config.install.defaultDir)) {
+            result.errors.push_back(
+                "ERROR: install.requireAdmin=false cannot use Program Files install.defaultDir");
+            result.isValid = false;
+        }
+        if (RegistryPathRequiresAdmin(config.install.installInfo.path)) {
+            result.errors.push_back(
+                "ERROR: install.requireAdmin=false cannot write install.installInfo to HKLM");
+            result.isValid = false;
+        }
+    }
+
     if (!config.app.product.iconPath.empty()) {
         fs::path iconPath = PathFromUtf8(config.app.product.iconPath);
         if (!iconPath.is_absolute()) {
@@ -127,6 +152,12 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
     for (const auto& reg : config.lifecycle.registry.onInstall) {
         if (reg.path.empty() || reg.key.empty()) {
             result.errors.push_back("ERROR: Invalid lifecycle.registry.onInstall entry: path and key are required");
+            result.isValid = false;
+            break;
+        }
+        if (!config.install.requireAdmin && RegistryPathRequiresAdmin(reg.path)) {
+            result.errors.push_back(
+                "ERROR: install.requireAdmin=false cannot write lifecycle.registry.onInstall to HKLM");
             result.isValid = false;
             break;
         }

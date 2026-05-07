@@ -11,16 +11,49 @@
 
 namespace MultiThreadedInstaller {
 
+namespace {
+
+std::string BuildInstallerManifestXml(bool requireAdmin) {
+    const char* level = requireAdmin ? "requireAdministrator" : "asInvoker";
+    std::ostringstream xml;
+    xml << "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+        << "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n"
+        << "  <assemblyIdentity version=\"1.0.0.0\" processorArchitecture=\"*\" "
+           "name=\"MultiThreadedInstaller.Installer\" type=\"win32\"/>\n"
+        << "  <description>Multi-threaded Installer with GUI</description>\n"
+        << "  <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n"
+        << "    <security>\n"
+        << "      <requestedPrivileges>\n"
+        << "        <requestedExecutionLevel level=\"" << level
+        << "\" uiAccess=\"false\"/>\n"
+        << "      </requestedPrivileges>\n"
+        << "    </security>\n"
+        << "  </trustInfo>\n"
+        << "  <application xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n"
+        << "    <windowsSettings>\n"
+        << "      <dpiAwareness xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">"
+           "PerMonitorV2</dpiAwareness>\n"
+        << "      <dpiAware xmlns=\"http://schemas.microsoft.com/SMI/2005/WindowsSettings\">"
+           "True/PM</dpiAware>\n"
+        << "    </windowsSettings>\n"
+        << "  </application>\n"
+        << "  <compatibility xmlns=\"urn:schemas-microsoft-com:compatibility.v1\">\n"
+        << "    <application>\n"
+        << "      <supportedOS Id=\"{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}\"/>\n"
+        << "      <supportedOS Id=\"{1f676c76-80e1-4239-95bb-83d0f6d0da78}\"/>\n"
+        << "      <supportedOS Id=\"{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}\"/>\n"
+        << "      <supportedOS Id=\"{35138b9a-5d96-4fbd-8e2d-a2440225f93a}\"/>\n"
+        << "    </application>\n"
+        << "  </compatibility>\n"
+        << "</assembly>\n";
+    return xml.str();
+}
+
+} // namespace
+
 static void AppendWord(std::vector<uint8_t>& out, WORD value) {
     out.push_back(static_cast<uint8_t>(value & 0xFF));
     out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
-}
-
-static void AppendDword(std::vector<uint8_t>& out, DWORD value) {
-    out.push_back(static_cast<uint8_t>(value & 0xFF));
-    out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
-    out.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
-    out.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
 }
 
 static void AppendWString(std::vector<uint8_t>& out, const std::wstring& value) {
@@ -193,6 +226,39 @@ bool UpdateInstallerVersionInfo(const std::string& exePath, const VersionInfoDat
         error = "EndUpdateResource failed";
         return false;
     }
+    return true;
+}
+
+bool UpdateInstallerExecutionLevel(const std::string& exePath, bool requireAdmin, std::string& error) {
+    const std::string manifest = BuildInstallerManifestXml(requireAdmin);
+    std::wstring exePathW = Utf8ToWide(exePath);
+    if (exePathW.empty()) {
+        error = "Invalid installer path: " + exePath;
+        return false;
+    }
+
+    HANDLE update = BeginUpdateResourceW(exePathW.c_str(), FALSE);
+    if (!update) {
+        error = "BeginUpdateResource failed";
+        return false;
+    }
+
+    if (!UpdateResourceW(update,
+                         MAKEINTRESOURCEW(24),
+                         MAKEINTRESOURCEW(1),
+                         MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
+                         const_cast<char*>(manifest.data()),
+                         static_cast<DWORD>(manifest.size()))) {
+        EndUpdateResourceW(update, TRUE);
+        error = "UpdateResource RT_MANIFEST failed";
+        return false;
+    }
+
+    if (!EndUpdateResourceW(update, FALSE)) {
+        error = "EndUpdateResource failed";
+        return false;
+    }
+
     return true;
 }
 

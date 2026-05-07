@@ -511,14 +511,6 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
         return INSTALLER_EXIT_FAILED;
     }
 
-    if ((metadata.installRequireAdmin || requiresAdminForInstall(installPath, metadata, pathResolver)) && !isRunningAsAdmin()) {
-        if (relaunchSelfAsAdmin()) {
-            return INSTALLER_EXIT_SUCCESS;
-        }
-        console.showError("Administrator privileges required.");
-        return INSTALLER_EXIT_ADMIN_REQUIRED;
-    }
-
     InstallServiceOptions options;
     options.installPath = installPath;
     options.installPathExplicit = true;
@@ -565,16 +557,6 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     const bool overwriteMode =
         resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
         installedInstance.found;
-
-    if (metadata.installRequireAdmin && !isRunningAsAdmin()) {
-        if (relaunchSelfAsAdmin()) {
-            return 0;
-        }
-        GUIHelpers::ShowWarningDialog(nullptr,
-                                      GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L""),
-                                      GUIHelpers::GetLocalizedText(L"msg.error.require_admin", L""));
-        return 1;
-    }
 
     InstallConfig config = CreateInstallConfigFromMetadata(metadata);
     config.overwriteMode = overwriteMode;

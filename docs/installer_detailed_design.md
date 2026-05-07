@@ -5,7 +5,7 @@
 
 目标：
 - 同时支持 GUI 与 CLI 模式。
-- 支持静默安装、管理员权限检查、路径映射、并行解压安装。
+- 支持静默安装、打包期权限策略、路径映射、并行解压安装。
 - 提供可回溯的安装清单（manifest）与卸载能力。
 
 入口：
@@ -34,7 +34,7 @@ flowchart LR
 ### 2.1 关键模块职责
 - `main.cpp`
   - 模式分发（GUI/CLI、install/uninstall、silent/debug）
-  - 启动前置检查（元数据、权限、资源）
+  - 启动前置检查（元数据、资源）
 - `MetadataParser`
   - 解析内嵌 metadata/data（或外置 data package）
 - `InstallService`
@@ -169,8 +169,10 @@ sequenceDiagram
 - 统一输出归一化路径。
 
 ### 7.2 权限模型
-- `main.cpp` + `installer_helpers.cpp`
-- 若 metadata 要求管理员权限：检查后尝试提权重启。
+- 安装权限策略由打包器根据 `install.requireAdmin` 写入 installer exe 的 Windows application manifest。
+- `install.requireAdmin=true` 时生成 `requireAdministrator`，`false` 时生成 `asInvoker`。
+- 安装器运行时不再根据安装路径、注册表写入或 GUI 选择动态提权重启。
+- 卸载流程仍保留运行时管理员检测；非管理员执行卸载时按现有逻辑尝试 `runas` 重启。
 
 ### 7.3 系统写入
 - 注册表：`registry_utils.cpp`

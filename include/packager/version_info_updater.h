@@ -15,5 +15,6 @@ struct VersionInfoData {
 };
 
 bool UpdateInstallerVersionInfo(const std::string& exePath, const VersionInfoData& info, std::string& error);
+bool UpdateInstallerExecutionLevel(const std::string& exePath, bool requireAdmin, std::string& error);
 
 } // namespace MultiThreadedInstaller

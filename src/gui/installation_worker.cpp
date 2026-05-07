@@ -213,15 +213,6 @@ PostProgressMessage(
         metadata.installDesktopIcon = m_desktopIcons;
 
         std::string installPathStr = WideToUtf8(installPath);
-        if (requiresAdminForInstall(installPathStr, metadata, pathResolver) && !isRunningAsAdmin()) {
-#ifdef _WIN32
-            SetEnvironmentVariableW(L"MTINSTALLER_INSTALL_PATH", installPath.c_str());
-#endif
-            std::wstring adminError = relaunchSelfAsAdmin()
-                ? GUIHelpers::GetLocalizedText(L"msg.error.require_admin_relaunch", L"")
-                : GUIHelpers::GetLocalizedText(L"msg.error.require_admin", L"");
-            throw std::runtime_error(WideToUtf8(adminError));
-        }
 
         logElapsed("prechecks_complete");
 

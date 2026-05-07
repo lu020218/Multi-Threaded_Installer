@@ -69,7 +69,8 @@ const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
 
 ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
     const PackagerConfiguration& config,
-    const std::string& inputDirectory) {
+    const std::string& inputDirectory,
+    const std::string& configDirectory) {
     ValidationResult result;
 
     if (config.schemaVersion != 2) {
@@ -112,7 +113,7 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
     if (!config.app.product.iconPath.empty()) {
         fs::path iconPath = PathFromUtf8(config.app.product.iconPath);
         if (!iconPath.is_absolute()) {
-            iconPath = PathFromUtf8(inputDirectory) / iconPath;
+            iconPath = PathFromUtf8(configDirectory) / iconPath;
         }
         if (!fs::exists(iconPath)) {
             result.errors.push_back("ERROR: Icon file not found: " + Utf8FromPath(iconPath));
@@ -267,7 +268,7 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         }
     }
 
-    if (!validateComponents(config, inputDirectory, result.errors)) {
+    if (!validateComponents(config, result.errors)) {
         result.isValid = false;
     }
 
@@ -368,7 +369,6 @@ bool ConfigurationValidator::validateTargetDirectory(const std::string& targetDi
 }
 
 bool ConfigurationValidator::validateComponents(const PackagerConfiguration& config,
-                                                const std::string& inputDirectory,
                                                 std::vector<std::string>& errors) {
     if (config.layout.components.empty()) {
         return true;

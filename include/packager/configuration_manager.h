@@ -24,7 +24,8 @@ public:
      *
      *
      */
-    bool initialize(const std::string& inputDirectory);
+    bool initialize(const std::string& inputDirectory,
+                    const std::string& configDirectory);
     
     /**
      *

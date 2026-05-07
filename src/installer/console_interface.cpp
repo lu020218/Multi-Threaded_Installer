@@ -88,7 +88,9 @@ void CliSupport::showWarning(const std::string& message) {
 
 bool CliSupport::confirmAction(const std::string& prompt) {
     std::string response = getUserInput(prompt + " (y/N): ");
-    std::transform(response.begin(), response.end(), response.begin(), ::tolower);
+    std::transform(response.begin(), response.end(), response.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
     return response == "y" || response == "yes";
 }
 
@@ -99,27 +101,49 @@ void CliSupport::showInfo(const std::string& message) {
 
 CliSupport::PackagerArgs CliSupport::parsePackagerArgs(int argc, char* argv[]) {
     PackagerArgs args;
+
+    auto readValue = [&](int& index, const std::string& option, std::string& target) -> bool {
+        if (!target.empty()) {
+            args.error = "Duplicate packager option: " + option;
+            return false;
+        }
+        if (index + 1 >= argc) {
+            args.error = "Missing value for " + option;
+            return false;
+        }
+        std::string value = argv[++index];
+        if (value.empty() || value[0] == '-') {
+            args.error = "Missing value for " + option;
+            return false;
+        }
+        target = std::move(value);
+        return true;
+    };
     
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         
         if (arg == "-h" || arg == "--help") {
             args.showHelp = true;
-        } else if (arg == "-v" || arg == "--verbose") {
-            args.verbose = true;
-        } else if ((arg == "-p" || arg == "--data-out") && i + 1 < argc) {
-            args.dataPackagePath = argv[++i];
-        } else if ((arg == "-a" || arg == "--algorithm") && i + 1 < argc) {
-            args.algorithm = parseCompressionAlgorithm(argv[++i]);
-            args.algorithmExplicitlySet = true;
-        } else if ((arg == "-l" || arg == "--level") && i + 1 < argc) {
-            args.compressionLevel = std::stoi(argv[++i]);
-        } else if ((arg == "-t" || arg == "--threads") && i + 1 < argc) {
-            args.threadCount = std::stoi(argv[++i]);
-        } else if (args.inputPath.empty()) {
-            args.inputPath = arg;
-        } else if (args.outputPath.empty()) {
-            args.outputPath = arg;
+        } else if (arg == "-i" || arg == "--input") {
+            if (!readValue(i, arg, args.inputPath)) {
+                return args;
+            }
+        } else if (arg == "-c" || arg == "--config") {
+            if (!readValue(i, arg, args.configPath)) {
+                return args;
+            }
+        } else if (arg == "-o" || arg == "--output") {
+            if (!readValue(i, arg, args.outputPath)) {
+                return args;
+            }
+        } else if (!arg.empty() && arg[0] == '-') {
+            args.error = "Unsupported packager option: " + arg;
+            return args;
+        } else {
+            args.error = "Unexpected packager argument: " + arg +
+                         ". Use --input, --config, and --output.";
+            return args;
         }
     }
     
@@ -213,19 +237,17 @@ CliSupport::InstallerArgs CliSupport::parseInstallerArgs(int argc, char* argv[])
 
 void CliSupport::showPackagerHelp() {
     std::cout << "Multi-Threaded Installer Packager" << std::endl;
-    std::cout << "Usage: packager [options] <input_directory> <output_file>" << std::endl;
+    std::cout << "Usage: packager --input <input_directory> --config <config_directory> --output <output_file>" << std::endl;
     std::cout << std::endl;
     std::cout << "Options:" << std::endl;
-    std::cout << "  -a, --algorithm <xz|zstd>      Choose compression algorithm (default: xz)" << std::endl;
-    std::cout << "  -l, --level <level>            Compression level (xz/lzma2: 0-9, zstd: 1-22)" << std::endl;
-    std::cout << "  -p, --data-out <file>          Write external data package" << std::endl;
-    std::cout << "  -t, --threads <count>          Number of compression threads (default: CPU cores)" << std::endl;
-    std::cout << "  -v, --verbose                  Show detailed information" << std::endl;
+    std::cout << "  -i, --input <directory>        Directory containing payload files to package" << std::endl;
+    std::cout << "  -c, --config <directory>       Directory containing packager.yaml, resources, and icon files" << std::endl;
+    std::cout << "  -o, --output <file>            Path for the generated installer executable" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
-    std::cout << "  packager -a xz -l 5 ./input ./output/installer.exe" << std::endl;
-    std::cout << "  packager -a zstd -l 3 ./input ./output/installer.exe" << std::endl;
+    std::cout << "  packager --input ./payload --config ./build-config --output ./output/installer.exe" << std::endl;
+    std::cout << "  packager -o ./output/installer.exe -c ./build-config -i ./payload" << std::endl;
 }
 
 void CliSupport::showInstallerHelp() {
@@ -310,7 +332,9 @@ bool CliSupport::validatePath(const std::string& path, bool shouldExist) {
 
 CompressionAlgorithm CliSupport::parseCompressionAlgorithm(const std::string& algorithmStr) {
     std::string lower = algorithmStr;
-    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
     
     if (lower == "xz" || lower == "lzma2" || lower == "xz_lzma2" || lower == "lzma2_xz") {
         return CompressionAlgorithm::LZMA2_XZ;

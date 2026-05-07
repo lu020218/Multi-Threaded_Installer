@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project uses `packager.exe` to turn an input directory into a GUI installer.
+This project uses `packager.exe` to turn a payload input directory plus a config directory into a GUI installer.
 
 Current configuration rules:
 - configuration file format: YAML only
@@ -26,15 +26,23 @@ Build outputs:
 - `build/Release/installer.exe`
 - `build/Release/uninstaller.exe`
 
-## Input Layout
+## Directory Layout
 
-Recommended input directory:
+Recommended payload input directory:
 
 ```text
 input/
 ├─ bin/
-├─ plugins/
-└─ packager.yaml
+└─ plugins/
+```
+
+Recommended config directory:
+
+```text
+build-config/
+├─ packager.yaml
+├─ app.ico
+└─ resources/
 ```
 
 Each top-level folder listed in `layout.folders` becomes one compressed folder payload in the package.
@@ -42,24 +50,19 @@ Each top-level folder listed in `layout.folders` becomes one compressed folder p
 ## Packager Usage
 
 ```powershell
-.\build\Release\packager.exe <input_directory> <output_installer.exe>
+.\build\Release\packager.exe --input <input_directory> --config <config_directory> --output <output_installer.exe>
 ```
 
 Examples:
 
 ```powershell
-# XZ/LZMA2
-.\build\Release\packager.exe -a xz -l 9 .\input .\dist\MyAppSetup.exe
-
-# ZSTD
-.\build\Release\packager.exe -a zstd -l 3 .\input .\dist\MyAppSetup.exe
-
-# Installer + external data package
-.\build\Release\packager.exe -a zstd -l 3 -p .\dist\MyApp.data .\input .\dist\MyAppSetup.exe
+.\build\Release\packager.exe --input .\input --config .\build-config --output .\dist\MyAppSetup.exe
+.\build\Release\packager.exe -o .\dist\MyAppSetup.exe -c .\build-config -i .\input
 ```
 
 Notes:
-- `packager.exe` reads the installer template and embedded resource inputs from its current directory.
+- `packager.exe` reads `packager.yaml`, `resources/`, and relative icon paths from the config directory.
+- `packager.exe` reads installer and uninstaller templates from its own directory.
 - generated installers embed UI resources and an embedded uninstaller
 - `packager.yaml` controls packaging, install defaults, UI metadata, layout, and lifecycle behaviors
 
@@ -310,7 +313,7 @@ The `layout.folders[].source` path is resolved relative to the input directory p
 
 ### Icon file not found
 
-`app.product.icon` is resolved relative to the input directory unless an absolute path is provided.
+`app.product.icon` is resolved relative to the config directory unless an absolute path is provided.
 
 ## Reference Example
 

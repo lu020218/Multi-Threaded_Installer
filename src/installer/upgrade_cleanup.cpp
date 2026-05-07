@@ -10,8 +10,13 @@
 #include <fstream>
 #include <json.hpp>
 #include <set>
+#include <cstdlib>
 #include <system_error>
 #include <vector>
+
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 namespace MultiThreadedInstaller {
 
@@ -186,6 +191,116 @@ bool IsSafeCleanupPath(const std::filesystem::path& path) {
     return true;
 }
 
+std::string ReadEnvironmentPath(const char* name) {
+    if (!name || name[0] == '\0') {
+        return {};
+    }
+#ifdef _WIN32
+    DWORD required = GetEnvironmentVariableA(name, nullptr, 0);
+    if (required == 0) {
+        return {};
+    }
+    std::string value(required, '\0');
+    DWORD written = GetEnvironmentVariableA(name, value.data(), required);
+    if (written == 0 || written >= required) {
+        return {};
+    }
+    value.resize(written);
+    return value;
+#else
+    const char* value = std::getenv(name);
+    return value ? std::string(value) : std::string();
+#endif
+}
+
+bool SameNormalizedPath(const std::filesystem::path& left, const std::filesystem::path& right) {
+    return normalizePathForCompare(Utf8FromPath(left.lexically_normal())) ==
+           normalizePathForCompare(Utf8FromPath(right.lexically_normal()));
+}
+
+bool IsProtectedFullCleanupRoot(const std::filesystem::path& path) {
+    if (!IsSafeCleanupPath(path)) {
+        return true;
+    }
+
+    const std::filesystem::path normalized = path.lexically_normal();
+    const std::vector<std::string> protectedExactRoots = {
+        ReadEnvironmentPath("ProgramFiles"),
+        ReadEnvironmentPath("ProgramFiles(x86)"),
+        ReadEnvironmentPath("ProgramW6432"),
+        ReadEnvironmentPath("ProgramData"),
+    };
+    for (const auto& root : protectedExactRoots) {
+        if (!root.empty() && SameNormalizedPath(normalized, PathFromUtf8(root))) {
+            return true;
+        }
+    }
+
+    const std::vector<std::string> protectedSubtrees = {
+        ReadEnvironmentPath("SystemRoot"),
+        ReadEnvironmentPath("WINDIR"),
+    };
+    for (const auto& root : protectedSubtrees) {
+        if (root.empty()) {
+            continue;
+        }
+        const std::filesystem::path protectedRoot = PathFromUtf8(root).lexically_normal();
+        if (IsPathUnderOrEqual(normalized, protectedRoot)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool RemoveDirectoryContentsBestEffort(const std::filesystem::path& root,
+                                       CliSupport& console,
+                                       const UpgradeCleanupProgressCallback& progressCallback,
+                                       const std::function<bool()>& cancellationCallback) {
+    if (IsProtectedFullCleanupRoot(root)) {
+        console.showWarning("Upgrade cleanup skipped unsafe previous install root: " + Utf8FromPath(root));
+        return false;
+    }
+
+    std::vector<std::filesystem::path> children;
+    std::error_code iterEc;
+    std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
+    for (std::filesystem::directory_iterator it(toLongPath(root), options, iterEc), end;
+         !iterEc && it != end;
+         it.increment(iterEc)) {
+        children.push_back(it->path());
+    }
+    if (iterEc) {
+        console.showWarning("Upgrade cleanup failed to enumerate previous install root: " + Utf8FromPath(root));
+    }
+
+    const size_t total = children.size();
+    for (size_t i = 0; i < total; ++i) {
+        if (IsCancelled(cancellationCallback)) {
+            console.showWarning("Upgrade cleanup cancelled while deleting previous install contents.");
+            return false;
+        }
+
+        const auto& child = children[i];
+        std::error_code removeEc;
+        if (std::filesystem::is_directory(child, removeEc)) {
+            std::filesystem::remove_all(toLongPath(child), removeEc);
+        } else {
+            std::filesystem::remove(toLongPath(child), removeEc);
+        }
+        if (removeEc && std::filesystem::exists(child)) {
+            console.showWarning("Upgrade cleanup skipped failed path: " + Utf8FromPath(child));
+        }
+
+        const float progress = total == 0
+                                   ? 0.8f
+                                   : 0.8f * static_cast<float>(i + 1) / static_cast<float>(total);
+        EmitProgress(progressCallback, progress, "Removing old path: " + Utf8FromPath(child));
+    }
+
+    return true;
+}
+
 bool RemoveUpgradeCleanupPath(const UninstallCleanupRule& rule,
                               const std::string& previousInstallDir,
                               InstallerPathResolver& resolver,
@@ -246,10 +361,8 @@ bool cleanupPreviousInstallForUpgrade(
 
     std::string normalizedOld = normalizePathForCompare(previousInstallDir);
     std::string normalizedNew = normalizePathForCompare(newInstallDir);
-    if (!normalizedOld.empty() && !normalizedNew.empty() && normalizedOld == normalizedNew) {
-        console.showInfo("Upgrade cleanup skipped: previous and new install directories are the same.");
-        return true;
-    }
+    const bool sameInstallRoot =
+        !normalizedOld.empty() && !normalizedNew.empty() && normalizedOld == normalizedNew;
 
     std::error_code existsEc;
     if (!std::filesystem::exists(previousRoot, existsEc)) {
@@ -272,7 +385,26 @@ bool cleanupPreviousInstallForUpgrade(
     if (ReadManifestJson(manifestPath, manifest)) {
         manifestFiles = CollectManifestFiles(manifest);
     } else {
-        console.showWarning("Upgrade cleanup: failed to read previous manifest, fallback to minimal cleanup.");
+        console.showWarning(
+            "Upgrade cleanup: failed to read previous manifest, fallback to directory contents cleanup.");
+        const bool cleaned = RemoveDirectoryContentsBestEffort(previousRoot,
+                                                              console,
+                                                              progressCallback,
+                                                              cancellationCallback);
+        EmitProgress(progressCallback, 0.95f, "Removing previous install contents");
+
+        if (!sameInstallRoot) {
+            std::error_code rootEc;
+            if (std::filesystem::is_empty(previousRoot, rootEc)) {
+                std::filesystem::remove(toLongPath(previousRoot), rootEc);
+                if (!rootEc) {
+                    console.showInfo("Removed previous install root: " + Utf8FromPath(previousRoot));
+                }
+            }
+        }
+
+        EmitProgress(progressCallback, 1.0f, "Upgrade cleanup completed");
+        return cleaned;
     }
 
     std::vector<std::filesystem::path> filesToDelete;
@@ -361,9 +493,14 @@ bool cleanupPreviousInstallForUpgrade(
 
     std::error_code rootEc;
     if (std::filesystem::is_empty(previousRoot, rootEc)) {
-        std::filesystem::remove(toLongPath(previousRoot), rootEc);
-        if (!rootEc) {
-            console.showInfo("Removed previous install root: " + Utf8FromPath(previousRoot));
+        if (sameInstallRoot) {
+            console.showInfo("Previous install root is empty and will be reused: " +
+                             Utf8FromPath(previousRoot));
+        } else {
+            std::filesystem::remove(toLongPath(previousRoot), rootEc);
+            if (!rootEc) {
+                console.showInfo("Removed previous install root: " + Utf8FromPath(previousRoot));
+            }
         }
     } else {
         console.showInfo("Previous install root is not empty after upgrade cleanup: " +

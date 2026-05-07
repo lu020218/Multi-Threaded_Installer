@@ -113,21 +113,6 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
           installSparseFileThresholdBytes(4 * 1024 * 1024) {}
 };
 
-struct BinaryMetadata {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t folderCount;
-    uint64_t metadataSize;
-    uint64_t dataOffset;
-
-    BinaryMetadata()
-        : magic(0x4D544950),
-          version(1),
-          folderCount(0),
-          metadataSize(0),
-          dataOffset(0) {}
-};
-
 struct DecompressionTask {
     std::vector<uint8_t> compressedData;
     std::string folderName;

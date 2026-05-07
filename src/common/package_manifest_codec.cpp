@@ -1,7 +1,5 @@
 #include "common/package_manifest_codec.h"
 
-#include "installer/metadata_binary_reader.h"
-
 #include <algorithm>
 #include <cstring>
 #include <json.hpp>
@@ -44,6 +42,16 @@ template <typename T>
 void AppendPod(std::vector<uint8_t>& out, const T& value) {
     const auto* bytes = reinterpret_cast<const uint8_t*>(&value);
     out.insert(out.end(), bytes, bytes + sizeof(T));
+}
+
+template <typename T>
+bool ReadPod(const std::vector<uint8_t>& data, size_t& offset, T& out) {
+    if (offset + sizeof(T) > data.size()) {
+        return false;
+    }
+    std::memcpy(&out, data.data() + offset, sizeof(T));
+    offset += sizeof(T);
+    return true;
 }
 
 uint32_t Fnv1a(const std::vector<uint8_t>& data) {
@@ -632,8 +640,10 @@ bool DeserializePackageManifest(const std::vector<uint8_t>& data,
     manifest.install.desktopIcon = install.value("desktopIcon", false);
     manifest.install.autoCleanOldInstall = install.value("autoCleanOldInstall", false);
     manifest.install.requireAdmin = install.value("requireAdmin", false);
-    manifest.install.minWindowsMajor = install.value("minWindowsMajor", 0);
-    manifest.install.minWindowsMinor = install.value("minWindowsMinor", 0);
+    manifest.install.minWindowsMajor =
+        static_cast<uint16_t>(install.value("minWindowsMajor", 0));
+    manifest.install.minWindowsMinor =
+        static_cast<uint16_t>(install.value("minWindowsMinor", 0));
     manifest.install.minWindowsBuild = install.value("minWindowsBuild", 0u);
     manifest.install.sparseFileThresholdBytes = install.value("sparseFileThresholdBytes", 0ULL);
     manifest.install.useMutex = install.value("useMutex", true);

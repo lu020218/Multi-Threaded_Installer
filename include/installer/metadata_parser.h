@@ -13,7 +13,6 @@ public:
     ExtendedInstallationMetadata parseExtendedEmbeddedMetadata();
     
 
-    bool validateMetadata(const InstallationMetadata& metadata);
     bool validateMetadata(const ExtendedInstallationMetadata& metadata);
     
     ExtendedInstallationMetadata deserializeExtendedMetadata(const std::vector<uint8_t>& data);
@@ -44,10 +43,6 @@ private:
                              uint64_t& logicalEnd,
                              DataLocator& locator);
     
-
-    bool validateHeader(const BinaryMetadata& header);
-    
-
     std::string dataPackagePath_;
 };
 

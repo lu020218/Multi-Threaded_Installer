@@ -33,13 +33,9 @@ public:
 
     struct PackagerArgs {
         std::string inputPath;
+        std::string configPath;
         std::string outputPath;
-        std::string dataPackagePath;
-        CompressionAlgorithm algorithm = CompressionAlgorithm::LZMA2_XZ;
-        bool algorithmExplicitlySet = false;
-        int compressionLevel = -1;
-        int threadCount = -1;
-        bool verbose = false;
+        std::string error;
         bool showHelp = false;
     };
     

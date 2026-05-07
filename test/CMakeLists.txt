@@ -16,7 +16,6 @@ add_executable(SchemaRegressionTests
     ../src/packager/metadata_generator.cpp
     ../src/packager/package_manifest_builder.cpp
     ../src/installer/metadata_parser.cpp
-    ../src/installer/metadata_binary_reader.cpp
     ../src/installer/package_manifest_validator.cpp
     ../src/installer/path_resolver.cpp
     ../src/installer/installer_helpers.cpp

@@ -35,7 +35,8 @@ public:
      *
      */
     ValidationResult validate(const PackagerConfiguration& config,
-                             const std::string& inputDirectory);
+                              const std::string& inputDirectory,
+                              const std::string& configDirectory);
     
 private:
     /**
@@ -73,7 +74,6 @@ private:
      *
      */
     bool validateComponents(const PackagerConfiguration& config,
-                            const std::string& inputDirectory,
                             std::vector<std::string>& errors);
 };
 

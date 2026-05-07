@@ -26,6 +26,7 @@ public:
 
     bool embedInstallerTemplate(const std::string& templatePath);
 
+    void setResourceDirectory(const std::string& resourceDirectory);
 
     std::string findDefaultInstallerTemplatePath() const;
     
@@ -43,6 +44,7 @@ private:
     };
     
     std::string installerTemplatePath;
+    std::string resourceDirectoryPath_;
     std::string lastError_;
     
 

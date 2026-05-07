@@ -789,17 +789,14 @@ bool ValidateLayoutReferences(const LayoutConfig& layout, std::string& lastError
 
 } // namespace
 
-std::optional<PackagerConfiguration> ConfigurationLoader::loadConfiguration(const std::string& inputDirectory) {
+std::optional<PackagerConfiguration> ConfigurationLoader::loadConfiguration(const std::string& configDirectory) {
     lastError_.clear();
     loadedConfigPath_.clear();
 
-    const char* envPath = std::getenv("PACKAGER_CONFIG");
-    if (envPath != nullptr && envPath[0] != '\0') {
-        return loadConfigurationFromPath(envPath);
-    }
-
-    auto configPath = findConfigFile(inputDirectory);
+    auto configPath = findConfigFile(configDirectory);
     if (!configPath.has_value()) {
+        lastError_ = "Configuration file not found in config directory: " + configDirectory +
+                     " (expected packager.yaml or packager.yml)";
         return std::nullopt;
     }
     return loadConfigurationFromPath(configPath.value());

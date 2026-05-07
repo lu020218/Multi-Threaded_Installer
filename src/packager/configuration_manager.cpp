@@ -18,11 +18,12 @@ std::string FolderSourceName(const std::string& source) {
 
 } // namespace
 
-bool ConfigurationManager::initialize(const std::string& inputDirectory) {
+bool ConfigurationManager::initialize(const std::string& inputDirectory,
+                                      const std::string& configDirectory) {
     lastError_.clear();
     
 
-    auto configOpt = loader_.loadConfiguration(inputDirectory);
+    auto configOpt = loader_.loadConfiguration(configDirectory);
     auto applyInstallDefaults = [](PackagerConfiguration& config) {
         const std::string identity = ResolveInstallIdentity(config);
         if (config.install.mutexName.empty()) {
@@ -41,7 +42,7 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory) {
         applyInstallDefaults(config_);
         
 
-        auto validationResult = validator_.validate(config_, inputDirectory);
+        auto validationResult = validator_.validate(config_, inputDirectory, configDirectory);
         
         if (!validationResult.isValid) {
 
@@ -61,20 +62,11 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory) {
         return true;
     } else {
 
-        hasConfigFile_ = false;
-        configFilePath_.clear();
-        config_ = PackagerConfiguration();
-        applyInstallDefaults(config_);
-        
-
         std::string loaderError = loader_.getLastError();
-        if (!loaderError.empty()) {
-
-            lastError_ = "Failed to load configuration: " + loaderError;
-            return false;
-        }
-        
-        return true;
+        lastError_ = loaderError.empty()
+                         ? "Failed to load configuration from: " + configDirectory
+                         : "Failed to load configuration: " + loaderError;
+        return false;
     }
 }
 

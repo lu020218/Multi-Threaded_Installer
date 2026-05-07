@@ -5,7 +5,7 @@
 The system is split into four major areas:
 
 - `src/packager`
-  builds installers from an input directory and `packager.yaml`
+  builds installers from a payload input directory and a config directory
 - `src/installer`
   handles install, repair, uninstall, cleanup, and payload extraction
 - `src/gui`
@@ -18,7 +18,7 @@ The system is split into four major areas:
 ### Flow
 
 1. parse CLI arguments
-2. load `packager.yaml` / `packager.yml`
+2. load `packager.yaml` / `packager.yml` from the config directory
 3. validate schema version 2 config
 4. scan top-level folders from input directory
 5. apply configured destination mapping

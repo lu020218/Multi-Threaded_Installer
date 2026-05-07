@@ -290,7 +290,6 @@ set(PACKAGER_SOURCES
 # Source files for installer
 set(INSTALLER_SOURCES
     src/installer/metadata_parser.cpp
-    src/installer/metadata_binary_reader.cpp
     src/installer/package_manifest_validator.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp
@@ -325,7 +324,6 @@ set(INSTALLER_SOURCES
 
 set(UNINSTALLER_SOURCES
     src/installer/metadata_parser.cpp
-    src/installer/metadata_binary_reader.cpp
     src/installer/package_manifest_validator.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp

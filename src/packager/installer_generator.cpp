@@ -70,6 +70,10 @@ bool InstallerGenerator::embedInstallerTemplate(const std::string& templatePath)
     return true;
 }
 
+void InstallerGenerator::setResourceDirectory(const std::string& resourceDirectory) {
+    resourceDirectoryPath_ = resourceDirectory;
+}
+
 std::string InstallerGenerator::findDefaultInstallerTemplatePath() const {
     std::filesystem::path exeDir = GetPackagerExecutableDirectory();
     if (exeDir.empty()) {
@@ -115,19 +119,16 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
             return false;
         }
 
-        std::filesystem::path templateDir = GetPackagerExecutableDirectory();
-        if (templateDir.empty()) {
-            lastError_ = "Cannot resolve packager directory for UI resource embedding";
+        if (resourceDirectoryPath_.empty()) {
+            lastError_ = "UI resources directory is not configured";
             std::cerr << "ERROR: " << lastError_ << std::endl;
             return false;
         }
-        std::filesystem::path resourceDir = templateDir / "resources";
+        std::filesystem::path resourceDir = PathFromUtf8(resourceDirectoryPath_);
         std::filesystem::path uninstallerTemplatePath = GetDefaultUninstallerTemplatePath();
-        std::cout << "Template resource directory: " << Utf8FromPath(templateDir) << std::endl;
         std::cout << "Resolved UI resources directory: " << Utf8FromPath(resourceDir) << std::endl;
         if (!std::filesystem::exists(resourceDir) || !std::filesystem::is_directory(resourceDir)) {
             lastError_ = "UI resources directory not found: " + Utf8FromPath(resourceDir) +
-                         ". Template directory: " + Utf8FromPath(templateDir) +
                          ". Packaging requires embedded UI resources and external resources are disabled.";
             std::cerr << "ERROR: " << lastError_ << std::endl;
             return false;

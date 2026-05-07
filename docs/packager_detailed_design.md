@@ -2,7 +2,7 @@
 
 ## Design Goal
 
-`packager.exe` is an offline build tool that converts an input directory plus `packager.yaml` into:
+`packager.exe` is an offline build tool that converts a payload input directory plus a config directory into:
 - a self-contained installer executable
 - optionally an external data package
 
@@ -31,7 +31,7 @@ flowchart LR
 ### ConfigurationLoader / ConfigurationManager / ConfigurationValidator
 
 Responsibilities:
-- load `packager.yaml` or `packager.yml`
+- load `packager.yaml` or `packager.yml` from the config directory
 - require `schemaVersion: 2`
 - parse the 6 top-level blocks
 - validate required fields and references

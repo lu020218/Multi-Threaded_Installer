@@ -113,16 +113,18 @@ void PrintTimingSummary(const PackagerStageTimings& timings,
 }
 
 void showUsage(const std::string& programName) {
-    std::cout << "Usage: " << programName << " <input_directory> <output_file>\n";
+    std::cout << "Usage: " << programName
+              << " --input <input_directory> --config <config_directory> --output <output_file>\n";
     std::cout << "\n";
-    std::cout << "Arguments:\n";
-    std::cout << "  input_directory  Directory containing files to package\n";
-    std::cout << "  output_file      Path for the generated installer executable\n";
+    std::cout << "Options:\n";
+    std::cout << "  -i, --input <directory>   Directory containing payload files to package\n";
+    std::cout << "  -c, --config <directory>  Directory containing packager.yaml, resources, and icon files\n";
+    std::cout << "  -o, --output <file>       Path for the generated installer executable\n";
+    std::cout << "  -h, --help                Show this help message\n";
     std::cout << "\n";
     std::cout << "Configuration:\n";
-    std::cout << "  Place packager.yaml or packager.yml in the input directory\n";
-    std::cout << "  to configure packaging options. If no configuration file is found,\n";
-    std::cout << "  default settings will be used.\n";
+    std::cout << "  Place packager.yaml or packager.yml in the config directory.\n";
+    std::cout << "  Place UI resources under <config_directory>/resources.\n";
 }
 
 static fs::path makeTempTemplatePath(const fs::path& outputPath) {
@@ -146,19 +148,31 @@ int main(int argc, char* argv[]) {
         console.showPackagerHelp();
         return 0;
     }
+
+    if (!args.error.empty()) {
+        console.showError(args.error);
+        showUsage(argv[0]);
+        return 1;
+    }
     
-    if (args.inputPath.empty() || args.outputPath.empty()) {
+    if (args.inputPath.empty() || args.configPath.empty() || args.outputPath.empty()) {
         console.showError("Error: Missing required arguments");
         showUsage(argv[0]);
         return 1;
     }
     
     std::string inputPath = args.inputPath;
+    std::string configPath = args.configPath;
     std::string outputPath = args.outputPath;
     
 
     if (!fs::exists(PathFromUtf8(inputPath)) || !fs::is_directory(PathFromUtf8(inputPath))) {
         console.showError("Error: Input directory does not exist: " + inputPath);
+        return 1;
+    }
+
+    if (!fs::exists(PathFromUtf8(configPath)) || !fs::is_directory(PathFromUtf8(configPath))) {
+        console.showError("Error: Config directory does not exist: " + configPath);
         return 1;
     }
     
@@ -174,12 +188,13 @@ int main(int argc, char* argv[]) {
     
     console.showInfo("Starting packaging process...");
     console.showInfo("Input directory: " + inputPath);
+    console.showInfo("Config directory: " + configPath);
     console.showInfo("Output file: " + outputPath);
     
 
     ConfigurationManager configManager;
     auto configStart = std::chrono::steady_clock::now();
-    if (!configManager.initialize(inputPath)) {
+    if (!configManager.initialize(inputPath, configPath)) {
         console.showError("Failed to initialize configuration");
         std::string error = configManager.getLastError();
         if (!error.empty()) {
@@ -192,19 +207,12 @@ int main(int argc, char* argv[]) {
     const auto& config = configManager.getConfiguration();
     
 
-    if (configManager.hasConfigFile()) {
-        console.showInfo("Using configuration file: " + configManager.getConfigFilePath());
-    } else {
-        console.showInfo("No configuration file found, using default settings");
-    }
+    console.showInfo("Using configuration file: " + configManager.getConfigFilePath());
     
     console.showInfo("Application name: " + config.app.name);
     console.showInfo("Default install directory: " + config.install.defaultDir);
 
     CompressionAlgorithm effectiveAlgorithm = config.package.compression.algorithm;
-    if (args.algorithmExplicitlySet) {
-        effectiveAlgorithm = args.algorithm;
-    }
     console.showInfo(std::string("Compression algorithm: ") + CompressionAlgorithmName(effectiveAlgorithm));
     
 
@@ -238,9 +246,7 @@ int main(int argc, char* argv[]) {
     }
 
     int effectiveCompressionLevel = -1;
-    if (args.compressionLevel >= 0) {
-        effectiveCompressionLevel = args.compressionLevel;
-    } else if (config.package.compression.level >= 0) {
+    if (config.package.compression.level >= 0) {
         effectiveCompressionLevel = config.package.compression.level;
     }
     if (effectiveCompressionLevel >= 0) {
@@ -251,7 +257,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    int configuredThreadCount = args.threadCount > 0 ? args.threadCount : config.package.compression.threads;
+    int configuredThreadCount = config.package.compression.threads;
     size_t compressionThreadBudget = ResolveCompressionThreadBudget(configuredThreadCount);
     size_t folderWorkerCount = std::min(compressionThreadBudget, folders.size());
     int perCompressorThreadCount = static_cast<int>(compressionThreadBudget);
@@ -372,6 +378,7 @@ int main(int argc, char* argv[]) {
     
 
     InstallerGenerator installerGen;
+    installerGen.setResourceDirectory(Utf8FromPath(PathFromUtf8(configPath) / "resources"));
 
     fs::path tempTemplatePath;
     bool usesTempTemplate = false;
@@ -407,7 +414,7 @@ int main(int argc, char* argv[]) {
         if (!config.app.product.iconPath.empty()) {
             fs::path iconPath = PathFromUtf8(config.app.product.iconPath);
             if (!iconPath.is_absolute()) {
-                iconPath = PathFromUtf8(inputPath) / iconPath;
+                iconPath = PathFromUtf8(configPath) / iconPath;
             }
             std::string iconError;
             if (UpdateInstallerIcon(Utf8FromPath(tempTemplatePath), Utf8FromPath(iconPath), iconError)) {
@@ -459,19 +466,6 @@ int main(int argc, char* argv[]) {
             console.showWarning("Failed to remove temporary template: " + removeError.message());
         }
         timings.cleanupSec += ElapsedSeconds(cleanupStart, std::chrono::steady_clock::now());
-    }
-    
-    if (!args.dataPackagePath.empty()) {
-        auto dataPackageStart = std::chrono::steady_clock::now();
-        if (!installerGen.generateDataPackage(args.dataPackagePath,
-                                              serializedMetadata,
-                                              compressionResults)) {
-            console.showError("Failed to generate data package");
-            return 1;
-        }
-        timings.dataPackageWriteSec = ElapsedSeconds(
-            dataPackageStart, std::chrono::steady_clock::now());
-        console.showInfo("Data package created: " + args.dataPackagePath);
     }
     
     console.showInfo("Packaging completed successfully!");

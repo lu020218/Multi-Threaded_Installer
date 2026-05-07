@@ -29,8 +29,6 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         return true;
     }
 
-    std::string normalizedOld = normalizePathForCompare(plan.previousInstallDir);
-    std::string normalizedNew = normalizePathForCompare(plan.pathDecision.resolvedInstallRoot);
     reporter.EmitMessage(InstallServiceEventType::Info,
                          "Detected previous install at: " + plan.previousInstallDir);
 
@@ -51,30 +49,22 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         reporter.EmitProgress("cleanup", detail, info.progress);
     };
 
-    const bool sameInstallRoot =
-        !normalizedOld.empty() && !normalizedNew.empty() && normalizedOld == normalizedNew;
-
-    if (!sameInstallRoot) {
-        if (!cleanupPreviousInstallForUpgrade(plan.previousManifest,
-                                              plan.previousInstallDir,
-                                              plan.pathDecision.resolvedInstallRoot,
-                                              console,
-                                              cleanupProgress,
-                                              options.cancellationCallback)) {
-            if (IsCancellationRequested(options)) {
-                cancelled = true;
-                error = "Installation cancelled.";
-                return false;
-            }
-            reporter.EmitMessage(InstallServiceEventType::Warning,
-                                 "Previous install cleanup reported failure.");
-            logInstallerWarning("[InstallFlow][Cleanup] finished with failure");
-        } else {
-            logInstallerInfo("[InstallFlow][Cleanup] finished successfully");
+    if (!cleanupPreviousInstallForUpgrade(plan.previousManifest,
+                                          plan.previousInstallDir,
+                                          plan.pathDecision.resolvedInstallRoot,
+                                          console,
+                                          cleanupProgress,
+                                          options.cancellationCallback)) {
+        if (IsCancellationRequested(options)) {
+            cancelled = true;
+            error = "Installation cancelled.";
+            return false;
         }
+        reporter.EmitMessage(InstallServiceEventType::Warning,
+                             "Previous install cleanup reported failure.");
+        logInstallerWarning("[InstallFlow][Cleanup] finished with failure");
     } else {
-        reporter.EmitMessage(InstallServiceEventType::Info,
-                             "Overwrite install will reuse the existing install root.");
+        logInstallerInfo("[InstallFlow][Cleanup] finished successfully");
     }
 
     if (!cleanupUpgradeSystemArtifacts(plan.previousManifest,

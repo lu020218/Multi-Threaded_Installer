@@ -4,6 +4,7 @@
 #include "packager/metadata_generator.h"
 #include "packager/package_manifest_builder.h"
 #include "installer/metadata_parser.h"
+#include "installer/console_interface.h"
 #include "common/package_manifest_codec.h"
 #include "installer/package_manifest_validator.h"
 #include "installer/install_plan_builder.h"
@@ -214,12 +215,15 @@ lifecycle:
 
 void TestLoadValidSchema() {
     fs::path root = CreateTestRoot("valid_schema");
-    fs::create_directories(root / "bin");
-    fs::create_directories(root / "templates");
-    WriteTextFile(root / "packager.yaml", MinimalValidYaml());
+    fs::path inputDir = root / "payload";
+    fs::path configDir = root / "config";
+    fs::create_directories(inputDir / "bin");
+    fs::create_directories(inputDir / "templates");
+    fs::create_directories(configDir);
+    WriteTextFile(configDir / "packager.yaml", MinimalValidYaml());
 
     ConfigurationManager manager;
-    Require(manager.initialize(root.string()),
+    Require(manager.initialize(inputDir.string(), configDir.string()),
             manager.getLastError().empty() ? "valid schema should initialize" : manager.getLastError());
 
     const auto& config = manager.getConfiguration();
@@ -234,12 +238,82 @@ void TestLoadValidSchema() {
 
 void TestRejectOldSchema() {
     fs::path root = CreateTestRoot("old_schema");
-    fs::create_directories(root / "bin");
-    WriteTextFile(root / "packager.yaml", OldSchemaYaml());
+    fs::path inputDir = root / "payload";
+    fs::path configDir = root / "config";
+    fs::create_directories(inputDir / "bin");
+    fs::create_directories(configDir);
+    WriteTextFile(configDir / "packager.yaml", OldSchemaYaml());
 
     ConfigurationManager manager;
-    Require(!manager.initialize(root.string()), "Old schema should be rejected");
+    Require(!manager.initialize(inputDir.string(), configDir.string()), "Old schema should be rejected");
     Require(!manager.getLastError().empty(), "Old schema rejection should provide an error message");
+}
+
+void TestConfigurationLoadsOnlyFromConfigDirectoryAndResolvesIconThere() {
+    fs::path root = CreateTestRoot("config_directory_source");
+    fs::path inputDir = root / "payload";
+    fs::path configDir = root / "config";
+    fs::create_directories(inputDir / "bin");
+    fs::create_directories(inputDir / "templates");
+    fs::create_directories(configDir);
+
+    WriteTextFile(inputDir / "packager.yaml", OldSchemaYaml());
+    WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
+
+    std::string yaml = MinimalValidYaml();
+    const std::string marker = "  website: https://example.com\n";
+    size_t position = yaml.find(marker);
+    Require(position != std::string::npos, "Minimal YAML marker should exist");
+    yaml.insert(position + marker.size(), "  product:\n    icon: app.ico\n");
+    WriteTextFile(configDir / "packager.yaml", yaml);
+
+    ConfigurationManager manager;
+    Require(manager.initialize(inputDir.string(), configDir.string()),
+            manager.getLastError().empty() ? "config directory schema should initialize"
+                                           : manager.getLastError());
+    Require(manager.getConfigFilePath().find("config") != std::string::npos,
+            "Configuration should be loaded from config directory");
+    Require(manager.getConfiguration().app.product.iconPath == "app.ico",
+            "Icon path should be read from config directory packager.yaml");
+}
+
+void TestPackagerArgsNamedOrderIndependent() {
+    CliSupport console;
+    const char* argv[] = {
+        "packager.exe",
+        "--output", "dist\\installer.exe",
+        "-c", "build-config",
+        "--input", "payload",
+    };
+    auto args = console.parsePackagerArgs(static_cast<int>(sizeof(argv) / sizeof(argv[0])),
+                                          const_cast<char**>(argv));
+
+    Require(args.error.empty(), "Named packager args should parse without error");
+    Require(args.inputPath == "payload", "Named packager args should capture input");
+    Require(args.configPath == "build-config", "Named packager args should capture config");
+    Require(args.outputPath == "dist\\installer.exe", "Named packager args should capture output");
+}
+
+void TestPackagerArgsRejectLegacyAndPositional() {
+    CliSupport console;
+    {
+        const char* argv[] = {"packager.exe", "--algorithm", "xz"};
+        auto args = console.parsePackagerArgs(static_cast<int>(sizeof(argv) / sizeof(argv[0])),
+                                              const_cast<char**>(argv));
+        Require(!args.error.empty(), "Legacy packager option should be rejected");
+    }
+    {
+        const char* argv[] = {"packager.exe", "payload", "config", "dist\\installer.exe"};
+        auto args = console.parsePackagerArgs(static_cast<int>(sizeof(argv) / sizeof(argv[0])),
+                                              const_cast<char**>(argv));
+        Require(!args.error.empty(), "Positional packager args should be rejected");
+    }
+    {
+        const char* argv[] = {"packager.exe", "--input"};
+        auto args = console.parsePackagerArgs(static_cast<int>(sizeof(argv) / sizeof(argv[0])),
+                                              const_cast<char**>(argv));
+        Require(!args.error.empty(), "Missing named packager arg value should be rejected");
+    }
 }
 
 PackagerConfiguration BuildConfigFixture() {
@@ -376,7 +450,8 @@ void TestMetadataRoundTrip() {
     MetadataGenerator generator;
     ExtendedInstallationMetadata generated =
         generator.generateExtendedMetadata({result}, {folder}, config);
-    std::vector<uint8_t> bytes = generator.serializeExtendedMetadata(generated);
+    std::vector<uint8_t> bytes =
+        SerializePackageManifest(PackageManifestFromExtendedMetadata(generated));
 
     MetadataParser parser;
     ExtendedInstallationMetadata parsed = parser.deserializeExtendedMetadata(bytes);
@@ -667,6 +742,54 @@ void TestAppendPathLeafIfMissing() {
             "Selected install directory should not duplicate app id when leaf already matches");
 }
 
+void TestSameRootUpgradeCleanupUsesPreviousManifestFiles() {
+    fs::path root = CreateTestRoot("upgrade_cleanup_same_root");
+    fs::path previousInstallDir = root / "InstallRoot";
+    fs::create_directories(previousInstallDir);
+
+    fs::path staleFile = previousInstallDir / "stale.txt";
+    fs::path keptFile = previousInstallDir / "user.dat";
+    WriteTextFile(staleFile, "stale");
+    WriteTextFile(keptFile, "keep");
+    WriteTextFile(previousInstallDir / "install.manifest.json",
+                  R"({"files":["stale.txt"],"appVersion":"1.0.0"})");
+
+    CliSupport console;
+    bool ok = cleanupPreviousInstallForUpgrade((previousInstallDir / "install.manifest.json").string(),
+                                               previousInstallDir.string(),
+                                               previousInstallDir.string(),
+                                               console);
+
+    Require(ok, "Same-root upgrade cleanup should succeed");
+    Require(fs::exists(previousInstallDir), "Same-root cleanup should keep the install root");
+    Require(!fs::exists(staleFile), "Same-root cleanup should remove files listed by previous manifest");
+    Require(fs::exists(keptFile), "Same-root cleanup should not remove files missing from manifest");
+    Require(!fs::exists(previousInstallDir / "install.manifest.json"),
+            "Same-root cleanup should remove the previous manifest");
+}
+
+void TestUpgradeCleanupMissingManifestRemovesSafeDirectoryContents() {
+    fs::path root = CreateTestRoot("upgrade_cleanup_missing_manifest");
+    fs::path previousInstallDir = root / "InstallRoot";
+    fs::create_directories(previousInstallDir / "subdir");
+
+    WriteTextFile(previousInstallDir / "stale.txt", "stale");
+    WriteTextFile(previousInstallDir / "subdir" / "nested.txt", "nested");
+
+    CliSupport console;
+    bool ok = cleanupPreviousInstallForUpgrade((previousInstallDir / "missing.manifest.json").string(),
+                                               previousInstallDir.string(),
+                                               previousInstallDir.string(),
+                                               console);
+
+    Require(ok, "Missing-manifest upgrade cleanup should clean safe install root contents");
+    Require(fs::exists(previousInstallDir), "Same-root missing-manifest cleanup should keep the root");
+    Require(!fs::exists(previousInstallDir / "stale.txt"),
+            "Missing-manifest cleanup should remove direct files");
+    Require(!fs::exists(previousInstallDir / "subdir"),
+            "Missing-manifest cleanup should remove child directories");
+}
+
 void TestCleanupUpgradeSystemArtifactsExecutesExplicitRules() {
     fs::path root = CreateTestRoot("upgrade_cleanup_execute");
     fs::path previousInstallDir = root / "PreviousInstall";
@@ -849,6 +972,10 @@ int main() {
     const std::vector<std::pair<std::string, void(*)()>> tests = {
         {"load_valid_schema", &TestLoadValidSchema},
         {"reject_old_schema", &TestRejectOldSchema},
+        {"configuration_loads_only_from_config_directory_and_resolves_icon_there",
+         &TestConfigurationLoadsOnlyFromConfigDirectoryAndResolvesIconThere},
+        {"packager_args_named_order_independent", &TestPackagerArgsNamedOrderIndependent},
+        {"packager_args_reject_legacy_and_positional", &TestPackagerArgsRejectLegacyAndPositional},
         {"metadata_round_trip", &TestMetadataRoundTrip},
         {"package_manifest_builder_and_codec_round_trip", &TestPackageManifestBuilderAndCodecRoundTrip},
         {"package_manifest_validator_rejects_invalid_payload_and_components",
@@ -863,6 +990,10 @@ int main() {
          &TestCompareSemanticVersion},
         {"append_path_leaf_if_missing",
          &TestAppendPathLeafIfMissing},
+        {"same_root_upgrade_cleanup_uses_previous_manifest_files",
+         &TestSameRootUpgradeCleanupUsesPreviousManifestFiles},
+        {"upgrade_cleanup_missing_manifest_removes_safe_directory_contents",
+         &TestUpgradeCleanupMissingManifestRemovesSafeDirectoryContents},
         {"cleanup_upgrade_system_artifacts_executes_explicit_rules",
          &TestCleanupUpgradeSystemArtifactsExecutesExplicitRules},
         {"uninstall_from_manifest_executes_explicit_cleanup",

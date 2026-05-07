@@ -25,7 +25,7 @@ public:
      *
      */
     std::optional<PackagerConfiguration> loadConfiguration(
-        const std::string& inputDirectory);
+        const std::string& configDirectory);
     
     /**
      *

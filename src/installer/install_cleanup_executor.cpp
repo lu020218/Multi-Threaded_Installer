@@ -49,22 +49,31 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         reporter.EmitProgress("cleanup", detail, info.progress);
     };
 
-    if (!cleanupPreviousInstallForUpgrade(plan.previousManifest,
-                                          plan.previousInstallDir,
-                                          plan.pathDecision.resolvedInstallRoot,
-                                          console,
-                                          cleanupProgress,
-                                          options.cancellationCallback)) {
-        if (IsCancellationRequested(options)) {
-            cancelled = true;
-            error = "Installation cancelled.";
-            return false;
-        }
+    UpgradeCleanupResult previousCleanup = runPreviousInstallCleanupWithWatchdog(
+        plan.previousManifest,
+        plan.previousInstallDir,
+        plan.pathDecision.resolvedInstallRoot,
+        cleanupProgress,
+        options.cancellationCallback);
+    if (!previousCleanup.success && IsCancellationRequested(options)) {
+        cancelled = true;
+        error = "Installation cancelled.";
+        return false;
+    }
+    if (!previousCleanup.success || previousCleanup.partial) {
         reporter.EmitMessage(InstallServiceEventType::Warning,
-                             "Previous install cleanup reported failure.");
-        logInstallerWarning("[InstallFlow][Cleanup] finished with failure");
+                             "Previous install cleanup completed with warnings.");
+        logInstallerWarning("[InstallFlow][Cleanup] finished partial success=" +
+                            std::string(previousCleanup.success ? "true" : "false") +
+                            " timedOut=" + std::string(previousCleanup.timedOut ? "true" : "false") +
+                            " deleted=" + std::to_string(previousCleanup.deletedCount) +
+                            " failed=" + std::to_string(previousCleanup.failedCount) +
+                            " skipped=" + std::to_string(previousCleanup.skippedCount) +
+                            " timedOutPath=" + previousCleanup.timedOutPath);
     } else {
-        logInstallerInfo("[InstallFlow][Cleanup] finished successfully");
+        logInstallerInfo("[InstallFlow][Cleanup] finished successfully deleted=" +
+                         std::to_string(previousCleanup.deletedCount) +
+                         " skipped=" + std::to_string(previousCleanup.skippedCount));
     }
 
     if (!cleanupUpgradeSystemArtifacts(plan.previousManifest,
@@ -73,7 +82,8 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
                                       pathResolver,
                                       console,
                                       cleanupProgress,
-                                      options.cancellationCallback)) {
+                                      options.cancellationCallback,
+                                      false)) {
         if (IsCancellationRequested(options)) {
             cancelled = true;
             error = "Installation cancelled.";
@@ -84,6 +94,34 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         logInstallerWarning("[InstallFlow][Cleanup] system cleanup finished with failure");
     } else {
         logInstallerInfo("[InstallFlow][Cleanup] system cleanup finished successfully");
+    }
+
+    if (!metadata.lifecycleUpgradeCleanup.extraPaths.empty()) {
+        UpgradeCleanupResult extraPathCleanup = runUpgradeExtraPathCleanupWithWatchdog(
+            metadata.lifecycleUpgradeCleanup.extraPaths,
+            plan.previousInstallDir,
+            pathResolver,
+            cleanupProgress,
+            options.cancellationCallback);
+        if (!extraPathCleanup.success && IsCancellationRequested(options)) {
+            cancelled = true;
+            error = "Installation cancelled.";
+            return false;
+        }
+        if (!extraPathCleanup.success || extraPathCleanup.partial) {
+            reporter.EmitMessage(InstallServiceEventType::Warning,
+                                 "Previous install extra path cleanup completed with warnings.");
+            logInstallerWarning("[InstallFlow][Cleanup] extra paths partial success=" +
+                                std::string(extraPathCleanup.success ? "true" : "false") +
+                                " timedOut=" + std::string(extraPathCleanup.timedOut ? "true" : "false") +
+                                " deleted=" + std::to_string(extraPathCleanup.deletedCount) +
+                                " failed=" + std::to_string(extraPathCleanup.failedCount) +
+                                " skipped=" + std::to_string(extraPathCleanup.skippedCount) +
+                                " timedOutPath=" + extraPathCleanup.timedOutPath);
+        } else {
+            logInstallerInfo("[InstallFlow][Cleanup] extra paths cleanup finished successfully deleted=" +
+                             std::to_string(extraPathCleanup.deletedCount));
+        }
     }
 
     reporter.EmitProgress("cleanup", "Previous installation cleanup finished", 1.0f);

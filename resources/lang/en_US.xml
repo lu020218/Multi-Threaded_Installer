@@ -60,6 +60,10 @@
   <Text id="msg.install.reboot_required" value="Restart Required"/>
   <Text id="msg.install.reboot_required_detail" value="Some files are locked by the system. Their replacement has been scheduled for after a reboot. Please restart your computer to finish installation."/>
   <Text id="msg.progress.processing" value="Processing: "/>
+  <Text id="msg.progress.prechecking_prefix" value="Checking: "/>
+  <Text id="msg.progress.cleaning_prefix" value="Cleaning: "/>
+  <Text id="msg.progress.extracting_prefix" value="Extracting files: "/>
+  <Text id="msg.progress.finalizing_prefix" value="Finalizing: "/>
   <Text id="msg.progress.eta" value="Estimated time remaining: Calculating..."/>
   <Text id="msg.space.required" value="Required: "/>
   <Text id="msg.space.available" value="Available: "/>

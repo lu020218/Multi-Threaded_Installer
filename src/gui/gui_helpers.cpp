@@ -480,7 +480,11 @@ std::wstring GUIHelpers::GetLocalizedText(const std::wstring& textId,
     if (text.IsEmpty()) {
         return fallback;
     }
-    return std::wstring(text.GetData());
+    std::wstring resolved(text.GetData());
+    if (resolved == textId) {
+        return fallback;
+    }
+    return resolved;
 }
 
 // ============================================================================

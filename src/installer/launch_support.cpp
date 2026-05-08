@@ -14,6 +14,7 @@
 #include "installer/metadata_parser.h"
 #include "installer/path_resolver.h"
 #include "installer/registry_utils.h"
+#include "installer/upgrade_cleanup.h"
 #include "installer/uninstall_manager.h"
 
 #include <Shlwapi.h>
@@ -703,6 +704,14 @@ int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
     const std::vector<std::wstring> wideArgs = GetWideArgs();
     if (HasFlag(wideArgs, std::wstring(L"--cleanup-self"))) {
         return RunCleanupHelper(wideArgs);
+    }
+    for (size_t i = 1; i + 1 < wideArgs.size(); ++i) {
+        std::wstring lowered = wideArgs[i];
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+        if (lowered == L"--upgrade-cleanup-worker") {
+            return runUpgradeCleanupWorkerFromTask(WideToUtf8(wideArgs[i + 1]));
+        }
     }
 
     switch (context.mode) {

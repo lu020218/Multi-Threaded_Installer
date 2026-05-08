@@ -966,6 +966,90 @@ void TestCleanupUpgradeSystemArtifactsExecutesExplicitRules() {
     deleteRegistryPath(registryPath);
 }
 
+void TestUpgradeExtraPathCleanupWithWatchdogRemovesPath() {
+    fs::path root = CreateTestRoot("upgrade_extra_path_worker");
+    fs::path previousInstallDir = root / "PreviousInstall";
+    fs::path cleanupPath = root / "LegacyData";
+    fs::create_directories(previousInstallDir);
+    fs::create_directories(cleanupPath);
+    WriteTextFile(cleanupPath / "stale.txt", "legacy");
+
+    UninstallCleanupRule rule;
+    rule.path = cleanupPath.string();
+    rule.recursive = true;
+    rule.onlyIfEmpty = false;
+
+    InstallerPathResolver resolver;
+    UpgradeCleanupPolicy policy;
+    policy.totalTimeoutMs = 30000;
+    UpgradeCleanupResult result = runUpgradeExtraPathCleanupWithWatchdog({rule},
+                                                                         previousInstallDir.string(),
+                                                                         resolver,
+                                                                         {},
+                                                                         {},
+                                                                         policy);
+    Require(result.success, "Extra path cleanup worker should succeed");
+    Require(!fs::exists(cleanupPath), "Extra path cleanup worker should remove recursive path");
+}
+
+#ifdef _WIN32
+void TestUpgradeCleanupWorkerTimeoutIsPartialSuccess() {
+    fs::path root = CreateTestRoot("upgrade_cleanup_worker_timeout");
+    fs::path previousInstallDir = root / "InstallRoot";
+    fs::create_directories(previousInstallDir);
+    fs::path staleFile = previousInstallDir / "stale.txt";
+    WriteTextFile(staleFile, "stale");
+    WriteTextFile(previousInstallDir / "install.manifest.json",
+                  R"({"files":["stale.txt"],"appVersion":"1.0.0"})");
+
+    SetEnvironmentVariableW(L"MTINSTALLER_TEST_CLEANUP_WORKER_DELAY_MS", L"2000");
+    UpgradeCleanupPolicy policy;
+    policy.totalTimeoutMs = 300;
+    policy.itemStaleTimeoutMs = 100;
+    UpgradeCleanupResult result = runPreviousInstallCleanupWithWatchdog(
+        (previousInstallDir / "install.manifest.json").string(),
+        previousInstallDir.string(),
+        previousInstallDir.string(),
+        {},
+        {},
+        policy);
+    SetEnvironmentVariableW(L"MTINSTALLER_TEST_CLEANUP_WORKER_DELAY_MS", nullptr);
+
+    Require(result.success, "Timed-out cleanup should be partial success by default");
+    Require(result.partial, "Timed-out cleanup should be marked partial");
+    Require(result.timedOut, "Timed-out cleanup should report timeout");
+}
+
+void TestUpgradeCleanupSkipsReparsePointTargets() {
+    fs::path root = CreateTestRoot("upgrade_cleanup_reparse_skip");
+    fs::path previousInstallDir = root / "InstallRoot";
+    fs::path externalTarget = root / "ExternalTarget";
+    fs::create_directories(previousInstallDir);
+    fs::create_directories(externalTarget);
+    WriteTextFile(externalTarget / "keep.txt", "keep");
+
+    fs::path linkPath = previousInstallDir / "linked_target";
+    DWORD flags = SYMBOLIC_LINK_FLAG_DIRECTORY;
+#ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+#define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
+#endif
+    flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+    if (!CreateSymbolicLinkW(linkPath.wstring().c_str(), externalTarget.wstring().c_str(), flags)) {
+        return;
+    }
+
+    CliSupport console;
+    bool ok = cleanupPreviousInstallForUpgrade((previousInstallDir / "missing.manifest.json").string(),
+                                               previousInstallDir.string(),
+                                               previousInstallDir.string(),
+                                               console);
+
+    Require(ok, "Cleanup should succeed when reparse point is skipped");
+    Require(fs::exists(externalTarget / "keep.txt"),
+            "Cleanup should not follow reparse point into external target");
+}
+#endif
+
 void TestUninstallFromManifestExecutesExplicitCleanup() {
     fs::path root = CreateTestRoot("uninstall_execute");
     fs::path installDir = root / "InstallRoot";
@@ -1091,7 +1175,11 @@ void TestUninstallFromManifestExecutesExplicitCleanup() {
 
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc == 3 && std::string(argv[1]) == "--upgrade-cleanup-worker") {
+        return runUpgradeCleanupWorkerFromTask(argv[2]);
+    }
+
     const std::vector<std::pair<std::string, void(*)()>> tests = {
         {"load_valid_schema", &TestLoadValidSchema},
         {"reject_old_schema", &TestRejectOldSchema},
@@ -1125,6 +1213,14 @@ int main() {
          &TestUpgradeCleanupMissingManifestRemovesSafeDirectoryContents},
         {"cleanup_upgrade_system_artifacts_executes_explicit_rules",
          &TestCleanupUpgradeSystemArtifactsExecutesExplicitRules},
+        {"upgrade_extra_path_cleanup_with_watchdog_removes_path",
+         &TestUpgradeExtraPathCleanupWithWatchdogRemovesPath},
+#ifdef _WIN32
+        {"upgrade_cleanup_worker_timeout_is_partial_success",
+         &TestUpgradeCleanupWorkerTimeoutIsPartialSuccess},
+        {"upgrade_cleanup_skips_reparse_point_targets",
+         &TestUpgradeCleanupSkipsReparsePointTargets},
+#endif
         {"uninstall_from_manifest_executes_explicit_cleanup",
          &TestUninstallFromManifestExecutesExplicitCleanup},
     };

@@ -6,11 +6,14 @@
 namespace MultiThreadedInstaller::GUIStatusPresenter {
 
 void UpdateProgressDisplay(CPaintManagerUI& manager,
+                           const std::wstring& progressPrefix,
                            const std::wstring& progressFolder,
                            float percentage) {
     CLabelUI* currentFolderLabel = static_cast<CLabelUI*>(manager.FindControl(_T("current_folder")));
     if (currentFolderLabel && !progressFolder.empty()) {
-        std::wstring prefix = GUIHelpers::GetLocalizedText(L"msg.progress.processing", L"");
+        std::wstring prefix = progressPrefix.empty()
+            ? GUIHelpers::GetLocalizedText(L"msg.progress.processing", L"")
+            : progressPrefix;
         currentFolderLabel->SetText(WStringToTStr(prefix + progressFolder));
     }
 

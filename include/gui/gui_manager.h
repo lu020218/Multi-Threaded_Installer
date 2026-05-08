@@ -65,10 +65,12 @@ struct InstallConfig {
 
 
 struct ProgressMessageData {
+    wchar_t progressPrefix[64];
     wchar_t currentFolder[MAX_PATH];
     float percentage;
     
     ProgressMessageData() : percentage(0.0f) {
+        progressPrefix[0] = L'\0';
         currentFolder[0] = L'\0';
     }
 };
@@ -194,6 +196,7 @@ private:
     float m_progressDisplayed;
     bool m_progressTimerActive;
     uint64_t m_progressLastTick;
+    std::wstring m_progressPrefix;
     std::wstring m_progressFolder;
 };
 

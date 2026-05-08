@@ -34,6 +34,26 @@ namespace MultiThreadedInstaller {
 
 namespace {
 
+std::wstring ProgressPrefixForPhase(InstallServicePhase phase) {
+    const std::wstring processing =
+        GUIHelpers::GetLocalizedText(L"msg.progress.processing", L"");
+    const std::wstring installing =
+        GUIHelpers::GetLocalizedText(L"msg.progress.installing_prefix", processing);
+    switch (phase) {
+        case InstallServicePhase::Precheck:
+            return GUIHelpers::GetLocalizedText(L"msg.progress.prechecking_prefix", processing);
+        case InstallServicePhase::CleanupOldInstall:
+            return GUIHelpers::GetLocalizedText(L"msg.progress.cleaning_prefix", processing);
+        case InstallServicePhase::Installing:
+            return GUIHelpers::GetLocalizedText(L"msg.progress.extracting_prefix", installing);
+        case InstallServicePhase::Finalizing:
+            return GUIHelpers::GetLocalizedText(L"msg.progress.finalizing_prefix", installing);
+        case InstallServicePhase::None:
+        default:
+            return processing;
+    }
+}
+
 template <typename T>
 bool PostOwnedWorkerMessage(HWND hwnd, UINT message, T* payload, const char* tag) {
     if (!payload) {
@@ -140,7 +160,20 @@ void InstallationWorker::ProgressCallback(const std::string& folder, const std::
 }
 
 void InstallationWorker::PostProgressMessage(const std::wstring& folder, float progress) {
+    PostProgressMessage(folder, progress, L"");
+}
+
+void InstallationWorker::PostProgressMessage(const std::wstring& folder,
+                                             float progress,
+                                             const std::wstring& progressPrefix) {
     ProgressMessageData* pData = new ProgressMessageData();
+
+    size_t prefixLen = progressPrefix.length();
+    if (prefixLen >= 64) {
+        prefixLen = 63;
+    }
+    wcsncpy_s(pData->progressPrefix, 64, progressPrefix.c_str(), prefixLen);
+    pData->progressPrefix[prefixLen] = L'\0';
 
     size_t copyLen = folder.length();
     if (copyLen >= MAX_PATH) {
@@ -235,7 +268,7 @@ if (m_cancellationRequested) {
                         detail = "Installing";
                     }
                     const float progress = std::max(0.0f, std::min(100.0f, event.overallProgress * 100.0f));
-                    PostProgressMessage(Utf8ToWide(detail), progress);
+                    PostProgressMessage(Utf8ToWide(detail), progress, ProgressPrefixForPhase(event.phase));
                     break;
                 }
                 case InstallServiceEventType::Info:

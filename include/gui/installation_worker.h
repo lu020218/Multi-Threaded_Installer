@@ -63,6 +63,9 @@ private:
     
 
     void PostProgressMessage(const std::wstring& folder, float progress);
+    void PostProgressMessage(const std::wstring& folder,
+                             float progress,
+                             const std::wstring& progressPrefix);
     
 
     void PostCompletionMessage(bool success, bool rebootRequired, const std::wstring& errorMsg);

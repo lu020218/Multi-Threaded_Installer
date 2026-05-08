@@ -5,6 +5,7 @@
 namespace MultiThreadedInstaller::GUIStatusPresenter {
 
 void UpdateProgressDisplay(CPaintManagerUI& manager,
+                           const std::wstring& progressPrefix,
                            const std::wstring& progressFolder,
                            float percentage);
 void ShowInstallCompletion(CPaintManagerUI& manager,

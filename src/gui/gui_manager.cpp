@@ -541,6 +541,7 @@ void GUIManager::OnInstallButtonClick() {
     StopProgressTimer();
     m_progressTarget = 0.0f;
     m_progressDisplayed = 0.0f;
+    m_progressPrefix.clear();
     m_progressFolder.clear();
     UpdateProgressDisplay(0.0f);
 
@@ -834,6 +835,9 @@ void GUIManager::HandleProgressMessage(ProgressMessageData* pData) {
     if (pData->currentFolder[0] != L'\0') {
         m_progressFolder = pData->currentFolder;
     }
+    if (pData->progressPrefix[0] != L'\0') {
+        m_progressPrefix = pData->progressPrefix;
+    }
 
     m_progressTarget = target;
     if (m_progressDisplayed > m_progressTarget) {
@@ -893,7 +897,7 @@ void GUIManager::TickProgressAnimation() {
 }
 
 void GUIManager::UpdateProgressDisplay(float percentage) {
-    GUIStatusPresenter::UpdateProgressDisplay(m_pm, m_progressFolder, percentage);
+    GUIStatusPresenter::UpdateProgressDisplay(m_pm, m_progressPrefix, m_progressFolder, percentage);
 }
 
 void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {

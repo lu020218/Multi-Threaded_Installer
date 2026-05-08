@@ -60,6 +60,10 @@
   <Text id="msg.install.reboot_required" value="需要重启完成安装"/>
   <Text id="msg.install.reboot_required_detail" value="部分文件当前被系统占用，已安排在重启后完成替换。请重启电脑以完成安装。"/>
   <Text id="msg.progress.processing" value="正在处理: "/>
+  <Text id="msg.progress.prechecking_prefix" value="正在检查: "/>
+  <Text id="msg.progress.cleaning_prefix" value="正在清理: "/>
+  <Text id="msg.progress.extracting_prefix" value="正在释放文件: "/>
+  <Text id="msg.progress.finalizing_prefix" value="正在完成安装: "/>
   <Text id="msg.progress.eta" value="预计剩余时间: 计算中..."/>
   <Text id="msg.space.required" value="所需空间: "/>
   <Text id="msg.space.available" value="可用空间: "/>

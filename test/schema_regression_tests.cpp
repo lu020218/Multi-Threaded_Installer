@@ -761,6 +761,69 @@ void TestWriteManifestPreservesExplicitCleanupSchema() {
             "Manifest should persist installInfo values");
 }
 
+void TestInstallerArgsParseUpgrade() {
+    CliSupport console;
+    std::vector<std::string> args = {"installer.exe", "--upgrade", "--silent"};
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+        argv.push_back(arg.data());
+    }
+
+    CliSupport::InstallerArgs parsed = console.parseInstallerArgs(static_cast<int>(argv.size()), argv.data());
+    Require(parsed.upgrade, "Installer args should parse --upgrade");
+    Require(parsed.silent, "Installer args should still parse --silent with --upgrade");
+}
+
+void TestInstallManifestPersistsPreviousInstallOptions() {
+    fs::path root = CreateTestRoot("previous_install_options");
+    fs::path manifestPath = root / "install.manifest.json";
+
+    InstallInfoConfig installInfo;
+    installInfo.path = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\PreviousOptions";
+    InstallInfoValueConfig installDirValue;
+    installDirValue.key = "InstallDir";
+    installDirValue.value = "%InstallDir%";
+    installInfo.values["installDir"] = installDirValue;
+
+    Require(writeManifest(manifestPath.string(),
+                          "SampleDesktopApp",
+                          "Sample Desktop App",
+                          "1.2.3",
+                          root.string(),
+                          {root.string()},
+                          UninstallCleanupConfig{},
+                          {},
+                          {},
+                          {},
+                          true,
+                          false,
+                          "",
+                          installInfo,
+                          "",
+                          "zh_CN",
+                          {},
+                          {"core", "tools"},
+                          true),
+            "writeManifest should persist previous install options");
+
+    PreviousInstallOptions options;
+    std::string error;
+    Require(loadPreviousInstallOptions(manifestPath.string(), options, error),
+            error.empty() ? "loadPreviousInstallOptions should succeed" : error);
+    Require(options.autoStartup, "Previous autoStartup should round-trip");
+    Require(!options.desktopIcon, "Previous desktopIcon should round-trip");
+    Require(options.installAllComponents, "Previous installAllComponents should round-trip");
+    Require(options.languageCode == "zh_CN", "Previous language should round-trip");
+    Require(options.selectedComponentIds.size() == 2 &&
+                options.selectedComponentIds[0] == "core" &&
+                options.selectedComponentIds[1] == "tools",
+            "Previous selected components should round-trip");
+
+    WriteTextFile(manifestPath, R"({"installAutoStartup":true,"installDesktopIcon":true,"language":"zh_CN"})");
+    Require(!loadPreviousInstallOptions(manifestPath.string(), options, error),
+            "Missing selectedComponentIds/installAllComponents should fail previous option loading");
+}
+
 void TestBuildInstallExecutionPlanUsesConfiguredInstallRoots() {
     fs::path root = CreateTestRoot("install_plan_roots");
     fs::path previousInstallDir = root / "OldInstall";
@@ -814,6 +877,91 @@ void TestBuildInstallExecutionPlanUsesConfiguredInstallRoots() {
     Require(normalizePathForCompare(plan.pathDecision.cleanupTargetInstallRoot) ==
                 normalizePathForCompare(previousInstallDir.string()),
             "Overwrite cleanup target should remain the previous install root");
+}
+
+void TestBuildInstallExecutionPlanUpgradeUsesInstallInfoRegistry() {
+    fs::path root = CreateTestRoot("upgrade_plan_registry");
+    fs::path previousInstallDir = root / "PreviousInstall";
+    fs::create_directories(previousInstallDir);
+    WriteTextFile(previousInstallDir / "install.manifest.json",
+                  R"({"installAutoStartup":true,"installDesktopIcon":false,"language":"zh_CN","installAllComponents":false,"selectedComponentIds":["core"]})");
+
+    const std::string registryPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UpgradePlan";
+    RegistryEntry entry;
+    entry.path = registryPath;
+    entry.key = "InstallDir";
+    entry.value = previousInstallDir.string();
+    entry.type = RegistryValueType::STRING;
+    Require(writeRegistryValue(entry, previousInstallDir.string(), RegistryValueType::STRING),
+            "Failed to seed upgrade installInfo registry value");
+
+    ExtendedInstallationMetadata metadata;
+    metadata.appName = "Sample Desktop App";
+    metadata.appId = "SampleDesktopApp";
+    metadata.appDirectoryName = "SampleDesktopApp";
+    metadata.installDefaultDir = "%ProgramFiles%\\SampleDesktopApp";
+    metadata.installInfo.path = registryPath;
+    InstallInfoValueConfig installDirValue;
+    installDirValue.key = "InstallDir";
+    installDirValue.value = "%InstallDir%";
+    metadata.installInfo.values["installDir"] = installDirValue;
+
+    InstallServiceOptions options;
+    options.upgradeMode = true;
+    options.installPath = "C:\\IgnoredDestination";
+    options.installPathExplicit = true;
+    InstallerPathResolver resolver;
+    InstallExecutionPlan plan;
+    std::string error;
+    bool built = BuildInstallExecutionPlan(metadata, resolver, options, plan, error);
+
+    deleteRegistryPath(registryPath);
+
+    Require(built, error.empty() ? "Upgrade plan should succeed" : error);
+    Require(plan.hasPreviousInstall, "Upgrade plan should require previous install");
+    Require(plan.pathDecision.mode == InstallTargetMode::UpgradeInstall,
+            "Upgrade plan should use UpgradeInstall mode");
+    Require(normalizePathForCompare(plan.pathDecision.resolvedInstallRoot) ==
+                normalizePathForCompare(previousInstallDir.string()),
+            "Upgrade install root should come from installInfo registry");
+    Require(normalizePathForCompare(plan.pathDecision.cleanupTargetInstallRoot) ==
+                normalizePathForCompare(previousInstallDir.string()),
+            "Upgrade cleanup target should be previous install root");
+}
+
+void TestBuildInstallExecutionPlanUpgradeFailsWithoutManifest() {
+    fs::path root = CreateTestRoot("upgrade_plan_missing_manifest");
+    fs::path previousInstallDir = root / "PreviousInstall";
+    fs::create_directories(previousInstallDir);
+
+    const std::string registryPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UpgradePlanMissingManifest";
+    RegistryEntry entry;
+    entry.path = registryPath;
+    entry.key = "InstallDir";
+    entry.value = previousInstallDir.string();
+    entry.type = RegistryValueType::STRING;
+    Require(writeRegistryValue(entry, previousInstallDir.string(), RegistryValueType::STRING),
+            "Failed to seed upgrade installInfo registry value");
+
+    ExtendedInstallationMetadata metadata;
+    metadata.appName = "Sample Desktop App";
+    metadata.appId = "SampleDesktopApp";
+    metadata.installInfo.path = registryPath;
+    InstallInfoValueConfig installDirValue;
+    installDirValue.key = "InstallDir";
+    metadata.installInfo.values["installDir"] = installDirValue;
+
+    InstallServiceOptions options;
+    options.upgradeMode = true;
+    InstallerPathResolver resolver;
+    InstallExecutionPlan plan;
+    std::string error;
+    bool built = BuildInstallExecutionPlan(metadata, resolver, options, plan, error);
+
+    deleteRegistryPath(registryPath);
+
+    Require(!built, "Upgrade plan should fail when previous manifest is missing");
+    Require(!error.empty(), "Upgrade plan failure should explain the missing previous install state");
 }
 
 void TestInstallRootsAreOnlyDiscoverySource() {
@@ -1193,14 +1341,21 @@ int main(int argc, char* argv[]) {
 #endif
         {"packager_args_named_order_independent", &TestPackagerArgsNamedOrderIndependent},
         {"packager_args_reject_legacy_and_positional", &TestPackagerArgsRejectLegacyAndPositional},
+        {"installer_args_parse_upgrade", &TestInstallerArgsParseUpgrade},
         {"metadata_round_trip", &TestMetadataRoundTrip},
         {"package_manifest_builder_and_codec_round_trip", &TestPackageManifestBuilderAndCodecRoundTrip},
         {"package_manifest_validator_rejects_invalid_payload_and_components",
          &TestPackageManifestValidatorRejectsInvalidPayloadAndComponents},
         {"path_resolver_expand_environment_variables", &TestPathResolverExpandEnvironmentVariables},
         {"write_manifest_preserves_explicit_cleanup_schema", &TestWriteManifestPreservesExplicitCleanupSchema},
+        {"install_manifest_persists_previous_install_options",
+         &TestInstallManifestPersistsPreviousInstallOptions},
         {"build_install_execution_plan_uses_configured_install_roots",
          &TestBuildInstallExecutionPlanUsesConfiguredInstallRoots},
+        {"build_install_execution_plan_upgrade_uses_install_info_registry",
+         &TestBuildInstallExecutionPlanUpgradeUsesInstallInfoRegistry},
+        {"build_install_execution_plan_upgrade_fails_without_manifest",
+         &TestBuildInstallExecutionPlanUpgradeFailsWithoutManifest},
         {"install_roots_are_only_discovery_source",
          &TestInstallRootsAreOnlyDiscoverySource},
         {"compare_semantic_version",

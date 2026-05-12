@@ -43,6 +43,7 @@ public:
         std::string defaultDestination;
         std::vector<std::string> selectedComponents;
         bool installAllComponents = false;
+        bool upgrade = false;
         bool silent = false;
         bool autoStartupSpecified = false;
         bool autoStartupEnabled = false;

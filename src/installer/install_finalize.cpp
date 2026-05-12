@@ -200,7 +200,9 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                            metadata.installInfo,
                            result.uninstallPath,
                            languageCode,
-                           componentActions)) {
+                           componentActions,
+                           options.selectedComponentIds,
+                           options.installAllComponents)) {
             reporter.EmitMessage(InstallServiceEventType::Warning,
                                  "Failed to write local install manifest");
         }

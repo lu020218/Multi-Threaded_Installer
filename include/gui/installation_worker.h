@@ -31,7 +31,9 @@ public:
                            bool autoRun,
                            bool desktopIcons,
                            const std::wstring& languageCode,
-                           const std::vector<std::string>& selectedComponents);
+                           const std::vector<std::string>& selectedComponents,
+                           bool installAllComponents = false,
+                           bool upgradeMode = false);
     
 
     void RequestCancellation();
@@ -48,6 +50,8 @@ private:
     std::atomic<bool> m_cancellationRequested;
     bool m_autoRun;
     bool m_desktopIcons;
+    bool m_installAllComponents;
+    bool m_upgradeMode;
     std::wstring m_languageCode;
     std::vector<std::string> m_selectedComponents;
     std::atomic<uint64_t> m_totalBytes;

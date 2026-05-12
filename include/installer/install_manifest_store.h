@@ -17,6 +17,14 @@ struct ComponentExecutionRecord {
     uint32_t timeoutSec = 900;
 };
 
+struct PreviousInstallOptions {
+    bool autoStartup = false;
+    bool desktopIcon = false;
+    bool installAllComponents = false;
+    std::string languageCode;
+    std::vector<std::string> selectedComponentIds;
+};
+
 bool writeManifest(const std::string& manifestPath,
                    const std::string& appId,
                    const std::string& displayName,
@@ -33,7 +41,12 @@ bool writeManifest(const std::string& manifestPath,
                    const InstallInfoConfig& installInfo,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
-                   const std::vector<ComponentExecutionRecord>& componentActions = {});
+                   const std::vector<ComponentExecutionRecord>& componentActions = {},
+                   const std::vector<std::string>& selectedComponentIds = {},
+                   bool installAllComponents = false);
 bool readManifest(const std::string& manifestPath, nlohmann::json& outManifest);
+bool loadPreviousInstallOptions(const std::string& manifestPath,
+                                PreviousInstallOptions& options,
+                                std::string& error);
 
 } // namespace MultiThreadedInstaller

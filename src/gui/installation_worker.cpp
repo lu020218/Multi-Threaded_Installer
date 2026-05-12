@@ -80,6 +80,8 @@ InstallationWorker::InstallationWorker(HWND hNotifyWindow)
     , m_cancellationRequested(false)
     , m_autoRun(false)
     , m_desktopIcons(false)
+    , m_installAllComponents(false)
+    , m_upgradeMode(false)
     , m_totalBytes(0)
     , m_completedBytes(0)
     , m_currentFolderBytes(0)
@@ -101,7 +103,9 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
                                            bool autoRun,
                                            bool desktopIcons,
                                            const std::wstring& languageCode,
-                                           const std::vector<std::string>& selectedComponents) {
+                                           const std::vector<std::string>& selectedComponents,
+                                           bool installAllComponents,
+                                           bool upgradeMode) {
     if (m_running.load()) {
         return;
     }
@@ -111,6 +115,8 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
     m_running = true;
     m_autoRun = autoRun;
     m_desktopIcons = desktopIcons;
+    m_installAllComponents = installAllComponents;
+    m_upgradeMode = upgradeMode;
     m_languageCode = languageCode;
     m_selectedComponents = selectedComponents;
     
@@ -293,6 +299,8 @@ if (m_cancellationRequested) {
         serviceOptions.installPath = installPathStr;
         serviceOptions.installPathExplicit = true;
         serviceOptions.selectedComponentIds = m_selectedComponents;
+        serviceOptions.installAllComponents = m_installAllComponents;
+        serviceOptions.upgradeMode = m_upgradeMode;
         serviceOptions.languageCode = WideToUtf8(m_languageCode);
         serviceOptions.applyRegistryBeforeFinalize = true;
         serviceOptions.preRegistryInstallPath = installPathStr;

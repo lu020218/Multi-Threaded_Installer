@@ -202,6 +202,8 @@ CliSupport::InstallerArgs CliSupport::parseInstallerArgs(int argc, char* argv[])
         
         if (arg == "-h" || arg == "--help") {
             args.showHelp = true;
+        } else if (arg == "--upgrade") {
+            args.upgrade = true;
         } else if (arg == "-s" || arg == "--silent") {
             args.silent = true;
         } else if (arg == "--components" && i + 1 < argc) {
@@ -257,6 +259,7 @@ void CliSupport::showInstallerHelp() {
     std::cout << "Options:" << std::endl;
     std::cout << "  -d, --destination <directory>  Default installation directory" << std::endl;
     std::cout << "  -s, --silent                   Silent installation mode" << std::endl;
+    std::cout << "  --upgrade                      Upgrade mode; requires existing install info" << std::endl;
     std::cout << "  --components <id1,id2,...|all> Select optional components or all" << std::endl;
     std::cout << "  --auto-startup <true|false>    Enable or disable auto startup" << std::endl;
     std::cout << "  --desktop-icon <true|false>    Enable or disable desktop icon" << std::endl;
@@ -267,6 +270,8 @@ void CliSupport::showInstallerHelp() {
     std::cout << "  installer -s -d C:\\Program Files\\MyApp" << std::endl;
     std::cout << "  installer -s --components main_app,chrome_plugin" << std::endl;
     std::cout << "  installer -s --components all" << std::endl;
+    std::cout << "  installer --upgrade" << std::endl;
+    std::cout << "  installer --upgrade --silent" << std::endl;
     std::cout << "  installer -s --auto-startup true --desktop-icon false" << std::endl;
 }
 

@@ -60,6 +60,7 @@ struct InstallServiceOptions {
     std::vector<std::pair<std::string, std::string>> folderMappings;
     std::vector<std::string> selectedComponentIds;
     bool installAllComponents = false;
+    bool upgradeMode = false;
     int threadCount = 0;
     std::string languageCode;
     bool applyRegistryBeforeFinalize = false;

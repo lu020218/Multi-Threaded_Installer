@@ -155,6 +155,11 @@ GUIManager::GUIManager()
         m_expandedClientHeight(0),
         m_baseWindowWidth(0),
         m_installMetadataLoaded(false),
+        m_autoStartInstall(false),
+        m_autoStartAutoRun(false),
+        m_autoStartDesktopIcons(false),
+        m_autoStartInstallAllComponents(false),
+        m_autoStartUpgradeMode(false),
         m_uninstallMode(false),
         m_progressTarget(0.0f),
         m_progressDisplayed(0.0f),
@@ -197,6 +202,23 @@ void GUIManager::SetInstallMetadata(const ExtendedInstallationMetadata& metadata
         }
     }
     m_installMetadataLoaded = true;
+}
+
+void GUIManager::SetAutoStartInstallRequest(const std::wstring& installPath,
+                                            bool autoRun,
+                                            bool desktopIcons,
+                                            const std::wstring& languageCode,
+                                            const std::vector<std::string>& selectedComponents,
+                                            bool installAllComponents,
+                                            bool upgradeMode) {
+    m_autoStartInstall = true;
+    m_autoStartInstallPath = installPath;
+    m_autoStartAutoRun = autoRun;
+    m_autoStartDesktopIcons = desktopIcons;
+    m_autoStartLanguageCode = languageCode;
+    m_autoStartSelectedComponents = selectedComponents;
+    m_autoStartInstallAllComponents = installAllComponents;
+    m_autoStartUpgradeMode = upgradeMode;
 }
 
 void GUIManager::PrepareInitialDpi(unsigned int dpi) {
@@ -274,6 +296,20 @@ void GUIManager::InitWindow() {
         RECT rcWindow;
         ::GetWindowRect(m_hWnd, &rcWindow);
         m_baseWindowWidth = rcWindow.right - rcWindow.left;
+    }
+
+    if (m_autoStartInstall && !m_uninstallMode) {
+        m_autoStartInstall = false;
+        if (m_pTabPages) {
+            m_pTabPages->SelectItem(GetProgressPageIndex());
+        }
+        StartInstallationWithOptions(m_autoStartInstallPath,
+                                     m_autoStartAutoRun,
+                                     m_autoStartDesktopIcons,
+                                     m_autoStartLanguageCode,
+                                     m_autoStartSelectedComponents,
+                                     m_autoStartInstallAllComponents,
+                                     m_autoStartUpgradeMode);
     }
 }
 
@@ -538,6 +574,23 @@ void GUIManager::OnInstallButtonClick() {
         return;
     }
 
+    std::vector<std::string> selectedComponents = CollectSelectedComponentsFromUi();
+    StartInstallationWithOptions(request.installPath,
+                                 request.autoRun,
+                                 request.desktopIcons,
+                                 request.languageCode,
+                                 selectedComponents,
+                                 false,
+                                 false);
+}
+
+bool GUIManager::StartInstallationWithOptions(const std::wstring& installPath,
+                                              bool autoRun,
+                                              bool desktopIcons,
+                                              const std::wstring& languageCode,
+                                              const std::vector<std::string>& selectedComponents,
+                                              bool installAllComponents,
+                                              bool upgradeMode) {
     StopProgressTimer();
     m_progressTarget = 0.0f;
     m_progressDisplayed = 0.0f;
@@ -552,30 +605,32 @@ void GUIManager::OnInstallButtonClick() {
             m_hWnd,
             GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L""),
             GUIHelpers::GetLocalizedText(L"msg.dialog.metadata_read_failed", L""));
-        return;
+        return false;
     }
     const ExtendedInstallationMetadata& metadata = m_installMetadata;
-    std::vector<std::string> selectedComponents = CollectSelectedComponentsFromUi();
 
     std::vector<std::string> processNames = buildKillProcessList(
         metadata.appName,
         metadata.installKillProcesses);
     if (!HandleRunningApplicationDialog(m_hWnd, processNames)) {
-        return;
+        return false;
     }
 
     if (!m_pWorker) {
         m_pWorker = new InstallationWorker(m_hWnd);
     }
-    m_pWorker->StartInstallation(request.installPath,
-                                 request.autoRun,
-                                 request.desktopIcons,
-                                 request.languageCode,
-                                 selectedComponents);
+    m_pWorker->StartInstallation(installPath,
+                                 autoRun,
+                                 desktopIcons,
+                                 languageCode,
+                                 selectedComponents,
+                                 installAllComponents,
+                                 upgradeMode);
 
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetProgressPageIndex());
     }
+    return true;
 }
 
 void GUIManager::OnUninstallConfirmClick() {

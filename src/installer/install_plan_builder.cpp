@@ -13,6 +13,7 @@
 #include <cctype>
 #include <filesystem>
 #include <functional>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -50,6 +51,16 @@ InstallPathDecision ResolveInstallPathDecision(InstallerPathResolver& pathResolv
     if (decision.cleanupTargetInstallRoot.empty()) {
         decision.cleanupTargetInstallRoot = decision.resolvedInstallRoot;
     }
+    return decision;
+}
+
+InstallPathDecision ResolveUpgradePathDecision(const std::string& previousInstallDir) {
+    InstallPathDecision decision;
+    decision.mode = InstallTargetMode::UpgradeInstall;
+    decision.requestedInstallRoot = previousInstallDir;
+    decision.resolvedInstallRoot = previousInstallDir;
+    decision.diskCheckPath = previousInstallDir;
+    decision.cleanupTargetInstallRoot = previousInstallDir;
     return decision;
 }
 
@@ -271,6 +282,8 @@ const char* InstallTargetModeName(InstallTargetMode mode) {
             return "FreshInstall";
         case InstallTargetMode::OverwriteInstall:
             return "OverwriteInstall";
+        case InstallTargetMode::UpgradeInstall:
+            return "UpgradeInstall";
         default:
             return "FreshInstall";
     }
@@ -330,6 +343,55 @@ std::string ResolveDesktopShortcutDisplayName(const ExtendedInstallationMetadata
     return metadata.appName;
 }
 
+bool ResolveUpgradeInstallFromInstallInfo(const ExtendedInstallationMetadata& metadata,
+                                          std::string& installDir,
+                                          std::string& manifestPath,
+                                          std::string& error) {
+    installDir.clear();
+    manifestPath.clear();
+    error.clear();
+
+    if (metadata.installInfo.path.empty()) {
+        error = "Upgrade mode requires install.installInfo.path";
+        return false;
+    }
+
+    auto valueIt = metadata.installInfo.values.find("installDir");
+    if (valueIt == metadata.installInfo.values.end() || valueIt->second.key.empty()) {
+        error = "Upgrade mode requires install.installInfo.values.installDir.key";
+        return false;
+    }
+
+    std::string registryInstallDir;
+    if (!readRegistryStringValue(metadata.installInfo.path, valueIt->second.key, registryInstallDir)) {
+        error = "Failed to read previous installDir from registry";
+        return false;
+    }
+
+    registryInstallDir = TrimAsciiCopy(registryInstallDir);
+    if (registryInstallDir.empty()) {
+        error = "Previous installDir in registry is empty";
+        return false;
+    }
+
+    std::filesystem::path installPath = PathFromUtf8(registryInstallDir);
+    std::error_code ec;
+    if (!std::filesystem::exists(installPath, ec) || !std::filesystem::is_directory(installPath, ec)) {
+        error = "Previous installDir from registry does not exist or is not a directory";
+        return false;
+    }
+
+    std::filesystem::path manifest = installPath / "install.manifest.json";
+    if (!std::filesystem::exists(manifest, ec) || !std::filesystem::is_regular_file(manifest, ec)) {
+        error = "Previous install manifest is missing";
+        return false;
+    }
+
+    installDir = Utf8FromPath(installPath);
+    manifestPath = Utf8FromPath(manifest);
+    return true;
+}
+
 bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
                                InstallerPathResolver& pathResolver,
                                const InstallServiceOptions& options,
@@ -342,16 +404,24 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
     plan.effectiveAppId = resolveEffectiveAppId(metadata.appId, metadata.appName);
     plan.effectiveDirectoryName =
         resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName);
-    plan.hasPreviousInstall = resolveInstalledInstanceFromInstallRoots(metadata, installedInstance);
-    if (plan.hasPreviousInstall) {
-        plan.previousManifest = installedInstance.manifestPath;
-        plan.previousInstallDir = installedInstance.installDir;
-    }
+    if (options.upgradeMode) {
+        if (!ResolveUpgradeInstallFromInstallInfo(metadata, plan.previousInstallDir, plan.previousManifest, error)) {
+            return false;
+        }
+        plan.hasPreviousInstall = true;
+        plan.pathDecision = ResolveUpgradePathDecision(plan.previousInstallDir);
+    } else {
+        plan.hasPreviousInstall = resolveInstalledInstanceFromInstallRoots(metadata, installedInstance);
+        if (plan.hasPreviousInstall) {
+            plan.previousManifest = installedInstance.manifestPath;
+            plan.previousInstallDir = installedInstance.installDir;
+        }
 
-    plan.pathDecision = ResolveInstallPathDecision(pathResolver,
-                                                   options.installPath,
-                                                   plan.hasPreviousInstall,
-                                                   plan.previousInstallDir);
+        plan.pathDecision = ResolveInstallPathDecision(pathResolver,
+                                                       options.installPath,
+                                                       plan.hasPreviousInstall,
+                                                       plan.previousInstallDir);
+    }
 
     plan.legacyDesktopShortcutCandidates =
         CollectLegacyDesktopShortcutCandidates(plan.previousManifest);

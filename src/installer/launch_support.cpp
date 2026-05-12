@@ -8,6 +8,7 @@
 #include "installer/embedded_resources.h"
 #include "installer/gui_resource_loader.h"
 #include "installer/install_manifest_store.h"
+#include "installer/install_plan_builder.h"
 #include "installer/install_service.h"
 #include "installer/installed_instance_resolver.h"
 #include "installer/installer_helpers.h"
@@ -477,6 +478,33 @@ InstallConfig BuildUninstallConfigFromManifest(const std::string& manifestPath) 
     return config;
 }
 
+bool ApplyPreviousOptionsForUpgrade(const ExtendedInstallationMetadata& metadata,
+                                    InstallServiceOptions& options,
+                                    std::string& installDir,
+                                    std::string& error) {
+    std::string manifestPath;
+    if (!ResolveUpgradeInstallFromInstallInfo(metadata, installDir, manifestPath, error)) {
+        return false;
+    }
+
+    PreviousInstallOptions previous;
+    if (!loadPreviousInstallOptions(manifestPath, previous, error)) {
+        return false;
+    }
+
+    options.upgradeMode = true;
+    options.installPath = installDir;
+    options.installPathExplicit = true;
+    options.overrideAutoStartup = true;
+    options.autoStartupEnabled = previous.autoStartup;
+    options.overrideDesktopIcons = true;
+    options.desktopIconsEnabled = previous.desktopIcon;
+    options.languageCode = previous.languageCode;
+    options.selectedComponentIds = previous.selectedComponentIds;
+    options.installAllComponents = previous.installAllComponents;
+    return true;
+}
+
 int RunSilentInstallLikeMode(const LaunchContext& context) {
     CliSupport console;
     InstallerPathResolver pathResolver;
@@ -490,38 +518,46 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
     SetInstallerAppNameEnv(metadata.appName);
     EnsureInstallerLoggingInitialized();
 
-    InstalledInstanceInfo installedInstance;
-    const bool hasInstalledInstance =
-        resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
-        installedInstance.found;
-
-    if (hasInstalledInstance) {
-        const int versionOrder =
-            compareSemanticVersion(metadata.appVersion, installedInstance.installedVersion);
-        if (versionOrder <= 0) {
-            console.showError("Silent install only supports upgrading to a higher version.");
+    InstallServiceOptions options;
+    std::string installPath;
+    if (context.args.upgrade) {
+        std::string upgradeError;
+        if (!ApplyPreviousOptionsForUpgrade(metadata, options, installPath, upgradeError)) {
+            console.showError(upgradeError.empty() ? "Upgrade mode requires an existing installation." : upgradeError);
             return INSTALLER_EXIT_FAILED;
         }
-    }
+    } else {
+        InstalledInstanceInfo installedInstance;
+        const bool hasInstalledInstance =
+            resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
+            installedInstance.found;
 
-    std::string existingManifest;
-    std::string installPath =
-        ResolveInstallPathForSilentRun(metadata, pathResolver, context, existingManifest);
-    if (installPath.empty()) {
-        console.showError("Silent install requires a valid installation path.");
-        return INSTALLER_EXIT_FAILED;
-    }
+        if (hasInstalledInstance) {
+            const int versionOrder =
+                compareSemanticVersion(metadata.appVersion, installedInstance.installedVersion);
+            if (versionOrder <= 0) {
+                console.showError("Silent install only supports upgrading to a higher version.");
+                return INSTALLER_EXIT_FAILED;
+            }
+        }
 
-    InstallServiceOptions options;
-    options.installPath = installPath;
-    options.installPathExplicit = true;
-    options.selectedComponentIds = context.args.selectedComponents;
-    options.installAllComponents = context.args.installAllComponents;
+        std::string existingManifest;
+        installPath = ResolveInstallPathForSilentRun(metadata, pathResolver, context, existingManifest);
+        if (installPath.empty()) {
+            console.showError("Silent install requires a valid installation path.");
+            return INSTALLER_EXIT_FAILED;
+        }
+
+        options.installPath = installPath;
+        options.installPathExplicit = true;
+        options.selectedComponentIds = context.args.selectedComponents;
+        options.installAllComponents = context.args.installAllComponents;
+        options.overrideAutoStartup = context.args.autoStartupSpecified;
+        options.autoStartupEnabled = context.args.autoStartupEnabled;
+        options.overrideDesktopIcons = context.args.desktopIconSpecified;
+        options.desktopIconsEnabled = context.args.desktopIconEnabled;
+    }
     options.writeUninstallRegistry = true;
-    options.overrideAutoStartup = context.args.autoStartupSpecified;
-    options.autoStartupEnabled = context.args.autoStartupEnabled;
-    options.overrideDesktopIcons = context.args.desktopIconSpecified;
-    options.desktopIconsEnabled = context.args.desktopIconEnabled;
 
     InstallServiceResult result = ExecuteInstallService(
         metadata, parser, pathResolver, options, BuildConsoleServiceCallbacks(console));
@@ -554,15 +590,41 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     }
 
     InstallerPathResolver pathResolver;
-    InstalledInstanceInfo installedInstance;
-    const bool overwriteMode =
-        resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
-        installedInstance.found;
+    InstallServiceOptions upgradeOptions;
+    std::string upgradeInstallDir;
+    bool upgradeMode = context.args.upgrade;
+    bool overwriteMode = false;
+
+    if (upgradeMode) {
+        std::string upgradeError;
+        if (!ApplyPreviousOptionsForUpgrade(metadata, upgradeOptions, upgradeInstallDir, upgradeError)) {
+            GUIHelpers::ShowErrorDialog(nullptr,
+                                        GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L""),
+                                        Utf8ToWide(upgradeError.empty()
+                                                       ? "Upgrade mode requires an existing installation."
+                                                       : upgradeError));
+            return 1;
+        }
+        overwriteMode = true;
+    } else {
+        InstalledInstanceInfo installedInstance;
+        overwriteMode =
+            resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
+            installedInstance.found;
+        if (overwriteMode && !installedInstance.installDir.empty()) {
+            upgradeInstallDir = installedInstance.installDir;
+        }
+    }
 
     InstallConfig config = CreateInstallConfigFromMetadata(metadata);
     config.overwriteMode = overwriteMode;
-    if (overwriteMode && !installedInstance.installDir.empty()) {
-        config.defaultInstallPath = Utf8ToWide(installedInstance.installDir);
+    if (!upgradeInstallDir.empty()) {
+        config.defaultInstallPath = Utf8ToWide(upgradeInstallDir);
+    }
+    if (upgradeMode) {
+        config.autoStartup = upgradeOptions.autoStartupEnabled;
+        config.desktopIcons = upgradeOptions.desktopIconsEnabled;
+        config.languageCode = Utf8ToWide(upgradeOptions.languageCode);
     }
 
     // Deferred: only needed by child processes spawned during installation.
@@ -581,6 +643,15 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     frame->SetOverwriteMode(overwriteMode);
     frame->SetInstallConfig(config);
     frame->SetInstallMetadata(metadata);
+    if (upgradeMode) {
+        frame->SetAutoStartInstallRequest(Utf8ToWide(upgradeInstallDir),
+                                          upgradeOptions.autoStartupEnabled,
+                                          upgradeOptions.desktopIconsEnabled,
+                                          Utf8ToWide(upgradeOptions.languageCode),
+                                          upgradeOptions.selectedComponentIds,
+                                          upgradeOptions.installAllComponents,
+                                          true);
+    }
 
     const std::wstring title = config.applicationName.empty() ? L"Installer" : config.applicationName;
     return RunGuiWindow(*frame, title, resources, false, WindowSize{800, 600});
@@ -699,6 +770,11 @@ int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
             console.showUninstallerHelp();
         }
         return INSTALLER_EXIT_SUCCESS;
+    }
+
+    if (context.binary != LaunchBinary::Installer && context.args.upgrade) {
+        console.showError("--upgrade is only supported by installer.exe");
+        return INSTALLER_EXIT_FAILED;
     }
 
     const std::vector<std::wstring> wideArgs = GetWideArgs();

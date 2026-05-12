@@ -94,7 +94,9 @@ bool writeManifest(const std::string& manifestPath,
                    const InstallInfoConfig& installInfo,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
-                   const std::vector<ComponentExecutionRecord>& componentActions) {
+                   const std::vector<ComponentExecutionRecord>& componentActions,
+                   const std::vector<std::string>& selectedComponentIds,
+                   bool installAllComponents) {
     if (manifestPath.empty()) {
         return false;
     }
@@ -158,6 +160,8 @@ bool writeManifest(const std::string& manifestPath,
         root["files"] = safeFiles;
         root["installAutoStartup"] = installAutoStartup;
         root["installDesktopIcon"] = installDesktopIcon;
+        root["installAllComponents"] = installAllComponents;
+        root["selectedComponentIds"] = EnsureUtf8List(selectedComponentIds);
         root["desktopShortcutDisplayName"] = EnsureUtf8(desktopShortcutDisplayName);
         root["language"] = EnsureUtf8(languageCode);
 
@@ -244,6 +248,41 @@ bool readManifest(const std::string& manifestPath, json& outManifest) {
     }
     outManifest = json::parse(content, nullptr, false);
     return !outManifest.is_discarded();
+}
+
+bool loadPreviousInstallOptions(const std::string& manifestPath,
+                                PreviousInstallOptions& options,
+                                std::string& error) {
+    options = PreviousInstallOptions{};
+    error.clear();
+
+    json manifest;
+    if (!readManifest(manifestPath, manifest)) {
+        error = "Failed to read previous install manifest";
+        return false;
+    }
+    if (!manifest.contains("installAutoStartup") || !manifest["installAutoStartup"].is_boolean() ||
+        !manifest.contains("installDesktopIcon") || !manifest["installDesktopIcon"].is_boolean() ||
+        !manifest.contains("language") || !manifest["language"].is_string() ||
+        !manifest.contains("installAllComponents") || !manifest["installAllComponents"].is_boolean() ||
+        !manifest.contains("selectedComponentIds") || !manifest["selectedComponentIds"].is_array()) {
+        error = "Previous install manifest does not contain complete install options";
+        return false;
+    }
+
+    options.autoStartup = manifest.value("installAutoStartup", false);
+    options.desktopIcon = manifest.value("installDesktopIcon", false);
+    options.installAllComponents = manifest.value("installAllComponents", false);
+    options.languageCode = manifest.value("language", "");
+    options.selectedComponentIds.clear();
+    for (const auto& item : manifest["selectedComponentIds"]) {
+        if (!item.is_string()) {
+            error = "Previous install manifest contains invalid selectedComponentIds";
+            return false;
+        }
+        options.selectedComponentIds.push_back(item.get<std::string>());
+    }
+    return true;
 }
 
 }  // namespace MultiThreadedInstaller

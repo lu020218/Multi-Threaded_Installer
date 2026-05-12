@@ -98,6 +98,13 @@ public:
 
     void SetInstallConfig(const InstallConfig& config);
     void SetInstallMetadata(const ExtendedInstallationMetadata& metadata);
+    void SetAutoStartInstallRequest(const std::wstring& installPath,
+                                    bool autoRun,
+                                    bool desktopIcons,
+                                    const std::wstring& languageCode,
+                                    const std::vector<std::string>& selectedComponents,
+                                    bool installAllComponents,
+                                    bool upgradeMode = false);
     void PrepareInitialDpi(unsigned int dpi);
     
 
@@ -142,6 +149,14 @@ private:
     ExtendedInstallationMetadata m_installMetadata;
     bool m_installMetadataLoaded;
     std::unordered_map<std::string, std::wstring> m_uiLinks;
+    bool m_autoStartInstall;
+    std::wstring m_autoStartInstallPath;
+    bool m_autoStartAutoRun;
+    bool m_autoStartDesktopIcons;
+    std::wstring m_autoStartLanguageCode;
+    std::vector<std::string> m_autoStartSelectedComponents;
+    bool m_autoStartInstallAllComponents;
+    bool m_autoStartUpgradeMode;
     
 
     void InitControls();
@@ -151,6 +166,13 @@ private:
     
 
     void OnInstallButtonClick();
+    bool StartInstallationWithOptions(const std::wstring& installPath,
+                                      bool autoRun,
+                                      bool desktopIcons,
+                                      const std::wstring& languageCode,
+                                      const std::vector<std::string>& selectedComponents,
+                                      bool installAllComponents,
+                                      bool upgradeMode);
     void OnCancelButtonClick();
     void OnBrowseButtonClick();
     void OnLicenseLinkClick();

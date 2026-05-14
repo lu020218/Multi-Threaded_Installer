@@ -87,6 +87,10 @@
   <Text id="msg.uninstall.failed" value="卸载失败: "/>
   <Text id="msg.version.prefix" value="版本 "/>
   <Text id="msg.uninstall.appname_missing" value="应用名称缺失，无法卸载。"/>
+  <Text id="msg.uninstall.manifest_missing" value="卸载清单缺失，无法卸载。"/>
+  <Text id="msg.uninstall.manifest_invalid" value="卸载清单损坏或不可读取，无法卸载。"/>
+  <Text id="msg.uninstall.context_missing" value="无法确定安装目录，卸载失败。"/>
+  <Text id="msg.uninstall.fallback_confirm" value="卸载清单缺失，将按安装目录执行安全降级卸载。是否继续？"/>
   <Text id="msg.dialog.title.prompt" value="提示"/>
   <Text id="msg.dialog.title.error" value="错误"/>
   <Text id="msg.dialog.title.warning" value="警告"/>

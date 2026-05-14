@@ -41,26 +41,28 @@ UninstallWorker::~UninstallWorker() {
     }
 }
 
-void UninstallWorker::StartUninstall(const std::string& manifestPath) {
+void UninstallWorker::StartUninstall(const UninstallContext& context) {
     if (m_thread.joinable()) {
         m_thread.join();
     }
-    m_thread = std::thread(&UninstallWorker::WorkerThreadFunc, this, manifestPath);
+    m_thread = std::thread(&UninstallWorker::WorkerThreadFunc, this, context);
 }
 
 bool UninstallWorker::Joinable() const {
     return m_thread.joinable();
 }
 
-void UninstallWorker::WorkerThreadFunc(const std::string& manifestPath) {
+void UninstallWorker::WorkerThreadFunc(UninstallContext context) {
     bool success = false;
     std::wstring errorMessage;
 
     try {
         InstallerPathResolver resolver;
         CliSupport console;
-        if (manifestPath.empty()) {
-            throw std::runtime_error("Manifest not found for uninstall");
+        if (!context.manifestReadable && !context.fallbackAllowed) {
+            throw std::runtime_error(context.errorMessage.empty()
+                                         ? "Uninstall context unavailable"
+                                         : context.errorMessage);
         }
 
         UninstallProgressCallback progressCb = [this](const UninstallProgressInfo& info) {
@@ -68,7 +70,7 @@ void UninstallWorker::WorkerThreadFunc(const std::string& manifestPath) {
             PostProgressMessage(info.progress, item);
         };
 
-        bool ok = uninstallFromManifest(manifestPath, resolver, console, progressCb);
+        bool ok = ExecuteUninstallFromContext(context, nullptr, resolver, console, progressCb);
         if (!ok) {
             throw std::runtime_error("Uninstall failed");
         }

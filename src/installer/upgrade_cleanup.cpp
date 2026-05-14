@@ -579,6 +579,47 @@ void DeletePathSegmented(CleanupExecutionState& state,
     }
 }
 
+std::vector<std::filesystem::path> CollectAffectedParentDirs(
+    const std::vector<std::filesystem::path>& files,
+    const std::filesystem::path& root) {
+    std::vector<std::filesystem::path> dirs;
+    std::set<std::string> seen;
+    const std::filesystem::path normalizedRoot = root.lexically_normal();
+    for (const auto& file : files) {
+        std::filesystem::path dir = file.lexically_normal().parent_path();
+        while (!dir.empty() && IsPathUnderOrEqual(dir, normalizedRoot)) {
+            const std::string key = NormalizePath(dir);
+            if (!key.empty() && seen.insert(key).second) {
+                dirs.push_back(dir);
+            }
+            if (SameNormalizedPath(dir, normalizedRoot)) {
+                break;
+            }
+            dir = dir.parent_path();
+        }
+    }
+    std::sort(dirs.begin(), dirs.end(), [](const auto& a, const auto& b) {
+        return a.native().size() > b.native().size();
+    });
+    return dirs;
+}
+
+void DeleteAffectedEmptyDirs(CleanupExecutionState& state,
+                             const std::vector<std::filesystem::path>& files,
+                             const std::filesystem::path& root,
+                             bool removeRoot) {
+    const std::filesystem::path normalizedRoot = root.lexically_normal();
+    for (const auto& dir : CollectAffectedParentDirs(files, normalizedRoot)) {
+        if (!removeRoot && SameNormalizedPath(dir, normalizedRoot)) {
+            continue;
+        }
+        std::error_code ec;
+        if (std::filesystem::exists(dir, ec) && std::filesystem::is_empty(dir, ec)) {
+            DeleteSinglePath(state, dir, "delete_affected_empty_dir");
+        }
+    }
+}
+
 bool RemoveDirectoryContentsBestEffort(const std::filesystem::path& root,
                                        CliSupport& console,
                                        const UpgradeCleanupProgressCallback& progressCallback,
@@ -797,27 +838,7 @@ bool cleanupPreviousInstallForUpgrade(
         return false;
     }
 
-    std::vector<std::filesystem::path> directories;
-    std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(toLongPath(previousRoot), options)) {
-        if (entry.is_directory()) {
-            directories.push_back(entry.path());
-        }
-    }
-    std::sort(directories.begin(), directories.end(), [](const auto& a, const auto& b) {
-        return a.native().size() > b.native().size();
-    });
-
-    for (const auto& dir : directories) {
-        if (IsCancelled(cancellationCallback)) {
-            console.showWarning("Upgrade cleanup cancelled while removing empty directories.");
-            return false;
-        }
-        std::error_code ec;
-        if (std::filesystem::is_empty(dir, ec)) {
-            DeleteSinglePath(state, dir, "delete_empty_dir");
-        }
-    }
+    DeleteAffectedEmptyDirs(state, filesToDelete, previousRoot, !sameInstallRoot);
     EmitProgress(progressCallback, 0.95f, "Removing empty directories from previous install root");
 
     std::error_code rootEc;
@@ -966,32 +987,7 @@ UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) 
         EmitCleanupProgress(state, progress, "Removing old file");
     }
 
-    std::vector<std::filesystem::path> directories;
-    std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
-    std::error_code iterEc;
-    for (std::filesystem::recursive_directory_iterator it(toLongPath(previousRoot), options, iterEc), end;
-         !iterEc && it != end;
-         it.increment(iterEc)) {
-        const auto path = it->path();
-        if (IsReparsePointPath(path)) {
-            it.disable_recursion_pending();
-            ++state.result.skippedCount;
-            continue;
-        }
-        std::error_code typeEc;
-        if (it->is_directory(typeEc)) {
-            directories.push_back(path);
-        }
-    }
-    std::sort(directories.begin(), directories.end(), [](const auto& a, const auto& b) {
-        return a.native().size() > b.native().size();
-    });
-    for (const auto& dir : directories) {
-        std::error_code emptyEc;
-        if (std::filesystem::is_empty(dir, emptyEc)) {
-            DeleteSinglePath(state, dir, "delete_empty_dir");
-        }
-    }
+    DeleteAffectedEmptyDirs(state, filesToDelete, previousRoot, !sameInstallRoot);
     std::error_code rootEc;
     if (!sameInstallRoot && std::filesystem::is_empty(previousRoot, rootEc)) {
         DeleteSinglePath(state, previousRoot, "delete_previous_root");

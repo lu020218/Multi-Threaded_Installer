@@ -70,6 +70,7 @@ bool requiresAdminForInstall(const std::string& installPath,
                              const ExtendedInstallationMetadata& metadata,
                              InstallerPathResolver& resolver);
 bool relaunchSelfAsAdmin();
+bool relaunchSelfAsAdminWithArguments(const std::vector<std::wstring>& extraArgs);
 uint64_t getAvailableDiskSpaceBytes(const std::string& path);
 bool checkDiskSpaceForInstall(const std::string& path, uint64_t requiredBytes,
                               uint64_t& availableBytes);

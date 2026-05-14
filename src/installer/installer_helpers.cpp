@@ -544,6 +544,37 @@ bool relaunchSelfAsAdmin() {
 #endif
 }
 
+bool relaunchSelfAsAdminWithArguments(const std::vector<std::wstring>& extraArgs) {
+#ifdef _WIN32
+    wchar_t envValue[8];
+    DWORD envSize = GetEnvironmentVariableW(L"MTINSTALLER_ELEVATED", envValue, 8);
+    if (envSize > 0) {
+        return false;
+    }
+    SetEnvironmentVariableW(L"MTINSTALLER_ELEVATED", L"1");
+
+    std::wstring exePath = Utf8ToWide(getCurrentExecutablePath());
+    if (exePath.empty()) {
+        return false;
+    }
+
+    std::wstring args = buildRelaunchArguments();
+    for (const auto& arg : extraArgs) {
+        if (!args.empty()) {
+            args += L" ";
+        }
+        args += quoteArgument(arg);
+    }
+    HINSTANCE result = ShellExecuteW(nullptr, L"runas", exePath.c_str(),
+                                     args.empty() ? nullptr : args.c_str(),
+                                     nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<intptr_t>(result) > 32;
+#else
+    (void)extraArgs;
+    return false;
+#endif
+}
+
 uint64_t getAvailableDiskSpaceBytes(const std::string& path) {
 #ifdef _WIN32
     if (path.empty()) {

@@ -49,6 +49,7 @@ public:
         bool autoStartupEnabled = false;
         bool desktopIconSpecified = false;
         bool desktopIconEnabled = false;
+        std::string uninstallManifestPath;
         bool showHelp = false;
     };
     

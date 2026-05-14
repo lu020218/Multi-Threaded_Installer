@@ -87,6 +87,10 @@
   <Text id="msg.uninstall.failed" value="Uninstall failed: "/>
   <Text id="msg.version.prefix" value="Version "/>
   <Text id="msg.uninstall.appname_missing" value="Application name missing; cannot uninstall."/>
+  <Text id="msg.uninstall.manifest_missing" value="Uninstall manifest missing; cannot uninstall."/>
+  <Text id="msg.uninstall.manifest_invalid" value="Uninstall manifest is corrupted or unreadable; cannot uninstall."/>
+  <Text id="msg.uninstall.context_missing" value="Unable to determine install directory; uninstall failed."/>
+  <Text id="msg.uninstall.fallback_confirm" value="Uninstall manifest is missing. A safe fallback uninstall will clean the install directory. Continue?"/>
   <Text id="msg.dialog.title.prompt" value="Prompt"/>
   <Text id="msg.dialog.title.error" value="Error"/>
   <Text id="msg.dialog.title.warning" value="Warning"/>

@@ -231,6 +231,8 @@ CliSupport::InstallerArgs CliSupport::parseInstallerArgs(int argc, char* argv[])
             }
         } else if ((arg == "-d" || arg == "--destination") && i + 1 < argc) {
             args.defaultDestination = argv[++i];
+        } else if (arg == "--uninstall-manifest" && i + 1 < argc) {
+            args.uninstallManifestPath = argv[++i];
         }
     }
     

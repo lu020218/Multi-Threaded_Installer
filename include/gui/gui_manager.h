@@ -7,6 +7,7 @@
 #include <vector>
 #include <unordered_map>
 #include "../common/archive_types.h"
+#include "../installer/uninstall_manager.h"
 
 // Use DuiLib namespace
 using namespace DuiLib;
@@ -98,6 +99,8 @@ public:
 
     void SetInstallConfig(const InstallConfig& config);
     void SetInstallMetadata(const ExtendedInstallationMetadata& metadata);
+    void SetUninstallContext(const UninstallContext& context);
+    void SetUninstallManifestPath(const std::string& manifestPath);
     void SetAutoStartInstallRequest(const std::wstring& installPath,
                                     bool autoRun,
                                     bool desktopIcons,
@@ -149,6 +152,8 @@ private:
     ExtendedInstallationMetadata m_installMetadata;
     bool m_installMetadataLoaded;
     std::unordered_map<std::string, std::wstring> m_uiLinks;
+    UninstallContext m_uninstallContext;
+    std::string m_uninstallManifestPath;
     bool m_autoStartInstall;
     std::wstring m_autoStartInstallPath;
     bool m_autoStartAutoRun;

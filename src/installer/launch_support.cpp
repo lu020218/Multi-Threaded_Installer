@@ -657,33 +657,42 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     return RunGuiWindow(*frame, title, resources, false, WindowSize{800, 600});
 }
 
-int RunSilentUninstallMode() {
+int RunSilentUninstallMode(const LaunchContext& context) {
     CliSupport console;
     InstallerPathResolver resolver;
     MetadataParser parser;
     ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
     const ExtendedInstallationMetadata* metadataPtr = parser.validateMetadata(metadata) ? &metadata : nullptr;
 
-    const std::string manifestPath = ResolveUninstallManifestPath(metadataPtr, resolver);
-    if (manifestPath.empty()) {
-        console.showError("Manifest not found for uninstall.");
+    UninstallContext uninstallContext;
+    ResolveUninstallContext(metadataPtr, resolver, context.args.uninstallManifestPath, uninstallContext);
+    if (!uninstallContext.manifestReadable && !uninstallContext.fallbackAllowed) {
+        console.showError(uninstallContext.errorMessage.empty()
+                              ? "Manifest not found for uninstall."
+                              : uninstallContext.errorMessage);
         return INSTALLER_EXIT_FAILED;
     }
 
     EnsureInstallerLoggingInitialized();
     if (!isRunningAsAdmin()) {
-        if (relaunchSelfAsAdmin()) {
+        std::vector<std::wstring> extraArgs;
+        if (uninstallContext.manifestReadable && !uninstallContext.manifestPath.empty() &&
+            context.args.uninstallManifestPath.empty()) {
+            extraArgs.push_back(L"--uninstall-manifest");
+            extraArgs.push_back(Utf8ToWide(uninstallContext.manifestPath));
+        }
+        if (extraArgs.empty() ? relaunchSelfAsAdmin() : relaunchSelfAsAdminWithArguments(extraArgs)) {
             return INSTALLER_EXIT_SUCCESS;
         }
         console.showError("Please run the uninstaller as Administrator.");
         return INSTALLER_EXIT_ADMIN_REQUIRED;
     }
 
-    const bool ok = uninstallFromManifest(manifestPath, resolver, console);
+    const bool ok = ExecuteUninstallFromContext(uninstallContext, metadataPtr, resolver, console);
     return ok ? INSTALLER_EXIT_SUCCESS : INSTALLER_EXIT_FAILED;
 }
 
-int RunGuiUninstallMode(HINSTANCE hInstance) {
+int RunGuiUninstallMode(HINSTANCE hInstance, const LaunchContext& context) {
     ScopedComInit com;
     if (!com.ok()) {
         GUIHelpers::ShowErrorDialog(nullptr, L"Error", L"Failed to initialize COM.");
@@ -695,15 +704,26 @@ int RunGuiUninstallMode(HINSTANCE hInstance) {
     ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
     const ExtendedInstallationMetadata* metadataPtr = parser.validateMetadata(metadata) ? &metadata : nullptr;
 
-    const std::string manifestPath = ResolveUninstallManifestPath(metadataPtr, resolver);
-    if (manifestPath.empty()) {
-        GUIHelpers::ShowErrorDialog(nullptr, L"Error", L"Manifest not found for uninstall.");
+    UninstallContext uninstallContext;
+    ResolveUninstallContext(metadataPtr, resolver, context.args.uninstallManifestPath, uninstallContext);
+    if (!uninstallContext.manifestReadable && !uninstallContext.fallbackAllowed) {
+        GUIHelpers::ShowErrorDialog(nullptr,
+                                    L"Error",
+                                    Utf8ToWide(uninstallContext.errorMessage.empty()
+                                                   ? "Manifest not found for uninstall."
+                                                   : uninstallContext.errorMessage));
         return 1;
     }
 
     EnsureInstallerLoggingInitialized();
     if (!isRunningAsAdmin()) {
-        if (relaunchSelfAsAdmin()) {
+        std::vector<std::wstring> extraArgs;
+        if (uninstallContext.manifestReadable && !uninstallContext.manifestPath.empty() &&
+            context.args.uninstallManifestPath.empty()) {
+            extraArgs.push_back(L"--uninstall-manifest");
+            extraArgs.push_back(Utf8ToWide(uninstallContext.manifestPath));
+        }
+        if (extraArgs.empty() ? relaunchSelfAsAdmin() : relaunchSelfAsAdminWithArguments(extraArgs)) {
             return 0;
         }
         GUIHelpers::ShowWarningDialog(nullptr,
@@ -725,8 +745,17 @@ int RunGuiUninstallMode(HINSTANCE hInstance) {
     if (metadataPtr) {
         frame->SetInstallMetadata(*metadataPtr);
     }
-    const InstallConfig uninstallConfig = BuildUninstallConfigFromManifest(manifestPath);
+    InstallConfig uninstallConfig = uninstallContext.manifestReadable
+                                        ? BuildUninstallConfigFromManifest(uninstallContext.manifestPath)
+                                        : InstallConfig{};
+    if (!uninstallContext.appName.empty()) {
+        uninstallConfig.applicationName = Utf8ToWide(uninstallContext.appName);
+    }
+    if (!uninstallContext.appId.empty()) {
+        uninstallConfig.appId = Utf8ToWide(uninstallContext.appId);
+    }
     frame->SetInstallConfig(uninstallConfig);
+    frame->SetUninstallContext(uninstallContext);
     return RunGuiWindow(*frame,
                         uninstallConfig.applicationName.empty() ? L"Uninstaller" : uninstallConfig.applicationName,
                         resources,
@@ -788,6 +817,9 @@ int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
         if (lowered == L"--upgrade-cleanup-worker") {
             return runUpgradeCleanupWorkerFromTask(WideToUtf8(wideArgs[i + 1]));
         }
+        if (lowered == L"--uninstall-cleanup-worker") {
+            return runUninstallCleanupWorkerFromTask(WideToUtf8(wideArgs[i + 1]));
+        }
     }
 
     switch (context.mode) {
@@ -796,9 +828,9 @@ int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
         case LaunchMode::InstallSilent:
             return RunSilentInstallLikeMode(context);
         case LaunchMode::UninstallGui:
-            return RunGuiUninstallMode(hInstance);
+            return RunGuiUninstallMode(hInstance, context);
         case LaunchMode::UninstallSilent:
-            return RunSilentUninstallMode();
+            return RunSilentUninstallMode(context);
         default:
             return INSTALLER_EXIT_FAILED;
     }

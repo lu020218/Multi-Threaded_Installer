@@ -3,16 +3,22 @@
 #include "installer/self_delete_scheduler.h"
 #include "installer/install_state_utils.h"
 #include "installer/installer_helpers.h"
+#include "installer/installed_instance_resolver.h"
 #include "installer/registry_utils.h"
+#include "installer/shortcut_startup_utils.h"
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <chrono>
 #include <limits>
+#include <sstream>
+#include <thread>
 #include <unordered_set>
+#include <set>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -196,11 +202,6 @@ static std::string ExpandInstallDirTokenLocal(const std::string& text,
     return expanded;
 }
 
-static bool IsDirectoryEmptySafe(const std::filesystem::path& path) {
-    std::error_code ec;
-    return std::filesystem::is_directory(path, ec) && std::filesystem::is_empty(path, ec);
-}
-
 static bool IsPathUnderOrEqualLocal(const std::filesystem::path& candidate,
                                     const std::filesystem::path& root) {
     const std::string normalizedCandidate = normalizePathForCompare(Utf8FromPath(candidate.lexically_normal()));
@@ -226,6 +227,156 @@ static std::string ExpandCleanupRulePath(const UninstallCleanupRule& rule,
                                          InstallerPathResolver& resolver) {
     std::string expanded = ExpandInstallDirTokenLocal(rule.path, installDir);
     return resolver.expandEnvironmentVariables(expanded);
+}
+
+static std::string ReadEnvironmentPathLocal(const char* name) {
+#ifdef _WIN32
+    DWORD required = GetEnvironmentVariableA(name, nullptr, 0);
+    if (required == 0) {
+        return {};
+    }
+    std::string value(required, '\0');
+    DWORD written = GetEnvironmentVariableA(name, value.data(), required);
+    if (written == 0 || written >= required) {
+        return {};
+    }
+    value.resize(written);
+    return value;
+#else
+    const char* value = std::getenv(name);
+    return value ? std::string(value) : std::string();
+#endif
+}
+
+static bool SameNormalizedPathLocal(const std::filesystem::path& left,
+                                    const std::filesystem::path& right) {
+    return normalizePathForCompare(Utf8FromPath(left.lexically_normal())) ==
+           normalizePathForCompare(Utf8FromPath(right.lexically_normal()));
+}
+
+static bool IsDangerousFallbackRoot(const std::filesystem::path& path) {
+    if (path.empty() || !path.is_absolute()) {
+        return true;
+    }
+    const std::filesystem::path normalized = path.lexically_normal();
+    const std::filesystem::path rootPath = normalized.root_path();
+    if (rootPath.empty() || normalized == rootPath || normalized.filename().empty()) {
+        return true;
+    }
+
+    const std::vector<std::string> protectedExact = {
+        ReadEnvironmentPathLocal("ProgramFiles"),
+        ReadEnvironmentPathLocal("ProgramFiles(x86)"),
+        ReadEnvironmentPathLocal("ProgramW6432"),
+        ReadEnvironmentPathLocal("ProgramData"),
+        ReadEnvironmentPathLocal("USERPROFILE"),
+    };
+    for (const auto& root : protectedExact) {
+        if (!root.empty() && SameNormalizedPathLocal(normalized, PathFromUtf8(root))) {
+            return true;
+        }
+    }
+
+    const std::vector<std::string> protectedSubtrees = {
+        ReadEnvironmentPathLocal("SystemRoot"),
+        ReadEnvironmentPathLocal("WINDIR"),
+    };
+    for (const auto& root : protectedSubtrees) {
+        if (!root.empty() && IsPathUnderOrEqualLocal(normalized, PathFromUtf8(root).lexically_normal())) {
+            return true;
+        }
+    }
+
+    const std::string userProfile = ReadEnvironmentPathLocal("USERPROFILE");
+    if (!userProfile.empty()) {
+        const std::vector<std::string> userFolders = {
+            userProfile + "\\Desktop",
+            userProfile + "\\Documents",
+            userProfile + "\\Downloads",
+        };
+        for (const auto& folder : userFolders) {
+            if (SameNormalizedPathLocal(normalized, PathFromUtf8(folder))) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool IsReparsePointPathLocal(const std::filesystem::path& path) {
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesW(toLongPath(path).c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES &&
+           (attrs & FILE_ATTRIBUTE_REPARSE_POINT) == FILE_ATTRIBUTE_REPARSE_POINT;
+#else
+    std::error_code ec;
+    return std::filesystem::is_symlink(std::filesystem::symlink_status(path, ec));
+#endif
+}
+
+static bool TryLoadManifestIntoContext(const std::string& manifestPath,
+                                       UninstallContext& context,
+                                       bool explicitPath) {
+    if (manifestPath.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    const std::filesystem::path path = PathFromUtf8(manifestPath);
+    if (!std::filesystem::exists(path, ec) || !std::filesystem::is_regular_file(path, ec)) {
+        if (explicitPath) {
+            context.errorMessage = "Uninstall manifest missing; cannot uninstall.";
+        }
+        return false;
+    }
+
+    json manifest;
+    if (!readManifest(manifestPath, manifest)) {
+        context.manifestPath = manifestPath;
+        context.manifestReadable = false;
+        context.fallbackAllowed = false;
+        context.errorMessage = "Uninstall manifest is corrupted or unreadable; cannot uninstall.";
+        return true;
+    }
+
+    context.manifestPath = manifestPath;
+    context.manifestReadable = true;
+    context.fallbackAllowed = false;
+    context.installDir = manifest.value("installDir", "");
+    context.appId = GetManifestAppId(manifest);
+    context.appName = GetManifestDisplayName(manifest);
+    context.errorMessage.clear();
+    return true;
+}
+
+static bool TrySetFallbackContext(const std::string& installDir,
+                                  const ExtendedInstallationMetadata* metadata,
+                                  UninstallContext& context,
+                                  const std::string& manifestPath = {}) {
+    if (installDir.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    std::filesystem::path installPath = PathFromUtf8(installDir);
+    if (!std::filesystem::exists(installPath, ec) || !std::filesystem::is_directory(installPath, ec)) {
+        return false;
+    }
+    if (IsDangerousFallbackRoot(installPath)) {
+        context.errorMessage = "Unable to determine a safe install directory; uninstall failed.";
+        return false;
+    }
+
+    context.installDir = Utf8FromPath(installPath);
+    context.manifestPath = manifestPath;
+    context.manifestReadable = false;
+    context.fallbackAllowed = true;
+    if (metadata) {
+        context.appId = resolveEffectiveAppId(metadata->appId, metadata->appName);
+        context.appName = metadata->appName;
+        context.installInfoRegistryPath = metadata->installInfo.path;
+    }
+    context.errorMessage = "Uninstall manifest missing; safe fallback uninstall will be used.";
+    return true;
 }
 
 #ifdef _WIN32
@@ -338,6 +489,776 @@ static bool executeShellCommandWithTimeout(const std::string& command,
     return true;
 }
 #endif
+
+struct UninstallCleanupPolicy {
+    uint32_t itemStaleTimeoutMs = 30000;
+    uint32_t totalTimeoutMs = 120000;
+    uint32_t heartbeatIntervalMs = 1000;
+    uint32_t heartbeatEveryItems = 100;
+    uint32_t slowItemLogMs = 3000;
+    bool allowPartialSuccess = true;
+};
+
+struct UninstallCleanupResult {
+    bool success = true;
+    bool partial = false;
+    bool timedOut = false;
+    uint64_t deletedCount = 0;
+    uint64_t failedCount = 0;
+    uint64_t skippedCount = 0;
+    std::string timedOutPath;
+    std::string message;
+};
+
+struct UninstallCleanupTask {
+    bool fallbackMode = false;
+    std::string installDir;
+    std::string manifestPath;
+    std::string uninstallPath;
+    std::string currentExePath;
+    std::string heartbeatPath;
+    std::string resultPath;
+    std::vector<std::string> files;
+    std::vector<std::string> cleanupRoots;
+    std::vector<UninstallCleanupRule> cleanupPaths;
+    UninstallCleanupPolicy policy;
+};
+
+uint64_t UninstallNowMs() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+json UninstallPolicyToJson(const UninstallCleanupPolicy& policy) {
+    return {
+        {"itemStaleTimeoutMs", policy.itemStaleTimeoutMs},
+        {"totalTimeoutMs", policy.totalTimeoutMs},
+        {"heartbeatIntervalMs", policy.heartbeatIntervalMs},
+        {"heartbeatEveryItems", policy.heartbeatEveryItems},
+        {"slowItemLogMs", policy.slowItemLogMs},
+        {"allowPartialSuccess", policy.allowPartialSuccess},
+    };
+}
+
+UninstallCleanupPolicy UninstallPolicyFromJson(const json& value) {
+    UninstallCleanupPolicy policy;
+    if (!value.is_object()) {
+        return policy;
+    }
+    policy.itemStaleTimeoutMs = value.value("itemStaleTimeoutMs", policy.itemStaleTimeoutMs);
+    policy.totalTimeoutMs = value.value("totalTimeoutMs", policy.totalTimeoutMs);
+    policy.heartbeatIntervalMs = value.value("heartbeatIntervalMs", policy.heartbeatIntervalMs);
+    policy.heartbeatEveryItems = value.value("heartbeatEveryItems", policy.heartbeatEveryItems);
+    policy.slowItemLogMs = value.value("slowItemLogMs", policy.slowItemLogMs);
+    policy.allowPartialSuccess = value.value("allowPartialSuccess", policy.allowPartialSuccess);
+    return policy;
+}
+
+json UninstallCleanupRuleToJson(const UninstallCleanupRule& rule) {
+    return {{"path", rule.path}, {"recursive", rule.recursive}, {"onlyIfEmpty", rule.onlyIfEmpty}};
+}
+
+UninstallCleanupRule UninstallCleanupRuleFromJson(const json& value) {
+    UninstallCleanupRule rule;
+    if (!value.is_object()) {
+        return rule;
+    }
+    rule.path = value.value("path", "");
+    rule.recursive = value.value("recursive", true);
+    rule.onlyIfEmpty = value.value("onlyIfEmpty", false);
+    return rule;
+}
+
+json UninstallTaskToJson(const UninstallCleanupTask& task) {
+    json root;
+    root["fallbackMode"] = task.fallbackMode;
+    root["installDir"] = task.installDir;
+    root["manifestPath"] = task.manifestPath;
+    root["uninstallPath"] = task.uninstallPath;
+    root["currentExePath"] = task.currentExePath;
+    root["heartbeatPath"] = task.heartbeatPath;
+    root["resultPath"] = task.resultPath;
+    root["files"] = task.files;
+    root["cleanupRoots"] = task.cleanupRoots;
+    root["policy"] = UninstallPolicyToJson(task.policy);
+    root["cleanupPaths"] = json::array();
+    for (const auto& rule : task.cleanupPaths) {
+        root["cleanupPaths"].push_back(UninstallCleanupRuleToJson(rule));
+    }
+    return root;
+}
+
+bool UninstallTaskFromJson(const json& root, UninstallCleanupTask& task) {
+    if (!root.is_object()) {
+        return false;
+    }
+    task.fallbackMode = root.value("fallbackMode", false);
+    task.installDir = root.value("installDir", "");
+    task.manifestPath = root.value("manifestPath", "");
+    task.uninstallPath = root.value("uninstallPath", "");
+    task.currentExePath = root.value("currentExePath", "");
+    task.heartbeatPath = root.value("heartbeatPath", "");
+    task.resultPath = root.value("resultPath", "");
+    task.files = root.value("files", std::vector<std::string>{});
+    task.cleanupRoots = root.value("cleanupRoots", std::vector<std::string>{});
+    task.policy = UninstallPolicyFromJson(root.value("policy", json::object()));
+    task.cleanupPaths.clear();
+    for (const auto& item : root.value("cleanupPaths", json::array())) {
+        task.cleanupPaths.push_back(UninstallCleanupRuleFromJson(item));
+    }
+    return true;
+}
+
+json UninstallResultToJson(const UninstallCleanupResult& result) {
+    return {
+        {"success", result.success},
+        {"partial", result.partial},
+        {"timedOut", result.timedOut},
+        {"deletedCount", result.deletedCount},
+        {"failedCount", result.failedCount},
+        {"skippedCount", result.skippedCount},
+        {"timedOutPath", result.timedOutPath},
+        {"message", result.message},
+    };
+}
+
+UninstallCleanupResult UninstallResultFromJson(const json& value) {
+    UninstallCleanupResult result;
+    if (!value.is_object()) {
+        return result;
+    }
+    result.success = value.value("success", result.success);
+    result.partial = value.value("partial", result.partial);
+    result.timedOut = value.value("timedOut", result.timedOut);
+    result.deletedCount = value.value("deletedCount", result.deletedCount);
+    result.failedCount = value.value("failedCount", result.failedCount);
+    result.skippedCount = value.value("skippedCount", result.skippedCount);
+    result.timedOutPath = value.value("timedOutPath", "");
+    result.message = value.value("message", "");
+    return result;
+}
+
+bool WriteUninstallJsonBestEffort(const std::filesystem::path& path, const json& value) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(toLongPath(path), std::ios::binary | std::ios::trunc);
+    if (!out) {
+        return false;
+    }
+    out << value.dump();
+    return out.good();
+}
+
+bool ReadUninstallJsonBestEffort(const std::filesystem::path& path, json& value) {
+    std::ifstream in(toLongPath(path), std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (content.empty()) {
+        return false;
+    }
+    value = json::parse(content, nullptr, false);
+    return !value.is_discarded();
+}
+
+std::filesystem::path BuildUninstallCleanupTempPath(const char* suffix) {
+    std::filesystem::path dir = std::filesystem::temp_directory_path() / "MTInstaller";
+    std::ostringstream name;
+    name << "uninstall_cleanup_";
+#ifdef _WIN32
+    name << GetCurrentProcessId();
+#else
+    name << std::hash<std::thread::id>{}(std::this_thread::get_id());
+#endif
+    name << "_" << UninstallNowMs() << suffix;
+    return dir / PathFromUtf8(name.str());
+}
+
+struct UninstallCleanupExecutionState {
+    UninstallCleanupTask task;
+    UninstallCleanupResult result;
+    std::string currentPath;
+    std::string currentAction;
+    uint64_t currentStartedMs = 0;
+    uint64_t lastHeartbeatMs = 0;
+    uint64_t processedSinceHeartbeat = 0;
+};
+
+void EmitUninstallHeartbeat(UninstallCleanupExecutionState& state, bool force) {
+    if (state.task.heartbeatPath.empty()) {
+        return;
+    }
+    const uint64_t now = UninstallNowMs();
+    const bool intervalDue = state.lastHeartbeatMs == 0 ||
+        now - state.lastHeartbeatMs >= state.task.policy.heartbeatIntervalMs;
+    const bool countDue = state.task.policy.heartbeatEveryItems > 0 &&
+        state.processedSinceHeartbeat >= state.task.policy.heartbeatEveryItems;
+    if (!force && !intervalDue && !countDue) {
+        return;
+    }
+    json heartbeat = {
+        {"timestampMs", now},
+        {"currentPath", state.currentPath},
+        {"currentAction", state.currentAction},
+        {"currentStartedMs", state.currentStartedMs},
+        {"deletedCount", state.result.deletedCount},
+        {"failedCount", state.result.failedCount},
+        {"skippedCount", state.result.skippedCount},
+    };
+    WriteUninstallJsonBestEffort(PathFromUtf8(state.task.heartbeatPath), heartbeat);
+    state.lastHeartbeatMs = now;
+    state.processedSinceHeartbeat = 0;
+}
+
+void MarkUninstallSkipped(UninstallCleanupExecutionState& state) {
+    ++state.result.skippedCount;
+    ++state.processedSinceHeartbeat;
+    EmitUninstallHeartbeat(state, false);
+}
+
+void DeleteUninstallSinglePath(UninstallCleanupExecutionState& state,
+                               const std::filesystem::path& path,
+                               const std::string& action) {
+    if (path.empty()) {
+        MarkUninstallSkipped(state);
+        return;
+    }
+    if (IsReparsePointPathLocal(path)) {
+        ++state.result.skippedCount;
+        ++state.processedSinceHeartbeat;
+        logInstallerWarning("[Uninstall][Cleanup] skipped reparse point path=" + Utf8FromPath(path));
+        EmitUninstallHeartbeat(state, false);
+        return;
+    }
+
+    state.currentPath = Utf8FromPath(path);
+    state.currentAction = action;
+    state.currentStartedMs = UninstallNowMs();
+    EmitUninstallHeartbeat(state, true);
+
+    std::error_code ec;
+    std::filesystem::remove(toLongPath(path), ec);
+    const uint64_t elapsed = UninstallNowMs() - state.currentStartedMs;
+    if (ec && std::filesystem::exists(path)) {
+        ++state.result.failedCount;
+        logInstallerWarning("[Uninstall][Cleanup] delete failed path=" + Utf8FromPath(path) +
+                            " error=" + ec.message());
+    } else {
+        ++state.result.deletedCount;
+        if (elapsed >= state.task.policy.slowItemLogMs) {
+            logInstallerWarning("[Uninstall][Cleanup] slow delete path=" + Utf8FromPath(path) +
+                                " elapsedMs=" + std::to_string(elapsed));
+        }
+    }
+    ++state.processedSinceHeartbeat;
+    EmitUninstallHeartbeat(state, false);
+}
+
+void DeleteUninstallDirectorySegmented(UninstallCleanupExecutionState& state,
+                                       const std::filesystem::path& root,
+                                       bool removeRoot,
+                                       bool onlyIfEmpty) {
+    std::error_code existsEc;
+    if (!std::filesystem::exists(root, existsEc)) {
+        MarkUninstallSkipped(state);
+        return;
+    }
+    if (IsReparsePointPathLocal(root)) {
+        MarkUninstallSkipped(state);
+        return;
+    }
+    if (onlyIfEmpty && !std::filesystem::is_empty(root, existsEc)) {
+        MarkUninstallSkipped(state);
+        return;
+    }
+    std::vector<std::filesystem::path> dirs;
+    std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
+    std::error_code iterEc;
+    for (std::filesystem::recursive_directory_iterator it(toLongPath(root), options, iterEc), end;
+         !iterEc && it != end;
+         it.increment(iterEc)) {
+        const auto path = it->path();
+        if (IsReparsePointPathLocal(path)) {
+            it.disable_recursion_pending();
+            ++state.result.skippedCount;
+            continue;
+        }
+        std::error_code typeEc;
+        if (it->is_directory(typeEc)) {
+            dirs.push_back(path);
+        } else {
+            DeleteUninstallSinglePath(state, path, "delete_file");
+        }
+    }
+    if (iterEc) {
+        ++state.result.failedCount;
+        logInstallerWarning("[Uninstall][Cleanup] directory scan failed path=" + Utf8FromPath(root) +
+                            " error=" + iterEc.message());
+    }
+    std::sort(dirs.begin(), dirs.end(), [](const auto& a, const auto& b) {
+        return a.native().size() > b.native().size();
+    });
+    for (const auto& dir : dirs) {
+        std::error_code ec;
+        if (std::filesystem::is_empty(dir, ec)) {
+            DeleteUninstallSinglePath(state, dir, "delete_empty_dir");
+        }
+    }
+    if (removeRoot) {
+        std::error_code ec;
+        if (std::filesystem::is_empty(root, ec)) {
+            DeleteUninstallSinglePath(state, root, "delete_root_dir");
+        }
+    }
+}
+
+void DeleteUninstallPathSegmented(UninstallCleanupExecutionState& state,
+                                  const std::filesystem::path& path,
+                                  bool recursive,
+                                  bool onlyIfEmpty,
+                                  bool removeRoot) {
+    std::error_code existsEc;
+    if (!std::filesystem::exists(path, existsEc)) {
+        MarkUninstallSkipped(state);
+        return;
+    }
+    if (std::filesystem::is_directory(path, existsEc)) {
+        if (recursive) {
+            DeleteUninstallDirectorySegmented(state, path, removeRoot, onlyIfEmpty);
+        } else if (!onlyIfEmpty || std::filesystem::is_empty(path, existsEc)) {
+            DeleteUninstallSinglePath(state, path, "delete_dir");
+        } else {
+            MarkUninstallSkipped(state);
+        }
+    } else {
+        DeleteUninstallSinglePath(state, path, "delete_file");
+    }
+}
+
+std::vector<std::filesystem::path> CollectUninstallAffectedParentDirs(
+    const std::vector<std::filesystem::path>& files,
+    const std::filesystem::path& root) {
+    std::vector<std::filesystem::path> dirs;
+    std::set<std::string> seen;
+    const auto normalizedRoot = root.lexically_normal();
+    for (const auto& file : files) {
+        std::filesystem::path dir = file.lexically_normal().parent_path();
+        while (!dir.empty() && IsPathUnderOrEqualLocal(dir, normalizedRoot)) {
+            const std::string key = normalizePathForCompare(Utf8FromPath(dir.lexically_normal()));
+            if (!key.empty() && seen.insert(key).second) {
+                dirs.push_back(dir);
+            }
+            if (SameNormalizedPathLocal(dir, normalizedRoot)) {
+                break;
+            }
+            dir = dir.parent_path();
+        }
+    }
+    std::sort(dirs.begin(), dirs.end(), [](const auto& a, const auto& b) {
+        return a.native().size() > b.native().size();
+    });
+    return dirs;
+}
+
+void DeleteUninstallAffectedEmptyDirs(UninstallCleanupExecutionState& state,
+                                      const std::vector<std::filesystem::path>& files,
+                                      const std::vector<std::string>& cleanupRoots,
+                                      const std::string& currentExePath) {
+    const std::filesystem::path currentExe = PathFromUtf8(currentExePath).lexically_normal();
+    for (const auto& rootUtf8 : cleanupRoots) {
+        const std::filesystem::path root = PathFromUtf8(rootUtf8).lexically_normal();
+        if (root.empty()) {
+            continue;
+        }
+        for (const auto& dir : CollectUninstallAffectedParentDirs(files, root)) {
+            std::error_code ec;
+            if (std::filesystem::exists(dir, ec) && std::filesystem::is_empty(dir, ec)) {
+                DeleteUninstallSinglePath(state, dir, "delete_affected_empty_dir");
+            }
+        }
+        std::error_code rootEc;
+        if (std::filesystem::exists(root, rootEc) && std::filesystem::is_empty(root, rootEc)) {
+            const bool currentExeInsideRoot =
+                !currentExePath.empty() && IsPathUnderOrEqualLocal(currentExe, root);
+            if (!currentExeInsideRoot) {
+                DeleteUninstallSinglePath(state, root, "delete_cleanup_root");
+            }
+        }
+    }
+}
+
+UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& task) {
+    UninstallCleanupExecutionState state;
+    state.task = task;
+    EmitUninstallHeartbeat(state, true);
+    const std::string currentExeNorm = normalizePathForCompare(task.currentExePath);
+    if (task.fallbackMode) {
+        const auto installRoot = PathFromUtf8(task.installDir).lexically_normal();
+        if (IsDangerousFallbackRoot(installRoot)) {
+            state.result.success = false;
+            state.result.message = "Unsafe fallback uninstall root";
+            return state.result;
+        }
+        DeleteUninstallDirectorySegmented(state, installRoot, true, false);
+    } else {
+        std::vector<std::filesystem::path> deletedCandidates;
+        std::set<std::string> seen;
+        auto addFile = [&](const std::string& raw) {
+            if (raw.empty()) {
+                return;
+            }
+            std::filesystem::path path = PathFromUtf8(raw);
+            if (!path.is_absolute() && !task.installDir.empty()) {
+                path = PathFromUtf8(task.installDir) / path;
+            }
+            path = path.lexically_normal();
+            const std::string key = normalizePathForCompare(Utf8FromPath(path));
+            if (!key.empty() && seen.insert(key).second) {
+                deletedCandidates.push_back(path);
+            }
+        };
+        for (const auto& file : task.files) {
+            addFile(file);
+        }
+        addFile(task.uninstallPath);
+        addFile(task.manifestPath);
+        for (const auto& path : deletedCandidates) {
+            if (normalizePathForCompare(Utf8FromPath(path)) == currentExeNorm) {
+                ++state.result.skippedCount;
+                continue;
+            }
+            DeleteUninstallSinglePath(state, path, "delete_manifest_file");
+        }
+        DeleteUninstallAffectedEmptyDirs(state, deletedCandidates, task.cleanupRoots, task.currentExePath);
+    }
+    for (const auto& rule : task.cleanupPaths) {
+        if (rule.path.empty()) {
+            MarkUninstallSkipped(state);
+            continue;
+        }
+        const auto cleanupPath = PathFromUtf8(rule.path).lexically_normal();
+        if (IsDangerousFallbackRoot(cleanupPath)) {
+            ++state.result.skippedCount;
+            logInstallerWarning("[Uninstall][Cleanup] skipped unsafe cleanup path=" + Utf8FromPath(cleanupPath));
+            continue;
+        }
+        DeleteUninstallPathSegmented(state, cleanupPath, rule.recursive, rule.onlyIfEmpty, true);
+    }
+    state.result.partial = state.result.failedCount > 0 || state.result.skippedCount > 0;
+    state.result.success = state.task.policy.allowPartialSuccess || state.result.failedCount == 0;
+    EmitUninstallHeartbeat(state, true);
+    return state.result;
+}
+
+std::wstring QuoteUninstallArg(const std::wstring& value) {
+    std::wstring quoted = L"\"";
+    for (wchar_t ch : value) {
+        if (ch == L'"') {
+            quoted += L'\\';
+        }
+        quoted += ch;
+    }
+    quoted += L"\"";
+    return quoted;
+}
+
+UninstallCleanupResult RunUninstallCleanupWithWatchdog(
+    UninstallCleanupTask task,
+    const UninstallProgressCallback& progressCallback,
+    const std::function<bool()>& cancellationCallback) {
+    UninstallCleanupResult fallback;
+#ifdef _WIN32
+    const auto taskPath = BuildUninstallCleanupTempPath(".json");
+    const auto heartbeatPath = BuildUninstallCleanupTempPath(".heartbeat.json");
+    const auto resultPath = BuildUninstallCleanupTempPath(".result.json");
+    task.heartbeatPath = Utf8FromPath(heartbeatPath);
+    task.resultPath = Utf8FromPath(resultPath);
+    if (!WriteUninstallJsonBestEffort(taskPath, UninstallTaskToJson(task))) {
+        fallback.success = false;
+        fallback.message = "Failed to write uninstall cleanup task";
+        return fallback;
+    }
+    const std::wstring exePath = Utf8ToWide(getCurrentExecutablePath());
+    std::wstring cmd = QuoteUninstallArg(exePath) + L" --uninstall-cleanup-worker " +
+                       QuoteUninstallArg(taskPath.wstring());
+    std::vector<wchar_t> cmdLine(cmd.begin(), cmd.end());
+    cmdLine.push_back(L'\0');
+    STARTUPINFOW si{};
+    PROCESS_INFORMATION pi{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    BOOL started = CreateProcessW(exePath.c_str(), cmdLine.data(), nullptr, nullptr, FALSE,
+                                  CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    if (!started) {
+        fallback.success = false;
+        fallback.message = "Failed to start uninstall cleanup worker";
+        std::error_code ec;
+        std::filesystem::remove(taskPath, ec);
+        return fallback;
+    }
+    const uint64_t startedMs = UninstallNowMs();
+    uint64_t lastHeartbeatTimestamp = startedMs;
+    std::string lastPath;
+    bool killed = false;
+    while (true) {
+        if (cancellationCallback && cancellationCallback()) {
+            TerminateProcess(pi.hProcess, 2);
+            killed = true;
+            fallback.success = false;
+            fallback.message = "Uninstall cleanup cancelled";
+            break;
+        }
+        DWORD wait = WaitForSingleObject(pi.hProcess, 250);
+        if (wait == WAIT_OBJECT_0) {
+            break;
+        }
+        json heartbeat;
+        if (ReadUninstallJsonBestEffort(heartbeatPath, heartbeat)) {
+            lastHeartbeatTimestamp = heartbeat.value("timestampMs", lastHeartbeatTimestamp);
+            lastPath = heartbeat.value("currentPath", lastPath);
+            if (progressCallback) {
+                UninstallProgressInfo info;
+                info.currentItem = lastPath.empty() ? "Cleaning files" : lastPath;
+                info.progress = 0.5f;
+                progressCallback(info);
+            }
+        }
+        const uint64_t now = UninstallNowMs();
+        const bool totalTimedOut = now - startedMs >= task.policy.totalTimeoutMs;
+        const bool heartbeatStale = now > lastHeartbeatTimestamp &&
+            now - lastHeartbeatTimestamp >= task.policy.itemStaleTimeoutMs;
+        if (totalTimedOut || heartbeatStale) {
+            fallback.success = task.policy.allowPartialSuccess;
+            fallback.partial = true;
+            fallback.timedOut = true;
+            fallback.timedOutPath = lastPath;
+            fallback.message = totalTimedOut ? "Uninstall cleanup total timeout"
+                                             : "Uninstall cleanup heartbeat stale";
+            logInstallerWarning("[Uninstall][Cleanup] worker timeout message=" + fallback.message +
+                                " currentPath=" + lastPath);
+            TerminateProcess(pi.hProcess, 3);
+            killed = true;
+            break;
+        }
+    }
+    DWORD exitCode = 1;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    UninstallCleanupResult result = fallback;
+    if (!killed) {
+        json resultJson;
+        if (ReadUninstallJsonBestEffort(resultPath, resultJson)) {
+            result = UninstallResultFromJson(resultJson);
+        } else {
+            result.success = exitCode == 0;
+            result.partial = exitCode != 0;
+            result.message = "Uninstall cleanup worker finished without result file";
+        }
+    }
+    std::error_code ec;
+    std::filesystem::remove(taskPath, ec);
+    std::filesystem::remove(heartbeatPath, ec);
+    std::filesystem::remove(resultPath, ec);
+    return result;
+#else
+    (void)progressCallback;
+    (void)cancellationCallback;
+    return ExecuteUninstallCleanupTask(task);
+#endif
+}
+
+bool ResolveUninstallContext(const ExtendedInstallationMetadata* metadata,
+                             InstallerPathResolver& resolver,
+                             const std::string& explicitManifestPath,
+                             UninstallContext& context) {
+    (void)resolver;
+    context = UninstallContext{};
+
+    if (TryLoadManifestIntoContext(explicitManifestPath, context, true)) {
+        return context.manifestReadable;
+    }
+    if (!context.errorMessage.empty() && !context.fallbackAllowed) {
+        return false;
+    }
+
+    const std::string exePath = getCurrentExecutablePath();
+    const std::string localManifest = getLocalManifestPath(exePath);
+    if (TryLoadManifestIntoContext(localManifest, context, false)) {
+        return context.manifestReadable;
+    }
+    if (!context.errorMessage.empty() && !context.fallbackAllowed) {
+        return false;
+    }
+
+    if (metadata) {
+        auto valueIt = metadata->installInfo.values.find("installDir");
+        if (!metadata->installInfo.path.empty() &&
+            valueIt != metadata->installInfo.values.end() &&
+            !valueIt->second.key.empty()) {
+            std::string installDir;
+            std::string manifestPath;
+            if (resolveInstallInfoFromRegistry(metadata->installInfo.path,
+                                               valueIt->second.key,
+                                               manifestPath,
+                                               installDir)) {
+                if (TryLoadManifestIntoContext(manifestPath, context, false)) {
+                    return context.manifestReadable;
+                }
+                if (TrySetFallbackContext(installDir, metadata, context, manifestPath)) {
+                    return true;
+                }
+            }
+        }
+
+        InstalledInstanceInfo installedInstance;
+        if (resolveInstalledInstanceFromInstallRoots(*metadata, installedInstance)) {
+            if (TryLoadManifestIntoContext(installedInstance.manifestPath, context, false)) {
+                return context.manifestReadable;
+            }
+            if (TrySetFallbackContext(installedInstance.installDir,
+                                      metadata,
+                                      context,
+                                      installedInstance.manifestPath)) {
+                return true;
+            }
+        }
+    }
+
+    if (!exePath.empty()) {
+        const std::filesystem::path installDir = PathFromUtf8(exePath).parent_path();
+        if (TrySetFallbackContext(Utf8FromPath(installDir), metadata, context, localManifest)) {
+            return true;
+        }
+    }
+
+    if (context.errorMessage.empty()) {
+        context.errorMessage = "Uninstall manifest missing; cannot uninstall.";
+    }
+    return false;
+}
+
+static bool ExecuteFallbackUninstall(const UninstallContext& context,
+                                     const ExtendedInstallationMetadata* metadata,
+                                     InstallerPathResolver& resolver,
+                                     CliSupport& console,
+                                     const UninstallProgressCallback& progressCallback,
+                                     const std::function<bool()>& cancellationCallback) {
+    (void)resolver;
+    if (!context.fallbackAllowed || context.installDir.empty()) {
+        console.showError(context.errorMessage.empty() ? "Unable to determine install directory; uninstall failed." : context.errorMessage);
+        return false;
+    }
+    std::filesystem::path installDir = PathFromUtf8(context.installDir);
+    if (IsDangerousFallbackRoot(installDir)) {
+        console.showError("Unable to determine a safe install directory; uninstall failed.");
+        return false;
+    }
+
+    console.showWarning("Manifest missing; running safe fallback uninstall for: " + context.installDir);
+
+    const std::string displayName =
+        !context.appName.empty() ? context.appName : (metadata ? metadata->appName : std::string());
+    if (!displayName.empty()) {
+        removeAutoStartup(displayName);
+        deleteDesktopShortcut(displayName);
+        deleteStartMenuShortcut(displayName);
+        deleteUninstallRegistryEntry(displayName, false);
+        deleteUninstallRegistryEntry(displayName, true);
+    }
+    if (!context.appId.empty() && context.appId != displayName) {
+        deleteUninstallRegistryEntry(context.appId, false);
+        deleteUninstallRegistryEntry(context.appId, true);
+    }
+    if (!context.installInfoRegistryPath.empty()) {
+        deleteRegistryPath(context.installInfoRegistryPath);
+    } else if (metadata && !metadata->installInfo.path.empty()) {
+        deleteRegistryPath(metadata->installInfo.path);
+    }
+
+    UninstallCleanupTask cleanupTask;
+    cleanupTask.fallbackMode = true;
+    cleanupTask.installDir = context.installDir;
+    cleanupTask.manifestPath = context.manifestPath;
+    cleanupTask.currentExePath = getCurrentExecutablePath();
+    UninstallCleanupResult cleanupResult =
+        RunUninstallCleanupWithWatchdog(cleanupTask, progressCallback, cancellationCallback);
+    if (!cleanupResult.success || cleanupResult.partial) {
+        console.showWarning("Fallback uninstall file cleanup completed with warnings: deleted=" +
+                            std::to_string(cleanupResult.deletedCount) +
+                            " failed=" + std::to_string(cleanupResult.failedCount) +
+                            " skipped=" + std::to_string(cleanupResult.skippedCount) +
+                            " timedOut=" + std::string(cleanupResult.timedOut ? "true" : "false"));
+    }
+
+    std::filesystem::path exePath = PathFromUtf8(getCurrentExecutablePath());
+    std::string exeName = Utf8FromPath(exePath.filename());
+    std::transform(exeName.begin(), exeName.end(), exeName.begin(),
+                   [](unsigned char c) { return ToLowerAsciiChar(c); });
+    if (exeName == "uninstall.exe") {
+        scheduleSelfDeleteImmediate({context.installDir}, context.manifestPath);
+    }
+
+    console.showInfo("Fallback uninstall completed");
+    return true;
+}
+
+bool ExecuteUninstallFromContext(const UninstallContext& context,
+                                 const ExtendedInstallationMetadata* metadata,
+                                 InstallerPathResolver& resolver,
+                                 CliSupport& console,
+                                 const UninstallProgressCallback& progressCallback,
+                                 const std::function<bool()>& cancellationCallback) {
+    if (context.manifestReadable && !context.manifestPath.empty()) {
+        return uninstallFromManifest(context.manifestPath,
+                                     resolver,
+                                     console,
+                                     progressCallback,
+                                     cancellationCallback);
+    }
+    return ExecuteFallbackUninstall(context,
+                                    metadata,
+                                    resolver,
+                                    console,
+                                    progressCallback,
+                                    cancellationCallback);
+}
+
+int runUninstallCleanupWorkerFromTask(const std::string& taskPath) {
+    initializeInstallerLogging();
+    json taskJson;
+    UninstallCleanupTask task;
+    if (!ReadUninstallJsonBestEffort(PathFromUtf8(taskPath), taskJson) ||
+        !UninstallTaskFromJson(taskJson, task)) {
+        logInstallerError("[Uninstall][Cleanup] worker failed to read task");
+        return 2;
+    }
+#ifdef _WIN32
+    char delayBuffer[32] = {};
+    DWORD delayLen = GetEnvironmentVariableA("MTINSTALLER_TEST_UNINSTALL_CLEANUP_WORKER_DELAY_MS",
+                                             delayBuffer,
+                                             static_cast<DWORD>(sizeof(delayBuffer)));
+    if (delayLen > 0 && delayLen < sizeof(delayBuffer)) {
+        const DWORD delayMs = static_cast<DWORD>(std::strtoul(delayBuffer, nullptr, 10));
+        if (delayMs > 0) {
+            Sleep(delayMs);
+        }
+    }
+#endif
+    UninstallCleanupResult result = ExecuteUninstallCleanupTask(task);
+    if (!task.resultPath.empty()) {
+        WriteUninstallJsonBestEffort(PathFromUtf8(task.resultPath), UninstallResultToJson(result));
+    }
+    logInstallerInfo("[Uninstall][Cleanup] worker end deleted=" + std::to_string(result.deletedCount) +
+                     " failed=" + std::to_string(result.failedCount) +
+                     " skipped=" + std::to_string(result.skippedCount) +
+                     " partial=" + std::string(result.partial ? "true" : "false"));
+    flushInstallerLogging();
+    return result.success ? 0 : 1;
+}
 
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
@@ -671,170 +1592,36 @@ bool uninstallFromManifest(const std::string& manifestPath,
 #endif
 
     std::string currentExe = getCurrentExecutablePath();
-    std::string currentExeNorm = normalizePathForCompare(currentExe);
-    std::string uninstallPathNorm = normalizePathForCompare(uninstallPath);
-    std::vector<std::filesystem::path> pendingRootCleanup;
-    pendingRootCleanup.reserve(cleanupRoots.size());
-    if (!uninstallPath.empty()) {
-        if (!currentExe.empty() && uninstallPathNorm == currentExeNorm) {
-            console.showInfo("Skipping uninstall.exe removal (currently running).");
-        } else {
-            std::filesystem::path path = PathFromUtf8(uninstallPath);
-            std::error_code removeEc;
-            std::filesystem::remove(toLongPath(path), removeEc);
-            if (removeEc && std::filesystem::exists(path)) {
-                console.showWarning("Failed to remove uninstall.exe: " + uninstallPath);
-            } else if (!removeEc) {
-                console.showInfo("Removed uninstall.exe: " + uninstallPath);
-            }
-        }
-        completeWorkUnit("Removing uninstall executable");
-    }
-
-    for (const auto& file : files) {
-        if (isCancelled()) {
-            console.showWarning("Uninstall cancelled while deleting files");
-            return false;
-        }
-        std::string fileNorm = normalizePathForCompare(file);
-        if (!currentExe.empty() && fileNorm == currentExeNorm) {
-            console.showInfo("Skipping file removal (current exe): " + file);
-            completeWorkUnit("Skipping current running executable");
-            continue;
-        }
-        std::filesystem::path path = PathFromUtf8(file);
-        std::error_code removeEc;
-        std::filesystem::remove(toLongPath(path), removeEc);
-        if (removeEc && std::filesystem::exists(path)) {
-            console.showWarning("Failed to remove file: " + file);
-        }
-        completeWorkUnit("Removing old file: " + file);
-    }
-
-    auto hasNonIgnoredFiles = [](const std::filesystem::path& rootPath) -> bool {
-        if (!std::filesystem::exists(rootPath)) {
-            return false;
-        }
-        std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(toLongPath(rootPath), options)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            std::string name = Utf8FromPath(entry.path().filename());
-            std::transform(name.begin(), name.end(), name.begin(),
-                           [](unsigned char c) { return ToLowerAsciiChar(c); });
-            if (name == "desktop.ini" || name == "thumbs.db") {
-                continue;
-            }
-            return true;
-        }
-        return false;
-    };
-
-    for (const auto& root : cleanupRoots) {
-        if (isCancelled()) {
-            console.showWarning("Uninstall cancelled while cleaning directories");
-            return false;
-        }
-
-        std::filesystem::path rootPath = PathFromUtf8(root);
-        pendingRootCleanup.push_back(rootPath);
-        completeWorkUnit("Scanning old directory: " + root);
-
-        if (!std::filesystem::exists(rootPath)) {
-            completeWorkUnit("Directory already removed: " + root);
-            continue;
-        }
-
-        std::vector<std::filesystem::path> emptyDirs;
-        std::vector<std::filesystem::path> ignoredFiles;
-        auto cleanupStart = std::chrono::steady_clock::now();
-        console.showInfo("Cleanup dirs start: " + root);
-        std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(toLongPath(rootPath), options)) {
-            if (entry.is_regular_file()) {
-                std::string name = Utf8FromPath(entry.path().filename());
-                std::transform(name.begin(), name.end(), name.begin(),
-                               [](unsigned char c) { return ToLowerAsciiChar(c); });
-                if (name == "desktop.ini" || name == "thumbs.db") {
-                    ignoredFiles.push_back(entry.path());
-                    addWorkUnits(1);
-                }
-            }
-            if (entry.is_directory()) {
-                emptyDirs.push_back(entry.path());
-                addWorkUnits(1);
-            }
-            if (isCancelled()) {
-                console.showWarning("Uninstall cancelled during directory scan");
-                return false;
-            }
-        }
-
-        for (const auto& ignored : ignoredFiles) {
-            std::error_code ec;
-            std::filesystem::remove(toLongPath(ignored), ec);
-            completeWorkUnit("Removing ignored file: " + Utf8FromPath(ignored));
-        }
-
-        std::sort(emptyDirs.begin(), emptyDirs.end(), [](const auto& a, const auto& b) {
-            return a.native().size() > b.native().size();
-        });
-        for (const auto& dir : emptyDirs) {
-            if (isCancelled()) {
-                console.showWarning("Uninstall cancelled during directory removal");
-                return false;
-            }
-            std::error_code ec;
-            std::filesystem::remove(toLongPath(dir), ec);
-            if (ec && std::filesystem::exists(dir)) {
-                console.showWarning("Failed to remove empty directory: " + Utf8FromPath(dir));
-            }
-            completeWorkUnit("Removing old directory: " + Utf8FromPath(dir));
-        }
-
-        auto cleanupEnd = std::chrono::steady_clock::now();
-        auto cleanupMs = std::chrono::duration_cast<std::chrono::milliseconds>(cleanupEnd - cleanupStart).count();
-        console.showInfo("Cleanup dirs done: " + root + " (" + std::to_string(cleanupMs) + " ms)");
-    }
-
+    UninstallCleanupTask cleanupTask;
+    cleanupTask.installDir = installDir;
+    cleanupTask.manifestPath = manifestPath;
+    cleanupTask.uninstallPath = uninstallPath;
+    cleanupTask.currentExePath = currentExe;
+    cleanupTask.files = files;
+    cleanupTask.cleanupRoots = cleanupRoots;
+    cleanupTask.cleanupPaths.reserve(uninstallCleanup.paths.size());
     for (const auto& rule : uninstallCleanup.paths) {
-        if (isCancelled()) {
-            console.showWarning("Uninstall cancelled while running cleanup rules");
-            return false;
-        }
-        const std::string expandedPath = ExpandCleanupRulePath(rule, installDir, resolver);
-        if (expandedPath.empty()) {
-            continue;
-        }
-        std::filesystem::path cleanupPath = PathFromUtf8(expandedPath);
-        std::error_code existsEc;
-        if (!std::filesystem::exists(cleanupPath, existsEc)) {
-            continue;
-        }
-
-        if (rule.onlyIfEmpty) {
-            if (std::filesystem::is_directory(cleanupPath, existsEc) &&
-                !IsDirectoryEmptySafe(cleanupPath)) {
-                console.showInfo("Skipping non-empty cleanup path: " + expandedPath);
-                continue;
-            }
-        }
-
-        std::error_code removeEc;
-        if (rule.recursive && std::filesystem::is_directory(cleanupPath, existsEc)) {
-            std::filesystem::remove_all(toLongPath(cleanupPath), removeEc);
-        } else {
-            std::filesystem::remove(toLongPath(cleanupPath), removeEc);
-        }
-
-        if (removeEc && std::filesystem::exists(cleanupPath)) {
-            console.showWarning("Failed to remove cleanup path: " + expandedPath);
-        } else {
-            console.showInfo("Removed cleanup path: " + expandedPath);
-        }
-        completeWorkUnit("Removing cleanup path: " + expandedPath);
+        UninstallCleanupRule expanded = rule;
+        expanded.path = ExpandCleanupRulePath(rule, installDir, resolver);
+        cleanupTask.cleanupPaths.push_back(std::move(expanded));
     }
+    UninstallCleanupResult cleanupResult =
+        RunUninstallCleanupWithWatchdog(cleanupTask, progressCallback, cancellationCallback);
+    if (!cleanupResult.success && isCancelled()) {
+        console.showWarning("Uninstall cancelled while cleaning files");
+        return false;
+    }
+    if (!cleanupResult.success || cleanupResult.partial) {
+        console.showWarning("Uninstall file cleanup completed with warnings: deleted=" +
+                            std::to_string(cleanupResult.deletedCount) +
+                            " failed=" + std::to_string(cleanupResult.failedCount) +
+                            " skipped=" + std::to_string(cleanupResult.skippedCount) +
+                            " timedOut=" + std::string(cleanupResult.timedOut ? "true" : "false"));
+    } else {
+        console.showInfo("Uninstall file cleanup completed: deleted=" +
+                         std::to_string(cleanupResult.deletedCount));
+    }
+    completeWorkUnit("Cleaning installed files");
 
     applyCoreInstallInfo(installInfo,
                          installDir,
@@ -844,49 +1631,10 @@ bool uninstallFromManifest(const std::string& manifestPath,
                          resolver);
     completeWorkUnit("Marking uninstalled state");
 
-    if (!manifestPath.empty()) {
-        if (!std::filesystem::remove(toLongPath(PathFromUtf8(manifestPath)))) {
-            if (std::filesystem::exists(PathFromUtf8(manifestPath))) {
-                console.showWarning("Failed to remove manifest: " + manifestPath);
-            }
-        }
-        completeWorkUnit("Removing uninstall manifest");
-    }
-
     std::filesystem::path exePath = PathFromUtf8(getCurrentExecutablePath());
     std::string exeName = Utf8FromPath(exePath.filename());
     std::transform(exeName.begin(), exeName.end(), exeName.begin(),
                    [](unsigned char c) { return ToLowerAsciiChar(c); });
-    const std::filesystem::path currentExePath = PathFromUtf8(currentExe).lexically_normal();
-    for (size_t index = 0; index < cleanupRoots.size(); ++index) {
-        const std::string& root = cleanupRoots[index];
-        const std::filesystem::path& rootPath = pendingRootCleanup[index];
-        if (!std::filesystem::exists(rootPath)) {
-            completeWorkUnit("Directory already removed: " + root);
-            continue;
-        }
-
-        if (!hasNonIgnoredFiles(rootPath)) {
-            std::error_code removeEc;
-            std::filesystem::remove_all(toLongPath(rootPath), removeEc);
-            if (removeEc && std::filesystem::exists(rootPath)) {
-                console.showWarning("Failed to remove empty root tree: " + Utf8FromPath(rootPath));
-            } else if (!removeEc) {
-                console.showInfo("Removed empty root tree: " + Utf8FromPath(rootPath));
-            }
-        } else {
-            const bool currentExeInsideRoot =
-                !currentExe.empty() && IsPathUnderOrEqualLocal(currentExePath, rootPath);
-            if (currentExeInsideRoot && exeName == "uninstall.exe") {
-                console.showInfo("Install root cleanup deferred until self-delete: " +
-                                 Utf8FromPath(rootPath));
-            } else {
-                console.showWarning("Root not empty after cleanup: " + Utf8FromPath(rootPath));
-            }
-        }
-
-        completeWorkUnit("Removing install root: " + root);
-    }
 
     if (exeName == "uninstall.exe") {
         addWorkUnits(1);

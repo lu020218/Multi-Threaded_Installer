@@ -2,6 +2,7 @@
 
 #include "installer/console_interface.h"
 #include "installer/path_resolver.h"
+#include "common/archive_types.h"
 
 #include <functional>
 #include <string>
@@ -15,6 +16,29 @@ struct UninstallProgressInfo {
 };
 
 using UninstallProgressCallback = std::function<void(const UninstallProgressInfo&)>;
+
+struct UninstallContext {
+    std::string manifestPath;
+    std::string installDir;
+    std::string appId;
+    std::string appName;
+    std::string installInfoRegistryPath;
+    bool manifestReadable = false;
+    bool fallbackAllowed = false;
+    std::string errorMessage;
+};
+
+bool ResolveUninstallContext(const ExtendedInstallationMetadata* metadata,
+                             InstallerPathResolver& resolver,
+                             const std::string& explicitManifestPath,
+                             UninstallContext& context);
+bool ExecuteUninstallFromContext(const UninstallContext& context,
+                                 const ExtendedInstallationMetadata* metadata,
+                                 InstallerPathResolver& resolver,
+                                 CliSupport& console,
+                                 const UninstallProgressCallback& progressCallback = {},
+                                 const std::function<bool()>& cancellationCallback = {});
+int runUninstallCleanupWorkerFromTask(const std::string& taskPath);
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
                            CliSupport& console);

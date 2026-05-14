@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include "installer/uninstall_manager.h"
 #include <string>
 #include <thread>
 #include <vector>
@@ -12,11 +13,11 @@ public:
     explicit UninstallWorker(HWND hNotifyWindow);
     ~UninstallWorker();
 
-    void StartUninstall(const std::string& manifestPath);
+    void StartUninstall(const UninstallContext& context);
     bool Joinable() const;
 
 private:
-    void WorkerThreadFunc(const std::string& manifestPath);
+    void WorkerThreadFunc(UninstallContext context);
     void PostProgressMessage(float progress, const std::wstring& currentItem);
     void PostCompletionMessage(bool success, const std::wstring& errorMsg);
 

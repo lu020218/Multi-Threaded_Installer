@@ -763,7 +763,8 @@ void TestWriteManifestPreservesExplicitCleanupSchema() {
 
 void TestInstallerArgsParseUpgrade() {
     CliSupport console;
-    std::vector<std::string> args = {"installer.exe", "--upgrade", "--silent"};
+    std::vector<std::string> args = {"installer.exe", "--upgrade", "--silent",
+                                     "--uninstall-manifest", "C:\\Apps\\Sample\\install.manifest.json"};
     std::vector<char*> argv;
     for (auto& arg : args) {
         argv.push_back(arg.data());
@@ -772,6 +773,8 @@ void TestInstallerArgsParseUpgrade() {
     CliSupport::InstallerArgs parsed = console.parseInstallerArgs(static_cast<int>(argv.size()), argv.data());
     Require(parsed.upgrade, "Installer args should parse --upgrade");
     Require(parsed.silent, "Installer args should still parse --silent with --upgrade");
+    Require(parsed.uninstallManifestPath == "C:\\Apps\\Sample\\install.manifest.json",
+            "Installer args should parse hidden --uninstall-manifest");
 }
 
 void TestInstallManifestPersistsPreviousInstallOptions() {
@@ -1321,11 +1324,123 @@ void TestUninstallFromManifestExecutesExplicitCleanup() {
     deleteRegistryPath(installInfoPath);
 }
 
+void TestUninstallContextExplicitManifestHasPriority() {
+    fs::path root = CreateTestRoot("uninstall_context_explicit");
+    fs::path installDir = root / "InstallRoot";
+    fs::create_directories(installDir);
+    fs::path manifestPath = installDir / "install.manifest.json";
+    nlohmann::json manifest;
+    manifest["appId"] = "ExplicitApp";
+    manifest["appName"] = "Explicit App";
+    manifest["displayName"] = "Explicit Display";
+    manifest["installDir"] = installDir.string();
+    manifest["files"] = nlohmann::json::array();
+    WriteTextFile(manifestPath, manifest.dump());
+
+    InstallerPathResolver resolver;
+    UninstallContext context;
+    Require(ResolveUninstallContext(nullptr, resolver, manifestPath.string(), context),
+            "Explicit uninstall manifest should resolve context");
+    Require(context.manifestReadable, "Explicit manifest should be readable");
+    Require(context.manifestPath == manifestPath.string(),
+            "Explicit manifest path should be used as highest priority");
+    Require(context.appId == "ExplicitApp", "Context should read appId from explicit manifest");
+    Require(context.appName == "Explicit Display", "Context should prefer displayName from explicit manifest");
+}
+
+void TestUninstallContextFallsBackFromInstallInfoRegistry() {
+    fs::path root = CreateTestRoot("uninstall_context_fallback");
+    fs::path installDir = root / "InstallRoot";
+    fs::create_directories(installDir);
+    WriteTextFile(installDir / "app.exe", "payload");
+
+    const std::string registryPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UninstallFallback";
+    RegistryEntry entry;
+    entry.path = registryPath;
+    entry.key = "InstallDir";
+    entry.value = installDir.string();
+    entry.type = RegistryValueType::STRING;
+    Require(writeRegistryValue(entry, installDir.string(), RegistryValueType::STRING),
+            "Failed to seed uninstall fallback registry value");
+
+    ExtendedInstallationMetadata metadata;
+    metadata.appName = "Fallback App";
+    metadata.appId = "FallbackApp";
+    metadata.installInfo.path = registryPath;
+    InstallInfoValueConfig installDirValue;
+    installDirValue.key = "InstallDir";
+    metadata.installInfo.values["installDir"] = installDirValue;
+
+    InstallerPathResolver resolver;
+    UninstallContext context;
+    bool resolved = ResolveUninstallContext(&metadata, resolver, "", context);
+
+    deleteRegistryPath(registryPath);
+
+    Require(resolved, "Missing manifest should resolve fallback uninstall context from installInfo registry");
+    Require(!context.manifestReadable, "Fallback context should not claim manifest is readable");
+    Require(context.fallbackAllowed, "Fallback context should be allowed for a safe install root");
+    Require(normalizePathForCompare(context.installDir) == normalizePathForCompare(installDir.string()),
+            "Fallback installDir should come from installInfo registry");
+}
+
+void TestUninstallFallbackRemovesSafeInstallDirectoryContents() {
+    fs::path root = CreateTestRoot("uninstall_fallback_execute");
+    fs::path installDir = root / "InstallRoot";
+    fs::create_directories(installDir / "bin");
+    WriteTextFile(installDir / "bin" / "app.exe", "payload");
+    WriteTextFile(installDir / "data.txt", "data");
+    const std::string registryPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UninstallFallbackExecute";
+    RegistryEntry entry;
+    entry.path = registryPath;
+    entry.key = "InstallDir";
+    entry.value = installDir.string();
+    entry.type = RegistryValueType::STRING;
+    Require(writeRegistryValue(entry, installDir.string(), RegistryValueType::STRING),
+            "Failed to seed fallback execute registry value");
+
+    UninstallContext context;
+    context.installDir = installDir.string();
+    context.appId = "FallbackApp";
+    context.appName = "Fallback App";
+    context.installInfoRegistryPath = registryPath;
+    context.fallbackAllowed = true;
+    context.manifestReadable = false;
+
+    InstallerPathResolver resolver;
+    CliSupport console;
+    bool ok = ExecuteUninstallFromContext(context, nullptr, resolver, console);
+
+    Require(ok, "Fallback uninstall should succeed for safe install directory");
+    Require(!fs::exists(installDir / "bin" / "app.exe"), "Fallback uninstall should remove files");
+    Require(!fs::exists(installDir / "data.txt"), "Fallback uninstall should remove root files");
+    std::string registryValue;
+    Require(!readRegistryStringValue(registryPath, "InstallDir", registryValue),
+            "Fallback uninstall should remove installInfo registry path");
+}
+
+void TestUninstallFallbackRejectsDangerousRoot() {
+    fs::path dangerousRoot = fs::temp_directory_path().root_path();
+    UninstallContext context;
+    context.installDir = dangerousRoot.string();
+    context.fallbackAllowed = true;
+    context.manifestReadable = false;
+
+    InstallerPathResolver resolver;
+    CliSupport console;
+    bool ok = ExecuteUninstallFromContext(context, nullptr, resolver, console);
+
+    Require(!ok, "Fallback uninstall should reject a volume root");
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
     if (argc == 3 && std::string(argv[1]) == "--upgrade-cleanup-worker") {
         return runUpgradeCleanupWorkerFromTask(argv[2]);
+    }
+    if (argc == 3 && std::string(argv[1]) == "--uninstall-cleanup-worker") {
+        return runUninstallCleanupWorkerFromTask(argv[2]);
     }
 
     const std::vector<std::pair<std::string, void(*)()>> tests = {
@@ -1376,6 +1491,14 @@ int main(int argc, char* argv[]) {
         {"upgrade_cleanup_skips_reparse_point_targets",
          &TestUpgradeCleanupSkipsReparsePointTargets},
 #endif
+        {"uninstall_context_explicit_manifest_has_priority",
+         &TestUninstallContextExplicitManifestHasPriority},
+        {"uninstall_context_falls_back_from_install_info_registry",
+         &TestUninstallContextFallsBackFromInstallInfoRegistry},
+        {"uninstall_fallback_removes_safe_install_directory_contents",
+         &TestUninstallFallbackRemovesSafeInstallDirectoryContents},
+        {"uninstall_fallback_rejects_dangerous_root",
+         &TestUninstallFallbackRejectsDangerousRoot},
         {"uninstall_from_manifest_executes_explicit_cleanup",
          &TestUninstallFromManifestExecutesExplicitCleanup},
     };

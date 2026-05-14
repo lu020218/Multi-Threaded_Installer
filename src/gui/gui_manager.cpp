@@ -204,6 +204,17 @@ void GUIManager::SetInstallMetadata(const ExtendedInstallationMetadata& metadata
     m_installMetadataLoaded = true;
 }
 
+void GUIManager::SetUninstallManifestPath(const std::string& manifestPath) {
+    m_uninstallManifestPath = manifestPath;
+    m_uninstallContext.manifestPath = manifestPath;
+    m_uninstallContext.manifestReadable = !manifestPath.empty();
+}
+
+void GUIManager::SetUninstallContext(const UninstallContext& context) {
+    m_uninstallContext = context;
+    m_uninstallManifestPath = context.manifestPath;
+}
+
 void GUIManager::SetAutoStartInstallRequest(const std::wstring& installPath,
                                             bool autoRun,
                                             bool desktopIcons,
@@ -644,19 +655,43 @@ void GUIManager::OnUninstallConfirmClick() {
         m_pUninstallWorker = new UninstallWorker(m_hWnd);
     }
 
-    InstalledInstanceInfo installedInstance;
-    if (!m_installMetadataLoaded ||
-        !resolveInstalledInstanceFromInstallRoots(m_installMetadata, installedInstance) ||
-        installedInstance.manifestPath.empty()) {
+    UninstallContext context = m_uninstallContext;
+    if (context.manifestPath.empty() && m_installMetadataLoaded) {
+        InstalledInstanceInfo installedInstance;
+        if (resolveInstalledInstanceFromInstallRoots(m_installMetadata, installedInstance)) {
+            context.manifestPath = installedInstance.manifestPath;
+            context.manifestReadable = !context.manifestPath.empty();
+        }
+    }
+
+    if (!context.manifestReadable && !context.fallbackAllowed) {
         CompletionMessageData* pData = new CompletionMessageData();
         pData->success = false;
-        std::wstring text = GUIHelpers::GetLocalizedText(L"msg.uninstall.appname_missing", L"");
+        std::wstring text = GUIHelpers::GetLocalizedText(L"msg.uninstall.manifest_missing", L"Uninstall manifest missing; cannot uninstall.");
+        if (!context.errorMessage.empty()) {
+            text = Utf8ToWide(context.errorMessage);
+        }
         wcsncpy_s(pData->errorMessage, text.c_str(), _TRUNCATE);
         PostOwnedGuiMessage(m_hWnd, WM_UNINSTALL_COMPLETE, pData, "[GUI]");
         return;
     }
 
-    m_pUninstallWorker->StartUninstall(installedInstance.manifestPath);
+    if (!context.manifestReadable && context.fallbackAllowed) {
+        std::wstring title = GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L"Prompt");
+        std::wstring message = GUIHelpers::GetLocalizedText(
+            L"msg.uninstall.fallback_confirm",
+            L"Uninstall manifest is missing. A safe fallback uninstall will clean the install directory. Continue?");
+        if (!GUIHelpers::ShowConfirmDialog(m_hWnd, title, message)) {
+            CompletionMessageData* pData = new CompletionMessageData();
+            pData->success = false;
+            std::wstring text = GUIHelpers::GetLocalizedText(L"msg.error.cancelled", L"Operation cancelled.");
+            wcsncpy_s(pData->errorMessage, text.c_str(), _TRUNCATE);
+            PostOwnedGuiMessage(m_hWnd, WM_UNINSTALL_COMPLETE, pData, "[GUI]");
+            return;
+        }
+    }
+
+    m_pUninstallWorker->StartUninstall(context);
 }
 
 void GUIManager::OnCancelButtonClick() {

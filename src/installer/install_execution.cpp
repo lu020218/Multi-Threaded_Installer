@@ -753,6 +753,7 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
     output.timing = parallelResult.timing;
     output.installRootPath = parallelResult.installRootPath;
     output.installedRoots = std::move(parallelResult.installedRoots);
+    output.installedFiles = std::move(parallelResult.installedFiles);
     output.cancelled = parallelResult.cancelled;
     output.rebootRequired = parallelResult.rebootRequired;
     output.pendingReplaceFiles = std::move(parallelResult.pendingReplaceFiles);

@@ -616,6 +616,7 @@ bool TarStreamExtractor::finalizeCurrentFileSuccess() {
         }
 
         pendingReplaceFiles_.push_back(Utf8FromPath(currentFullPath_));
+        installedFiles_.push_back(Utf8FromPath(currentFullPath_));
         logInstallerWarning("[DECOMP][RebootReplace] registered path=" +
                             Utf8FromPath(currentFullPath_) + " stagingPath=" +
                             Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_);
@@ -632,6 +633,9 @@ bool TarStreamExtractor::finalizeCurrentFileSuccess() {
         }
     }
 #endif
+    if (!currentFullPath_.empty()) {
+        installedFiles_.push_back(Utf8FromPath(currentFullPath_));
+    }
     resetCurrentFileState();
     return true;
 }

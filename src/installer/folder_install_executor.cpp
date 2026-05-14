@@ -94,6 +94,7 @@ FolderInstallResult FolderInstallExecutor::execute(const FolderInstallRequest& r
     result.writeSec = static_cast<double>(timing.writeNs) / 1e9;
     result.rebootRequired = outcome.rebootRequired;
     result.pendingReplaceFiles = std::move(outcome.pendingReplaceFiles);
+    result.installedFiles = std::move(outcome.installedFiles);
 
     if (!ok) {
         logError("Failed to install folder payload: " + request.folderName);

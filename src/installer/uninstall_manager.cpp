@@ -791,6 +791,45 @@ void DeleteUninstallSinglePath(UninstallCleanupExecutionState& state,
     EmitUninstallHeartbeat(state, false);
 }
 
+void DeleteUninstallDirectoryIfEmptyByRemove(UninstallCleanupExecutionState& state,
+                                             const std::filesystem::path& path,
+                                             const std::string& action) {
+    if (path.empty()) {
+        MarkUninstallSkipped(state);
+        return;
+    }
+    if (IsReparsePointPathLocal(path)) {
+        ++state.result.skippedCount;
+        ++state.processedSinceHeartbeat;
+        logInstallerWarning("[Uninstall][Cleanup] skipped reparse point path=" + Utf8FromPath(path));
+        EmitUninstallHeartbeat(state, false);
+        return;
+    }
+
+    const uint64_t started = UninstallNowMs();
+    SetUninstallCurrentItem(state, path, action, started);
+    std::error_code ec;
+    const bool removed = std::filesystem::remove(toLongPath(path), ec);
+    const uint64_t elapsed = UninstallNowMs() - started;
+    if (!ec && removed) {
+        ++state.result.deletedCount;
+        if (elapsed >= state.task.policy.slowItemLogMs) {
+            logInstallerWarning("[Uninstall][Cleanup] slow delete path=" + Utf8FromPath(path) +
+                                " elapsedMs=" + std::to_string(elapsed));
+        }
+    } else if (!ec ||
+               ec == std::make_error_code(std::errc::directory_not_empty) ||
+               ec == std::make_error_code(std::errc::file_exists)) {
+        // Non-empty directories are expected while walking parent chains.
+    } else {
+        ++state.result.failedCount;
+        logInstallerWarning("[Uninstall][Cleanup] delete failed path=" + Utf8FromPath(path) +
+                            " error=" + ec.message());
+    }
+    ++state.processedSinceHeartbeat;
+    EmitUninstallHeartbeat(state, false);
+}
+
 uint32_t ResolveUninstallWorkerConcurrency(const UninstallCleanupPolicy& policy) {
     if (policy.workerConcurrency > 0) {
         return std::max<uint32_t>(1, policy.workerConcurrency);
@@ -1006,16 +1045,10 @@ void DeleteUninstallDirectorySegmented(UninstallCleanupExecutionState& state,
         return a.native().size() > b.native().size();
     });
     for (const auto& dir : dirs) {
-        std::error_code ec;
-        if (std::filesystem::is_empty(dir, ec)) {
-            DeleteUninstallSinglePath(state, dir, "delete_empty_dir");
-        }
+        DeleteUninstallDirectoryIfEmptyByRemove(state, dir, "delete_empty_dir");
     }
     if (removeRoot) {
-        std::error_code ec;
-        if (std::filesystem::is_empty(root, ec)) {
-            DeleteUninstallSinglePath(state, root, "delete_root_dir");
-        }
+        DeleteUninstallDirectoryIfEmptyByRemove(state, root, "delete_root_dir");
     }
 }
 
@@ -1078,18 +1111,12 @@ void DeleteUninstallAffectedEmptyDirs(UninstallCleanupExecutionState& state,
             continue;
         }
         for (const auto& dir : CollectUninstallAffectedParentDirs(files, root)) {
-            std::error_code ec;
-            if (std::filesystem::exists(dir, ec) && std::filesystem::is_empty(dir, ec)) {
-                DeleteUninstallSinglePath(state, dir, "delete_affected_empty_dir");
-            }
+            DeleteUninstallDirectoryIfEmptyByRemove(state, dir, "delete_affected_empty_dir");
         }
-        std::error_code rootEc;
-        if (std::filesystem::exists(root, rootEc) && std::filesystem::is_empty(root, rootEc)) {
-            const bool currentExeInsideRoot =
-                !currentExePath.empty() && IsPathUnderOrEqualLocal(currentExe, root);
-            if (!currentExeInsideRoot) {
-                DeleteUninstallSinglePath(state, root, "delete_cleanup_root");
-            }
+        const bool currentExeInsideRoot =
+            !currentExePath.empty() && IsPathUnderOrEqualLocal(currentExe, root);
+        if (!currentExeInsideRoot) {
+            DeleteUninstallDirectoryIfEmptyByRemove(state, root, "delete_cleanup_root");
         }
     }
 }
@@ -1248,14 +1275,11 @@ UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& t
         DeleteUninstallDirectorySegmented(state, pending, true, false);
     }
     if (!installRoot.empty()) {
-        std::error_code ec;
-        if (std::filesystem::exists(installRoot, ec) && std::filesystem::is_empty(installRoot, ec)) {
-            const bool currentExeInsideRoot =
-                !task.currentExePath.empty() &&
-                IsPathUnderOrEqualLocal(PathFromUtf8(task.currentExePath).lexically_normal(), installRoot);
-            if (!currentExeInsideRoot) {
-                DeleteUninstallSinglePath(state, installRoot, "delete_install_root");
-            }
+        const bool currentExeInsideRoot =
+            !task.currentExePath.empty() &&
+            IsPathUnderOrEqualLocal(PathFromUtf8(task.currentExePath).lexically_normal(), installRoot);
+        if (!currentExeInsideRoot) {
+            DeleteUninstallDirectoryIfEmptyByRemove(state, installRoot, "delete_install_root");
         }
     }
     for (const auto& rule : task.cleanupPaths) {

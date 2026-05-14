@@ -185,6 +185,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         result.timing = executionOutput.timing;
         result.installRootPath = executionOutput.installRootPath;
         result.installedRoots = std::move(executionOutput.installedRoots);
+        result.installedFiles = std::move(executionOutput.installedFiles);
         result.cancelled = executionOutput.cancelled;
         result.rebootRequired = executionOutput.rebootRequired;
         result.pendingReplaceFiles = std::move(executionOutput.pendingReplaceFiles);

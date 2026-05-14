@@ -174,7 +174,13 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
     }
     advanceFinalize(0.35f, "Creating startup and shortcut entries");
 
-    result.installedFiles = CollectFilesRecursive(result.installedRoots);
+    if (result.installedFiles.empty()) {
+        result.installedFiles = CollectFilesRecursive(result.installedRoots);
+    } else {
+        std::sort(result.installedFiles.begin(), result.installedFiles.end());
+        result.installedFiles.erase(std::unique(result.installedFiles.begin(), result.installedFiles.end()),
+                                    result.installedFiles.end());
+    }
 
     if (!result.installRootPath.empty()) {
         std::filesystem::path target = PathFromUtf8(result.installRootPath) / "uninstall.exe";

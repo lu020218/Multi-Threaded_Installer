@@ -487,6 +487,16 @@ void EmitCleanupProgress(CleanupExecutionState& state, float progress, const std
     EmitProgress(state.progressCallback, progress, item);
 }
 
+void SetCleanupCurrentItem(CleanupExecutionState& state,
+                           const std::filesystem::path& path,
+                           const std::string& action,
+                           uint64_t startedMs) {
+    state.currentPath = Utf8FromPath(path);
+    state.currentAction = action;
+    state.currentStartedMs = startedMs;
+    EmitCleanupHeartbeat(state, false);
+}
+
 void MarkSkipped(CleanupExecutionState& state) {
     ++state.result.skippedCount;
     ++state.processedSinceHeartbeat;
@@ -508,14 +518,12 @@ void DeleteSinglePath(CleanupExecutionState& state,
         return;
     }
 
-    state.currentPath = Utf8FromPath(path);
-    state.currentAction = action;
-    state.currentStartedMs = NowMs();
-    EmitCleanupHeartbeat(state, true);
+    const uint64_t started = NowMs();
+    SetCleanupCurrentItem(state, path, action, started);
 
     std::error_code ec;
     const bool removed = std::filesystem::remove(toLongPath(path), ec);
-    const uint64_t elapsed = NowMs() - state.currentStartedMs;
+    const uint64_t elapsed = NowMs() - started;
     if (ec) {
         ++state.result.failedCount;
         logInstallerWarning("[InstallFlow][Cleanup] delete failed path=" + Utf8FromPath(path) +
@@ -528,6 +536,45 @@ void DeleteSinglePath(CleanupExecutionState& state,
             logInstallerWarning("[InstallFlow][Cleanup] slow delete path=" + Utf8FromPath(path) +
                                 " elapsedMs=" + std::to_string(elapsed));
         }
+    }
+    ++state.processedSinceHeartbeat;
+    EmitCleanupHeartbeat(state, false);
+}
+
+void DeleteDirectoryIfEmptyByRemove(CleanupExecutionState& state,
+                                    const std::filesystem::path& path,
+                                    const std::string& action) {
+    if (path.empty()) {
+        MarkSkipped(state);
+        return;
+    }
+    if (IsReparsePointPath(path)) {
+        ++state.result.skippedCount;
+        ++state.processedSinceHeartbeat;
+        logInstallerWarning("[InstallFlow][Cleanup] skipped reparse point directory=" + Utf8FromPath(path));
+        EmitCleanupHeartbeat(state, false);
+        return;
+    }
+
+    const uint64_t started = NowMs();
+    SetCleanupCurrentItem(state, path, action, started);
+    std::error_code ec;
+    const bool removed = std::filesystem::remove(toLongPath(path), ec);
+    const uint64_t elapsed = NowMs() - started;
+    if (!ec && removed) {
+        ++state.result.deletedCount;
+        if (elapsed >= state.task.policy.slowItemLogMs) {
+            logInstallerWarning("[InstallFlow][Cleanup] slow delete path=" + Utf8FromPath(path) +
+                                " elapsedMs=" + std::to_string(elapsed));
+        }
+    } else if (!ec ||
+               ec == std::make_error_code(std::errc::directory_not_empty) ||
+               ec == std::make_error_code(std::errc::file_exists)) {
+        // Non-empty directories are expected while walking parent chains.
+    } else {
+        ++state.result.failedCount;
+        logInstallerWarning("[InstallFlow][Cleanup] delete failed path=" + Utf8FromPath(path) +
+                            " error=" + ec.message());
     }
     ++state.processedSinceHeartbeat;
     EmitCleanupHeartbeat(state, false);
@@ -581,16 +628,10 @@ void DeleteDirectoryContentsSegmented(CleanupExecutionState& state,
         return a.native().size() > b.native().size();
     });
     for (const auto& dir : directories) {
-        std::error_code emptyEc;
-        if (std::filesystem::is_empty(dir, emptyEc)) {
-            DeleteSinglePath(state, dir, "delete_empty_dir");
-        }
+        DeleteDirectoryIfEmptyByRemove(state, dir, "delete_empty_dir");
     }
     if (removeRoot) {
-        std::error_code emptyEc;
-        if (std::filesystem::is_empty(root, emptyEc)) {
-            DeleteSinglePath(state, root, "delete_root_dir");
-        }
+        DeleteDirectoryIfEmptyByRemove(state, root, "delete_root_dir");
     }
 }
 
@@ -742,10 +783,7 @@ void DeleteAffectedEmptyDirs(CleanupExecutionState& state,
         if (!removeRoot && SameNormalizedPath(dir, normalizedRoot)) {
             continue;
         }
-        std::error_code ec;
-        if (std::filesystem::exists(dir, ec) && std::filesystem::is_empty(dir, ec)) {
-            DeleteSinglePath(state, dir, "delete_affected_empty_dir");
-        }
+        DeleteDirectoryIfEmptyByRemove(state, dir, "delete_affected_empty_dir");
     }
 }
 
@@ -889,11 +927,9 @@ bool cleanupPreviousInstallForUpgrade(
 
         if (!sameInstallRoot) {
             std::error_code rootEc;
-            if (std::filesystem::is_empty(previousRoot, rootEc)) {
-                std::filesystem::remove(toLongPath(previousRoot), rootEc);
-                if (!rootEc) {
-                    console.showInfo("Removed previous install root: " + Utf8FromPath(previousRoot));
-                }
+            const bool removed = std::filesystem::remove(toLongPath(previousRoot), rootEc);
+            if (removed && !rootEc) {
+                console.showInfo("Removed previous install root: " + Utf8FromPath(previousRoot));
             }
         }
 
@@ -970,20 +1006,24 @@ bool cleanupPreviousInstallForUpgrade(
     DeleteAffectedEmptyDirs(state, filesToDelete, previousRoot, !sameInstallRoot);
     EmitProgress(progressCallback, 0.95f, "Removing empty directories from previous install root");
 
-    std::error_code rootEc;
-    if (std::filesystem::is_empty(previousRoot, rootEc)) {
-        if (sameInstallRoot) {
+    if (sameInstallRoot) {
+        std::error_code rootEc;
+        if (std::filesystem::is_empty(previousRoot, rootEc)) {
             console.showInfo("Previous install root is empty and will be reused: " +
                              Utf8FromPath(previousRoot));
         } else {
-            DeleteSinglePath(state, previousRoot, "delete_previous_root");
-            if (!std::filesystem::exists(previousRoot, rootEc)) {
-                console.showInfo("Removed previous install root: " + Utf8FromPath(previousRoot));
-            }
+            console.showInfo("Previous install root is not empty after upgrade cleanup: " +
+                             Utf8FromPath(previousRoot));
         }
     } else {
-        console.showInfo("Previous install root is not empty after upgrade cleanup: " +
-                         Utf8FromPath(previousRoot));
+        const uint64_t deletedBefore = state.result.deletedCount;
+        DeleteDirectoryIfEmptyByRemove(state, previousRoot, "delete_previous_root");
+        if (state.result.deletedCount > deletedBefore) {
+            console.showInfo("Removed previous install root: " + Utf8FromPath(previousRoot));
+        } else {
+            console.showInfo("Previous install root is not empty after upgrade cleanup: " +
+                             Utf8FromPath(previousRoot));
+        }
     }
 
     EmitProgress(progressCallback, 1.0f, "Upgrade cleanup completed");
@@ -1071,10 +1111,7 @@ UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) 
             EmitCleanupProgress(state, progress, "Removing old path");
         }
         if (!sameInstallRoot) {
-            std::error_code emptyEc;
-            if (std::filesystem::is_empty(previousRoot, emptyEc)) {
-                DeleteSinglePath(state, previousRoot, "delete_previous_root");
-            }
+            DeleteDirectoryIfEmptyByRemove(state, previousRoot, "delete_previous_root");
         }
         state.result.partial = state.result.failedCount > 0 || state.result.skippedCount > 0;
         state.result.success = state.task.policy.allowPartialSuccess || state.result.failedCount == 0;
@@ -1117,9 +1154,8 @@ UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) 
     }
 
     DeleteAffectedEmptyDirs(state, filesToDelete, previousRoot, !sameInstallRoot);
-    std::error_code rootEc;
-    if (!sameInstallRoot && std::filesystem::is_empty(previousRoot, rootEc)) {
-        DeleteSinglePath(state, previousRoot, "delete_previous_root");
+    if (!sameInstallRoot) {
+        DeleteDirectoryIfEmptyByRemove(state, previousRoot, "delete_previous_root");
     }
 
     state.result.partial = state.result.failedCount > 0 || state.result.skippedCount > 0;

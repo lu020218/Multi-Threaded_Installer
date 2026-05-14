@@ -14,14 +14,16 @@ namespace MultiThreadedInstaller {
 
 std::filesystem::path toLongPath(const std::filesystem::path& path) {
 #ifdef _WIN32
-    std::filesystem::path absPath = std::filesystem::absolute(path);
-    std::wstring native = absPath.native();
+    std::wstring native = path.native();
     if (native.rfind(LR"(\\?\)", 0) == 0) {
-        return absPath;
+        return path;
     }
     if (native.rfind(LR"(\\)", 0) == 0) {
         std::wstring unc = LR"(\\?\UNC\)" + native.substr(2);
         return std::filesystem::path(unc);
+    }
+    if (!path.is_absolute()) {
+        native = std::filesystem::absolute(path).native();
     }
     std::wstring longPath = LR"(\\?\)" + native;
     return std::filesystem::path(longPath);

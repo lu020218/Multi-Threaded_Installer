@@ -2,6 +2,7 @@
 
 #include "common/utf8_utils.h"
 #include <filesystem>
+#include <chrono>
 #include <cstdio>
 #include <ctime>
 #include <exception>
@@ -9,6 +10,8 @@
 #include <iostream>
 #include <atomic>
 #include <mutex>
+#include <set>
+#include <vector>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -26,6 +29,9 @@ bool g_crashHandlersRegistered = false;
 std::atomic_flag g_crashHandling = ATOMIC_FLAG_INIT;
 std::wstring g_crashDumpDirWide;
 std::wstring g_crashLogPathWide;
+
+constexpr size_t kMaxInstallerLogFiles = 5;
+constexpr int kInstallerLogRetentionDays = 3;
 
 const char* levelToText(InstallerLogLevel level) {
     switch (level) {
@@ -74,6 +80,94 @@ void writeTimestampPrefix(FILE* file) {
 }
 
 #ifdef _WIN32
+bool isManagedInstallerLogFile(const std::filesystem::path& path) {
+    const std::wstring name = path.filename().wstring();
+    if (name.rfind(L"MTInstaller_", 0) != 0) {
+        return false;
+    }
+    if (path.extension() != L".log") {
+        return false;
+    }
+    return name.find(L".crash.") == std::wstring::npos;
+}
+
+bool sameFilesystemPath(const std::filesystem::path& a, const std::filesystem::path& b) {
+    std::error_code ec;
+    if (std::filesystem::equivalent(a, b, ec)) {
+        return true;
+    }
+    const auto normalizedA = std::filesystem::absolute(a, ec).lexically_normal().wstring();
+    ec.clear();
+    const auto normalizedB = std::filesystem::absolute(b, ec).lexically_normal().wstring();
+    return _wcsicmp(normalizedA.c_str(), normalizedB.c_str()) == 0;
+}
+
+size_t pruneOldInstallerLogs(const std::filesystem::path& logDir,
+                             const std::filesystem::path& currentLogPath) {
+    if (logDir.empty()) {
+        return 0;
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(logDir, ec) || !std::filesystem::is_directory(logDir, ec)) {
+        return 0;
+    }
+
+    struct LogEntry {
+        std::filesystem::path path;
+        std::filesystem::file_time_type writeTime;
+    };
+
+    std::vector<LogEntry> logs;
+    for (std::filesystem::directory_iterator it(logDir, ec), end; !ec && it != end; it.increment(ec)) {
+        const auto path = it->path();
+        if (!isManagedInstallerLogFile(path) || sameFilesystemPath(path, currentLogPath)) {
+            continue;
+        }
+        std::error_code timeEc;
+        const auto writeTime = std::filesystem::last_write_time(path, timeEc);
+        if (timeEc) {
+            continue;
+        }
+        logs.push_back({path, writeTime});
+    }
+
+    const auto now = std::filesystem::file_time_type::clock::now();
+    const auto retentionCutoff = now - std::chrono::hours(24 * kInstallerLogRetentionDays);
+    std::vector<std::filesystem::path> toDelete;
+    std::set<std::wstring> selected;
+    auto selectForDelete = [&](const std::filesystem::path& path) {
+        const std::wstring key = path.lexically_normal().wstring();
+        if (selected.insert(key).second) {
+            toDelete.push_back(path);
+        }
+    };
+
+    for (const auto& entry : logs) {
+        if (entry.writeTime < retentionCutoff) {
+            selectForDelete(entry.path);
+        }
+    }
+
+    std::sort(logs.begin(), logs.end(), [](const LogEntry& a, const LogEntry& b) {
+        return a.writeTime > b.writeTime;
+    });
+    if (logs.size() + 1 > kMaxInstallerLogFiles) {
+        const size_t keepOldCount = kMaxInstallerLogFiles - 1;
+        for (size_t i = keepOldCount; i < logs.size(); ++i) {
+            selectForDelete(logs[i].path);
+        }
+    }
+
+    size_t deleted = 0;
+    for (const auto& path : toDelete) {
+        std::error_code removeEc;
+        if (std::filesystem::remove(path, removeEc) && !removeEc) {
+            ++deleted;
+        }
+    }
+    return deleted;
+}
+
 std::string getCrashLogPath() {
     if (!g_logPath.empty()) {
         return g_logPath + ".crash.log";
@@ -264,6 +358,7 @@ void initializeInstallerLogging() {
         return;
     }
     std::filesystem::path logPath;
+    bool createdNewLogPath = false;
     try {
         wchar_t explicitLogPath[1024] = {};
         DWORD explicitLen = GetEnvironmentVariableW(L"MTINSTALLER_LOG_PATH",
@@ -272,6 +367,7 @@ void initializeInstallerLogging() {
                                                                        sizeof(explicitLogPath[0])));
         if (explicitLen > 0 && explicitLen < (sizeof(explicitLogPath) / sizeof(explicitLogPath[0]))) {
             logPath = explicitLogPath;
+            createdNewLogPath = false;
         }
     } catch (...) {
         logPath.clear();
@@ -312,13 +408,16 @@ void initializeInstallerLogging() {
                        st.wSecond,
                        static_cast<unsigned long>(GetCurrentProcessId()));
             logPath = logDir / fileName;
+            createdNewLogPath = true;
         } else {
             logPath = std::filesystem::temp_directory_path() /
                        (L"MTInstaller_" + sanitized + L".log");
+            createdNewLogPath = true;
         }
         }
     } catch (...) {
         logPath = std::filesystem::path(L"MTInstaller_Installer.log");
+        createdNewLogPath = true;
     }
     FILE* fp = nullptr;
     _wfopen_s(&fp, logPath.c_str(), L"a");
@@ -333,6 +432,13 @@ void initializeInstallerLogging() {
     writeInstallerLog(InstallerLogLevel::Info, "Installer log started. Log: " + g_logPath);
     writeInstallerLog(InstallerLogLevel::Info,
                       "Crash dumps enabled. Directory: " + Utf8FromPath(getCrashDumpDirectory()));
+    if (createdNewLogPath) {
+        const size_t deleted = pruneOldInstallerLogs(logPath.parent_path(), logPath);
+        if (deleted > 0) {
+            writeInstallerLog(InstallerLogLevel::Info,
+                              "Pruned old installer logs: deleted=" + std::to_string(deleted));
+        }
+    }
 
     if (!g_crashHandlersRegistered) {
         SetUnhandledExceptionFilter(InstallerUnhandledExceptionFilter);

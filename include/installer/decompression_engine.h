@@ -20,6 +20,7 @@ public:
     struct DecompressionOutcome {
         bool rebootRequired = false;
         std::vector<std::string> pendingReplaceFiles;
+        std::vector<std::string> installedFiles;
     };
 
     DecompressionEngine();

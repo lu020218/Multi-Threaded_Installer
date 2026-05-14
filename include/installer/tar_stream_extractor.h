@@ -38,6 +38,7 @@ public:
     bool write(const uint8_t* data, size_t size) override;
     void flush() override;
     const std::vector<std::string>& pendingReplaceFiles() const { return pendingReplaceFiles_; }
+    const std::vector<std::string>& installedFiles() const { return installedFiles_; }
     const LastFailureInfo& lastFailureInfo() const { return lastFailureInfo_; }
     
 private:
@@ -69,6 +70,7 @@ private:
     bool currentPendingRebootReplace_ = false;
     std::function<void(const std::string&)> currentFileChangedCallback_;
     std::vector<std::string> pendingReplaceFiles_;
+    std::vector<std::string> installedFiles_;
     LastFailureInfo lastFailureInfo_;
 
     bool isFileOpen() const;

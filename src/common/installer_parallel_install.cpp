@@ -141,6 +141,7 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     std::mutex resultMutex;
     std::vector<std::string> errors;
     std::vector<std::string> pendingReplaceFiles;
+    std::vector<std::string> installedFiles;
     std::vector<FolderTiming> folderTimings;
     std::atomic<bool> overallSuccess(true);
     std::atomic<bool> cancelled(false);
@@ -207,6 +208,9 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
             pendingReplaceFiles.insert(pendingReplaceFiles.end(),
                                        folderResult.pendingReplaceFiles.begin(),
                                        folderResult.pendingReplaceFiles.end());
+            installedFiles.insert(installedFiles.end(),
+                                  folderResult.installedFiles.begin(),
+                                  folderResult.installedFiles.end());
         });
     }
 
@@ -216,6 +220,9 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     result.cancelled = cancelled.load();
     result.success = overallSuccess.load() && result.errors.empty() && !result.cancelled;
     result.pendingReplaceFiles = std::move(pendingReplaceFiles);
+    std::sort(installedFiles.begin(), installedFiles.end());
+    installedFiles.erase(std::unique(installedFiles.begin(), installedFiles.end()), installedFiles.end());
+    result.installedFiles = std::move(installedFiles);
     result.timing.payloadReadSec = static_cast<double>(totalReadNs.load()) / 1e9;
     result.timing.decompressSec = static_cast<double>(totalDecompressNs.load()) / 1e9;
     result.timing.writeSec = static_cast<double>(totalWriteNs.load()) / 1e9;

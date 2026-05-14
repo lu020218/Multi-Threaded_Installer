@@ -141,6 +141,7 @@ bool DecompressionEngine::decompressFolder(const DecompressionTask& task,
     if (ok && outcome) {
         outcome->rebootRequired = !extractor.pendingReplaceFiles().empty();
         outcome->pendingReplaceFiles = extractor.pendingReplaceFiles();
+        outcome->installedFiles = extractor.installedFiles();
     }
     return ok;
 }

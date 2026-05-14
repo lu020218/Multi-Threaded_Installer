@@ -21,6 +21,7 @@ struct InstallExecutionOutput {
     bool rebootRequired = false;
     std::string installRootPath;
     std::vector<std::string> installedRoots;
+    std::vector<std::string> installedFiles;
     std::vector<std::string> pendingReplaceFiles;
     std::vector<std::string> errors;
     ParallelInstallSummary timing;

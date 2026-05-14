@@ -238,6 +238,42 @@ bool SameNormalizedPath(const std::filesystem::path& left, const std::filesystem
            normalizePathForCompare(Utf8FromPath(right.lexically_normal()));
 }
 
+bool IsMtiPendingDirectoryName(const std::filesystem::path& path) {
+    const std::string name = Utf8FromPath(path.filename());
+    return name.rfind(".mti_delete_pending_", 0) == 0;
+}
+
+std::filesystem::path DirectChildUnderRoot(const std::filesystem::path& path,
+                                           const std::filesystem::path& root) {
+    const std::filesystem::path normalizedPath = path.lexically_normal();
+    const std::filesystem::path normalizedRoot = root.lexically_normal();
+    if (SameNormalizedPath(normalizedPath, normalizedRoot) ||
+        !IsPathUnderOrEqual(normalizedPath, normalizedRoot)) {
+        return {};
+    }
+    const std::filesystem::path relative = normalizedPath.lexically_relative(normalizedRoot);
+    auto it = relative.begin();
+    if (it == relative.end()) {
+        return {};
+    }
+    return (normalizedRoot / *it).lexically_normal();
+}
+
+std::filesystem::path MakePendingSiblingPath(const std::filesystem::path& child) {
+    std::ostringstream name;
+    name << ".mti_delete_pending_" << Utf8FromPath(child.filename()) << "_";
+#ifdef _WIN32
+    name << GetCurrentProcessId();
+#else
+    name << std::hash<std::thread::id>{}(std::this_thread::get_id());
+#endif
+    const auto nowMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    name << "_" << nowMs;
+    return child.parent_path() / PathFromUtf8(name.str());
+}
+
 bool IsProtectedFullCleanupRoot(const std::filesystem::path& path) {
     if (!IsSafeCleanupPath(path)) {
         return true;
@@ -478,12 +514,14 @@ void DeleteSinglePath(CleanupExecutionState& state,
     EmitCleanupHeartbeat(state, true);
 
     std::error_code ec;
-    std::filesystem::remove(toLongPath(path), ec);
+    const bool removed = std::filesystem::remove(toLongPath(path), ec);
     const uint64_t elapsed = NowMs() - state.currentStartedMs;
-    if (ec && std::filesystem::exists(path)) {
+    if (ec) {
         ++state.result.failedCount;
         logInstallerWarning("[InstallFlow][Cleanup] delete failed path=" + Utf8FromPath(path) +
                             " error=" + ec.message());
+    } else if (!removed) {
+        ++state.result.skippedCount;
     } else {
         ++state.result.deletedCount;
         if (elapsed >= state.task.policy.slowItemLogMs) {
@@ -577,6 +615,97 @@ void DeletePathSegmented(CleanupExecutionState& state,
     } else {
         DeleteSinglePath(state, path, "delete_file");
     }
+}
+
+void AddIsolationCandidate(std::vector<std::filesystem::path>& candidates,
+                           std::set<std::string>& seen,
+                           const std::filesystem::path& candidate,
+                           const std::filesystem::path& previousRoot) {
+    const std::filesystem::path child = DirectChildUnderRoot(candidate, previousRoot);
+    if (child.empty() || SameNormalizedPath(child, previousRoot) || IsMtiPendingDirectoryName(child)) {
+        return;
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(child, ec) || !std::filesystem::is_directory(child, ec) ||
+        IsReparsePointPath(child)) {
+        return;
+    }
+    const std::string key = NormalizePath(child);
+    if (!key.empty() && seen.insert(key).second) {
+        candidates.push_back(child);
+    }
+}
+
+std::vector<std::filesystem::path> BuildSubdirectoryIsolationCandidates(
+    const json* manifest,
+    const std::filesystem::path& previousRoot,
+    const std::vector<std::string>& replacementTargets) {
+    std::vector<std::filesystem::path> candidates;
+    std::set<std::string> seen;
+
+    bool hasRootReplacement = false;
+    for (const auto& rawTarget : replacementTargets) {
+        if (rawTarget.empty()) {
+            continue;
+        }
+        const std::filesystem::path target = PathFromUtf8(rawTarget).lexically_normal();
+        if (SameNormalizedPath(target, previousRoot)) {
+            hasRootReplacement = true;
+            continue;
+        }
+        AddIsolationCandidate(candidates, seen, target, previousRoot);
+    }
+
+    if (manifest && hasRootReplacement) {
+        for (const auto& file : CollectManifestFiles(*manifest)) {
+            std::filesystem::path filePath = PathFromUtf8(file);
+            if (!filePath.is_absolute()) {
+                filePath = previousRoot / filePath;
+            }
+            AddIsolationCandidate(candidates, seen, filePath, previousRoot);
+        }
+    }
+
+    if (!manifest && !replacementTargets.empty() && candidates.empty()) {
+        std::error_code ec;
+        std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
+        for (std::filesystem::directory_iterator it(toLongPath(previousRoot), options, ec), end;
+             !ec && it != end;
+             it.increment(ec)) {
+            AddIsolationCandidate(candidates, seen, it->path(), previousRoot);
+        }
+    }
+
+    return candidates;
+}
+
+std::vector<std::filesystem::path> IsolateCleanupSubdirectories(
+    const std::vector<std::filesystem::path>& candidates) {
+    std::vector<std::filesystem::path> pendingDirs;
+    for (const auto& child : candidates) {
+        std::filesystem::path pending = MakePendingSiblingPath(child);
+        for (int attempt = 0; attempt < 10; ++attempt) {
+            std::error_code existsEc;
+            if (!std::filesystem::exists(pending, existsEc)) {
+                break;
+            }
+            pending = child.parent_path() / PathFromUtf8(
+                ".mti_delete_pending_" + Utf8FromPath(child.filename()) + "_" +
+                std::to_string(NowMs()) + "_" + std::to_string(attempt));
+        }
+
+        std::error_code ec;
+        std::filesystem::rename(toLongPath(child), toLongPath(pending), ec);
+        if (ec) {
+            logInstallerWarning("[InstallFlow][Cleanup] isolate rename failed source=" +
+                                Utf8FromPath(child) + " error=" + ec.message());
+            continue;
+        }
+        logInstallerInfo("[InstallFlow][Cleanup] isolated old subdirectory source=" +
+                         Utf8FromPath(child) + " pending=" + Utf8FromPath(pending));
+        pendingDirs.push_back(std::move(pending));
+    }
+    return pendingDirs;
 }
 
 std::vector<std::filesystem::path> CollectAffectedParentDirs(
@@ -1078,13 +1207,33 @@ UpgradeCleanupResult RunTaskWithWatchdog(UpgradeCleanupTask task,
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
+    const std::string parentLogPath = getInstallerLogPath();
+    std::wstring envBlock;
+    if (!parentLogPath.empty()) {
+        LPWCH currentEnv = GetEnvironmentStringsW();
+        if (currentEnv) {
+            for (LPWCH entry = currentEnv; *entry != L'\0'; entry += wcslen(entry) + 1) {
+                envBlock.append(entry);
+                envBlock.push_back(L'\0');
+            }
+            FreeEnvironmentStringsW(currentEnv);
+        }
+        envBlock.append(L"MTINSTALLER_LOG_PATH=");
+        envBlock.append(Utf8ToWide(parentLogPath));
+        envBlock.push_back(L'\0');
+        envBlock.push_back(L'\0');
+    }
+    DWORD creationFlags = CREATE_NO_WINDOW;
+    if (!envBlock.empty()) {
+        creationFlags |= CREATE_UNICODE_ENVIRONMENT;
+    }
     BOOL started = CreateProcessW(exePath.c_str(),
                                   cmdLine.data(),
                                   nullptr,
                                   nullptr,
                                   FALSE,
-                                  CREATE_NO_WINDOW,
-                                  nullptr,
+                                  creationFlags,
+                                  envBlock.empty() ? nullptr : envBlock.data(),
                                   nullptr,
                                   &si,
                                   &pi);
@@ -1117,6 +1266,9 @@ UpgradeCleanupResult RunTaskWithWatchdog(UpgradeCleanupTask task,
         if (ReadJsonFileBestEffort(heartbeatPath, heartbeat)) {
             lastHeartbeatTimestamp = heartbeat.value("timestampMs", lastHeartbeatTimestamp);
             lastPath = heartbeat.value("currentPath", lastPath);
+            fallback.deletedCount = heartbeat.value("deletedCount", fallback.deletedCount);
+            fallback.failedCount = heartbeat.value("failedCount", fallback.failedCount);
+            fallback.skippedCount = heartbeat.value("skippedCount", fallback.skippedCount);
             if (progressCallback) {
                 UpgradeCleanupProgressInfo info;
                 info.currentItem = lastPath.empty() ? "Cleaning previous installation" : lastPath;
@@ -1173,6 +1325,73 @@ UpgradeCleanupResult RunTaskWithWatchdog(UpgradeCleanupTask task,
 #endif
 }
 
+bool StartDetachedCleanupTask(UpgradeCleanupTask task) {
+#ifdef _WIN32
+    const std::filesystem::path taskPath = BuildCleanupTempPath(".detached.json");
+    task.policy.totalTimeoutMs = 10 * 60 * 1000;
+    task.policy.itemStaleTimeoutMs = 60 * 1000;
+    task.policy.heartbeatEveryItems = 200;
+    if (!WriteJsonFileBestEffort(taskPath, TaskToJson(task))) {
+        logInstallerWarning("[InstallFlow][Cleanup] detached worker task write failed");
+        return false;
+    }
+
+    const std::wstring exePath = Utf8ToWide(getCurrentExecutablePath());
+    std::wstring cmd = QuoteArg(exePath) + L" --detached-cleanup-worker " + QuoteArg(taskPath.wstring());
+    std::vector<wchar_t> cmdLine(cmd.begin(), cmd.end());
+    cmdLine.push_back(L'\0');
+
+    STARTUPINFOW si{};
+    PROCESS_INFORMATION pi{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    const std::string parentLogPath = getInstallerLogPath();
+    std::wstring envBlock;
+    if (!parentLogPath.empty()) {
+        LPWCH currentEnv = GetEnvironmentStringsW();
+        if (currentEnv) {
+            for (LPWCH entry = currentEnv; *entry != L'\0'; entry += wcslen(entry) + 1) {
+                envBlock.append(entry);
+                envBlock.push_back(L'\0');
+            }
+            FreeEnvironmentStringsW(currentEnv);
+        }
+        envBlock.append(L"MTINSTALLER_LOG_PATH=");
+        envBlock.append(Utf8ToWide(parentLogPath));
+        envBlock.push_back(L'\0');
+        envBlock.push_back(L'\0');
+    }
+    DWORD creationFlags = CREATE_NO_WINDOW | DETACHED_PROCESS | BELOW_NORMAL_PRIORITY_CLASS;
+    if (!envBlock.empty()) {
+        creationFlags |= CREATE_UNICODE_ENVIRONMENT;
+    }
+    BOOL started = CreateProcessW(exePath.c_str(),
+                                  cmdLine.data(),
+                                  nullptr,
+                                  nullptr,
+                                  FALSE,
+                                  creationFlags,
+                                  envBlock.empty() ? nullptr : envBlock.data(),
+                                  nullptr,
+                                  &si,
+                                  &pi);
+    if (!started) {
+        std::error_code ec;
+        std::filesystem::remove(taskPath, ec);
+        logInstallerWarning("[InstallFlow][Cleanup] detached worker start failed");
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    logInstallerInfo("[InstallFlow][Cleanup] detached worker started task=" + Utf8FromPath(taskPath));
+    return true;
+#else
+    (void)task;
+    return false;
+#endif
+}
+
 int runUpgradeCleanupWorkerFromTask(const std::string& taskPath) {
     initializeInstallerLogging();
     json taskJson;
@@ -1202,6 +1421,8 @@ int runUpgradeCleanupWorkerFromTask(const std::string& taskPath) {
                      " skipped=" + std::to_string(result.skippedCount) +
                      " partial=" + std::string(result.partial ? "true" : "false"));
     flushInstallerLogging();
+    std::error_code ec;
+    std::filesystem::remove(PathFromUtf8(taskPath), ec);
     return result.success ? 0 : 1;
 }
 
@@ -1209,9 +1430,51 @@ UpgradeCleanupResult runPreviousInstallCleanupWithWatchdog(
     const std::string& manifestPath,
     const std::string& previousInstallDir,
     const std::string& newInstallDir,
+    const std::vector<std::string>& replacementTargets,
     const UpgradeCleanupProgressCallback& progressCallback,
     const std::function<bool()>& cancellationCallback,
     const UpgradeCleanupPolicy& policy) {
+    UpgradeCleanupResult result;
+    const std::filesystem::path previousRoot = PathFromUtf8(previousInstallDir).lexically_normal();
+
+    json manifest;
+    const bool hasManifest = ReadManifestJson(manifestPath, manifest);
+    std::error_code existsEc;
+    if (!previousInstallDir.empty() &&
+        std::filesystem::exists(previousRoot, existsEc) &&
+        std::filesystem::is_directory(previousRoot, existsEc) &&
+        !IsProtectedFullCleanupRoot(previousRoot)) {
+        const std::vector<std::filesystem::path> candidates =
+            BuildSubdirectoryIsolationCandidates(hasManifest ? &manifest : nullptr,
+                                                 previousRoot,
+                                                 replacementTargets);
+        const std::vector<std::filesystem::path> pendingDirs =
+            IsolateCleanupSubdirectories(candidates);
+        if (!pendingDirs.empty()) {
+            UpgradeCleanupTask detachedTask;
+            detachedTask.mode = UpgradeCleanupTaskMode::ExtraPaths;
+            detachedTask.previousInstallDir = previousInstallDir;
+            detachedTask.policy = policy;
+            detachedTask.policy.allowPartialSuccess = true;
+            detachedTask.extraPaths.reserve(pendingDirs.size());
+            for (const auto& pending : pendingDirs) {
+                UninstallCleanupRule rule;
+                rule.path = Utf8FromPath(pending);
+                rule.recursive = true;
+                rule.onlyIfEmpty = false;
+                detachedTask.extraPaths.push_back(std::move(rule));
+            }
+            if (StartDetachedCleanupTask(std::move(detachedTask))) {
+                result.success = true;
+                result.partial = true;
+                result.skippedCount = candidates.size() - pendingDirs.size();
+                result.message = "Previous install subdirectories isolated for detached cleanup";
+                EmitProgress(progressCallback, 1.0f, "Previous installation cleanup delegated");
+                return result;
+            }
+        }
+    }
+
     UpgradeCleanupTask task;
     task.mode = UpgradeCleanupTaskMode::PreviousInstall;
     task.previousInstallDir = previousInstallDir;

@@ -1042,6 +1042,42 @@ void TestSameRootUpgradeCleanupUsesPreviousManifestFiles() {
             "Same-root cleanup should remove the previous manifest");
 }
 
+#ifdef _WIN32
+void TestSameRootUpgradeCleanupIsolatesPayloadSubdirectories() {
+    fs::path root = CreateTestRoot("upgrade_cleanup_isolate_subdirs");
+    fs::path previousInstallDir = root / "InstallRoot";
+    fs::create_directories(previousInstallDir / "resources" / "node_modules");
+    WriteTextFile(previousInstallDir / "resources" / "node_modules" / "a.js", "stale");
+    WriteTextFile(previousInstallDir / "user.dat", "keep");
+    WriteTextFile(previousInstallDir / "install.manifest.json",
+                  R"({"files":["resources/node_modules/a.js"],"appVersion":"1.0.0"})");
+
+    SetEnvironmentVariableW(L"MTINSTALLER_TEST_CLEANUP_WORKER_DELAY_MS", L"2000");
+    UpgradeCleanupResult result = runPreviousInstallCleanupWithWatchdog(
+        (previousInstallDir / "install.manifest.json").string(),
+        previousInstallDir.string(),
+        previousInstallDir.string(),
+        {previousInstallDir.string()});
+    SetEnvironmentVariableW(L"MTINSTALLER_TEST_CLEANUP_WORKER_DELAY_MS", nullptr);
+
+    bool pendingFound = false;
+    for (const auto& entry : fs::directory_iterator(previousInstallDir)) {
+        if (entry.is_directory() &&
+            entry.path().filename().string().rfind(".mti_delete_pending_resources_", 0) == 0) {
+            pendingFound = true;
+            break;
+        }
+    }
+
+    Require(result.success, "Detached same-root cleanup delegation should succeed");
+    Require(result.partial, "Detached same-root cleanup should be reported as delegated partial cleanup");
+    Require(fs::exists(previousInstallDir), "Detached cleanup must not rename the install root");
+    Require(!fs::exists(previousInstallDir / "resources"), "Payload child directory should be isolated");
+    Require(fs::exists(previousInstallDir / "user.dat"), "Root-level user file should be kept");
+    Require(pendingFound, "Isolated payload child should be renamed to pending cleanup directory");
+}
+#endif
+
 void TestUpgradeCleanupMissingManifestRemovesSafeDirectoryContents() {
     fs::path root = CreateTestRoot("upgrade_cleanup_missing_manifest");
     fs::path previousInstallDir = root / "InstallRoot";
@@ -1161,6 +1197,7 @@ void TestUpgradeCleanupWorkerTimeoutIsPartialSuccess() {
         (previousInstallDir / "install.manifest.json").string(),
         previousInstallDir.string(),
         previousInstallDir.string(),
+        {},
         {},
         {},
         policy);
@@ -1439,6 +1476,9 @@ int main(int argc, char* argv[]) {
     if (argc == 3 && std::string(argv[1]) == "--upgrade-cleanup-worker") {
         return runUpgradeCleanupWorkerFromTask(argv[2]);
     }
+    if (argc == 3 && std::string(argv[1]) == "--detached-cleanup-worker") {
+        return runUpgradeCleanupWorkerFromTask(argv[2]);
+    }
     if (argc == 3 && std::string(argv[1]) == "--uninstall-cleanup-worker") {
         return runUninstallCleanupWorkerFromTask(argv[2]);
     }
@@ -1479,6 +1519,10 @@ int main(int argc, char* argv[]) {
          &TestAppendPathLeafIfMissing},
         {"same_root_upgrade_cleanup_uses_previous_manifest_files",
          &TestSameRootUpgradeCleanupUsesPreviousManifestFiles},
+#ifdef _WIN32
+        {"same_root_upgrade_cleanup_isolates_payload_subdirectories",
+         &TestSameRootUpgradeCleanupIsolatesPayloadSubdirectories},
+#endif
         {"upgrade_cleanup_missing_manifest_removes_safe_directory_contents",
          &TestUpgradeCleanupMissingManifestRemovesSafeDirectoryContents},
         {"cleanup_upgrade_system_artifacts_executes_explicit_rules",

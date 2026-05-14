@@ -9,6 +9,7 @@
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -19,6 +20,8 @@
 #include <thread>
 #include <unordered_set>
 #include <set>
+#include <mutex>
+#include <condition_variable>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -492,10 +495,11 @@ static bool executeShellCommandWithTimeout(const std::string& command,
 
 struct UninstallCleanupPolicy {
     uint32_t itemStaleTimeoutMs = 30000;
-    uint32_t totalTimeoutMs = 120000;
+    uint32_t totalTimeoutMs = 0;
     uint32_t heartbeatIntervalMs = 1000;
     uint32_t heartbeatEveryItems = 100;
     uint32_t slowItemLogMs = 3000;
+    uint32_t workerConcurrency = 0;
     bool allowPartialSuccess = true;
 };
 
@@ -537,6 +541,7 @@ json UninstallPolicyToJson(const UninstallCleanupPolicy& policy) {
         {"heartbeatIntervalMs", policy.heartbeatIntervalMs},
         {"heartbeatEveryItems", policy.heartbeatEveryItems},
         {"slowItemLogMs", policy.slowItemLogMs},
+        {"workerConcurrency", policy.workerConcurrency},
         {"allowPartialSuccess", policy.allowPartialSuccess},
     };
 }
@@ -551,6 +556,7 @@ UninstallCleanupPolicy UninstallPolicyFromJson(const json& value) {
     policy.heartbeatIntervalMs = value.value("heartbeatIntervalMs", policy.heartbeatIntervalMs);
     policy.heartbeatEveryItems = value.value("heartbeatEveryItems", policy.heartbeatEveryItems);
     policy.slowItemLogMs = value.value("slowItemLogMs", policy.slowItemLogMs);
+    policy.workerConcurrency = value.value("workerConcurrency", policy.workerConcurrency);
     policy.allowPartialSuccess = value.value("allowPartialSuccess", policy.allowPartialSuccess);
     return policy;
 }
@@ -679,11 +685,26 @@ std::filesystem::path BuildUninstallCleanupTempPath(const char* suffix) {
 struct UninstallCleanupExecutionState {
     UninstallCleanupTask task;
     UninstallCleanupResult result;
+    std::mutex mutex;
     std::string currentPath;
     std::string currentAction;
     uint64_t currentStartedMs = 0;
     uint64_t lastHeartbeatMs = 0;
     uint64_t processedSinceHeartbeat = 0;
+    uint64_t processedCount = 0;
+    uint32_t workerConcurrency = 1;
+};
+
+struct DeleteBatchWorkerPool {
+    UninstallCleanupExecutionState& state;
+    std::vector<std::filesystem::path> files;
+    std::mutex filesMutex;
+    std::condition_variable cv;
+    std::atomic<bool> done{false};
+    std::vector<std::thread> workers;
+
+    explicit DeleteBatchWorkerPool(UninstallCleanupExecutionState& stateRef)
+        : state(stateRef) {}
 };
 
 void EmitUninstallHeartbeat(UninstallCleanupExecutionState& state, bool force) {
@@ -706,10 +727,24 @@ void EmitUninstallHeartbeat(UninstallCleanupExecutionState& state, bool force) {
         {"deletedCount", state.result.deletedCount},
         {"failedCount", state.result.failedCount},
         {"skippedCount", state.result.skippedCount},
+        {"processedCount", state.processedCount},
+        {"workerConcurrency", state.workerConcurrency},
     };
     WriteUninstallJsonBestEffort(PathFromUtf8(state.task.heartbeatPath), heartbeat);
     state.lastHeartbeatMs = now;
     state.processedSinceHeartbeat = 0;
+}
+
+void SetUninstallCurrentItem(UninstallCleanupExecutionState& state,
+                             const std::filesystem::path& path,
+                             const std::string& action,
+                             uint64_t startedMs) {
+    state.currentPath = Utf8FromPath(path);
+    state.currentAction = action;
+    state.currentStartedMs = startedMs;
+    // Do not force heartbeat here. File deletion is the hot path for large
+    // node_modules-like trees; heartbeat must stay time/count-throttled.
+    EmitUninstallHeartbeat(state, false);
 }
 
 void MarkUninstallSkipped(UninstallCleanupExecutionState& state) {
@@ -733,18 +768,18 @@ void DeleteUninstallSinglePath(UninstallCleanupExecutionState& state,
         return;
     }
 
-    state.currentPath = Utf8FromPath(path);
-    state.currentAction = action;
-    state.currentStartedMs = UninstallNowMs();
-    EmitUninstallHeartbeat(state, true);
+    const uint64_t started = UninstallNowMs();
+    SetUninstallCurrentItem(state, path, action, started);
 
     std::error_code ec;
-    std::filesystem::remove(toLongPath(path), ec);
-    const uint64_t elapsed = UninstallNowMs() - state.currentStartedMs;
-    if (ec && std::filesystem::exists(path)) {
+    const bool removed = std::filesystem::remove(toLongPath(path), ec);
+    const uint64_t elapsed = UninstallNowMs() - started;
+    if (ec) {
         ++state.result.failedCount;
         logInstallerWarning("[Uninstall][Cleanup] delete failed path=" + Utf8FromPath(path) +
                             " error=" + ec.message());
+    } else if (!removed) {
+        ++state.result.skippedCount;
     } else {
         ++state.result.deletedCount;
         if (elapsed >= state.task.policy.slowItemLogMs) {
@@ -754,6 +789,167 @@ void DeleteUninstallSinglePath(UninstallCleanupExecutionState& state,
     }
     ++state.processedSinceHeartbeat;
     EmitUninstallHeartbeat(state, false);
+}
+
+uint32_t ResolveUninstallWorkerConcurrency(const UninstallCleanupPolicy& policy) {
+    if (policy.workerConcurrency > 0) {
+        return std::max<uint32_t>(1, policy.workerConcurrency);
+    }
+    const unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0) {
+        return 2;
+    }
+    return std::min<uint32_t>(8, std::max<uint32_t>(2, hw / 2));
+}
+
+void DeleteUninstallFilesParallel(UninstallCleanupExecutionState& state,
+                                  const std::vector<std::filesystem::path>& files) {
+    if (files.empty()) {
+        return;
+    }
+    const uint32_t concurrency = std::min<uint32_t>(
+        ResolveUninstallWorkerConcurrency(state.task.policy),
+        static_cast<uint32_t>(files.size()));
+    state.workerConcurrency = concurrency;
+
+    std::atomic<size_t> nextIndex{0};
+    auto worker = [&]() {
+        while (true) {
+            const size_t index = nextIndex.fetch_add(1);
+            if (index >= files.size()) {
+                break;
+            }
+            const auto& path = files[index];
+            const uint64_t started = UninstallNowMs();
+            {
+                std::lock_guard<std::mutex> lock(state.mutex);
+                SetUninstallCurrentItem(state, path, "delete_file_parallel", started);
+            }
+
+            std::error_code ec;
+            const bool removed = std::filesystem::remove(toLongPath(path), ec);
+            const uint64_t elapsed = UninstallNowMs() - started;
+
+            {
+                std::lock_guard<std::mutex> lock(state.mutex);
+                if (ec) {
+                    ++state.result.failedCount;
+                    logInstallerWarning("[Uninstall][Cleanup] delete failed path=" +
+                                        Utf8FromPath(path) + " error=" + ec.message());
+                } else if (!removed) {
+                    ++state.result.skippedCount;
+                } else {
+                    ++state.result.deletedCount;
+                    if (elapsed >= state.task.policy.slowItemLogMs) {
+                        logInstallerWarning("[Uninstall][Cleanup] slow delete path=" +
+                                            Utf8FromPath(path) + " elapsedMs=" +
+                                            std::to_string(elapsed));
+                    }
+                }
+                ++state.processedCount;
+                ++state.processedSinceHeartbeat;
+                EmitUninstallHeartbeat(state, false);
+            }
+
+            if ((index + 1) % 200 == 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(concurrency);
+    for (uint32_t i = 0; i < concurrency; ++i) {
+        workers.emplace_back(worker);
+    }
+    for (auto& thread : workers) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+}
+
+void StartDeleteBatchWorkerPool(DeleteBatchWorkerPool& pool) {
+    const uint32_t concurrency = ResolveUninstallWorkerConcurrency(pool.state.task.policy);
+    pool.state.workerConcurrency = concurrency;
+    pool.workers.reserve(concurrency);
+    for (uint32_t i = 0; i < concurrency; ++i) {
+        pool.workers.emplace_back([&pool]() {
+            while (true) {
+                std::filesystem::path path;
+                {
+                    std::unique_lock<std::mutex> lock(pool.filesMutex);
+                    pool.cv.wait(lock, [&]() {
+                        return pool.done.load() || !pool.files.empty();
+                    });
+                    if (pool.files.empty()) {
+                        if (pool.done.load()) {
+                            return;
+                        }
+                        continue;
+                    }
+                    path = std::move(pool.files.back());
+                    pool.files.pop_back();
+                }
+
+                const uint64_t started = UninstallNowMs();
+                {
+                    std::lock_guard<std::mutex> lock(pool.state.mutex);
+                    SetUninstallCurrentItem(pool.state, path, "delete_file_parallel", started);
+                }
+
+                std::error_code ec;
+                const bool removed = std::filesystem::remove(toLongPath(path), ec);
+                const uint64_t elapsed = UninstallNowMs() - started;
+
+                {
+                    std::lock_guard<std::mutex> lock(pool.state.mutex);
+                    if (ec) {
+                        ++pool.state.result.failedCount;
+                        logInstallerWarning("[Uninstall][Cleanup] delete failed path=" +
+                                            Utf8FromPath(path) + " error=" + ec.message());
+                    } else if (!removed) {
+                        ++pool.state.result.skippedCount;
+                    } else {
+                        ++pool.state.result.deletedCount;
+                        if (elapsed >= pool.state.task.policy.slowItemLogMs) {
+                            logInstallerWarning("[Uninstall][Cleanup] slow delete path=" +
+                                                Utf8FromPath(path) + " elapsedMs=" +
+                                                std::to_string(elapsed));
+                        }
+                    }
+                    ++pool.state.processedCount;
+                    ++pool.state.processedSinceHeartbeat;
+                    EmitUninstallHeartbeat(pool.state, false);
+                }
+            }
+        });
+    }
+}
+
+void SubmitDeleteBatch(DeleteBatchWorkerPool& pool,
+                       std::vector<std::filesystem::path>& batch) {
+    if (batch.empty()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(pool.filesMutex);
+        for (auto& file : batch) {
+            pool.files.push_back(std::move(file));
+        }
+    }
+    batch.clear();
+    pool.cv.notify_all();
+}
+
+void FinishDeleteBatchWorkerPool(DeleteBatchWorkerPool& pool) {
+    pool.done.store(true);
+    pool.cv.notify_all();
+    for (auto& worker : pool.workers) {
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
 }
 
 void DeleteUninstallDirectorySegmented(UninstallCleanupExecutionState& state,
@@ -774,6 +970,10 @@ void DeleteUninstallDirectorySegmented(UninstallCleanupExecutionState& state,
         return;
     }
     std::vector<std::filesystem::path> dirs;
+    std::vector<std::filesystem::path> batch;
+    batch.reserve(512);
+    DeleteBatchWorkerPool pool(state);
+    StartDeleteBatchWorkerPool(pool);
     std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
     std::error_code iterEc;
     for (std::filesystem::recursive_directory_iterator it(toLongPath(root), options, iterEc), end;
@@ -789,9 +989,14 @@ void DeleteUninstallDirectorySegmented(UninstallCleanupExecutionState& state,
         if (it->is_directory(typeEc)) {
             dirs.push_back(path);
         } else {
-            DeleteUninstallSinglePath(state, path, "delete_file");
+            batch.push_back(path);
+            if (batch.size() >= 512) {
+                SubmitDeleteBatch(pool, batch);
+            }
         }
     }
+    SubmitDeleteBatch(pool, batch);
+    FinishDeleteBatchWorkerPool(pool);
     if (iterEc) {
         ++state.result.failedCount;
         logInstallerWarning("[Uninstall][Cleanup] directory scan failed path=" + Utf8FromPath(root) +
@@ -889,19 +1094,122 @@ void DeleteUninstallAffectedEmptyDirs(UninstallCleanupExecutionState& state,
     }
 }
 
+bool IsMtiPendingDirectoryNameLocal(const std::filesystem::path& path) {
+    const std::string name = Utf8FromPath(path.filename());
+    return name.rfind(".mti_delete_pending_", 0) == 0;
+}
+
+std::filesystem::path MakeUninstallPendingSiblingPath(const std::filesystem::path& child) {
+    std::ostringstream name;
+    name << ".mti_delete_pending_" << Utf8FromPath(child.filename()) << "_";
+#ifdef _WIN32
+    name << GetCurrentProcessId();
+#else
+    name << std::hash<std::thread::id>{}(std::this_thread::get_id());
+#endif
+    name << "_" << UninstallNowMs();
+    return child.parent_path() / PathFromUtf8(name.str());
+}
+
+std::vector<std::filesystem::path> IsolateInstallRootChildDirectories(
+    UninstallCleanupExecutionState& state,
+    const std::filesystem::path& installRoot) {
+    std::vector<std::filesystem::path> pendingDirs;
+    std::error_code ec;
+    if (installRoot.empty() || !std::filesystem::exists(installRoot, ec) ||
+        !std::filesystem::is_directory(installRoot, ec)) {
+        return pendingDirs;
+    }
+
+    std::vector<std::filesystem::path> children;
+    std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
+    for (std::filesystem::directory_iterator it(toLongPath(installRoot), options, ec), end;
+         !ec && it != end;
+         it.increment(ec)) {
+        std::error_code typeEc;
+        if (!it->is_directory(typeEc) || IsReparsePointPathLocal(it->path())) {
+            continue;
+        }
+        if (IsMtiPendingDirectoryNameLocal(it->path())) {
+            pendingDirs.push_back(it->path());
+        } else {
+            children.push_back(it->path());
+        }
+    }
+
+    for (const auto& child : children) {
+        std::filesystem::path pending = MakeUninstallPendingSiblingPath(child);
+        std::error_code renameEc;
+        std::filesystem::rename(toLongPath(child), toLongPath(pending), renameEc);
+        if (renameEc) {
+            ++state.result.failedCount;
+            logInstallerWarning("[Uninstall][Cleanup] isolate rename failed source=" +
+                                Utf8FromPath(child) + " error=" + renameEc.message());
+            continue;
+        }
+        ++state.result.deletedCount;
+        ++state.processedCount;
+        pendingDirs.push_back(std::move(pending));
+    }
+    return pendingDirs;
+}
+
+bool IsPathUnderAnyRootLocal(const std::filesystem::path& path,
+                             const std::vector<std::filesystem::path>& roots) {
+    for (const auto& root : roots) {
+        if (IsPathUnderOrEqualLocal(path, root)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& task) {
     UninstallCleanupExecutionState state;
     state.task = task;
     EmitUninstallHeartbeat(state, true);
     const std::string currentExeNorm = normalizePathForCompare(task.currentExePath);
+    const auto installRoot = PathFromUtf8(task.installDir).lexically_normal();
+    std::vector<std::filesystem::path> pendingDirs;
+    if (!installRoot.empty() && !IsDangerousFallbackRoot(installRoot)) {
+        pendingDirs = IsolateInstallRootChildDirectories(state, installRoot);
+    }
+    std::vector<std::filesystem::path> isolatedOriginalRoots;
+    isolatedOriginalRoots.reserve(pendingDirs.size());
+    for (const auto& pending : pendingDirs) {
+        std::string name = Utf8FromPath(pending.filename());
+        const std::string prefix = ".mti_delete_pending_";
+        if (name.rfind(prefix, 0) == 0) {
+            name = name.substr(prefix.size());
+            const size_t pidSep = name.rfind('_');
+            if (pidSep != std::string::npos) {
+                name = name.substr(0, pidSep);
+                const size_t timeSep = name.rfind('_');
+                if (timeSep != std::string::npos) {
+                    name = name.substr(0, timeSep);
+                }
+            }
+            if (!name.empty()) {
+                isolatedOriginalRoots.push_back((installRoot / PathFromUtf8(name)).lexically_normal());
+            }
+        }
+    }
     if (task.fallbackMode) {
-        const auto installRoot = PathFromUtf8(task.installDir).lexically_normal();
         if (IsDangerousFallbackRoot(installRoot)) {
             state.result.success = false;
             state.result.message = "Unsafe fallback uninstall root";
             return state.result;
         }
-        DeleteUninstallDirectorySegmented(state, installRoot, true, false);
+        std::error_code iterEc;
+        std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
+        for (std::filesystem::directory_iterator it(toLongPath(installRoot), options, iterEc), end;
+             !iterEc && it != end;
+             it.increment(iterEc)) {
+            std::error_code typeEc;
+            if (!it->is_directory(typeEc)) {
+                DeleteUninstallSinglePath(state, it->path(), "delete_root_file");
+            }
+        }
     } else {
         std::vector<std::filesystem::path> deletedCandidates;
         std::set<std::string> seen;
@@ -914,6 +1222,9 @@ UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& t
                 path = PathFromUtf8(task.installDir) / path;
             }
             path = path.lexically_normal();
+            if (IsPathUnderAnyRootLocal(path, isolatedOriginalRoots)) {
+                return;
+            }
             const std::string key = normalizePathForCompare(Utf8FromPath(path));
             if (!key.empty() && seen.insert(key).second) {
                 deletedCandidates.push_back(path);
@@ -933,6 +1244,20 @@ UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& t
         }
         DeleteUninstallAffectedEmptyDirs(state, deletedCandidates, task.cleanupRoots, task.currentExePath);
     }
+    for (const auto& pending : pendingDirs) {
+        DeleteUninstallDirectorySegmented(state, pending, true, false);
+    }
+    if (!installRoot.empty()) {
+        std::error_code ec;
+        if (std::filesystem::exists(installRoot, ec) && std::filesystem::is_empty(installRoot, ec)) {
+            const bool currentExeInsideRoot =
+                !task.currentExePath.empty() &&
+                IsPathUnderOrEqualLocal(PathFromUtf8(task.currentExePath).lexically_normal(), installRoot);
+            if (!currentExeInsideRoot) {
+                DeleteUninstallSinglePath(state, installRoot, "delete_install_root");
+            }
+        }
+    }
     for (const auto& rule : task.cleanupPaths) {
         if (rule.path.empty()) {
             MarkUninstallSkipped(state);
@@ -946,7 +1271,7 @@ UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& t
         }
         DeleteUninstallPathSegmented(state, cleanupPath, rule.recursive, rule.onlyIfEmpty, true);
     }
-    state.result.partial = state.result.failedCount > 0 || state.result.skippedCount > 0;
+    state.result.partial = state.result.failedCount > 0 || state.result.timedOut;
     state.result.success = state.task.policy.allowPartialSuccess || state.result.failedCount == 0;
     EmitUninstallHeartbeat(state, true);
     return state.result;
@@ -990,8 +1315,32 @@ UninstallCleanupResult RunUninstallCleanupWithWatchdog(
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
+    const std::string parentLogPath = getInstallerLogPath();
+    std::wstring envBlock;
+    if (!parentLogPath.empty()) {
+        LPWCH currentEnv = GetEnvironmentStringsW();
+        if (currentEnv) {
+            for (LPWCH entry = currentEnv; *entry != L'\0'; entry += wcslen(entry) + 1) {
+                envBlock.append(entry);
+                envBlock.push_back(L'\0');
+            }
+            FreeEnvironmentStringsW(currentEnv);
+        }
+        envBlock.append(L"MTINSTALLER_LOG_PATH=");
+        envBlock.append(Utf8ToWide(parentLogPath));
+        envBlock.push_back(L'\0');
+        envBlock.push_back(L'\0');
+    }
+    DWORD creationFlags = CREATE_NO_WINDOW;
+    if (!envBlock.empty()) {
+        creationFlags |= CREATE_UNICODE_ENVIRONMENT;
+    }
     BOOL started = CreateProcessW(exePath.c_str(), cmdLine.data(), nullptr, nullptr, FALSE,
-                                  CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+                                  creationFlags,
+                                  envBlock.empty() ? nullptr : envBlock.data(),
+                                  nullptr,
+                                  &si,
+                                  &pi);
     if (!started) {
         fallback.success = false;
         fallback.message = "Failed to start uninstall cleanup worker";
@@ -1019,6 +1368,9 @@ UninstallCleanupResult RunUninstallCleanupWithWatchdog(
         if (ReadUninstallJsonBestEffort(heartbeatPath, heartbeat)) {
             lastHeartbeatTimestamp = heartbeat.value("timestampMs", lastHeartbeatTimestamp);
             lastPath = heartbeat.value("currentPath", lastPath);
+            fallback.deletedCount = heartbeat.value("deletedCount", fallback.deletedCount);
+            fallback.failedCount = heartbeat.value("failedCount", fallback.failedCount);
+            fallback.skippedCount = heartbeat.value("skippedCount", fallback.skippedCount);
             if (progressCallback) {
                 UninstallProgressInfo info;
                 info.currentItem = lastPath.empty() ? "Cleaning files" : lastPath;
@@ -1027,7 +1379,8 @@ UninstallCleanupResult RunUninstallCleanupWithWatchdog(
             }
         }
         const uint64_t now = UninstallNowMs();
-        const bool totalTimedOut = now - startedMs >= task.policy.totalTimeoutMs;
+        const bool totalTimedOut = task.policy.totalTimeoutMs > 0 &&
+            now - startedMs >= task.policy.totalTimeoutMs;
         const bool heartbeatStale = now > lastHeartbeatTimestamp &&
             now - lastHeartbeatTimestamp >= task.policy.itemStaleTimeoutMs;
         if (totalTimedOut || heartbeatStale) {

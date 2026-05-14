@@ -1,9 +1,14 @@
 #include "installer/install_cleanup_executor.h"
 
 #include "common/installer_logger.h"
+#include "common/utf8_utils.h"
 #include "installer/console_interface.h"
 #include "installer/installer_helpers.h"
 #include "installer/upgrade_cleanup.h"
+
+#include <algorithm>
+#include <filesystem>
+#include <unordered_set>
 
 namespace MultiThreadedInstaller {
 
@@ -11,6 +16,54 @@ namespace {
 
 bool IsCancellationRequested(const InstallServiceOptions& options) {
     return options.cancellationCallback && options.cancellationCallback();
+}
+
+std::vector<std::string> ResolveSelectedPayloadTargets(const ExtendedInstallationMetadata& metadata,
+                                                       const InstallExecutionPlan& plan,
+                                                       InstallerPathResolver& pathResolver) {
+    std::unordered_set<std::string> selected(plan.selectedEmbeddedFolders.begin(),
+                                             plan.selectedEmbeddedFolders.end());
+    std::vector<std::string> targets;
+    std::unordered_set<std::string> seen;
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
+        if (selected.find(mapping.folderId) == selected.end()) {
+            continue;
+        }
+        std::string target = mapping.target.empty() ? mapping.targetPath : mapping.target;
+        const std::string token = "%InstallDir%";
+        size_t pos = 0;
+        while ((pos = target.find(token, pos)) != std::string::npos) {
+            target.replace(pos, token.size(), plan.pathDecision.resolvedInstallRoot);
+            pos += plan.pathDecision.resolvedInstallRoot.size();
+        }
+        target = pathResolver.expandEnvironmentVariables(target);
+        if (target.empty()) {
+            continue;
+        }
+        const std::string normalized = normalizePathForCompare(target);
+        if (normalized.empty()) {
+            continue;
+        }
+        if (normalized == normalizePathForCompare(plan.pathDecision.resolvedInstallRoot) &&
+            !mapping.fileIndex.empty()) {
+            for (const auto& file : mapping.fileIndex) {
+                if (file.relativePath.empty()) {
+                    continue;
+                }
+                const std::filesystem::path candidate =
+                    PathFromUtf8(target) / PathFromUtf8(file.relativePath);
+                const std::string candidateKey = normalizePathForCompare(Utf8FromPath(candidate));
+                if (!candidateKey.empty() && seen.insert(candidateKey).second) {
+                    targets.push_back(Utf8FromPath(candidate));
+                }
+            }
+            continue;
+        }
+        if (seen.insert(normalized).second) {
+            targets.push_back(std::move(target));
+        }
+    }
+    return targets;
 }
 
 } // namespace
@@ -53,6 +106,7 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         plan.previousManifest,
         plan.previousInstallDir,
         plan.pathDecision.resolvedInstallRoot,
+        ResolveSelectedPayloadTargets(metadata, plan, pathResolver),
         cleanupProgress,
         options.cancellationCallback);
     if (!previousCleanup.success && IsCancellationRequested(options)) {

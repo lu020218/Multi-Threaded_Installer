@@ -50,6 +50,7 @@ UpgradeCleanupResult runPreviousInstallCleanupWithWatchdog(
     const std::string& manifestPath,
     const std::string& previousInstallDir,
     const std::string& newInstallDir,
+    const std::vector<std::string>& replacementTargets = {},
     const UpgradeCleanupProgressCallback& progressCallback = {},
     const std::function<bool()>& cancellationCallback = {},
     const UpgradeCleanupPolicy& policy = {});

@@ -265,6 +265,22 @@ void initializeInstallerLogging() {
     }
     std::filesystem::path logPath;
     try {
+        wchar_t explicitLogPath[1024] = {};
+        DWORD explicitLen = GetEnvironmentVariableW(L"MTINSTALLER_LOG_PATH",
+                                                    explicitLogPath,
+                                                    static_cast<DWORD>(sizeof(explicitLogPath) /
+                                                                       sizeof(explicitLogPath[0])));
+        if (explicitLen > 0 && explicitLen < (sizeof(explicitLogPath) / sizeof(explicitLogPath[0]))) {
+            logPath = explicitLogPath;
+        }
+    } catch (...) {
+        logPath.clear();
+    }
+    try {
+        if (!logPath.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(logPath.parent_path(), ec);
+        } else {
         wchar_t appNameBuf[256] = {};
         DWORD appNameCap = static_cast<DWORD>(sizeof(appNameBuf) / sizeof(appNameBuf[0]));
         DWORD len = GetEnvironmentVariableW(L"MTINSTALLER_APPNAME", appNameBuf, appNameCap);
@@ -299,6 +315,7 @@ void initializeInstallerLogging() {
         } else {
             logPath = std::filesystem::temp_directory_path() /
                        (L"MTInstaller_" + sanitized + L".log");
+        }
         }
     } catch (...) {
         logPath = std::filesystem::path(L"MTInstaller_Installer.log");

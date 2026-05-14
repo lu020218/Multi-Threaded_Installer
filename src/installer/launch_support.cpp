@@ -817,6 +817,9 @@ int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
         if (lowered == L"--upgrade-cleanup-worker") {
             return runUpgradeCleanupWorkerFromTask(WideToUtf8(wideArgs[i + 1]));
         }
+        if (lowered == L"--detached-cleanup-worker") {
+            return runUpgradeCleanupWorkerFromTask(WideToUtf8(wideArgs[i + 1]));
+        }
         if (lowered == L"--uninstall-cleanup-worker") {
             return runUninstallCleanupWorkerFromTask(WideToUtf8(wideArgs[i + 1]));
         }

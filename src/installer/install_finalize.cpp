@@ -23,6 +23,10 @@ std::vector<std::string> CollectFilesRecursive(const std::vector<std::string>& r
                (filename.find(L".__mti_old") != std::wstring::npos ||
                 filename.find(L".__mti_reboot_new") != std::wstring::npos);
     };
+    auto isPendingCleanupDirectory = [](const std::filesystem::path& path) {
+        const std::string name = Utf8FromPath(path.filename());
+        return name.rfind(".mti_delete_pending_", 0) == 0;
+    };
     for (const auto& rootPath : roots) {
         if (rootPath.empty()) {
             continue;
@@ -31,7 +35,15 @@ std::vector<std::string> CollectFilesRecursive(const std::vector<std::string>& r
         if (!std::filesystem::exists(root)) {
             continue;
         }
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+        std::error_code iterEc;
+        for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, iterEc), end;
+             !iterEc && it != end;
+             it.increment(iterEc)) {
+            const auto& entry = *it;
+            if (entry.is_directory() && isPendingCleanupDirectory(entry.path())) {
+                it.disable_recursion_pending();
+                continue;
+            }
             if (entry.is_regular_file() && !isInstallerTransientFile(entry.path())) {
                 files.push_back(Utf8FromPath(entry.path()));
             }

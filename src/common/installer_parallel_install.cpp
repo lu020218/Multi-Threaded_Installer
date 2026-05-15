@@ -3,6 +3,7 @@
 #include "common/installer_logger.h"
 #include "installer/folder_install_executor.h"
 #include "installer/folder_payload_reader.h"
+#include "installer/installer_concurrency_policy.h"
 #include "installer/installer_helpers.h"
 #include "installer/path_resolver.h"
 #include "installer/thread_pool_manager.h"
@@ -132,11 +133,14 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
         return result;
     }
 
-    const size_t workerCount =
-        ResolveThreadPoolWorkerCount(threadCount > 0 ? static_cast<size_t>(threadCount) : 0);
+    (void)threadCount;
+    const size_t workerCount = ResolvePayloadWorkerCount(dispatches.size());
+    const uint32_t decoderBudget =
+        ResolveDecoderThreadCount(static_cast<uint32_t>(std::max<size_t>(1, workerCount)));
     logInstallerInfo("[InstallFlow][Payload] folderCount=" + std::to_string(dispatches.size()) +
-                     " requestedThreadCount=" + std::to_string(threadCount) +
-                     " workerCount=" + std::to_string(workerCount));
+                     " hwThreads=" + std::to_string(GetInstallerHardwareConcurrency()) +
+                     " payloadWorkers=" + std::to_string(workerCount) +
+                     " decoderBudget=" + std::to_string(decoderBudget));
 
     std::mutex resultMutex;
     std::vector<std::string> errors;

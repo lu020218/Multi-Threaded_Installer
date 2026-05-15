@@ -2,6 +2,7 @@
 
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
+#include "installer/cleanup_delete_executor.h"
 #include "installer/installer_helpers.h"
 #include "installer/registry_utils.h"
 
@@ -10,7 +11,10 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <json.hpp>
+#include <map>
+#include <mutex>
 #include <set>
 #include <cstdlib>
 #include <sstream>
@@ -327,86 +331,6 @@ uint64_t NowMs() {
             .count());
 }
 
-json PolicyToJson(const UpgradeCleanupPolicy& policy) {
-    return {
-        {"itemStaleTimeoutMs", policy.itemStaleTimeoutMs},
-        {"totalTimeoutMs", policy.totalTimeoutMs},
-        {"heartbeatIntervalMs", policy.heartbeatIntervalMs},
-        {"heartbeatEveryItems", policy.heartbeatEveryItems},
-        {"slowItemLogMs", policy.slowItemLogMs},
-        {"allowPartialSuccess", policy.allowPartialSuccess},
-    };
-}
-
-UpgradeCleanupPolicy PolicyFromJson(const json& value) {
-    UpgradeCleanupPolicy policy;
-    if (!value.is_object()) {
-        return policy;
-    }
-    policy.itemStaleTimeoutMs = value.value("itemStaleTimeoutMs", policy.itemStaleTimeoutMs);
-    policy.totalTimeoutMs = value.value("totalTimeoutMs", policy.totalTimeoutMs);
-    policy.heartbeatIntervalMs = value.value("heartbeatIntervalMs", policy.heartbeatIntervalMs);
-    policy.heartbeatEveryItems = value.value("heartbeatEveryItems", policy.heartbeatEveryItems);
-    policy.slowItemLogMs = value.value("slowItemLogMs", policy.slowItemLogMs);
-    policy.allowPartialSuccess = value.value("allowPartialSuccess", policy.allowPartialSuccess);
-    return policy;
-}
-
-json CleanupRuleToJson(const UninstallCleanupRule& rule) {
-    return {
-        {"path", rule.path},
-        {"recursive", rule.recursive},
-        {"onlyIfEmpty", rule.onlyIfEmpty},
-    };
-}
-
-UninstallCleanupRule CleanupRuleFromJson(const json& value) {
-    UninstallCleanupRule rule;
-    if (!value.is_object()) {
-        return rule;
-    }
-    rule.path = value.value("path", "");
-    rule.recursive = value.value("recursive", true);
-    rule.onlyIfEmpty = value.value("onlyIfEmpty", false);
-    return rule;
-}
-
-json TaskToJson(const UpgradeCleanupTask& task) {
-    json root;
-    root["mode"] = task.mode == UpgradeCleanupTaskMode::ExtraPaths ? "extraPaths" : "previousInstall";
-    root["previousInstallDir"] = task.previousInstallDir;
-    root["newInstallDir"] = task.newInstallDir;
-    root["manifestPath"] = task.manifestPath;
-    root["heartbeatPath"] = task.heartbeatPath;
-    root["resultPath"] = task.resultPath;
-    root["policy"] = PolicyToJson(task.policy);
-    root["extraPaths"] = json::array();
-    for (const auto& rule : task.extraPaths) {
-        root["extraPaths"].push_back(CleanupRuleToJson(rule));
-    }
-    return root;
-}
-
-bool TaskFromJson(const json& root, UpgradeCleanupTask& task) {
-    if (!root.is_object()) {
-        return false;
-    }
-    const std::string mode = root.value("mode", "previousInstall");
-    task.mode = mode == "extraPaths" ? UpgradeCleanupTaskMode::ExtraPaths
-                                     : UpgradeCleanupTaskMode::PreviousInstall;
-    task.previousInstallDir = root.value("previousInstallDir", "");
-    task.newInstallDir = root.value("newInstallDir", "");
-    task.manifestPath = root.value("manifestPath", "");
-    task.heartbeatPath = root.value("heartbeatPath", "");
-    task.resultPath = root.value("resultPath", "");
-    task.policy = PolicyFromJson(root.value("policy", json::object()));
-    task.extraPaths.clear();
-    for (const auto& item : root.value("extraPaths", json::array())) {
-        task.extraPaths.push_back(CleanupRuleFromJson(item));
-    }
-    return true;
-}
-
 bool WriteJsonFileBestEffort(const std::filesystem::path& path, const json& value) {
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
@@ -448,11 +372,23 @@ struct CleanupExecutionState {
     UpgradeCleanupTask task;
     UpgradeCleanupResult result;
     UpgradeCleanupProgressCallback progressCallback;
+    std::unique_ptr<CleanupDeleteExecutor> deleteExecutor;
+    std::vector<std::filesystem::path> pendingEmptyDirs;
+    std::mutex mutex;
     std::string currentPath;
     std::string currentAction;
     uint64_t currentStartedMs = 0;
     uint64_t lastHeartbeatMs = 0;
     uint64_t processedSinceHeartbeat = 0;
+    uint64_t processedCount = 0;
+    uint32_t workerConcurrency = 1;
+    uint32_t activeWorkers = 0;
+    uint64_t lastCompletedAtMs = 0;
+    std::string slowestCurrentItem;
+    std::string slowestCurrentThreadId;
+    uint64_t slowestCurrentStartedMs = 0;
+    std::map<std::string, uint64_t> activeItems;
+    std::map<std::string, std::string> activeItemThreadIds;
 };
 
 void EmitCleanupHeartbeat(CleanupExecutionState& state, bool force) {
@@ -477,6 +413,13 @@ void EmitCleanupHeartbeat(CleanupExecutionState& state, bool force) {
         {"deletedCount", state.result.deletedCount},
         {"failedCount", state.result.failedCount},
         {"skippedCount", state.result.skippedCount},
+        {"processedCount", state.processedCount},
+        {"workerConcurrency", state.workerConcurrency},
+        {"activeWorkers", state.activeWorkers},
+        {"slowestCurrentItem", state.slowestCurrentItem},
+        {"slowestCurrentThreadId", state.slowestCurrentThreadId},
+        {"slowestCurrentStartedMs", state.slowestCurrentStartedMs},
+        {"lastCompletedAt", state.lastCompletedAtMs},
     };
     WriteJsonFileBestEffort(PathFromUtf8(state.task.heartbeatPath), heartbeat);
     state.lastHeartbeatMs = now;
@@ -490,11 +433,49 @@ void EmitCleanupProgress(CleanupExecutionState& state, float progress, const std
 void SetCleanupCurrentItem(CleanupExecutionState& state,
                            const std::filesystem::path& path,
                            const std::string& action,
-                           uint64_t startedMs) {
+                           uint64_t startedMs,
+                           const std::string& threadId = {}) {
     state.currentPath = Utf8FromPath(path);
     state.currentAction = action;
     state.currentStartedMs = startedMs;
+    ++state.activeWorkers;
+    state.activeItems[state.currentPath] = startedMs;
+    state.activeItemThreadIds[state.currentPath] = threadId;
+    if (state.slowestCurrentItem.empty() ||
+        startedMs < state.slowestCurrentStartedMs) {
+        state.slowestCurrentItem = state.currentPath;
+        state.slowestCurrentThreadId = threadId;
+        state.slowestCurrentStartedMs = startedMs;
+    }
     EmitCleanupHeartbeat(state, false);
+}
+
+void MarkCleanupCurrentItemCompleted(CleanupExecutionState& state,
+                                     const std::filesystem::path& path) {
+    const std::string pathText = Utf8FromPath(path);
+    auto it = state.activeItems.find(pathText);
+    if (it != state.activeItems.end()) {
+        state.activeItems.erase(it);
+    }
+    state.activeItemThreadIds.erase(pathText);
+    if (state.activeWorkers > 0) {
+        --state.activeWorkers;
+    }
+    state.lastCompletedAtMs = NowMs();
+
+    state.slowestCurrentItem.clear();
+    state.slowestCurrentThreadId.clear();
+    state.slowestCurrentStartedMs = 0;
+    for (const auto& item : state.activeItems) {
+        if (state.slowestCurrentItem.empty() ||
+            item.second < state.slowestCurrentStartedMs) {
+            state.slowestCurrentItem = item.first;
+            auto threadIt = state.activeItemThreadIds.find(item.first);
+            state.slowestCurrentThreadId =
+                threadIt == state.activeItemThreadIds.end() ? std::string() : threadIt->second;
+            state.slowestCurrentStartedMs = item.second;
+        }
+    }
 }
 
 void MarkSkipped(CleanupExecutionState& state) {
@@ -537,8 +518,140 @@ void DeleteSinglePath(CleanupExecutionState& state,
                                 " elapsedMs=" + std::to_string(elapsed));
         }
     }
+    MarkCleanupCurrentItemCompleted(state, path);
     ++state.processedSinceHeartbeat;
     EmitCleanupHeartbeat(state, false);
+}
+
+void RecordParallelDeleteResult(CleanupExecutionState& state,
+                                const std::filesystem::path& path,
+                                const std::error_code& ec,
+                                bool removed,
+                                uint64_t elapsed) {
+    if (ec) {
+        ++state.result.failedCount;
+        logInstallerWarning("[InstallFlow][Cleanup] delete failed path=" +
+                            Utf8FromPath(path) + " error=" + ec.message());
+    } else if (!removed) {
+        ++state.result.skippedCount;
+    } else {
+        ++state.result.deletedCount;
+        if (elapsed >= state.task.policy.slowItemLogMs) {
+            logInstallerWarning("[InstallFlow][Cleanup] slow delete path=" +
+                                Utf8FromPath(path) + " elapsedMs=" +
+                                std::to_string(elapsed));
+        }
+    }
+    MarkCleanupCurrentItemCompleted(state, path);
+    ++state.processedCount;
+    ++state.processedSinceHeartbeat;
+    EmitCleanupHeartbeat(state, false);
+}
+
+void DeleteDirectoryIfEmptyByRemove(CleanupExecutionState& state,
+                                    const std::filesystem::path& path,
+                                    const std::string& action);
+
+CleanupDeleteCallbacks BuildCleanupDeleteCallbacks(CleanupExecutionState& state) {
+    CleanupDeleteCallbacks callbacks;
+    callbacks.onItemStarted = [&state](const std::filesystem::path& path,
+                                       const std::string& action,
+                                       uint64_t started,
+                                       const std::string& threadId) {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        SetCleanupCurrentItem(state, path, action, started, threadId);
+    };
+    callbacks.onItemFinished = [&state](const std::filesystem::path& path,
+                                        const std::error_code& ec,
+                                        bool removed,
+                                        uint64_t elapsed,
+                                        const std::string& threadId) {
+        (void)threadId;
+        std::lock_guard<std::mutex> lock(state.mutex);
+        RecordParallelDeleteResult(state, path, ec, removed, elapsed);
+    };
+    callbacks.onReparsePointSkipped = [&state](const std::filesystem::path& path) {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        ++state.result.skippedCount;
+        ++state.processedSinceHeartbeat;
+        logInstallerWarning("[InstallFlow][Cleanup] skipped reparse point path=" +
+                            Utf8FromPath(path));
+        EmitCleanupHeartbeat(state, false);
+    };
+    callbacks.onEmptyPathSkipped = [&state]() {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        MarkSkipped(state);
+    };
+    return callbacks;
+}
+
+CleanupDeleteExecutor& EnsureCleanupDeleteExecutor(CleanupExecutionState& state) {
+    if (!state.deleteExecutor) {
+        state.deleteExecutor = std::make_unique<CleanupDeleteExecutor>(
+            CleanupDeleteWorkload::Upgrade,
+            BuildCleanupDeleteCallbacks(state));
+        state.workerConcurrency = state.deleteExecutor->workerConcurrency();
+        logInstallerInfo("[InstallFlow][Cleanup] delete executor start workload=upgrade cleanupWorkers=" +
+                         std::to_string(state.workerConcurrency));
+    }
+    return *state.deleteExecutor;
+}
+
+void DeleteFilesParallel(CleanupExecutionState& state,
+                         const std::vector<std::filesystem::path>& files) {
+    if (files.empty()) {
+        return;
+    }
+    CleanupDeleteExecutor& executor = EnsureCleanupDeleteExecutor(state);
+    std::vector<std::filesystem::path> batch;
+    batch.reserve(512);
+    for (const auto& file : files) {
+        batch.push_back(file);
+        if (batch.size() >= 512) {
+            executor.submit(batch);
+        }
+    }
+    executor.submit(batch);
+}
+
+void FinishParallelDeletes(CleanupExecutionState& state) {
+    if (!state.deleteExecutor) {
+        return;
+    }
+    const uint64_t startedDeleted = state.result.deletedCount;
+    const uint64_t startedFailed = state.result.failedCount;
+    const uint64_t startedSkipped = state.result.skippedCount;
+    state.deleteExecutor->finish();
+    state.deleteExecutor.reset();
+    logInstallerInfo("[InstallFlow][Cleanup] delete executor end deletedDelta=" +
+                     std::to_string(state.result.deletedCount - startedDeleted) +
+                     " failedDelta=" + std::to_string(state.result.failedCount - startedFailed) +
+                     " skippedDelta=" + std::to_string(state.result.skippedCount - startedSkipped));
+}
+
+void QueueEmptyDirectoryRemoval(CleanupExecutionState& state,
+                                const std::filesystem::path& path) {
+    if (!path.empty()) {
+        state.pendingEmptyDirs.push_back(path);
+    }
+}
+
+void DeleteQueuedEmptyDirectories(CleanupExecutionState& state) {
+    if (state.pendingEmptyDirs.empty()) {
+        return;
+    }
+    std::sort(state.pendingEmptyDirs.begin(), state.pendingEmptyDirs.end(), [](const auto& a, const auto& b) {
+        return a.native().size() > b.native().size();
+    });
+    std::set<std::string> seen;
+    for (const auto& dir : state.pendingEmptyDirs) {
+        const std::string key = NormalizePath(dir);
+        if (key.empty() || !seen.insert(key).second) {
+            continue;
+        }
+        DeleteDirectoryIfEmptyByRemove(state, dir, "delete_empty_dir");
+    }
+    state.pendingEmptyDirs.clear();
 }
 
 void DeleteDirectoryIfEmptyByRemove(CleanupExecutionState& state,
@@ -600,6 +713,8 @@ void DeleteDirectoryContentsSegmented(CleanupExecutionState& state,
     }
 
     std::vector<std::filesystem::path> directories;
+    std::vector<std::filesystem::path> batch;
+    batch.reserve(512);
     std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
     std::error_code iterEc;
     for (std::filesystem::recursive_directory_iterator it(toLongPath(root), options, iterEc), end;
@@ -608,15 +723,26 @@ void DeleteDirectoryContentsSegmented(CleanupExecutionState& state,
         const std::filesystem::path entryPath = it->path();
         if (IsReparsePointPath(entryPath)) {
             it.disable_recursion_pending();
-            ++state.result.skippedCount;
+            {
+                std::lock_guard<std::mutex> lock(state.mutex);
+                ++state.result.skippedCount;
+                ++state.processedSinceHeartbeat;
+                EmitCleanupHeartbeat(state, false);
+            }
             continue;
         }
         std::error_code typeEc;
         if (it->is_directory(typeEc)) {
             directories.push_back(entryPath);
         } else {
-            DeleteSinglePath(state, entryPath, "delete_file");
+            batch.push_back(entryPath);
+            if (batch.size() >= 512) {
+                EnsureCleanupDeleteExecutor(state).submit(batch);
+            }
         }
+    }
+    if (!batch.empty()) {
+        EnsureCleanupDeleteExecutor(state).submit(batch);
     }
     if (iterEc) {
         ++state.result.failedCount;
@@ -624,14 +750,11 @@ void DeleteDirectoryContentsSegmented(CleanupExecutionState& state,
                             " error=" + iterEc.message());
     }
 
-    std::sort(directories.begin(), directories.end(), [](const auto& a, const auto& b) {
-        return a.native().size() > b.native().size();
-    });
     for (const auto& dir : directories) {
-        DeleteDirectoryIfEmptyByRemove(state, dir, "delete_empty_dir");
+        QueueEmptyDirectoryRemoval(state, dir);
     }
     if (removeRoot) {
-        DeleteDirectoryIfEmptyByRemove(state, root, "delete_root_dir");
+        QueueEmptyDirectoryRemoval(state, root);
     }
 }
 
@@ -831,6 +954,8 @@ bool RemoveDirectoryContentsBestEffort(const std::filesystem::path& root,
         EmitProgress(progressCallback, progress, "Removing old path: " + Utf8FromPath(child));
     }
 
+    FinishParallelDeletes(state);
+    DeleteQueuedEmptyDirectories(state);
     return state.result.failedCount == 0;
 }
 
@@ -868,6 +993,8 @@ bool RemoveUpgradeCleanupPath(const UninstallCleanupRule& rule,
     CleanupExecutionState state;
     state.task = std::move(task);
     DeletePathSegmented(state, cleanupPath, rule.recursive, rule.onlyIfEmpty, true);
+    FinishParallelDeletes(state);
+    DeleteQueuedEmptyDirectories(state);
     if (state.result.failedCount > 0 && std::filesystem::exists(cleanupPath)) {
         console.showWarning("Upgrade cleanup failed to remove path: " + Utf8FromPath(cleanupPath));
         return false;
@@ -982,21 +1109,13 @@ bool cleanupPreviousInstallForUpgrade(
     state.task = std::move(task);
     state.progressCallback = progressCallback;
 
-    const size_t totalFiles = filesToDelete.size();
-    for (size_t i = 0; i < totalFiles; ++i) {
-        if (IsCancelled(cancellationCallback)) {
-            console.showWarning("Upgrade cleanup cancelled while deleting files.");
-            return false;
-        }
-        const std::filesystem::path& filePath = filesToDelete[i];
-        DeleteSinglePath(state, filePath, "delete_manifest_file");
-
-        float progress = 0.8f;
-        if (totalFiles > 0) {
-            progress = 0.8f * static_cast<float>(i + 1) / static_cast<float>(totalFiles);
-        }
-        EmitProgress(progressCallback, progress, "Removing old file: " + Utf8FromPath(filePath));
+    if (IsCancelled(cancellationCallback)) {
+        console.showWarning("Upgrade cleanup cancelled before deleting files.");
+        return false;
     }
+    DeleteFilesParallel(state, filesToDelete);
+    FinishParallelDeletes(state);
+    EmitProgress(progressCallback, 0.8f, "Removing old files");
 
     if (IsCancelled(cancellationCallback)) {
         console.showWarning("Upgrade cleanup cancelled before directory cleanup.");
@@ -1028,35 +1147,6 @@ bool cleanupPreviousInstallForUpgrade(
 
     EmitProgress(progressCallback, 1.0f, "Upgrade cleanup completed");
     return true;
-}
-
-json ResultToJson(const UpgradeCleanupResult& result) {
-    return {
-        {"success", result.success},
-        {"partial", result.partial},
-        {"timedOut", result.timedOut},
-        {"deletedCount", result.deletedCount},
-        {"failedCount", result.failedCount},
-        {"skippedCount", result.skippedCount},
-        {"timedOutPath", result.timedOutPath},
-        {"message", result.message},
-    };
-}
-
-UpgradeCleanupResult ResultFromJson(const json& value) {
-    UpgradeCleanupResult result;
-    if (!value.is_object()) {
-        return result;
-    }
-    result.success = value.value("success", result.success);
-    result.partial = value.value("partial", result.partial);
-    result.timedOut = value.value("timedOut", result.timedOut);
-    result.deletedCount = value.value("deletedCount", result.deletedCount);
-    result.failedCount = value.value("failedCount", result.failedCount);
-    result.skippedCount = value.value("skippedCount", result.skippedCount);
-    result.timedOutPath = value.value("timedOutPath", "");
-    result.message = value.value("message", "");
-    return result;
 }
 
 UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) {
@@ -1110,6 +1200,8 @@ UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) 
                 : 0.8f * static_cast<float>(i + 1) / static_cast<float>(children.size());
             EmitCleanupProgress(state, progress, "Removing old path");
         }
+        FinishParallelDeletes(state);
+        DeleteQueuedEmptyDirectories(state);
         if (!sameInstallRoot) {
             DeleteDirectoryIfEmptyByRemove(state, previousRoot, "delete_previous_root");
         }
@@ -1145,13 +1237,9 @@ UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) 
     addFile(previousRoot / "uninstall.exe");
     addFile(previousRoot / "install.manifest.json");
 
-    for (size_t i = 0; i < filesToDelete.size(); ++i) {
-        DeleteSinglePath(state, filesToDelete[i], "delete_manifest_file");
-        const float progress = filesToDelete.empty()
-            ? 0.8f
-            : 0.8f * static_cast<float>(i + 1) / static_cast<float>(filesToDelete.size());
-        EmitCleanupProgress(state, progress, "Removing old file");
-    }
+    DeleteFilesParallel(state, filesToDelete);
+    FinishParallelDeletes(state);
+    EmitCleanupProgress(state, 0.8f, "Removing old files");
 
     DeleteAffectedEmptyDirs(state, filesToDelete, previousRoot, !sameInstallRoot);
     if (!sameInstallRoot) {
@@ -1191,6 +1279,8 @@ UpgradeCleanupResult ExecuteExtraPathsTask(const UpgradeCleanupTask& task) {
             : static_cast<float>(i + 1) / static_cast<float>(task.extraPaths.size());
         EmitCleanupProgress(state, progress, "Removing upgrade cleanup path");
     }
+    FinishParallelDeletes(state);
+    DeleteQueuedEmptyDirectories(state);
     state.result.partial = state.result.failedCount > 0 || state.result.skippedCount > 0;
     state.result.success = state.task.policy.allowPartialSuccess || state.result.failedCount == 0;
     EmitCleanupHeartbeat(state, true);
@@ -1221,80 +1311,31 @@ UpgradeCleanupResult RunTaskWithWatchdog(UpgradeCleanupTask task,
                                          const std::function<bool()>& cancellationCallback) {
     UpgradeCleanupResult fallback;
 #ifdef _WIN32
-    const std::filesystem::path taskPath = BuildCleanupTempPath(".json");
     const std::filesystem::path heartbeatPath = BuildCleanupTempPath(".heartbeat.json");
-    const std::filesystem::path resultPath = BuildCleanupTempPath(".result.json");
     task.heartbeatPath = Utf8FromPath(heartbeatPath);
-    task.resultPath = Utf8FromPath(resultPath);
-    if (!WriteJsonFileBestEffort(taskPath, TaskToJson(task))) {
-        fallback.success = false;
-        fallback.message = "Failed to write cleanup task";
-        return fallback;
-    }
-
-    const std::wstring exePath = Utf8ToWide(getCurrentExecutablePath());
-    const std::wstring taskPathW = taskPath.wstring();
-    std::wstring cmd = QuoteArg(exePath) + L" --upgrade-cleanup-worker " + QuoteArg(taskPathW);
-    std::vector<wchar_t> cmdLine(cmd.begin(), cmd.end());
-    cmdLine.push_back(L'\0');
-
-    STARTUPINFOW si{};
-    PROCESS_INFORMATION pi{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    const std::string parentLogPath = getInstallerLogPath();
-    std::wstring envBlock;
-    if (!parentLogPath.empty()) {
-        LPWCH currentEnv = GetEnvironmentStringsW();
-        if (currentEnv) {
-            for (LPWCH entry = currentEnv; *entry != L'\0'; entry += wcslen(entry) + 1) {
-                envBlock.append(entry);
-                envBlock.push_back(L'\0');
-            }
-            FreeEnvironmentStringsW(currentEnv);
-        }
-        envBlock.append(L"MTINSTALLER_LOG_PATH=");
-        envBlock.append(Utf8ToWide(parentLogPath));
-        envBlock.push_back(L'\0');
-        envBlock.push_back(L'\0');
-    }
-    DWORD creationFlags = CREATE_NO_WINDOW;
-    if (!envBlock.empty()) {
-        creationFlags |= CREATE_UNICODE_ENVIRONMENT;
-    }
-    BOOL started = CreateProcessW(exePath.c_str(),
-                                  cmdLine.data(),
-                                  nullptr,
-                                  nullptr,
-                                  FALSE,
-                                  creationFlags,
-                                  envBlock.empty() ? nullptr : envBlock.data(),
-                                  nullptr,
-                                  &si,
-                                  &pi);
-    if (!started) {
-        fallback.success = false;
-        fallback.message = "Failed to start cleanup worker";
-        std::error_code ec;
-        std::filesystem::remove(taskPath, ec);
-        return fallback;
-    }
+    task.resultPath.clear();
+    auto cleanupFuture = std::async(std::launch::async, [task = std::move(task)]() {
+        return ExecuteCleanupTask(task);
+    });
 
     const uint64_t startedMs = NowMs();
     uint64_t lastHeartbeatTimestamp = startedMs;
     std::string lastPath;
-    bool killed = false;
+    std::string slowestPath;
+    std::string slowestThreadId;
+    uint32_t activeWorkers = 0;
+    uint64_t processedCount = 0;
+    uint64_t lastCompletedAt = 0;
+    bool timedOut = false;
+    bool cancelled = false;
     while (true) {
         if (IsCancelled(cancellationCallback)) {
-            TerminateProcess(pi.hProcess, 2);
-            killed = true;
             fallback.success = false;
             fallback.message = "Cleanup cancelled";
+            cancelled = true;
             break;
         }
-        DWORD wait = WaitForSingleObject(pi.hProcess, 250);
-        if (wait == WAIT_OBJECT_0) {
+        if (cleanupFuture.wait_for(std::chrono::milliseconds(250)) == std::future_status::ready) {
             break;
         }
 
@@ -1302,6 +1343,11 @@ UpgradeCleanupResult RunTaskWithWatchdog(UpgradeCleanupTask task,
         if (ReadJsonFileBestEffort(heartbeatPath, heartbeat)) {
             lastHeartbeatTimestamp = heartbeat.value("timestampMs", lastHeartbeatTimestamp);
             lastPath = heartbeat.value("currentPath", lastPath);
+            slowestPath = heartbeat.value("slowestCurrentItem", slowestPath);
+            slowestThreadId = heartbeat.value("slowestCurrentThreadId", slowestThreadId);
+            activeWorkers = heartbeat.value("activeWorkers", activeWorkers);
+            processedCount = heartbeat.value("processedCount", processedCount);
+            lastCompletedAt = heartbeat.value("lastCompletedAt", lastCompletedAt);
             fallback.deletedCount = heartbeat.value("deletedCount", fallback.deletedCount);
             fallback.failedCount = heartbeat.value("failedCount", fallback.failedCount);
             fallback.skippedCount = heartbeat.value("skippedCount", fallback.skippedCount);
@@ -1321,145 +1367,39 @@ UpgradeCleanupResult RunTaskWithWatchdog(UpgradeCleanupTask task,
             fallback.success = task.policy.allowPartialSuccess;
             fallback.partial = true;
             fallback.timedOut = true;
-            fallback.timedOutPath = lastPath;
+            fallback.timedOutPath = slowestPath.empty() ? lastPath : slowestPath;
             fallback.message = totalTimedOut ? "Cleanup worker total timeout"
                                              : "Cleanup worker heartbeat stale";
             logInstallerWarning("[InstallFlow][Cleanup] worker timeout message=" + fallback.message +
-                                " currentPath=" + lastPath);
-            TerminateProcess(pi.hProcess, 3);
-            killed = true;
+                                " currentPath=" + lastPath +
+                                " slowestCurrentItem=" + slowestPath +
+                                " slowestCurrentThreadId=" + slowestThreadId +
+                                " activeWorkers=" + std::to_string(activeWorkers) +
+                                " processedCount=" + std::to_string(processedCount) +
+                                " lastCompletedAt=" + std::to_string(lastCompletedAt));
+            timedOut = true;
             break;
         }
     }
 
-    DWORD exitCode = 1;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-
     UpgradeCleanupResult result = fallback;
-    if (!killed) {
-        json resultJson;
-        if (ReadJsonFileBestEffort(resultPath, resultJson)) {
-            result = ResultFromJson(resultJson);
-        } else {
-            result.success = exitCode == 0;
-            result.partial = exitCode != 0;
-            result.message = "Cleanup worker finished without result file";
-        }
+    if (!timedOut && !cancelled) {
+        result = cleanupFuture.get();
+    } else {
+        // In-process cleanup threads cannot be safely killed. Preserve the
+        // timeout/cancel result for the caller, but wait for the worker to
+        // unwind so no background deletion continues after completion UI.
+        cleanupFuture.wait();
     }
 
     std::error_code ec;
-    std::filesystem::remove(taskPath, ec);
     std::filesystem::remove(heartbeatPath, ec);
-    std::filesystem::remove(resultPath, ec);
     return result;
 #else
     (void)progressCallback;
     (void)cancellationCallback;
     return ExecuteCleanupTask(task);
 #endif
-}
-
-bool StartDetachedCleanupTask(UpgradeCleanupTask task) {
-#ifdef _WIN32
-    const std::filesystem::path taskPath = BuildCleanupTempPath(".detached.json");
-    task.policy.totalTimeoutMs = 10 * 60 * 1000;
-    task.policy.itemStaleTimeoutMs = 60 * 1000;
-    task.policy.heartbeatEveryItems = 200;
-    if (!WriteJsonFileBestEffort(taskPath, TaskToJson(task))) {
-        logInstallerWarning("[InstallFlow][Cleanup] detached worker task write failed");
-        return false;
-    }
-
-    const std::wstring exePath = Utf8ToWide(getCurrentExecutablePath());
-    std::wstring cmd = QuoteArg(exePath) + L" --detached-cleanup-worker " + QuoteArg(taskPath.wstring());
-    std::vector<wchar_t> cmdLine(cmd.begin(), cmd.end());
-    cmdLine.push_back(L'\0');
-
-    STARTUPINFOW si{};
-    PROCESS_INFORMATION pi{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    const std::string parentLogPath = getInstallerLogPath();
-    std::wstring envBlock;
-    if (!parentLogPath.empty()) {
-        LPWCH currentEnv = GetEnvironmentStringsW();
-        if (currentEnv) {
-            for (LPWCH entry = currentEnv; *entry != L'\0'; entry += wcslen(entry) + 1) {
-                envBlock.append(entry);
-                envBlock.push_back(L'\0');
-            }
-            FreeEnvironmentStringsW(currentEnv);
-        }
-        envBlock.append(L"MTINSTALLER_LOG_PATH=");
-        envBlock.append(Utf8ToWide(parentLogPath));
-        envBlock.push_back(L'\0');
-        envBlock.push_back(L'\0');
-    }
-    DWORD creationFlags = CREATE_NO_WINDOW | DETACHED_PROCESS | BELOW_NORMAL_PRIORITY_CLASS;
-    if (!envBlock.empty()) {
-        creationFlags |= CREATE_UNICODE_ENVIRONMENT;
-    }
-    BOOL started = CreateProcessW(exePath.c_str(),
-                                  cmdLine.data(),
-                                  nullptr,
-                                  nullptr,
-                                  FALSE,
-                                  creationFlags,
-                                  envBlock.empty() ? nullptr : envBlock.data(),
-                                  nullptr,
-                                  &si,
-                                  &pi);
-    if (!started) {
-        std::error_code ec;
-        std::filesystem::remove(taskPath, ec);
-        logInstallerWarning("[InstallFlow][Cleanup] detached worker start failed");
-        return false;
-    }
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    logInstallerInfo("[InstallFlow][Cleanup] detached worker started task=" + Utf8FromPath(taskPath));
-    return true;
-#else
-    (void)task;
-    return false;
-#endif
-}
-
-int runUpgradeCleanupWorkerFromTask(const std::string& taskPath) {
-    initializeInstallerLogging();
-    json taskJson;
-    UpgradeCleanupTask task;
-    if (!ReadJsonFileBestEffort(PathFromUtf8(taskPath), taskJson) || !TaskFromJson(taskJson, task)) {
-        logInstallerError("[InstallFlow][Cleanup] worker failed to read task");
-        return 2;
-    }
-#ifdef _WIN32
-    char delayBuffer[32] = {};
-    DWORD delayLen = GetEnvironmentVariableA("MTINSTALLER_TEST_CLEANUP_WORKER_DELAY_MS",
-                                             delayBuffer,
-                                             static_cast<DWORD>(sizeof(delayBuffer)));
-    if (delayLen > 0 && delayLen < sizeof(delayBuffer)) {
-        const DWORD delayMs = static_cast<DWORD>(std::strtoul(delayBuffer, nullptr, 10));
-        if (delayMs > 0) {
-            Sleep(delayMs);
-        }
-    }
-#endif
-    UpgradeCleanupResult result = ExecuteCleanupTask(task);
-    if (!task.resultPath.empty()) {
-        WriteJsonFileBestEffort(PathFromUtf8(task.resultPath), ResultToJson(result));
-    }
-    logInstallerInfo("[InstallFlow][Cleanup] worker end deleted=" + std::to_string(result.deletedCount) +
-                     " failed=" + std::to_string(result.failedCount) +
-                     " skipped=" + std::to_string(result.skippedCount) +
-                     " partial=" + std::string(result.partial ? "true" : "false"));
-    flushInstallerLogging();
-    std::error_code ec;
-    std::filesystem::remove(PathFromUtf8(taskPath), ec);
-    return result.success ? 0 : 1;
 }
 
 UpgradeCleanupResult runPreviousInstallCleanupWithWatchdog(
@@ -1487,27 +1427,26 @@ UpgradeCleanupResult runPreviousInstallCleanupWithWatchdog(
         const std::vector<std::filesystem::path> pendingDirs =
             IsolateCleanupSubdirectories(candidates);
         if (!pendingDirs.empty()) {
-            UpgradeCleanupTask detachedTask;
-            detachedTask.mode = UpgradeCleanupTaskMode::ExtraPaths;
-            detachedTask.previousInstallDir = previousInstallDir;
-            detachedTask.policy = policy;
-            detachedTask.policy.allowPartialSuccess = true;
-            detachedTask.extraPaths.reserve(pendingDirs.size());
+            UpgradeCleanupTask isolatedTask;
+            isolatedTask.mode = UpgradeCleanupTaskMode::ExtraPaths;
+            isolatedTask.previousInstallDir = previousInstallDir;
+            isolatedTask.policy = policy;
+            isolatedTask.policy.allowPartialSuccess = true;
+            isolatedTask.extraPaths.reserve(pendingDirs.size());
             for (const auto& pending : pendingDirs) {
                 UninstallCleanupRule rule;
                 rule.path = Utf8FromPath(pending);
                 rule.recursive = true;
                 rule.onlyIfEmpty = false;
-                detachedTask.extraPaths.push_back(std::move(rule));
+                isolatedTask.extraPaths.push_back(std::move(rule));
             }
-            if (StartDetachedCleanupTask(std::move(detachedTask))) {
-                result.success = true;
-                result.partial = true;
-                result.skippedCount = candidates.size() - pendingDirs.size();
-                result.message = "Previous install subdirectories isolated for detached cleanup";
-                EmitProgress(progressCallback, 1.0f, "Previous installation cleanup delegated");
-                return result;
+            result = RunTaskWithWatchdog(std::move(isolatedTask), progressCallback, cancellationCallback);
+            result.skippedCount += candidates.size() - pendingDirs.size();
+            result.partial = result.partial || result.skippedCount > 0;
+            if (result.message.empty()) {
+                result.message = "Previous install subdirectories isolated and cleaned";
             }
+            return result;
         }
     }
 

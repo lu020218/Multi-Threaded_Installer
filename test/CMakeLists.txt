@@ -6,6 +6,15 @@ if(MSVC)
     target_compile_options(FileLockSimulator PRIVATE /W4 /EHsc)
 endif()
 
+if(NOT TARGET spdlog_header_only)
+    set(SPDLOG_INCLUDE_DIR "${THIRD_PARTY_DIR}/spdlog/include")
+    add_library(spdlog_header_only INTERFACE)
+    target_include_directories(spdlog_header_only INTERFACE "${SPDLOG_INCLUDE_DIR}")
+    target_compile_definitions(spdlog_header_only INTERFACE
+        SPDLOG_WCHAR_FILENAMES
+    )
+endif()
+
 add_executable(SchemaRegressionTests
     schema_regression_tests.cpp
     ../src/packager/config_value_reader.cpp
@@ -30,8 +39,13 @@ add_executable(SchemaRegressionTests
     ../src/installer/console_interface.cpp
     ../src/installer/shortcut_startup_utils.cpp
     ../src/installer/self_delete_scheduler.cpp
+    ../src/installer/installer_task_manager.cpp
+    ../src/installer/thread_pool_manager.cpp
+    ../src/installer/installer_concurrency_policy.cpp
+    ../src/installer/cleanup_delete_executor.cpp
     ../src/installer/upgrade_cleanup.cpp
     ../src/installer/uninstall_manager.cpp
+    ../src/gui/progress_path_formatter.cpp
     ../src/common/types.cpp
     ../src/common/utf8_utils.cpp
     ../src/common/version_utils.cpp
@@ -41,7 +55,7 @@ add_executable(SchemaRegressionTests
 )
 
 target_compile_features(SchemaRegressionTests PRIVATE cxx_std_17)
-target_link_libraries(SchemaRegressionTests PRIVATE ${YAML_CPP_LIBRARIES})
+target_link_libraries(SchemaRegressionTests PRIVATE spdlog_header_only ${YAML_CPP_LIBRARIES})
 target_include_directories(SchemaRegressionTests PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src

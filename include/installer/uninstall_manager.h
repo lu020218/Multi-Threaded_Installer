@@ -38,7 +38,6 @@ bool ExecuteUninstallFromContext(const UninstallContext& context,
                                  CliSupport& console,
                                  const UninstallProgressCallback& progressCallback = {},
                                  const std::function<bool()>& cancellationCallback = {});
-int runUninstallCleanupWorkerFromTask(const std::string& taskPath);
 bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
                            CliSupport& console);

@@ -1,15 +1,25 @@
 #include "common/installer_logger.h"
 
 #include "common/utf8_utils.h"
+#ifndef SPDLOG_LEVEL_NAMES
+#define SPDLOG_LEVEL_NAMES { "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL", "OFF" }
+#endif
+#include <spdlog/logger.h>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/spdlog.h>
+
+#include <algorithm>
 #include <filesystem>
 #include <chrono>
 #include <cstdio>
+#include <cwctype>
 #include <ctime>
 #include <exception>
 #include <cstdlib>
 #include <iostream>
 #include <atomic>
 #include <mutex>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -22,8 +32,8 @@ namespace MultiThreadedInstaller {
 
 namespace {
 
-std::mutex g_logWriteMutex;
-FILE* g_logFile = nullptr;
+std::mutex g_loggerMutex;
+std::shared_ptr<spdlog::logger> g_logger;
 std::string g_logPath;
 bool g_crashHandlersRegistered = false;
 std::atomic_flag g_crashHandling = ATOMIC_FLAG_INIT;
@@ -33,50 +43,45 @@ std::wstring g_crashLogPathWide;
 constexpr size_t kMaxInstallerLogFiles = 5;
 constexpr int kInstallerLogRetentionDays = 3;
 
-const char* levelToText(InstallerLogLevel level) {
+spdlog::level::level_enum toSpdlogLevel(InstallerLogLevel level) {
     switch (level) {
         case InstallerLogLevel::Info:
-            return "INFO";
+            return spdlog::level::info;
         case InstallerLogLevel::Warning:
-            return "WARN";
+            return spdlog::level::warn;
         case InstallerLogLevel::Error:
-            return "ERROR";
+            return spdlog::level::err;
         case InstallerLogLevel::Debug:
-            return "DEBUG";
+            return spdlog::level::debug;
         default:
-            return "INFO";
+            return spdlog::level::info;
     }
 }
 
-void writeTimestampPrefix(FILE* file) {
-    if (!file) {
-        return;
-    }
+spdlog::level::level_enum parseConfiguredLogLevel() {
 #ifdef _WIN32
-    SYSTEMTIME st{};
-    GetLocalTime(&st);
-    std::fprintf(file,
-                 "[%04d-%02d-%02d %02d:%02d:%02d.%03d] ",
-                 st.wYear,
-                 st.wMonth,
-                 st.wDay,
-                 st.wHour,
-                 st.wMinute,
-                 st.wSecond,
-                 st.wMilliseconds);
-#else
-    std::time_t now = std::time(nullptr);
-    std::tm localTime{};
-    localtime_s(&localTime, &now);
-    std::fprintf(file,
-                 "[%04d-%02d-%02d %02d:%02d:%02d] ",
-                 localTime.tm_year + 1900,
-                 localTime.tm_mon + 1,
-                 localTime.tm_mday,
-                 localTime.tm_hour,
-                 localTime.tm_min,
-                 localTime.tm_sec);
+    wchar_t levelBuf[64] = {};
+    DWORD len = GetEnvironmentVariableW(L"MTINSTALLER_LOG_LEVEL",
+                                        levelBuf,
+                                        static_cast<DWORD>(sizeof(levelBuf) / sizeof(levelBuf[0])));
+    if (len == 0 || len >= (sizeof(levelBuf) / sizeof(levelBuf[0]))) {
+        return spdlog::level::info;
+    }
+    std::wstring level(levelBuf, len);
+    std::transform(level.begin(), level.end(), level.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(towlower(ch));
+    });
+    if (level == L"debug") {
+        return spdlog::level::debug;
+    }
+    if (level == L"warn" || level == L"warning") {
+        return spdlog::level::warn;
+    }
+    if (level == L"error" || level == L"err") {
+        return spdlog::level::err;
+    }
 #endif
+    return spdlog::level::info;
 }
 
 #ifdef _WIN32
@@ -328,10 +333,7 @@ LONG WINAPI InstallerUnhandledExceptionFilter(EXCEPTION_POINTERS* info) {
     DWORD dumpError = ERROR_SUCCESS;
     bool dumpWritten = writeMiniDump(info, code, dumpPath, dumpError);
     writeCrashLogLine("Unhandled exception", code, dumpPath, dumpError, dumpWritten);
-    if (g_logFile) {
-        std::lock_guard<std::mutex> lock(g_logWriteMutex);
-        fflush(g_logFile);
-    }
+    flushInstallerLogging();
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -342,10 +344,7 @@ void InstallerTerminateHandler() {
         bool dumpWritten = writeMiniDump(nullptr, 0, dumpPath, dumpError);
         writeCrashLogLine("std::terminate", 0, dumpPath, dumpError, dumpWritten);
     }
-    if (g_logFile) {
-        std::lock_guard<std::mutex> lock(g_logWriteMutex);
-        fflush(g_logFile);
-    }
+    flushInstallerLogging();
     std::abort();
 }
 #endif
@@ -354,8 +353,11 @@ void InstallerTerminateHandler() {
 
 void initializeInstallerLogging() {
 #ifdef _WIN32
-    if (g_logFile) {
-        return;
+    {
+        std::lock_guard<std::mutex> lock(g_loggerMutex);
+        if (g_logger) {
+            return;
+        }
     }
     std::filesystem::path logPath;
     bool createdNewLogPath = false;
@@ -419,24 +421,36 @@ void initializeInstallerLogging() {
         logPath = std::filesystem::path(L"MTInstaller_Installer.log");
         createdNewLogPath = true;
     }
-    FILE* fp = nullptr;
-    _wfopen_s(&fp, logPath.c_str(), L"a");
-    if (!fp) {
+    std::shared_ptr<spdlog::logger> logger;
+    try {
+        auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logPath.wstring(), false);
+        logger = std::make_shared<spdlog::logger>("installer", std::move(sink));
+        logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [tid=%t] %v");
+        logger->set_level(parseConfiguredLogLevel());
+        logger->flush_on(spdlog::level::warn);
+    } catch (...) {
         return;
     }
-    setvbuf(fp, nullptr, _IOLBF, 4096);
-    g_logFile = fp;
-    g_logPath = Utf8FromPath(logPath);
-    g_crashLogPathWide = Utf8ToWide(g_logPath + ".crash.log");
-    g_crashDumpDirWide = getCrashDumpDirectory().wstring();
-    writeInstallerLog(InstallerLogLevel::Info, "Installer log started. Log: " + g_logPath);
-    writeInstallerLog(InstallerLogLevel::Info,
-                      "Crash dumps enabled. Directory: " + Utf8FromPath(getCrashDumpDirectory()));
+
+    {
+        std::lock_guard<std::mutex> lock(g_loggerMutex);
+        if (g_logger) {
+            return;
+        }
+        g_logger = logger;
+        g_logPath = Utf8FromPath(logPath);
+        g_crashLogPathWide = Utf8ToWide(g_logPath + ".crash.log");
+        g_crashDumpDirWide = getCrashDumpDirectory().wstring();
+    }
+
+    SetEnvironmentVariableW(L"MTINSTALLER_LOG_PATH", logPath.wstring().c_str());
+
+    logger->info("Installer log started. Log: {}", g_logPath);
+    logger->info("Crash dumps enabled. Directory: {}", Utf8FromPath(getCrashDumpDirectory()));
     if (createdNewLogPath) {
         const size_t deleted = pruneOldInstallerLogs(logPath.parent_path(), logPath);
         if (deleted > 0) {
-            writeInstallerLog(InstallerLogLevel::Info,
-                              "Pruned old installer logs: deleted=" + std::to_string(deleted));
+            logger->info("Pruned old installer logs: deleted={}", deleted);
         }
     }
 
@@ -452,9 +466,13 @@ void initializeInstallerLogging() {
 
 void flushInstallerLogging() {
 #ifdef _WIN32
-    if (g_logFile) {
-        std::lock_guard<std::mutex> lock(g_logWriteMutex);
-        fflush(g_logFile);
+    std::shared_ptr<spdlog::logger> logger;
+    {
+        std::lock_guard<std::mutex> lock(g_loggerMutex);
+        logger = g_logger;
+    }
+    if (logger) {
+        logger->flush();
     }
 #endif
 }
@@ -468,11 +486,13 @@ void writeInstallerLog(InstallerLogLevel level, const std::string& message) {
     if (message.empty()) {
         return;
     }
-    std::lock_guard<std::mutex> lock(g_logWriteMutex);
-    if (g_logFile) {
-        writeTimestampPrefix(g_logFile);
-        std::fprintf(g_logFile, "[%s] %s\n", levelToText(level), message.c_str());
-        std::fflush(g_logFile);
+    std::shared_ptr<spdlog::logger> logger;
+    {
+        std::lock_guard<std::mutex> lock(g_loggerMutex);
+        logger = g_logger;
+    }
+    if (logger) {
+        logger->log(toSpdlogLevel(level), "{}", message);
     }
 #else
     (void)level;

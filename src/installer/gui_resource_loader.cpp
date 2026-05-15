@@ -39,18 +39,6 @@ std::string ReadFileToString(const std::filesystem::path& path) {
                        std::istreambuf_iterator<char>());
 }
 
-bool ZipEntryExists(const CDuiString& zipPath, const CDuiString& entry) {
-    HZIP hz = OpenZip(zipPath.GetData(), 0);
-    if (hz == NULL) {
-        return false;
-    }
-    ZIPENTRY ze;
-    int index = 0;
-    bool found = (FindZipItem(hz, entry.GetData(), true, &index, &ze) == 0);
-    CloseZip(hz);
-    return found;
-}
-
 std::vector<std::string> EnumerateZipEntriesUtf8(const CDuiString& zipPath) {
     std::vector<std::string> entries;
     HZIP hz = OpenZip(zipPath.GetData(), 0);
@@ -76,18 +64,6 @@ std::vector<std::string> EnumerateZipEntriesUtf8(const CDuiString& zipPath) {
 
     CloseZip(hz);
     return entries;
-}
-
-void LogZipEntryCheck(const CDuiString& zipPath, const std::vector<CDuiString>& entries) {
-    std::string zipPathUtf8 = WideToUtf8(TCharToWide(zipPath.GetData()));
-    if (!zipPathUtf8.empty()) {
-        logInstallerInfo(std::string("[GUI][RES] Resource zip path: ") + zipPathUtf8);
-    }
-    for (const auto& entry : entries) {
-        std::string entryUtf8 = WideToUtf8(TCharToWide(entry.GetData()));
-        logInstallerInfo(std::string("[GUI][RES] Zip entry check: ") + entryUtf8 + " -> " +
-                         (ZipEntryExists(zipPath, entry) ? "found" : "missing"));
-    }
 }
 
 std::string ReadZipEntryToString(const CDuiString& zipPath, const CDuiString& entry) {
@@ -142,22 +118,6 @@ WindowSize ParseWindowSizeFromXml(const std::string& xml, WindowSize fallback) {
         return fallback;
     }
     return fallback;
-}
-
-std::vector<CDuiString> BuildResourceZipChecks() {
-    std::vector<CDuiString> checks;
-    checks.emplace_back(_T("images/bg2.png"));
-    checks.emplace_back(_T("../images/bg2.png"));
-    checks.emplace_back(_T("images/bg2@150.png"));
-    checks.emplace_back(_T("../images/bg2@150.png"));
-    checks.emplace_back(_T("images/bg2@200.png"));
-    checks.emplace_back(_T("../images/bg2@200.png"));
-    checks.emplace_back(_T("images/logo3.png"));
-    checks.emplace_back(_T("../images/logo3.png"));
-    checks.emplace_back(_T("skins/msgBox.xml"));
-    checks.emplace_back(_T("skins\\msgBox.xml"));
-    checks.emplace_back(_T("msgBox.xml"));
-    return checks;
 }
 
 std::string ToLowerAsciiCopy(std::string value) {
@@ -658,7 +618,6 @@ void RunDeferredGuiResourceDiagnostics() {
 
     CDuiString resourcePath(g_activeDiagnosticsContext.resourcePath.c_str());
     CDuiString zipPath = resourcePath + _T("resources.zip");
-    LogZipEntryCheck(zipPath, BuildResourceZipChecks());
     LogZipResourceDiagnostics(zipPath, 96, "DeferredApplyGuiResources", nullptr);
 }
 

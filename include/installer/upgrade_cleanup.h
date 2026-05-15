@@ -24,6 +24,7 @@ struct UpgradeCleanupPolicy {
     uint32_t heartbeatIntervalMs = 1000;
     uint32_t heartbeatEveryItems = 100;
     uint32_t slowItemLogMs = 3000;
+    uint32_t workerConcurrency = 0;
     bool allowPartialSuccess = true;
 };
 
@@ -62,8 +63,6 @@ UpgradeCleanupResult runUpgradeExtraPathCleanupWithWatchdog(
     const UpgradeCleanupProgressCallback& progressCallback = {},
     const std::function<bool()>& cancellationCallback = {},
     const UpgradeCleanupPolicy& policy = {});
-
-int runUpgradeCleanupWorkerFromTask(const std::string& taskPath);
 
 bool cleanupUpgradeSystemArtifacts(
     const std::string& manifestPath,

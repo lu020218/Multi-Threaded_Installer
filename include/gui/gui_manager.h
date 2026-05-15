@@ -3,6 +3,7 @@
 #include <UIlib.h>
 #include <string>
 #include <memory>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 #include <unordered_map>
@@ -65,9 +66,11 @@ struct InstallConfig {
 #define WM_UNINSTALL_PROGRESS (WM_USER + 4)
 
 
+constexpr size_t kProgressItemTextMax = 1024;
+
 struct ProgressMessageData {
     wchar_t progressPrefix[64];
-    wchar_t currentFolder[MAX_PATH];
+    wchar_t currentFolder[kProgressItemTextMax];
     float percentage;
     
     ProgressMessageData() : percentage(0.0f) {

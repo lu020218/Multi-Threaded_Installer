@@ -108,8 +108,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                          " diskCheckPath=" + plan.pathDecision.diskCheckPath);
         logInstallerInfo(std::string("[InstallFlow][Plan] selectedEmbeddedFolders=") +
                          std::to_string(plan.selectedEmbeddedFolders.size()) +
-                         " totalInstallBytes=" + std::to_string(plan.totalInstallBytes) +
-                         " threadCount=" + std::to_string(options.threadCount));
+                         " totalInstallBytes=" + std::to_string(plan.totalInstallBytes));
 
         if (plan.componentPlan.hasComponents) {
             std::string selectedSummary = "Selected layoutComponents:";

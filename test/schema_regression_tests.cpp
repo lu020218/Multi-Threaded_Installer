@@ -15,10 +15,17 @@
 #include "installer/installed_instance_resolver.h"
 #include "installer/path_resolver.h"
 #include "installer/registry_utils.h"
+#include "installer/installer_task_manager.h"
+#include "installer/thread_pool_manager.h"
+#include "installer/installer_concurrency_policy.h"
+#include "installer/cleanup_delete_executor.h"
 #include "installer/upgrade_cleanup.h"
 #include "installer/uninstall_manager.h"
 #include "common/version_utils.h"
+#include "gui/progress_path_formatter.h"
 
+#include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -69,6 +76,152 @@ void ReplaceAll(std::string& text, const std::string& from, const std::string& t
         text.replace(position, from.size(), to);
         position += to.size();
     }
+}
+
+void TestInstallerConcurrencyPolicyDefaults() {
+    const uint32_t hw = GetInstallerHardwareConcurrency();
+    Require(hw >= 1, "Hardware concurrency fallback should be at least 1");
+
+    Require(ResolvePayloadWorkerCount(0) == 0,
+            "No payload folders should resolve to zero workers");
+    const uint32_t oneFolderWorkers = ResolvePayloadWorkerCount(1);
+    Require(oneFolderWorkers == 1,
+            "One payload folder should resolve to one worker");
+    const uint32_t manyFolderWorkers = ResolvePayloadWorkerCount(1024);
+    Require(manyFolderWorkers >= 1 && manyFolderWorkers <= 1024,
+            "Payload workers should stay within folder count");
+    Require(manyFolderWorkers <= std::max<uint32_t>(1, hw / 2),
+            "Payload workers should respect the hardware budget");
+
+    Require(ResolveDecoderThreadCount(1) <= 4,
+            "Decoder threads should be capped at four");
+    Require(ResolveDecoderThreadCount(hw * 2) == 1,
+            "High scheduler concurrency should reduce decoder budget to one");
+
+    Require(ResolveCleanupDeleteConcurrency(CleanupDeleteWorkload::Upgrade) <= 4,
+            "Upgrade cleanup workers should be capped at four");
+    Require(ResolveCleanupDeleteConcurrency(CleanupDeleteWorkload::Uninstall) <= 4,
+            "Uninstall cleanup workers should be capped at four");
+}
+
+void TestInstallerTaskManagerExecutesAndWaits() {
+    InstallerTaskManager manager(2, "SchemaRegressionTaskManager");
+    std::atomic<int> counter{0};
+
+    auto first = manager.enqueue([&counter]() {
+        counter.fetch_add(1);
+        return 7;
+    });
+    manager.submit([&counter]() {
+        counter.fetch_add(2);
+    });
+
+    manager.waitForAll();
+    InstallerTaskStats stats = manager.stats();
+
+    Require(first.get() == 7, "InstallerTaskManager future should return task result");
+    Require(counter.load() == 3, "InstallerTaskManager should execute all queued tasks");
+    Require(stats.pending == 0, "InstallerTaskManager should have no pending tasks after wait");
+    Require(stats.active == 0, "InstallerTaskManager should have no active tasks after wait");
+    Require(stats.completed == 2, "InstallerTaskManager should track completed tasks");
+    Require(manager.totalWorkerCount() == 2, "InstallerTaskManager should keep configured worker count");
+}
+
+void TestThreadPoolManagerUsesInstallerTaskManagerCompatibly() {
+    ThreadPoolManager pool(2);
+    std::atomic<int> counter{0};
+
+    auto future = pool.enqueue([&counter]() {
+        counter.fetch_add(1);
+        return 11;
+    });
+    pool.enqueue([&counter]() {
+        counter.fetch_add(2);
+    });
+
+    pool.waitForAll();
+
+    Require(future.get() == 11, "ThreadPoolManager compatibility wrapper should return futures");
+    Require(counter.load() == 3, "ThreadPoolManager compatibility wrapper should execute tasks");
+    Require(pool.getActiveThreadCount() == 0,
+            "ThreadPoolManager should report no active threads after wait");
+    Require(pool.getTotalThreadCount() == 2,
+            "ThreadPoolManager should report wrapped task manager worker count");
+}
+
+void TestCleanupDeleteExecutorUsesUnifiedConcurrency() {
+    fs::path root = CreateTestRoot("cleanup_delete_executor_unified");
+    WriteTextFile(root / "a.txt", "a");
+    WriteTextFile(root / "b.txt", "b");
+
+    std::atomic<int> finished{0};
+    CleanupDeleteCallbacks callbacks;
+    callbacks.onItemFinished = [&](const fs::path&,
+                                   const std::error_code&,
+                                   bool,
+                                   uint64_t,
+                                   const std::string&) {
+        finished.fetch_add(1);
+    };
+
+    CleanupDeleteExecutor executor(CleanupDeleteWorkload::Upgrade, std::move(callbacks));
+    Require(executor.workerConcurrency() == ResolveCleanupDeleteConcurrency(CleanupDeleteWorkload::Upgrade),
+            "CleanupDeleteExecutor should use unified concurrency policy");
+
+    std::vector<fs::path> files{root / "a.txt", root / "b.txt"};
+    executor.submit(files);
+    executor.finish();
+
+    Require(files.empty(), "CleanupDeleteExecutor should consume submitted file list");
+    Require(finished.load() == 2, "CleanupDeleteExecutor should report finished file tasks");
+    Require(!fs::exists(root / "a.txt"), "CleanupDeleteExecutor should delete first file");
+    Require(!fs::exists(root / "b.txt"), "CleanupDeleteExecutor should delete second file");
+}
+
+void TestProgressPathFormatterKeepsShortPath() {
+    const std::wstring path = L"E:\\Application\\sample_desktop_app\\bin\\app.exe";
+    Require(GUIStatusPresenter::FormatProgressPathForDisplay(path, 90) == path,
+            "Short progress path should be unchanged");
+}
+
+void TestProgressPathFormatterShortensAbsolutePath() {
+    const std::wstring path =
+        L"E:\\Application\\sample_desktop_app\\resources\\app\\node_modules\\webpack\\node_modules\\ajv\\dist\\refs\\json-schema-2019-09\\index.js";
+    const std::wstring display = GUIStatusPresenter::FormatProgressPathForDisplay(path, 60);
+
+    Require(display.size() <= 60, "Formatted absolute path should respect max chars");
+    Require(display.find(L"E:\\") == 0, "Formatted absolute path should keep drive root");
+    Require(display.find(L"...\\") != std::wstring::npos,
+            "Formatted absolute path should contain middle marker");
+    Require(display.find(L"index.js") != std::wstring::npos,
+            "Formatted absolute path should keep filename");
+}
+
+void TestProgressPathFormatterShortensRelativePath() {
+    const std::wstring path =
+        L"resources\\app\\node_modules\\webpack-dev-middleware\\node_modules\\ajv\\lib\\compile\\errors.ts";
+    const std::wstring display = GUIStatusPresenter::FormatProgressPathForDisplay(path, 50);
+
+    Require(display.size() <= 50, "Formatted relative path should respect max chars");
+    Require(display.find(L"resources\\") == 0,
+            "Formatted relative path should keep first segment");
+    Require(display.find(L"...\\") != std::wstring::npos,
+            "Formatted relative path should contain middle marker");
+    Require(display.find(L"errors.ts") != std::wstring::npos,
+            "Formatted relative path should keep filename");
+}
+
+void TestProgressPathFormatterStripsLongPathPrefix() {
+    const std::wstring path =
+        L"\\\\?\\E:\\Application\\sample_desktop_app\\resources\\app\\node_modules\\semver\\classes\\comparator.js";
+    const std::wstring display = GUIStatusPresenter::FormatProgressPathForDisplay(path, 80);
+
+    Require(display.find(L"\\\\?\\") == std::wstring::npos,
+            "Formatted path should strip long path prefix");
+    Require(display.find(L"E:\\") == 0,
+            "Formatted long path should keep drive root after stripping prefix");
+    Require(display.find(L"comparator.js") != std::wstring::npos,
+            "Formatted long path should keep filename");
 }
 
 std::string MinimalValidYaml() {
@@ -1052,13 +1205,11 @@ void TestSameRootUpgradeCleanupIsolatesPayloadSubdirectories() {
     WriteTextFile(previousInstallDir / "install.manifest.json",
                   R"({"files":["resources/node_modules/a.js"],"appVersion":"1.0.0"})");
 
-    SetEnvironmentVariableW(L"MTINSTALLER_TEST_CLEANUP_WORKER_DELAY_MS", L"2000");
     UpgradeCleanupResult result = runPreviousInstallCleanupWithWatchdog(
         (previousInstallDir / "install.manifest.json").string(),
         previousInstallDir.string(),
         previousInstallDir.string(),
         {previousInstallDir.string()});
-    SetEnvironmentVariableW(L"MTINSTALLER_TEST_CLEANUP_WORKER_DELAY_MS", nullptr);
 
     bool pendingFound = false;
     for (const auto& entry : fs::directory_iterator(previousInstallDir)) {
@@ -1069,12 +1220,12 @@ void TestSameRootUpgradeCleanupIsolatesPayloadSubdirectories() {
         }
     }
 
-    Require(result.success, "Detached same-root cleanup delegation should succeed");
-    Require(result.partial, "Detached same-root cleanup should be reported as delegated partial cleanup");
-    Require(fs::exists(previousInstallDir), "Detached cleanup must not rename the install root");
+    Require(result.success, "Synchronous same-root isolated cleanup should succeed");
+    Require(!result.partial, "Synchronous isolated cleanup should complete before installation continues");
+    Require(fs::exists(previousInstallDir), "Synchronous cleanup must not rename the install root");
     Require(!fs::exists(previousInstallDir / "resources"), "Payload child directory should be isolated");
     Require(fs::exists(previousInstallDir / "user.dat"), "Root-level user file should be kept");
-    Require(pendingFound, "Isolated payload child should be renamed to pending cleanup directory");
+    Require(!pendingFound, "Pending payload child should be removed before cleanup returns");
 }
 #endif
 
@@ -1180,8 +1331,8 @@ void TestUpgradeExtraPathCleanupWithWatchdogRemovesPath() {
 }
 
 #ifdef _WIN32
-void TestUpgradeCleanupWorkerTimeoutIsPartialSuccess() {
-    fs::path root = CreateTestRoot("upgrade_cleanup_worker_timeout");
+void TestUpgradeCleanupRunsInProcessAndCompletes() {
+    fs::path root = CreateTestRoot("upgrade_cleanup_in_process");
     fs::path previousInstallDir = root / "InstallRoot";
     fs::create_directories(previousInstallDir);
     fs::path staleFile = previousInstallDir / "stale.txt";
@@ -1189,7 +1340,6 @@ void TestUpgradeCleanupWorkerTimeoutIsPartialSuccess() {
     WriteTextFile(previousInstallDir / "install.manifest.json",
                   R"({"files":["stale.txt"],"appVersion":"1.0.0"})");
 
-    SetEnvironmentVariableW(L"MTINSTALLER_TEST_CLEANUP_WORKER_DELAY_MS", L"2000");
     UpgradeCleanupPolicy policy;
     policy.totalTimeoutMs = 300;
     policy.itemStaleTimeoutMs = 100;
@@ -1201,11 +1351,10 @@ void TestUpgradeCleanupWorkerTimeoutIsPartialSuccess() {
         {},
         {},
         policy);
-    SetEnvironmentVariableW(L"MTINSTALLER_TEST_CLEANUP_WORKER_DELAY_MS", nullptr);
 
-    Require(result.success, "Timed-out cleanup should be partial success by default");
-    Require(result.partial, "Timed-out cleanup should be marked partial");
-    Require(result.timedOut, "Timed-out cleanup should report timeout");
+    Require(result.success, "In-process cleanup should succeed");
+    Require(!result.timedOut, "In-process cleanup should not rely on worker-process timeout");
+    Require(!fs::exists(staleFile), "In-process cleanup should remove stale file");
 }
 
 void TestUpgradeCleanupSkipsReparsePointTargets() {
@@ -1473,16 +1622,8 @@ void TestUninstallFallbackRejectsDangerousRoot() {
 } // namespace
 
 int main(int argc, char* argv[]) {
-    if (argc == 3 && std::string(argv[1]) == "--upgrade-cleanup-worker") {
-        return runUpgradeCleanupWorkerFromTask(argv[2]);
-    }
-    if (argc == 3 && std::string(argv[1]) == "--detached-cleanup-worker") {
-        return runUpgradeCleanupWorkerFromTask(argv[2]);
-    }
-    if (argc == 3 && std::string(argv[1]) == "--uninstall-cleanup-worker") {
-        return runUninstallCleanupWorkerFromTask(argv[2]);
-    }
-
+    (void)argc;
+    (void)argv;
     const std::vector<std::pair<std::string, void(*)()>> tests = {
         {"load_valid_schema", &TestLoadValidSchema},
         {"reject_old_schema", &TestRejectOldSchema},
@@ -1517,6 +1658,22 @@ int main(int argc, char* argv[]) {
          &TestCompareSemanticVersion},
         {"append_path_leaf_if_missing",
          &TestAppendPathLeafIfMissing},
+        {"installer_concurrency_policy_defaults",
+         &TestInstallerConcurrencyPolicyDefaults},
+        {"installer_task_manager_executes_and_waits",
+         &TestInstallerTaskManagerExecutesAndWaits},
+        {"thread_pool_manager_uses_installer_task_manager_compatibly",
+         &TestThreadPoolManagerUsesInstallerTaskManagerCompatibly},
+        {"cleanup_delete_executor_uses_unified_concurrency",
+         &TestCleanupDeleteExecutorUsesUnifiedConcurrency},
+        {"progress_path_formatter_keeps_short_path",
+         &TestProgressPathFormatterKeepsShortPath},
+        {"progress_path_formatter_shortens_absolute_path",
+         &TestProgressPathFormatterShortensAbsolutePath},
+        {"progress_path_formatter_shortens_relative_path",
+         &TestProgressPathFormatterShortensRelativePath},
+        {"progress_path_formatter_strips_long_path_prefix",
+         &TestProgressPathFormatterStripsLongPathPrefix},
         {"same_root_upgrade_cleanup_uses_previous_manifest_files",
          &TestSameRootUpgradeCleanupUsesPreviousManifestFiles},
 #ifdef _WIN32
@@ -1530,8 +1687,8 @@ int main(int argc, char* argv[]) {
         {"upgrade_extra_path_cleanup_with_watchdog_removes_path",
          &TestUpgradeExtraPathCleanupWithWatchdogRemovesPath},
 #ifdef _WIN32
-        {"upgrade_cleanup_worker_timeout_is_partial_success",
-         &TestUpgradeCleanupWorkerTimeoutIsPartialSuccess},
+        {"upgrade_cleanup_runs_in_process_and_completes",
+         &TestUpgradeCleanupRunsInProcessAndCompletes},
         {"upgrade_cleanup_skips_reparse_point_targets",
          &TestUpgradeCleanupSkipsReparsePointTargets},
 #endif

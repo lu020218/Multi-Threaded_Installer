@@ -40,6 +40,18 @@ set(EXPECTED_LIBLZMA_SHA256 "229209de2a901b987543e1496a02d4874260c3b6f2f2f459bcd
 set(EXPECTED_DUILIB_SHA256 "96324b831ff0fd236873f43842945bebfad440a5efaa0d75fd53b9037776164f")
 set(EXPECTED_YAML_CPP_SHA256 "1cf6fa319e7529afb38e4ab55e3b0cca7a901f3ee3351b7f525fe682a5b5392e")
 
+set(SPDLOG_INCLUDE_DIR "${THIRD_PARTY_DIR}/spdlog/include")
+if(NOT EXISTS "${SPDLOG_INCLUDE_DIR}/spdlog/spdlog.h")
+    message(FATAL_ERROR
+        "Pinned dependency missing: ${SPDLOG_INCLUDE_DIR}. "
+        "This project requires header-only spdlog under third_party/spdlog/include.")
+endif()
+add_library(spdlog_header_only INTERFACE)
+target_include_directories(spdlog_header_only INTERFACE "${SPDLOG_INCLUDE_DIR}")
+target_compile_definitions(spdlog_header_only INTERFACE
+    SPDLOG_WCHAR_FILENAMES
+)
+
 # Try to find zstd (local installation first, then system)
 if(ENABLE_ZSTD)
     unset(ZSTD_INCLUDE_DIR CACHE)
@@ -291,6 +303,7 @@ set(PACKAGER_SOURCES
 set(INSTALLER_SOURCES
     src/installer/metadata_parser.cpp
     src/installer/package_manifest_validator.cpp
+    src/installer/installer_task_manager.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp
     src/installer/folder_payload_reader.cpp
@@ -308,6 +321,8 @@ set(INSTALLER_SOURCES
     src/installer/install_plan_builder.cpp
     src/installer/install_precheck.cpp
     src/installer/install_cleanup_executor.cpp
+    src/installer/installer_concurrency_policy.cpp
+    src/installer/cleanup_delete_executor.cpp
     src/installer/install_execution.cpp
     src/installer/install_finalize.cpp
     src/installer/install_service.cpp
@@ -325,6 +340,7 @@ set(INSTALLER_SOURCES
 set(UNINSTALLER_SOURCES
     src/installer/metadata_parser.cpp
     src/installer/package_manifest_validator.cpp
+    src/installer/installer_task_manager.cpp
     src/installer/thread_pool_manager.cpp
     src/installer/decompression_engine.cpp
     src/installer/folder_payload_reader.cpp
@@ -342,6 +358,8 @@ set(UNINSTALLER_SOURCES
     src/installer/install_plan_builder.cpp
     src/installer/install_precheck.cpp
     src/installer/install_cleanup_executor.cpp
+    src/installer/installer_concurrency_policy.cpp
+    src/installer/cleanup_delete_executor.cpp
     src/installer/install_execution.cpp
     src/installer/install_finalize.cpp
     src/installer/install_service.cpp
@@ -361,6 +379,7 @@ set(GUI_SOURCES
     src/gui/gui_runtime_utils.cpp
     src/gui/gui_text_presenter.cpp
     src/gui/gui_status_presenter.cpp
+    src/gui/progress_path_formatter.cpp
     src/gui/gui_diagnostics.cpp
     src/gui/gui_event_router.cpp
     src/gui/gui_startup_initializer.cpp
@@ -401,7 +420,7 @@ set(POST_SETUP_AGENT_SOURCES
 
 # Create packager executable
 add_executable(packager ${PACKAGER_SOURCES} ${COMMON_SOURCES})
-target_link_libraries(packager ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads ${YAML_CPP_LIBRARIES})
+target_link_libraries(packager spdlog_header_only ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads ${YAML_CPP_LIBRARIES})
 if(WIN32)
     target_link_libraries(packager dbghelp)
 endif()
@@ -415,7 +434,7 @@ copy_dlls_to_target(packager)
 
 # Create installer executable
 add_executable(installer WIN32 ${INSTALLER_SOURCES} ${COMMON_SOURCES})
-target_link_libraries(installer ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads)
+target_link_libraries(installer spdlog_header_only ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads)
 if(WIN32)
     target_link_libraries(installer ole32 shell32 bcrypt urlmon dbghelp rstrtmgr)
 endif()
@@ -427,7 +446,7 @@ apply_msvc_liblzma_link_fixes(installer)
 copy_dlls_to_target(installer)
 
 add_executable(uninstaller WIN32 ${UNINSTALLER_SOURCES} ${COMMON_SOURCES})
-target_link_libraries(uninstaller ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads)
+target_link_libraries(uninstaller spdlog_header_only ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads)
 if(WIN32)
     target_link_libraries(uninstaller ole32 shell32 bcrypt urlmon dbghelp rstrtmgr)
 endif()

@@ -1,14 +1,13 @@
 #pragma once
 
+#include "installer/installer_task_manager.h"
+
 #include <thread>
 #include <future>
-#include <queue>
-#include <mutex>
-#include <condition_variable>
 #include <functional>
-#include <vector>
 #include <memory>
-#include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 namespace MultiThreadedInstaller {
 
@@ -25,7 +24,7 @@ public:
     
 
     template<typename F, typename... Args>
-    auto enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type>;
+    auto enqueue(F&& f, Args&&... args) -> std::future<std::invoke_result_t<F, Args...>>;
     
 
     void waitForAll();
@@ -40,46 +39,13 @@ public:
     void stop();
     
 private:
-    std::vector<std::thread> workers;
-    std::queue<std::function<void()>> tasks;
-    
-    std::mutex queueMutex;
-    std::condition_variable condition;
-    bool stopFlag;
-    size_t pendingTasks;
-    
-    size_t activeThreads;
-    mutable std::mutex activeThreadsMutex;
-    std::condition_variable allTasksComplete;
-    
-
-    void workerThread();
+    std::unique_ptr<InstallerTaskManager> taskManager_;
 };
 
 
 template<typename F, typename... Args>
-auto ThreadPoolManager::enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type> {
-    using return_type = typename std::result_of<F(Args...)>::type;
-    
-    auto task = std::make_shared<std::packaged_task<return_type()>>(
-        std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-    );
-    
-    std::future<return_type> result = task->get_future();
-    
-    {
-        std::unique_lock<std::mutex> lock(queueMutex);
-        
-        if (stopFlag) {
-            throw std::runtime_error("enqueue on stopped ThreadPool");
-        }
-        
-        tasks.emplace([task]() { (*task)(); });
-        ++pendingTasks;
-    }
-    
-    condition.notify_one();
-    return result;
+auto ThreadPoolManager::enqueue(F&& f, Args&&... args) -> std::future<std::invoke_result_t<F, Args...>> {
+    return taskManager_->enqueue(std::forward<F>(f), std::forward<Args>(args)...);
 }
 
 } // namespace MultiThreadedInstaller

@@ -182,10 +182,10 @@ void InstallationWorker::PostProgressMessage(const std::wstring& folder,
     pData->progressPrefix[prefixLen] = L'\0';
 
     size_t copyLen = folder.length();
-    if (copyLen >= MAX_PATH) {
-        copyLen = MAX_PATH - 1;
+    if (copyLen >= kProgressItemTextMax) {
+        copyLen = kProgressItemTextMax - 1;
     }
-    wcsncpy_s(pData->currentFolder, MAX_PATH, folder.c_str(), copyLen);
+    wcsncpy_s(pData->currentFolder, kProgressItemTextMax, folder.c_str(), copyLen);
     pData->currentFolder[copyLen] = L'\0';
 
     pData->percentage = progress;

@@ -1,6 +1,7 @@
 #include "installer/decompression_engine.h"
 
 #include "common/installer_logger.h"
+#include "installer/installer_concurrency_policy.h"
 #include "installer/tar_stream_extractor.h"
 #ifdef ZSTD_FOUND
 #include <zstd.h>
@@ -10,7 +11,6 @@
 #include <chrono>
 #include <cstdint>
 #include <sstream>
-#include <thread>
 #include <vector>
 
 namespace MultiThreadedInstaller {
@@ -23,18 +23,9 @@ constexpr uint64_t kMinDecoderMemlimitThreading = 256ull * 1024ull * 1024ull;
 constexpr uint64_t kMaxDecoderMemlimitThreading = 768ull * 1024ull * 1024ull;
 constexpr uint64_t kDecoderMemlimitStop = 2ull * 1024ull * 1024ull * 1024ull;
 
-uint32_t ComputeRecommendedDecoderThreads(unsigned int hardwareThreads,
-                                         unsigned int schedulerConcurrencyHint) {
-    const unsigned int safeHardwareThreads = (std::max)(1u, hardwareThreads);
-    const unsigned int safeSchedulerConcurrency = (std::max)(1u, schedulerConcurrencyHint);
-    const unsigned int perPayloadBudget =
-        (std::max)(1u, safeHardwareThreads / safeSchedulerConcurrency);
-    return (std::min)(4u, perPayloadBudget);
-}
-
 std::string BuildMultiThreadedDecoderDecision(const LzmaLoader& loader,
                                               const DecompressionTask& task,
-                                              unsigned int threadCount,
+                                              uint32_t hardwareThreads,
                                               uint32_t recommendedThreads,
                                               bool* shouldUseMt) {
     std::ostringstream oss;
@@ -47,7 +38,7 @@ std::string BuildMultiThreadedDecoderDecision(const LzmaLoader& loader,
     oss << "[DECOMP] XZ decoder decision folder=" << task.folderName
         << " original_size=" << task.originalSize
         << " compressed_size=" << task.compressedData.size()
-        << " hw_threads=" << threadCount
+        << " hw_threads=" << hardwareThreads
         << " scheduler_concurrency=" << task.schedulerConcurrencyHint
         << " recommended_threads=" << recommendedThreads
         << " loader_ready=" << (loaderReady ? "true" : "false")
@@ -78,12 +69,11 @@ lzma_ret InitializeLzmaDecoder(const LzmaLoader& loader,
         return LZMA_PROG_ERROR;
     }
 
-    const unsigned int threadCount = std::thread::hardware_concurrency();
-    const uint32_t recommendedThreads =
-        ComputeRecommendedDecoderThreads(threadCount, task.schedulerConcurrencyHint);
+    const uint32_t hardwareThreads = GetInstallerHardwareConcurrency();
+    const uint32_t recommendedThreads = ResolveDecoderThreadCount(task.schedulerConcurrencyHint);
     bool shouldUseMt = false;
     logInstallerInfo(BuildMultiThreadedDecoderDecision(
-        loader, task, threadCount, recommendedThreads, &shouldUseMt));
+        loader, task, hardwareThreads, recommendedThreads, &shouldUseMt));
 
     if (shouldUseMt) {
         lzma_mt options{};

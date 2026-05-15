@@ -382,9 +382,11 @@ int RunGuiWindow(GUIManager& frame,
         RunDeferredGuiResourceDiagnostics();
         logInstallerInfo("[GUI][RES] Deferred resource diagnostics completed.");
     });
-    convergeDiagThread.detach();
 
     CPaintManagerUI::MessageLoop();
+    if (convergeDiagThread.joinable()) {
+        convergeDiagThread.join();
+    }
     logInstallerInfo("[GUI] Message loop exited.");
     CPaintManagerUI::SetResourceZip(_T(""), true);
     return 0;
@@ -810,21 +812,6 @@ int RunLaunchContext(HINSTANCE hInstance, const LaunchContext& context) {
     if (HasFlag(wideArgs, std::wstring(L"--cleanup-self"))) {
         return RunCleanupHelper(wideArgs);
     }
-    for (size_t i = 1; i + 1 < wideArgs.size(); ++i) {
-        std::wstring lowered = wideArgs[i];
-        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                       [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
-        if (lowered == L"--upgrade-cleanup-worker") {
-            return runUpgradeCleanupWorkerFromTask(WideToUtf8(wideArgs[i + 1]));
-        }
-        if (lowered == L"--detached-cleanup-worker") {
-            return runUpgradeCleanupWorkerFromTask(WideToUtf8(wideArgs[i + 1]));
-        }
-        if (lowered == L"--uninstall-cleanup-worker") {
-            return runUninstallCleanupWorkerFromTask(WideToUtf8(wideArgs[i + 1]));
-        }
-    }
-
     switch (context.mode) {
         case LaunchMode::InstallGui:
             return RunGuiInstallLikeMode(hInstance, context);

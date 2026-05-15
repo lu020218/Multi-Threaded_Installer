@@ -729,8 +729,7 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
     } else {
         logInstallerInfo(std::string("[InstallFlow][Extract] start folderCount=") +
                          std::to_string(plan.selectedEmbeddedFolders.size()) +
-                         " installPath=" + options.installPath +
-                         " threadCount=" + std::to_string(options.threadCount));
+                         " installPath=" + options.installPath);
         parallelResult = RunParallelInstall(metadata,
                                             payloadReader,
                                             pathResolver,
@@ -738,7 +737,7 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                                             options.folderMappings,
                                             plan.selectedEmbeddedFolders,
                                             plan.componentPlan.hasComponents,
-                                            options.threadCount,
+                                            0,
                                             progressCallback,
                                             infoCallback,
                                             errorCallback,

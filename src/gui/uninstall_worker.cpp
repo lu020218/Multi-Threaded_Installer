@@ -86,10 +86,10 @@ void UninstallWorker::PostProgressMessage(float progress, const std::wstring& cu
     ProgressMessageData* pData = new ProgressMessageData();
 
     size_t copyLen = currentItem.length();
-    if (copyLen >= 256) {
-        copyLen = 255;
+    if (copyLen >= kProgressItemTextMax) {
+        copyLen = kProgressItemTextMax - 1;
     }
-    wcsncpy_s(pData->currentFolder, 256, currentItem.c_str(), copyLen);
+    wcsncpy_s(pData->currentFolder, kProgressItemTextMax, currentItem.c_str(), copyLen);
     pData->currentFolder[copyLen] = L'\0';
     pData->percentage = progress * 100.0f;
 

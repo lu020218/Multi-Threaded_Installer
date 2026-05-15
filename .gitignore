@@ -12,7 +12,10 @@ Cargo.lock
 /build-stage3-verify
 /build-zstd-stage2
 /.idea
-/third_party
+/third_party/*
+!/third_party/spdlog/
+!/third_party/spdlog/include/
+!/third_party/spdlog/include/**
 /build/CMakeFiles
 /build/installer.dir
 /build/packager.dir
@@ -41,3 +44,4 @@ build/ZERO_CHECK.vcxproj.filters
 *.filters
 /test/build
 /build_codex
+/third_party/spdlog

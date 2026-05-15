@@ -1,9 +1,16 @@
 #include "gui/gui_status_presenter.h"
 
 #include "gui/gui_helpers.h"
+#include "gui/progress_path_formatter.h"
 #include "gui/gui_runtime_utils.h"
 
 namespace MultiThreadedInstaller::GUIStatusPresenter {
+namespace {
+
+constexpr std::size_t kProgressPathDisplayMaxChars = 60;
+constexpr int kProgressTooltipWidth = 640;
+
+} // namespace
 
 void UpdateProgressDisplay(CPaintManagerUI& manager,
                            const std::wstring& progressPrefix,
@@ -14,7 +21,11 @@ void UpdateProgressDisplay(CPaintManagerUI& manager,
         std::wstring prefix = progressPrefix.empty()
             ? GUIHelpers::GetLocalizedText(L"msg.progress.processing", L"")
             : progressPrefix;
-        currentFolderLabel->SetText(WStringToTStr(prefix + progressFolder));
+        const std::wstring displayPath =
+            FormatProgressPathForDisplay(progressFolder, kProgressPathDisplayMaxChars);
+        currentFolderLabel->SetText(WStringToTStr(prefix + displayPath));
+        currentFolderLabel->SetToolTip(WStringToTStr(prefix + progressFolder));
+        currentFolderLabel->SetToolTipWidth(kProgressTooltipWidth);
     }
 
     CProgressUI* progressBar = static_cast<CProgressUI*>(manager.FindControl(_T("progress_bar")));

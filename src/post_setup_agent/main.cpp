@@ -1,4 +1,5 @@
 #include "common/utf8_utils.h"
+#include "post_setup_agent/post_setup_url_utils.h"
 
 #include <Windows.h>
 #include <WinHTTP.h>
@@ -126,7 +127,6 @@ bool HttpDownloadToSink(const std::string& url,
                        std::string& error);
 bool HttpGetBytes(const std::string& url, std::vector<uint8_t>& out, std::string& error);
 bool FetchUrlToString(const std::string& url, std::string& out, std::string& error);
-std::string FileUrlToPath(const std::string& url);
 bool FetchComponentToPath(const std::string& url,
                           const fs::path& savePath,
                           const ExpansionContext& context,
@@ -586,16 +586,6 @@ bool FetchUrlToString(const std::string& url, std::string& out, std::string& err
     return true;
 }
 
-std::string FileUrlToPath(const std::string& url) {
-    std::string path = url.substr(strlen("file://"));
-    if (!path.empty() && path[0] == '/' && path.size() > 2 &&
-        std::isalpha(static_cast<unsigned char>(path[1])) && path[2] == ':') {
-        path.erase(path.begin());
-    }
-    std::replace(path.begin(), path.end(), '/', '\\');
-    return path;
-}
-
 bool FetchComponentToPath(const std::string& url,
                           const fs::path& savePath,
                           const ExpansionContext& context,
@@ -604,7 +594,8 @@ bool FetchComponentToPath(const std::string& url,
         return false;
     }
     if (StartsWithNoCase(url, "file://")) {
-        fs::path source = PathFromUtf8(ExpandTokens(FileUrlToPath(url), context));
+        const std::string expandedUrl = ExpandTokens(url, context);
+        fs::path source = PathFromUtf8(FileUrlToPath(expandedUrl));
         std::error_code ec;
         fs::copy_file(source, savePath, fs::copy_options::overwrite_existing, ec);
         if (ec) {

@@ -46,6 +46,7 @@ add_executable(SchemaRegressionTests
     ../src/installer/upgrade_cleanup.cpp
     ../src/installer/uninstall_manager.cpp
     ../src/gui/progress_path_formatter.cpp
+    ../src/post_setup_agent/post_setup_url_utils.cpp
     ../src/common/types.cpp
     ../src/common/utf8_utils.cpp
     ../src/common/version_utils.cpp

@@ -23,6 +23,7 @@
 #include "installer/uninstall_manager.h"
 #include "common/version_utils.h"
 #include "gui/progress_path_formatter.h"
+#include "post_setup_agent/post_setup_url_utils.h"
 
 #include <algorithm>
 #include <atomic>
@@ -222,6 +223,26 @@ void TestProgressPathFormatterStripsLongPathPrefix() {
             "Formatted long path should keep drive root after stripping prefix");
     Require(display.find(L"comparator.js") != std::wstring::npos,
             "Formatted long path should keep filename");
+}
+
+void TestPostSetupFileUrlDecodesUtf8ChinesePath() {
+    const std::string chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE8\xB7\xAF\xE5\xBE\x84";
+    const std::string decoded = PercentDecodeUrlPath("%E4%B8%AD%E6%96%87%E8%B7%AF%E5%BE%84");
+
+    Require(decoded == chinese, "URL percent decoder should preserve UTF-8 Chinese bytes");
+
+    const std::string path =
+        FileUrlToPath("file:///E:/Application/%E4%B8%AD%E6%96%87%E8%B7%AF%E5%BE%84/payload.exe");
+    Require(path == "E:\\Application\\" + chinese + "\\payload.exe",
+            "file URL should decode UTF-8 Chinese path and normalize separators");
+}
+
+void TestPostSetupFileUrlSupportsExpandedInstallDirDrivePath() {
+    const std::string chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE8\xB7\xAF\xE5\xBE\x84";
+    const std::string path = FileUrlToPath("file://E:\\Application\\" + chinese + "/payload.exe");
+
+    Require(path == "E:\\Application\\" + chinese + "\\payload.exe",
+            "file URL should accept already-expanded drive paths with Chinese characters");
 }
 
 std::string MinimalValidYaml() {
@@ -1674,6 +1695,10 @@ int main(int argc, char* argv[]) {
          &TestProgressPathFormatterShortensRelativePath},
         {"progress_path_formatter_strips_long_path_prefix",
          &TestProgressPathFormatterStripsLongPathPrefix},
+        {"post_setup_file_url_decodes_utf8_chinese_path",
+         &TestPostSetupFileUrlDecodesUtf8ChinesePath},
+        {"post_setup_file_url_supports_expanded_install_dir_drive_path",
+         &TestPostSetupFileUrlSupportsExpandedInstallDirDrivePath},
         {"same_root_upgrade_cleanup_uses_previous_manifest_files",
          &TestSameRootUpgradeCleanupUsesPreviousManifestFiles},
 #ifdef _WIN32

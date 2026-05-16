@@ -416,6 +416,7 @@ set(COMMON_SOURCES
 
 set(POST_SETUP_AGENT_SOURCES
     src/post_setup_agent/main.cpp
+    src/post_setup_agent/post_setup_url_utils.cpp
 )
 
 # Create packager executable

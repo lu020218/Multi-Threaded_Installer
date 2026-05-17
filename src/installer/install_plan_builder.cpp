@@ -343,52 +343,20 @@ std::string ResolveDesktopShortcutDisplayName(const ExtendedInstallationMetadata
     return metadata.appName;
 }
 
-bool ResolveUpgradeInstallFromInstallInfo(const ExtendedInstallationMetadata& metadata,
-                                          std::string& installDir,
-                                          std::string& manifestPath,
-                                          std::string& error) {
+bool ResolveUpgradeInstallFromInstallStateDetect(const ExtendedInstallationMetadata& metadata,
+                                                 InstallerPathResolver& pathResolver,
+                                                 std::string& installDir,
+                                                 std::string& manifestPath,
+                                                 std::string& error) {
     installDir.clear();
     manifestPath.clear();
     error.clear();
 
-    if (metadata.installInfo.path.empty()) {
-        error = "Upgrade mode requires install.installInfo.path";
+    std::string detectSource;
+    if (!resolveInstallDirFromInstallStateStore(metadata, pathResolver, installDir, manifestPath, detectSource, error)) {
         return false;
     }
 
-    auto valueIt = metadata.installInfo.values.find("installDir");
-    if (valueIt == metadata.installInfo.values.end() || valueIt->second.key.empty()) {
-        error = "Upgrade mode requires install.installInfo.values.installDir.key";
-        return false;
-    }
-
-    std::string registryInstallDir;
-    if (!readRegistryStringValue(metadata.installInfo.path, valueIt->second.key, registryInstallDir)) {
-        error = "Failed to read previous installDir from registry";
-        return false;
-    }
-
-    registryInstallDir = TrimAsciiCopy(registryInstallDir);
-    if (registryInstallDir.empty()) {
-        error = "Previous installDir in registry is empty";
-        return false;
-    }
-
-    std::filesystem::path installPath = PathFromUtf8(registryInstallDir);
-    std::error_code ec;
-    if (!std::filesystem::exists(installPath, ec) || !std::filesystem::is_directory(installPath, ec)) {
-        error = "Previous installDir from registry does not exist or is not a directory";
-        return false;
-    }
-
-    std::filesystem::path manifest = installPath / "install.manifest.json";
-    if (!std::filesystem::exists(manifest, ec) || !std::filesystem::is_regular_file(manifest, ec)) {
-        error = "Previous install manifest is missing";
-        return false;
-    }
-
-    installDir = Utf8FromPath(installPath);
-    manifestPath = Utf8FromPath(manifest);
     return true;
 }
 
@@ -402,16 +370,22 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
 
     InstalledInstanceInfo installedInstance;
     plan.effectiveAppId = resolveEffectiveAppId(metadata.appId, metadata.appName);
-    plan.effectiveDirectoryName =
-        resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName);
+    plan.effectiveDirectoryName = metadata.appDirectoryName;
     if (options.upgradeMode) {
-        if (!ResolveUpgradeInstallFromInstallInfo(metadata, plan.previousInstallDir, plan.previousManifest, error)) {
+        if (!ResolveUpgradeInstallFromInstallStateDetect(metadata,
+                                                         pathResolver,
+                                                         plan.previousInstallDir,
+                                                         plan.previousManifest,
+                                                         error)) {
             return false;
         }
         plan.hasPreviousInstall = true;
         plan.pathDecision = ResolveUpgradePathDecision(plan.previousInstallDir);
     } else {
-        plan.hasPreviousInstall = resolveInstalledInstanceFromInstallRoots(metadata, installedInstance);
+        plan.hasPreviousInstall = resolveInstalledInstanceFromInstallState(metadata,
+                                                                          pathResolver,
+                                                                          installedInstance,
+                                                                          nullptr);
         if (plan.hasPreviousInstall) {
             plan.previousManifest = installedInstance.manifestPath;
             plan.previousInstallDir = installedInstance.installDir;
@@ -430,7 +404,17 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
         return false;
     }
 
-    plan.effectiveRegistry = metadata.lifecycleInstallRegistry;
+    plan.effectiveRegistry.clear();
+    for (const auto& group : metadata.installerRegistryWrite) {
+        for (const auto& pair : group.values) {
+            RegistryEntry entry;
+            entry.path = group.path;
+            entry.key = pair.second.key.empty() ? pair.first : pair.second.key;
+            entry.value = pair.second.value;
+            entry.type = pair.second.type;
+            plan.effectiveRegistry.push_back(std::move(entry));
+        }
+    }
     std::unordered_set<std::string> registrySeen;
     registrySeen.reserve(plan.effectiveRegistry.size() + metadata.layoutComponents.size() * 2);
     for (const auto& entry : plan.effectiveRegistry) {

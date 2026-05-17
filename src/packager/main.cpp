@@ -1,6 +1,5 @@
 #include "packager/folder_scanner.h"
 #include "packager/compression_module.h"
-#include "packager/metadata_generator.h"
 #include "packager/package_manifest_builder.h"
 #include "packager/installer_generator.h"
 #include "packager/configuration_manager.h"
@@ -210,7 +209,7 @@ int main(int argc, char* argv[]) {
     console.showInfo("Using configuration file: " + configManager.getConfigFilePath());
     
     console.showInfo("Application name: " + config.app.name);
-    console.showInfo("Default install directory: " + config.install.defaultDir);
+    console.showInfo("Default install directory: " + config.installer.defaultDir);
 
     CompressionAlgorithm effectiveAlgorithm = config.package.compression.algorithm;
     console.showInfo(std::string("Compression algorithm: ") + CompressionAlgorithmName(effectiveAlgorithm));
@@ -218,7 +217,7 @@ int main(int argc, char* argv[]) {
 
     FolderScanner scanner;
     auto scanStart = std::chrono::steady_clock::now();
-    auto folders = scanner.scanInputDirectory(inputPath);
+    auto folders = scanner.scanConfiguredPayloads(inputPath, config.installer.payload);
     
     if (!scanner.validateFolderStructure(folders)) {
         console.showError("Invalid folder structure");
@@ -406,16 +405,17 @@ int main(int argc, char* argv[]) {
 
     std::string manifestError;
     if (!UpdateInstallerExecutionLevel(Utf8FromPath(tempTemplatePath),
-                                       config.install.requireAdmin,
+                                       config.installer.requireAdmin,
                                        manifestError)) {
         console.showError("Failed to apply installer execution level: " + manifestError);
         return 1;
     }
     console.showInfo(std::string("Applied installer execution level: ") +
-                     (config.install.requireAdmin ? "requireAdministrator" : "asInvoker"));
+                     (config.installer.requireAdmin ? "requireAdministrator" : "asInvoker"));
 
-    if (!config.app.product.iconPath.empty()) {
-        fs::path iconPath = PathFromUtf8(config.app.product.iconPath);
+    const std::string icon = config.app.icon.empty() ? config.app.product.iconPath : config.app.icon;
+    if (!icon.empty()) {
+        fs::path iconPath = PathFromUtf8(icon);
         if (!iconPath.is_absolute()) {
             iconPath = PathFromUtf8(configPath) / iconPath;
         }

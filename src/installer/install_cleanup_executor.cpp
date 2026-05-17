@@ -3,11 +3,13 @@
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include "installer/console_interface.h"
+#include "installer/install_manifest_store.h"
 #include "installer/installer_helpers.h"
 #include "installer/upgrade_cleanup.h"
 
 #include <algorithm>
 #include <filesystem>
+#include <json.hpp>
 #include <unordered_set>
 
 namespace MultiThreadedInstaller {
@@ -66,6 +68,12 @@ std::vector<std::string> ResolveSelectedPayloadTargets(const ExtendedInstallatio
     return targets;
 }
 
+std::string NormalizePolicyValue(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
 } // namespace
 
 bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
@@ -102,13 +110,45 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         reporter.EmitProgress("cleanup", detail, info.progress);
     };
 
-    UpgradeCleanupResult previousCleanup = runPreviousInstallCleanupWithWatchdog(
-        plan.previousManifest,
-        plan.previousInstallDir,
-        plan.pathDecision.resolvedInstallRoot,
-        ResolveSelectedPayloadTargets(metadata, plan, pathResolver),
-        cleanupProgress,
-        options.cancellationCallback);
+    bool previousManifestReadable = false;
+    if (!plan.previousManifest.empty()) {
+        nlohmann::json previousManifestJson;
+        previousManifestReadable = readManifest(plan.previousManifest, previousManifestJson);
+    }
+
+    UpgradeCleanupResult previousCleanup;
+    const std::string missingManifestFallback =
+        NormalizePolicyValue(metadata.uninstallerCleanup.missingManifestFallback);
+    if (!previousManifestReadable) {
+        if (missingManifestFallback == "fail") {
+            error = "Previous install manifest is missing or unreadable.";
+            return false;
+        }
+        if (missingManifestFallback == "none" || missingManifestFallback == "disabled") {
+            previousCleanup.success = true;
+            previousCleanup.partial = true;
+            previousCleanup.message = "Previous install manifest unavailable; directory cleanup skipped by policy";
+            reporter.EmitMessage(InstallServiceEventType::Warning,
+                                 "Previous install manifest unavailable; directory cleanup skipped by policy.");
+            logInstallerWarning("[InstallFlow][Cleanup] previous manifest unavailable; fallback disabled by v3 policy");
+        } else {
+            previousCleanup = runPreviousInstallCleanupWithWatchdog(
+                plan.previousManifest,
+                plan.previousInstallDir,
+                plan.pathDecision.resolvedInstallRoot,
+                ResolveSelectedPayloadTargets(metadata, plan, pathResolver),
+                cleanupProgress,
+                options.cancellationCallback);
+        }
+    } else {
+        previousCleanup = runPreviousInstallCleanupWithWatchdog(
+            plan.previousManifest,
+            plan.previousInstallDir,
+            plan.pathDecision.resolvedInstallRoot,
+            ResolveSelectedPayloadTargets(metadata, plan, pathResolver),
+            cleanupProgress,
+            options.cancellationCallback);
+    }
     if (!previousCleanup.success && IsCancellationRequested(options)) {
         cancelled = true;
         error = "Installation cancelled.";
@@ -150,9 +190,9 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         logInstallerInfo("[InstallFlow][Cleanup] system cleanup finished successfully");
     }
 
-    if (!metadata.lifecycleUpgradeCleanup.extraPaths.empty()) {
+    if (!metadata.installerCleanup.paths.empty()) {
         UpgradeCleanupResult extraPathCleanup = runUpgradeExtraPathCleanupWithWatchdog(
-            metadata.lifecycleUpgradeCleanup.extraPaths,
+            metadata.installerCleanup.paths,
             plan.previousInstallDir,
             pathResolver,
             cleanupProgress,

@@ -281,7 +281,6 @@ set(PACKAGER_SOURCES
     src/packager/folder_scanner.cpp
     src/packager/compression_module.cpp
     src/packager/folder_payload_compressor.cpp
-    src/packager/metadata_generator.cpp
     src/packager/package_manifest_builder.cpp
     src/packager/installer_generator.cpp
     src/packager/icon_updater.cpp
@@ -317,6 +316,7 @@ set(INSTALLER_SOURCES
     src/installer/shortcut_startup_utils.cpp
     src/installer/registry_utils.cpp
     src/installer/install_state_utils.cpp
+    src/installer/install_state_store.cpp
     src/installer/install_progress_reporter.cpp
     src/installer/install_plan_builder.cpp
     src/installer/install_precheck.cpp
@@ -354,6 +354,7 @@ set(UNINSTALLER_SOURCES
     src/installer/shortcut_startup_utils.cpp
     src/installer/registry_utils.cpp
     src/installer/install_state_utils.cpp
+    src/installer/install_state_store.cpp
     src/installer/install_progress_reporter.cpp
     src/installer/install_plan_builder.cpp
     src/installer/install_precheck.cpp

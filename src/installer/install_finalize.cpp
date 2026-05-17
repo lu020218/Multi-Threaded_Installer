@@ -4,6 +4,7 @@
 #include "common/utf8_utils.h"
 #include "installer/embedded_resources.h"
 #include "installer/install_state_utils.h"
+#include "installer/install_state_store.h"
 #include "installer/installer_helpers.h"
 #include "installer/registry_utils.h"
 
@@ -74,6 +75,131 @@ void AppendNamedCleanupEntry(std::vector<NamedCleanupEntry>& entries, const std:
     }
 }
 
+std::string ResolveSystemUninstallEntryName(const ExtendedInstallationMetadata& metadata,
+                                            const InstallExecutionPlan& plan,
+                                            const std::string& desktopShortcutDisplayName) {
+    if (!metadata.systemUninstallEntry.displayName.empty()) {
+        return metadata.systemUninstallEntry.displayName;
+    }
+    if (!desktopShortcutDisplayName.empty()) {
+        return desktopShortcutDisplayName;
+    }
+    return plan.effectiveAppId.empty() ? metadata.appName : plan.effectiveAppId;
+}
+
+bool WriteSystemUninstallEntryForScope(const std::string& keyName,
+                                       const std::string& displayName,
+                                       const ExtendedInstallationMetadata& metadata,
+                                       const InstallServiceResult& result,
+                                       bool perMachine) {
+    return writeUninstallRegistryEntry(keyName,
+                                       displayName,
+                                       metadata.appVersion,
+                                       result.installRootPath,
+                                       result.uninstallPath,
+                                       perMachine,
+                                       metadata.systemUninstallEntry.publisher);
+}
+
+void WriteConfiguredSystemUninstallEntries(const ExtendedInstallationMetadata& metadata,
+                                           const InstallExecutionPlan& plan,
+                                           const std::string& desktopShortcutDisplayName,
+                                           const InstallServiceResult& result,
+                                           UninstallCleanupConfig& manifestCleanup,
+                                           InstallProgressReporter& reporter) {
+#ifdef _WIN32
+    if (result.uninstallPath.empty()) {
+        return;
+    }
+    const std::string uninstallKeyName = plan.effectiveAppId.empty()
+                                             ? resolveEffectiveAppId(metadata.appId, metadata.appName)
+                                             : plan.effectiveAppId;
+    const std::string uninstallDisplayName =
+        ResolveSystemUninstallEntryName(metadata, plan, desktopShortcutDisplayName);
+    auto recordUninstallEntry = [&](UninstallEntryScope scope) {
+        UninstallEntryCleanup entry;
+        entry.name = uninstallDisplayName;
+        entry.scope = scope;
+        manifestCleanup.uninstallEntries.push_back(std::move(entry));
+    };
+
+    bool wroteAny = false;
+    switch (metadata.systemUninstallEntry.scope) {
+        case UninstallEntryScope::CURRENT_USER:
+            wroteAny = WriteSystemUninstallEntryForScope(
+                uninstallKeyName, uninstallDisplayName, metadata, result, false);
+            if (wroteAny) {
+                recordUninstallEntry(UninstallEntryScope::CURRENT_USER);
+            }
+            break;
+        case UninstallEntryScope::LOCAL_MACHINE:
+        case UninstallEntryScope::WOW6432:
+            wroteAny = WriteSystemUninstallEntryForScope(
+                uninstallKeyName, uninstallDisplayName, metadata, result, true);
+            if (wroteAny) {
+                recordUninstallEntry(UninstallEntryScope::LOCAL_MACHINE);
+            }
+            break;
+        case UninstallEntryScope::BOTH: {
+            const bool wroteUser = WriteSystemUninstallEntryForScope(
+                uninstallKeyName, uninstallDisplayName, metadata, result, false);
+            const bool wroteMachine = WriteSystemUninstallEntryForScope(
+                uninstallKeyName, uninstallDisplayName, metadata, result, true);
+            wroteAny = wroteUser || wroteMachine;
+            if (wroteUser) {
+                recordUninstallEntry(UninstallEntryScope::CURRENT_USER);
+            }
+            if (wroteMachine) {
+                recordUninstallEntry(UninstallEntryScope::LOCAL_MACHINE);
+            }
+            break;
+        }
+        case UninstallEntryScope::ANY:
+        default: {
+            const bool perMachine = isRunningAsAdmin();
+            wroteAny = WriteSystemUninstallEntryForScope(
+                uninstallKeyName, uninstallDisplayName, metadata, result, perMachine);
+            if (wroteAny) {
+                recordUninstallEntry(perMachine ? UninstallEntryScope::LOCAL_MACHINE
+                                                : UninstallEntryScope::CURRENT_USER);
+            }
+            break;
+        }
+    }
+
+    if (!wroteAny) {
+        reporter.EmitMessage(InstallServiceEventType::Warning,
+                             "Failed to write uninstall registry entry");
+    }
+#else
+    (void)metadata;
+    (void)plan;
+    (void)desktopShortcutDisplayName;
+    (void)result;
+    (void)manifestCleanup;
+    (void)reporter;
+#endif
+}
+
+InstallStateContext BuildInstallStateContext(const ExtendedInstallationMetadata& metadata,
+                                             const InstallExecutionPlan& plan,
+                                             const InstallServiceOptions& options,
+                                             const std::string& installDir,
+                                             const std::string& state) {
+    InstallStateContext context;
+    context.installDir = installDir;
+    context.version = metadata.appVersion;
+    context.appName = metadata.appName;
+    context.appId = plan.effectiveAppId.empty() ? metadata.appId : plan.effectiveAppId;
+    context.installSource = getCurrentExecutablePath();
+    context.state = state;
+    context.userName = GetCurrentUserNameForInstallState();
+    if (context.installDir.empty()) {
+        context.installDir = options.installPath;
+    }
+    return context;
+}
+
 } // namespace
 
 bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
@@ -117,13 +243,7 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
     const std::string languageCode = ResolveLanguageCode(options.languageCode);
     const std::string desktopShortcutDisplayName =
         ResolveDesktopShortcutDisplayName(metadata, languageCode);
-    UninstallCleanupConfig manifestCleanup = metadata.lifecycleUninstallCleanup;
-    if (!plan.effectiveAppId.empty()) {
-        UninstallEntryCleanup uninstallEntry;
-        uninstallEntry.name = plan.effectiveAppId;
-        uninstallEntry.scope = UninstallEntryScope::ANY;
-        manifestCleanup.uninstallEntries.push_back(std::move(uninstallEntry));
-    }
+    UninstallCleanupConfig manifestCleanup;
 
     if (!result.installRootPath.empty()) {
         if (!plan.legacyDesktopShortcutCandidates.empty()) {
@@ -200,6 +320,14 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
             result.installedFiles.end());
     }
 
+    WriteConfiguredSystemUninstallEntries(metadata,
+                                          plan,
+                                          desktopShortcutDisplayName,
+                                          result,
+                                          manifestCleanup,
+                                          reporter);
+    advanceFinalize(0.62f, "Writing uninstall registry");
+
     if (!result.installRootPath.empty()) {
         std::filesystem::path localPath = PathFromUtf8(result.installRootPath) / "install.manifest.json";
         if (!writeManifest(Utf8FromPath(localPath),
@@ -210,17 +338,21 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                            result.installedRoots,
                            manifestCleanup,
                            result.installedFiles,
-                           effectiveRegistry,
-                           effectiveKillProcesses,
+                           metadata.uninstallerKillBeforeUninstall,
                            effectiveAutoStartup,
                            effectiveDesktopIcons,
                            desktopShortcutDisplayName,
-                           metadata.installInfo,
+                           metadata.installState,
+                           metadata.installStateCleanupMode.empty() ? "delete" : metadata.installStateCleanupMode,
                            result.uninstallPath,
                            languageCode,
                            componentActions,
                            options.selectedComponentIds,
-                           options.installAllComponents)) {
+                           options.installAllComponents,
+                           metadata.appPublisher,
+                           metadata.appWebsite,
+                           metadata.uninstallerCleanup,
+                           metadata.systemUninstallEntry)) {
             reporter.EmitMessage(InstallServiceEventType::Warning,
                                  "Failed to write local install manifest");
         }
@@ -234,28 +366,15 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                              metadata.appName);
     }
 
-#ifdef _WIN32
-    if (options.writeUninstallRegistry && !result.uninstallPath.empty()) {
-        bool perMachine = isRunningAsAdmin();
-        if (!writeUninstallRegistryEntry(plan.effectiveAppId,
-                                         desktopShortcutDisplayName,
-                                         metadata.appVersion,
-                                         result.installRootPath,
-                                         result.uninstallPath,
-                                         perMachine)) {
-            reporter.EmitMessage(InstallServiceEventType::Warning,
-                                 "Failed to write uninstall registry entry");
-        }
-    }
-#endif
-    advanceFinalize(0.90f, "Writing uninstall registry");
+    advanceFinalize(0.90f, "Registry finalization complete");
 
-    applyCoreInstallInfo(metadata.installInfo,
-                         result.installRootPath,
-                         metadata.appVersion,
-                         metadata.appName,
-                         "installed",
-                         pathResolver);
+    ApplyInstallState(metadata.installState,
+                      BuildInstallStateContext(metadata,
+                                               plan,
+                                               options,
+                                               result.installRootPath,
+                                               "installed"),
+                      pathResolver);
     advanceFinalize(1.0f, "Finalization complete");
     return true;
 }

@@ -27,8 +27,11 @@ bool writeUninstallRegistryEntry(const std::string& appName,
                                  const std::string& version,
                                  const std::string& installDir,
                                  const std::string& uninstallExePath,
-                                 bool perMachine);
+                                 bool perMachine,
+                                 const std::string& publisher = "");
 bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine);
+bool deleteSystemUninstallEntryByDisplayName(const std::string& displayName,
+                                             UninstallEntryScope scope);
 bool deleteMatchingUninstallRegistryEntries(const std::string& installDir,
                                             const std::string& uninstallExePath,
                                             bool perMachine);

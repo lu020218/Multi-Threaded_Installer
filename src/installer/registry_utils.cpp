@@ -110,6 +110,98 @@ bool deleteRegistryTree(HKEY root, const std::string& subkey) {
     }
     return status == ERROR_SUCCESS;
 }
+
+std::string queryRegistryString(HKEY key, const wchar_t* valueName) {
+    DWORD type = 0;
+    DWORD size = 0;
+    LONG status = RegQueryValueExW(key, valueName, nullptr, &type, nullptr, &size);
+    if (status != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ) || size == 0) {
+        return {};
+    }
+
+    std::wstring value;
+    value.resize(size / sizeof(wchar_t));
+    status = RegQueryValueExW(key, valueName, nullptr, &type,
+                              reinterpret_cast<BYTE*>(&value[0]), &size);
+    if (status != ERROR_SUCCESS) {
+        return {};
+    }
+    if (!value.empty() && value.back() == L'\0') {
+        value.pop_back();
+    }
+    if (type == REG_EXPAND_SZ) {
+        DWORD expandedSize = ExpandEnvironmentStringsW(value.c_str(), nullptr, 0);
+        if (expandedSize > 0) {
+            std::wstring expanded(expandedSize, L'\0');
+            if (ExpandEnvironmentStringsW(value.c_str(), expanded.data(), expandedSize) > 0) {
+                if (!expanded.empty() && expanded.back() == L'\0') {
+                    expanded.pop_back();
+                }
+                return WideToUtf8(expanded);
+            }
+        }
+    }
+    return WideToUtf8(value);
+}
+
+std::string normalizeRegistryNameForCompare(std::string value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+        value.erase(value.begin());
+    }
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+        value.pop_back();
+    }
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+bool deleteUninstallRegistryEntriesByDisplayName(const std::string& displayName, bool perMachine) {
+    const std::string targetName = normalizeRegistryNameForCompare(displayName);
+    if (targetName.empty()) {
+        return false;
+    }
+
+    HKEY root = perMachine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
+    const wchar_t* uninstallSubkeyW = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+    HKEY uninstallKey = nullptr;
+    LONG status = RegOpenKeyExW(root, uninstallSubkeyW, 0, KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE, &uninstallKey);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+
+    std::vector<std::string> matchedSubkeys;
+    DWORD index = 0;
+    wchar_t nameBuffer[512];
+    DWORD nameLen = static_cast<DWORD>(std::size(nameBuffer));
+    while (RegEnumKeyExW(uninstallKey, index, nameBuffer, &nameLen, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
+        std::wstring subkeyNameW(nameBuffer, nameLen);
+        HKEY entryKey = nullptr;
+        if (RegOpenKeyExW(root, (std::wstring(uninstallSubkeyW) + L"\\" + subkeyNameW).c_str(),
+                          0, KEY_QUERY_VALUE, &entryKey) == ERROR_SUCCESS) {
+            const std::string entryDisplayName = normalizeRegistryNameForCompare(
+                queryRegistryString(entryKey, L"DisplayName"));
+            RegCloseKey(entryKey);
+            if (entryDisplayName == targetName) {
+                matchedSubkeys.push_back("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" +
+                                         WideToUtf8(subkeyNameW));
+            }
+        }
+
+        ++index;
+        nameLen = static_cast<DWORD>(std::size(nameBuffer));
+    }
+
+    RegCloseKey(uninstallKey);
+
+    bool removedAny = false;
+    for (const auto& subkey : matchedSubkeys) {
+        if (deleteRegistryTree(root, subkey)) {
+            removedAny = true;
+        }
+    }
+    return removedAny;
+}
 #endif
 
 } // namespace
@@ -437,7 +529,8 @@ bool writeUninstallRegistryEntry(const std::string& appName,
                                  const std::string& version,
                                  const std::string& installDir,
                                  const std::string& uninstallExePath,
-                                 bool perMachine) {
+                                 bool perMachine,
+                                 const std::string& publisher) {
 #ifdef _WIN32
     if (appName.empty() || uninstallExePath.empty()) {
         return false;
@@ -479,7 +572,7 @@ bool writeUninstallRegistryEntry(const std::string& appName,
     writeRegistryValue(entry, uninstallCommand, RegistryValueType::STRING);
 
     entry.key = "Publisher";
-    writeRegistryValue(entry, appName, RegistryValueType::STRING);
+    writeRegistryValue(entry, publisher.empty() ? appName : publisher, RegistryValueType::STRING);
 
     entry.key = "NoModify";
     writeRegistryValue(entry, "1", RegistryValueType::DWORD);
@@ -495,6 +588,7 @@ bool writeUninstallRegistryEntry(const std::string& appName,
     (void)installDir;
     (void)uninstallExePath;
     (void)perMachine;
+    (void)publisher;
     return false;
 #endif
 }
@@ -541,6 +635,29 @@ bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine) {
 #else
     (void)appName;
     (void)perMachine;
+    return false;
+#endif
+}
+
+bool deleteSystemUninstallEntryByDisplayName(const std::string& displayName,
+                                             UninstallEntryScope scope) {
+#ifdef _WIN32
+    switch (scope) {
+    case UninstallEntryScope::CURRENT_USER:
+        return deleteUninstallRegistryEntriesByDisplayName(displayName, false);
+    case UninstallEntryScope::LOCAL_MACHINE:
+    case UninstallEntryScope::WOW6432:
+        return deleteUninstallRegistryEntriesByDisplayName(displayName, true);
+    case UninstallEntryScope::BOTH:
+        return deleteUninstallRegistryEntriesByDisplayName(displayName, false) ||
+               deleteUninstallRegistryEntriesByDisplayName(displayName, true);
+    case UninstallEntryScope::ANY:
+    default:
+        return false;
+    }
+#else
+    (void)displayName;
+    (void)scope;
     return false;
 #endif
 }

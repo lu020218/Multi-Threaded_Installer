@@ -62,7 +62,8 @@ enum class UninstallEntryScope : uint8_t {
     CURRENT_USER = 0,
     LOCAL_MACHINE = 1,
     WOW6432 = 2,
-    ANY = 3
+    ANY = 3,
+    BOTH = 4
 };
 
 struct UninstallEntryCleanup {
@@ -70,6 +71,14 @@ struct UninstallEntryCleanup {
     UninstallEntryScope scope;
 
     UninstallEntryCleanup()
+        : scope(UninstallEntryScope::ANY) {}
+};
+
+struct SystemUninstallEntryCleanupItem {
+    std::string displayName;
+    UninstallEntryScope scope;
+
+    SystemUninstallEntryCleanupItem()
         : scope(UninstallEntryScope::ANY) {}
 };
 
@@ -220,6 +229,9 @@ struct AppConfig {
     std::string version;
     std::string directoryName;
     std::string website;
+    std::string publisher;
+    std::string icon;
+    AppProductInfo versionInfo;
     AppProductInfo product;
 
     AppConfig()
@@ -296,6 +308,185 @@ struct LayoutConfig {
     std::vector<ComponentConfig> components;
 };
 
+struct InstallStateValueConfig {
+    std::string key;
+    std::string name;
+    std::string value;
+    RegistryValueType type;
+
+    InstallStateValueConfig()
+        : type(RegistryValueType::STRING) {}
+};
+
+struct InstallStateRegistryStoreConfig {
+    std::string id;
+    std::string path;
+    std::unordered_map<std::string, InstallStateValueConfig> values;
+};
+
+struct InstallStateFileStoreConfig {
+    std::string id;
+    std::string path;
+    std::string format;
+    std::unordered_map<std::string, InstallStateValueConfig> values;
+
+    InstallStateFileStoreConfig()
+        : format("json") {}
+};
+
+struct InstalledInstanceDetectPrimaryConfig {
+    std::string registry;
+    std::string value;
+};
+
+struct InstalledInstanceDetectInstallStateConfig {
+    std::string id;
+    std::string path;
+    std::string installDirValue;
+};
+
+struct InstalledInstanceDetectConfig {
+    InstalledInstanceDetectPrimaryConfig primary;
+    std::vector<InstalledInstanceDetectInstallStateConfig> legacy;
+};
+
+struct InstallStateConfig {
+    std::vector<InstallStateRegistryStoreConfig> registries;
+    std::vector<InstallStateFileStoreConfig> files;
+    InstalledInstanceDetectConfig detect;
+};
+
+struct InstallerDefaultsConfig {
+    bool autoStartup;
+    bool desktopShortcut;
+
+    InstallerDefaultsConfig()
+        : autoStartup(false),
+          desktopShortcut(false) {}
+};
+
+struct SystemUninstallEntryConfig {
+    UninstallEntryScope scope;
+    std::string displayName;
+    std::string publisher;
+
+    SystemUninstallEntryConfig()
+        : scope(UninstallEntryScope::ANY) {}
+};
+
+struct SystemUninstallEntryCleanupConfig {
+    UninstallEntryScope scope;
+    std::string displayName;
+    std::vector<SystemUninstallEntryCleanupItem> legacyEntries;
+
+    SystemUninstallEntryCleanupConfig()
+        : scope(UninstallEntryScope::ANY) {}
+};
+
+struct CleanupLegacyNamesConfig {
+    std::vector<std::string> desktopShortcutNames;
+    std::vector<std::string> startupNames;
+};
+
+struct RegistryCleanupConfig {
+    std::vector<std::string> deleteKeys;
+    std::vector<RegistryEntry> deleteValues;
+};
+
+struct InstallerCleanupConfig {
+    SystemUninstallEntryCleanupConfig systemUninstallEntry;
+    CleanupLegacyNamesConfig legacy;
+    RegistryCleanupConfig registry;
+    std::vector<UninstallCleanupRule> paths;
+};
+
+struct PayloadConfig {
+    std::string id;
+    std::string source;
+    std::string target;
+    bool required;
+
+    PayloadConfig()
+        : required(false) {}
+};
+
+struct InstallerRegistryWriteGroup {
+    std::string path;
+    std::unordered_map<std::string, InstallStateValueConfig> values;
+};
+
+struct InstallerRegistryConfig {
+    std::vector<InstallerRegistryWriteGroup> write;
+};
+
+struct InstallerConfig {
+    bool requireAdmin;
+    std::string defaultDir;
+    std::string directoryName;
+    MinWindowsConfig minWindows;
+    uint64_t largeFileThresholdBytes;
+    std::string mutex;
+    std::vector<std::string> killBeforeInstall;
+    InstallerDefaultsConfig defaults;
+    InstallStateConfig installState;
+    SystemUninstallEntryConfig systemUninstallEntry;
+    InstallerCleanupConfig cleanup;
+    UiConfig ui;
+    std::vector<PayloadConfig> payload;
+    std::vector<ComponentConfig> components;
+    InstallerRegistryConfig registry;
+
+    InstallerConfig()
+        : requireAdmin(false),
+          defaultDir("%ProgramFiles%"),
+          largeFileThresholdBytes(4 * 1024 * 1024) {}
+};
+
+struct UninstallerLegacyCleanupConfig {
+    std::vector<std::string> desktopShortcutNames;
+    std::vector<std::string> startupNames;
+};
+
+struct UninstallerRegistryCleanupConfig {
+    std::vector<std::string> deleteKeys;
+    std::vector<RegistryEntry> deleteValues;
+};
+
+struct UninstallerCleanupConfigV3 {
+    std::string installedFiles;
+    std::string missingManifestFallback;
+    std::string installState;
+    std::string autoStartup;
+    std::string desktopShortcut;
+    SystemUninstallEntryCleanupConfig systemUninstallEntry;
+    CleanupLegacyNamesConfig legacy;
+    RegistryCleanupConfig registry;
+    std::vector<UninstallCleanupRule> paths;
+
+    UninstallerCleanupConfigV3()
+        : installedFiles("manifest"),
+          missingManifestFallback("safeDirectoryFallback"),
+          installState("delete"),
+          autoStartup("auto"),
+          desktopShortcut("auto") {}
+};
+
+struct UninstallerUiConfig {
+    std::string defaultLanguage;
+    std::string title;
+    std::string confirmMessage;
+};
+
+struct UninstallerConfig {
+    bool requireAdmin;
+    std::vector<std::string> killBeforeUninstall;
+    UninstallerCleanupConfigV3 cleanup;
+    UninstallerUiConfig ui;
+
+    UninstallerConfig()
+        : requireAdmin(false) {}
+};
+
 struct LifecycleRegistryConfig {
     std::vector<RegistryEntry> onInstall;
 };
@@ -314,13 +505,15 @@ struct PackagerConfiguration {
     uint32_t schemaVersion;
     AppConfig app;
     PackageConfig package;
+    InstallerConfig installer;
+    UninstallerConfig uninstaller;
     PackagerInstallConfig install;
     UiConfig ui;
     LayoutConfig layout;
     LifecycleConfig lifecycle;
 
     PackagerConfiguration()
-        : schemaVersion(2) {}
+        : schemaVersion(3) {}
 };
 
 } // namespace MultiThreadedInstaller

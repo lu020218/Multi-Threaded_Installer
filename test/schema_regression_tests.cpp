@@ -1,7 +1,7 @@
 #include "common/archive_types.h"
 #include "packager/configuration_manager.h"
 #include "packager/configuration_loader.h"
-#include "packager/metadata_generator.h"
+#include "packager/configuration_validator.h"
 #include "packager/package_manifest_builder.h"
 #include "packager/version_info_updater.h"
 #include "installer/metadata_parser.h"
@@ -11,6 +11,7 @@
 #include "installer/package_manifest_validator.h"
 #include "installer/install_plan_builder.h"
 #include "installer/install_manifest_store.h"
+#include "installer/install_state_store.h"
 #include "installer/installer_helpers.h"
 #include "installer/installed_instance_resolver.h"
 #include "installer/path_resolver.h"
@@ -246,116 +247,143 @@ void TestPostSetupFileUrlSupportsExpandedInstallDirDrivePath() {
 }
 
 std::string MinimalValidYaml() {
-    return R"(schemaVersion: 2
+    return R"(schemaVersion: 3
 app:
-  name: Sample Desktop App
   id: SampleDesktopApp
+  name: Sample Desktop App
   version: 1.2.3
-  directoryName: SampleDesktopApp
+  publisher: OpenAI
   website: https://example.com
+  icon: app.ico
+  versionInfo:
+    productName: Sample Desktop App
+    fileDescription: Sample Desktop App Installer
 package:
   compression:
     algorithm: zstd
     level: 6
     threads: 2
-install:
+installer:
   defaultDir: "%ProgramFiles%\\SampleDesktopApp"
+  directoryName: SampleDesktopApp
   requireAdmin: true
-  autoCleanOldInstall: false
-  autoStartup: false
-  desktopIcon: true
-  useMutex: true
-  mutexName: "Global\\SampleDesktopApp_Install"
-  minWindows:
-    major: 10
-    minor: 0
-    build: 19045
-  sparseFileThresholdBytes: 4194304
-  killProcesses:
+  mutex: "Global\\SampleDesktopApp_Install"
+  minWindows: "10.0.19045"
+  largeFileThresholdBytes: 4194304
+  killBeforeInstall:
     - SampleDesktopApp.exe
-  installInfo:
-    mode: registry
-    path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp
-    values:
-      installDir:
-        key: InstallDir
-        value: "%InstallDir%"
-        type: expand
-      displayName:
-        key: DisplayName
-        value: "%AppName%"
-        type: string
-      displayVersion:
-        key: Version
-        value: "%Version%"
-        type: string
-      executablePath:
-        key: ExecutablePath
-        value: "%InstallDir%\\SampleDesktopApp.exe"
-        type: expand
-      installState:
-        key: InstallState
-        value: "%InstallState%"
-        type: string
-ui:
-  defaultLanguage: zh_CN
-  desktopShortcut:
-    defaultName: Sample Desktop App
-layout:
-  folders:
+  defaults:
+    autoStartup: false
+    desktopShortcut: true
+  installState:
+    registries:
+      - id: mainRegistry
+        path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp
+        values:
+          installDir:
+            key: InstallDir
+            value: "%InstallDir%"
+            type: expand
+          displayName:
+            key: DisplayName
+            value: "%AppName%"
+            type: string
+          displayVersion:
+            key: Version
+            value: "%Version%"
+            type: string
+          executablePath:
+            key: ExecutablePath
+            value: "%InstallDir%\\SampleDesktopApp.exe"
+            type: expand
+          installState:
+            key: InstallState
+            value: "%InstallState%"
+            type: string
+    files:
+      - id: mainFile
+        path: "%InstallDir%\\install.state.json"
+        format: json
+        values:
+          installDir:
+            name: installDir
+            value: "%InstallDir%"
+          customValue:
+            name: customValue
+            value: custom
+    detect:
+      primary:
+        registry: mainRegistry
+        value: installDir
+      legacy:
+        - id: legacy_v2
+          path: HKEY_CURRENT_USER\\Software\\SampleDesktopAppLegacy
+          installDirValue: InstallPath
+  systemUninstallEntry:
+    scope: machine
+    displayName: Sample Desktop App
+    publisher: OpenAI
+  cleanup:
+    systemUninstallEntry:
+      legacyEntries:
+        - displayName: SampleDesktopApp
+          scope: both
+  ui:
+    defaultLanguage: zh_CN
+    desktopShortcutName:
+      default: Sample Desktop App
+  payload:
     - id: app
       source: bin
       target: "%InstallDir%"
     - id: user_templates
       source: templates
       target: "%AppData%\\SampleDesktopApp"
-lifecycle:
   registry:
-    onInstall:
+    write:
       - path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp
-        key: Publisher
-        value: "OpenAI"
-        type: string
+        values:
+          Publisher:
+            value: OpenAI
+            type: string
+  components:
+    - id: core
+      name: Core
+      required: true
+      defaultSelected: true
+      payload:
+        - app
+uninstaller:
+  requireAdmin: true
+  killBeforeUninstall:
+    - SampleDesktopApp.exe
   cleanup:
-    onUpgrade:
-      installRoots:
-        - path: HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp
-          key: InstallDir
-      registry:
-        legacyKeys:
-          - path: HKEY_CURRENT_USER\\Software\\SampleDesktopAppLegacy
-            key: ""
-      uninstallEntries:
-        entries:
-          - name: SampleDesktopApp
-            scope: any
-      shortcuts:
-        - name: Sample Desktop App
-      startup:
-        - name: SampleDesktopApp
-      extraPaths:
-        - path: "%LocalAppData%\\SampleDesktopAppLegacy"
-          recursive: true
-          onlyIfEmpty: false
-    onUninstall:
-      processes:
-        - name: SampleDesktopApp.exe
-      registry:
-        legacyKeys:
-          - path: HKEY_CURRENT_USER\\Software\\SampleDesktopApp
-            key: ""
-      uninstallEntries:
-        entries:
-          - name: SampleDesktopApp
-            scope: any
-      shortcuts:
-        - name: Sample Desktop App
-      startup:
-        - name: SampleDesktopApp
-      paths:
-        - path: "%LocalAppData%\\SampleDesktopApp\\Cache"
-          recursive: true
-          onlyIfEmpty: false
+    installedFiles: manifest
+    missingManifestFallback: safeDirectoryFallback
+    installState: delete
+    autoStartup: auto
+    desktopShortcut: auto
+    systemUninstallEntry:
+      scope: machine
+      displayName: Sample Desktop App
+      legacyEntries:
+        - displayName: SampleDesktopApp
+          scope: both
+    legacy:
+      desktopShortcutNames:
+        - Sample Desktop App
+      startupNames:
+        - SampleDesktopApp
+    registry:
+      deleteKeys:
+        - HKEY_CURRENT_USER\\Software\\SampleDesktopApp
+      deleteValues:
+        - path: HKEY_CURRENT_USER\\Software\\SampleDesktopApp
+          key: LegacyValue
+    paths:
+      - path: "%LocalAppData%\\SampleDesktopApp\\Cache"
+        recursive: true
+        onlyIfEmpty: false
 )";
 }
 
@@ -401,6 +429,31 @@ lifecycle:
 )";
 }
 
+PackagerConfiguration BuildConfigFixture();
+
+InstallStateConfig BuildTestInstallStateConfig(const std::string& registryPath,
+                                               const std::string& installDirKey = "InstallDir") {
+    InstallStateConfig config;
+    InstallStateRegistryStoreConfig store;
+    store.id = "main";
+    store.path = registryPath;
+
+    InstallStateValueConfig installDirValue;
+    installDirValue.key = installDirKey;
+    installDirValue.value = "%InstallDir%";
+    installDirValue.type = RegistryValueType::EXPAND_STRING;
+    store.values["installDir"] = installDirValue;
+
+    InstallStateValueConfig installStateValue;
+    installStateValue.key = "InstallState";
+    installStateValue.value = "%InstallState%";
+    installStateValue.type = RegistryValueType::STRING;
+    store.values["installState"] = installStateValue;
+
+    config.registries.push_back(std::move(store));
+    return config;
+}
+
 void TestLoadValidSchema() {
     fs::path root = CreateTestRoot("valid_schema");
     fs::path inputDir = root / "payload";
@@ -408,6 +461,7 @@ void TestLoadValidSchema() {
     fs::create_directories(inputDir / "bin");
     fs::create_directories(inputDir / "templates");
     fs::create_directories(configDir);
+    WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
     WriteTextFile(configDir / "packager.yaml", MinimalValidYaml());
 
     ConfigurationManager manager;
@@ -415,13 +469,27 @@ void TestLoadValidSchema() {
             manager.getLastError().empty() ? "valid schema should initialize" : manager.getLastError());
 
     const auto& config = manager.getConfiguration();
-    Require(config.layout.folders.size() == 2, "Expected two layout folders");
-    Require(config.layout.folders[0].target == "%InstallDir%", "Folder target should preserve %InstallDir%");
-    Require(config.install.installInfo.path.find("HKEY_LOCAL_MACHINE") != std::string::npos &&
-                config.install.installInfo.path.find("SampleDesktopApp") != std::string::npos,
-            "installInfo path mismatch");
-    Require(config.install.installInfo.values.at("installState").value == "%InstallState%",
+    Require(config.installer.payload.size() == 2, "Expected two installer payload entries");
+    Require(config.installer.payload[0].target == "%InstallDir%", "Payload target should preserve %InstallDir%");
+    Require(config.installer.installState.registries.size() == 1, "Expected one installState registry store");
+    Require(config.installer.installState.files.size() == 1, "Expected one installState file store");
+    Require(config.installer.installState.files[0].values.count("customValue") == 1,
+            "installState file store should preserve custom values");
+    Require(config.installer.installState.detect.primary.registry == "mainRegistry" &&
+                config.installer.installState.detect.primary.value == "installDir",
+            "v3 installState primary detection mismatch");
+    Require(config.installer.installState.detect.legacy.size() == 1 &&
+                config.installer.installState.detect.legacy[0].id == "legacy_v2",
+            "v3 legacy installState detection should parse");
+    Require(config.installer.installState.registries[0].values.at("installState").value == "%InstallState%",
             "installState template mismatch");
+    Require(config.installer.payload.size() == 2, "v3 payload entries should be exposed directly");
+    Require(config.installer.cleanup.systemUninstallEntry.legacyEntries[0].scope == UninstallEntryScope::BOTH,
+            "installer cleanup legacy system uninstall entry scope should parse");
+    Require(config.uninstaller.cleanup.systemUninstallEntry.legacyEntries[0].scope == UninstallEntryScope::BOTH,
+            "uninstaller cleanup legacy system uninstall entry scope should parse");
+    Require(config.installer.cleanup.systemUninstallEntry.legacyEntries.size() == 1,
+            "installer cleanup legacy system uninstall entries should remain in v3 cleanup");
 }
 
 void TestRejectOldSchema() {
@@ -435,6 +503,76 @@ void TestRejectOldSchema() {
     ConfigurationManager manager;
     Require(!manager.initialize(inputDir.string(), configDir.string()), "Old schema should be rejected");
     Require(!manager.getLastError().empty(), "Old schema rejection should provide an error message");
+}
+
+void TestRejectUninstallerDetectField() {
+    fs::path root = CreateTestRoot("reject_uninstaller_detect");
+    fs::path inputDir = root / "payload";
+    fs::path configDir = root / "config";
+    fs::create_directories(inputDir / "bin");
+    fs::create_directories(inputDir / "templates");
+    fs::create_directories(configDir);
+    WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
+
+    std::string yaml = MinimalValidYaml();
+    const std::string marker = "uninstaller:\n  requireAdmin: true\n";
+    const std::string unsupported =
+        "uninstaller:\n"
+        "  requireAdmin: true\n"
+        "  detect:\n"
+        "    installState:\n"
+        "      path: HKEY_CURRENT_USER\\\\Software\\\\OldApp\n"
+        "      installDirValue: InstallDir\n";
+    const size_t pos = yaml.find(marker);
+    Require(pos != std::string::npos, "Minimal yaml should contain uninstaller marker");
+    yaml.replace(pos, marker.size(), unsupported);
+    WriteTextFile(configDir / "packager.yaml", yaml);
+
+    ConfigurationManager manager;
+    Require(!manager.initialize(inputDir.string(), configDir.string()),
+            "uninstaller.detect should be rejected");
+    Require(manager.getLastError().find("Unsupported field 'uninstaller.detect'") != std::string::npos,
+            "uninstaller.detect rejection should point to installer.installState.detect");
+}
+
+void TestRejectLegacySystemUninstallEntryFields() {
+    fs::path root = CreateTestRoot("reject_legacy_system_uninstall_fields");
+    fs::path inputDir = root / "payload";
+    fs::path configDir = root / "config";
+    fs::create_directories(inputDir / "bin");
+    fs::create_directories(inputDir / "templates");
+    fs::create_directories(configDir);
+    WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
+
+    {
+        std::string yaml = MinimalValidYaml();
+        ReplaceAll(yaml, "  systemUninstallEntry:\n    scope: machine",
+                   "  systemUninstallEntry:\n    enabled: true\n    scope: machine");
+        WriteTextFile(configDir / "packager.yaml", yaml);
+        ConfigurationManager manager;
+        Require(!manager.initialize(inputDir.string(), configDir.string()),
+                "installer.systemUninstallEntry.enabled should be rejected");
+    }
+    {
+        std::string yaml = MinimalValidYaml();
+        ReplaceAll(yaml,
+                   "    systemUninstallEntry:\n      scope: machine\n      displayName: Sample Desktop App",
+                   "    systemUninstallEntry: auto");
+        WriteTextFile(configDir / "packager.yaml", yaml);
+        ConfigurationManager manager;
+        Require(!manager.initialize(inputDir.string(), configDir.string()),
+                "uninstaller.cleanup.systemUninstallEntry string should be rejected");
+    }
+    {
+        std::string yaml = MinimalValidYaml();
+        ReplaceAll(yaml,
+                   "      startupNames:\n        - SampleDesktopApp\n",
+                   "      startupNames:\n        - SampleDesktopApp\n      uninstallEntries:\n        - name: SampleDesktopApp\n          scope: both\n");
+        WriteTextFile(configDir / "packager.yaml", yaml);
+        ConfigurationManager manager;
+        Require(!manager.initialize(inputDir.string(), configDir.string()),
+                "uninstaller.cleanup.legacy.uninstallEntries should be rejected");
+    }
 }
 
 void TestConfigurationLoadsOnlyFromConfigDirectoryAndResolvesIconThere() {
@@ -452,7 +590,6 @@ void TestConfigurationLoadsOnlyFromConfigDirectoryAndResolvesIconThere() {
     const std::string marker = "  website: https://example.com\n";
     size_t position = yaml.find(marker);
     Require(position != std::string::npos, "Minimal YAML marker should exist");
-    yaml.insert(position + marker.size(), "  product:\n    icon: app.ico\n");
     WriteTextFile(configDir / "packager.yaml", yaml);
 
     ConfigurationManager manager;
@@ -461,7 +598,7 @@ void TestConfigurationLoadsOnlyFromConfigDirectoryAndResolvesIconThere() {
                                            : manager.getLastError());
     Require(manager.getConfigFilePath().find("config") != std::string::npos,
             "Configuration should be loaded from config directory");
-    Require(manager.getConfiguration().app.product.iconPath == "app.ico",
+    Require(manager.getConfiguration().app.icon == "app.ico",
             "Icon path should be read from config directory packager.yaml");
 }
 
@@ -473,6 +610,7 @@ void TestRequireAdminFalseRejectsAdminOnlyConfiguration() {
         fs::create_directories(inputDir / "bin");
         fs::create_directories(inputDir / "templates");
         fs::create_directories(configDir);
+        WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
         std::string yaml = MinimalValidYaml();
         ReplaceAll(yaml, "  requireAdmin: true", "  requireAdmin: false");
         WriteTextFile(configDir / "packager.yaml", yaml);
@@ -488,6 +626,7 @@ void TestRequireAdminFalseRejectsAdminOnlyConfiguration() {
         fs::create_directories(inputDir / "bin");
         fs::create_directories(inputDir / "templates");
         fs::create_directories(configDir);
+        WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
         std::string yaml = MinimalValidYaml();
         ReplaceAll(yaml, "  requireAdmin: true", "  requireAdmin: false");
         ReplaceAll(yaml, "  defaultDir: \"%ProgramFiles%\\\\SampleDesktopApp\"",
@@ -496,7 +635,7 @@ void TestRequireAdminFalseRejectsAdminOnlyConfiguration() {
 
         ConfigurationManager manager;
         Require(!manager.initialize(inputDir.string(), configDir.string()),
-                "requireAdmin=false should reject HKLM installInfo path");
+                "requireAdmin=false should reject HKLM installState path");
     }
     {
         fs::path root = CreateTestRoot("require_admin_false_hklm_on_install");
@@ -505,18 +644,56 @@ void TestRequireAdminFalseRejectsAdminOnlyConfiguration() {
         fs::create_directories(inputDir / "bin");
         fs::create_directories(inputDir / "templates");
         fs::create_directories(configDir);
+        WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
         std::string yaml = MinimalValidYaml();
         ReplaceAll(yaml, "  requireAdmin: true", "  requireAdmin: false");
         ReplaceAll(yaml, "  defaultDir: \"%ProgramFiles%\\\\SampleDesktopApp\"",
                    "  defaultDir: \"%LocalAppData%\\\\SampleDesktopApp\"");
-        ReplaceAll(yaml, "    path: HKEY_LOCAL_MACHINE\\\\Software\\\\SampleDesktopApp",
-                   "    path: HKEY_CURRENT_USER\\\\Software\\\\SampleDesktopApp");
+        ReplaceAll(yaml, "        path: HKEY_LOCAL_MACHINE\\\\Software\\\\SampleDesktopApp",
+                   "        path: HKEY_CURRENT_USER\\\\Software\\\\SampleDesktopApp");
         WriteTextFile(configDir / "packager.yaml", yaml);
 
         ConfigurationManager manager;
         Require(!manager.initialize(inputDir.string(), configDir.string()),
                 "requireAdmin=false should reject HKLM lifecycle registry path");
     }
+}
+
+void TestInstallStateDetectValidationSupportsLegacySources() {
+    fs::path root = CreateTestRoot("detect_validation");
+    fs::path inputDir = root / "payload";
+    fs::path configDir = root / "config";
+    fs::create_directories(inputDir / "bin");
+    fs::create_directories(configDir);
+    WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
+
+    PackagerConfiguration config = BuildConfigFixture();
+    config.installer.defaultDir = "%LocalAppData%\\SampleDesktopApp";
+    config.installer.requireAdmin = false;
+    config.installer.systemUninstallEntry.scope = UninstallEntryScope::CURRENT_USER;
+    config.installer.registry.write.clear();
+    config.installer.installState.registries[0].path =
+        "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\DetectValidation";
+    config.installer.payload.clear();
+    PayloadConfig payload;
+    payload.id = "app";
+    payload.source = "bin";
+    payload.target = "%InstallDir%";
+    config.installer.payload.push_back(payload);
+    config.installer.components.clear();
+    config.installer.installState.detect.primary = InstalledInstanceDetectPrimaryConfig{};
+
+    ConfigurationValidator validator;
+    auto valid = validator.validate(config, inputDir.string(), configDir.string());
+    Require(valid.isValid, valid.errors.empty() ? "legacy-only detect should validate" : valid.errors.front());
+
+    config.installer.installState.detect.legacy.push_back(config.installer.installState.detect.legacy.front());
+    auto duplicate = validator.validate(config, inputDir.string(), configDir.string());
+    Require(!duplicate.isValid, "Duplicate legacy detect ids should fail validation");
+
+    config.installer.installState.detect.legacy.clear();
+    auto missing = validator.validate(config, inputDir.string(), configDir.string());
+    Require(!missing.isValid, "Empty installer.installState.detect should fail validation");
 }
 
 #ifdef _WIN32
@@ -618,8 +795,8 @@ PackagerConfiguration BuildConfigFixture() {
     config.app.name = "Sample Desktop App";
     config.app.id = "SampleDesktopApp";
     config.app.version = "1.2.3";
-    config.app.directoryName = "SampleDesktopApp";
     config.app.website = "https://example.com";
+    config.app.publisher = "OpenAI";
     config.ui.desktopShortcut.defaultName = "Sample Shortcut";
     config.ui.desktopShortcut.i18n["zh_CN"] = "示例应用";
     config.ui.desktopShortcut.i18n["en_US"] = "Sample Shortcut";
@@ -628,44 +805,74 @@ PackagerConfiguration BuildConfigFixture() {
     link.url = "https://example.com";
     config.ui.links.push_back(link);
 
-    config.install.defaultDir = "%ProgramFiles%\\SampleDesktopApp";
-    config.install.requireAdmin = true;
-    config.install.useMutex = true;
-    config.install.mutexName = "Global\\SampleDesktopApp_Install";
-    config.install.installInfo.path = "HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp";
+    config.installer.defaultDir = "%ProgramFiles%\\SampleDesktopApp";
+    config.installer.directoryName = "SampleDesktopApp";
+    config.installer.requireAdmin = true;
+    config.installer.mutex = "Global\\SampleDesktopApp_Install";
+    config.installer.defaults.autoStartup = false;
+    config.installer.defaults.desktopShortcut = true;
+    config.installer.minWindows.major = 10;
+    config.installer.minWindows.minor = 0;
+    config.installer.minWindows.build = 19045;
+    config.installer.largeFileThresholdBytes = 4 * 1024 * 1024;
+    config.installer.killBeforeInstall.push_back("SampleDesktopApp.exe");
 
-    InstallInfoValueConfig installDirValue;
+    InstallStateRegistryStoreConfig registryStore;
+    registryStore.id = "mainRegistry";
+    registryStore.path = "HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp";
+    InstallStateValueConfig installDirValue;
     installDirValue.key = "InstallDir";
     installDirValue.value = "%InstallDir%";
     installDirValue.type = RegistryValueType::EXPAND_STRING;
-    config.install.installInfo.values["installDir"] = installDirValue;
-
-    InstallInfoValueConfig displayNameValue;
+    registryStore.values["installDir"] = installDirValue;
+    InstallStateValueConfig displayNameValue;
     displayNameValue.key = "DisplayName";
     displayNameValue.value = "%AppName%";
-    config.install.installInfo.values["displayName"] = displayNameValue;
-
-    InstallInfoValueConfig versionValue;
+    registryStore.values["displayName"] = displayNameValue;
+    InstallStateValueConfig versionValue;
     versionValue.key = "Version";
     versionValue.value = "%Version%";
-    config.install.installInfo.values["displayVersion"] = versionValue;
-
-    InstallInfoValueConfig executableValue;
+    registryStore.values["displayVersion"] = versionValue;
+    InstallStateValueConfig executableValue;
     executableValue.key = "ExecutablePath";
     executableValue.value = "%InstallDir%\\SampleDesktopApp.exe";
     executableValue.type = RegistryValueType::EXPAND_STRING;
-    config.install.installInfo.values["executablePath"] = executableValue;
-
-    InstallInfoValueConfig stateValue;
+    registryStore.values["executablePath"] = executableValue;
+    InstallStateValueConfig stateValue;
     stateValue.key = "InstallState";
     stateValue.value = "%InstallState%";
-    config.install.installInfo.values["installState"] = stateValue;
+    registryStore.values["installState"] = stateValue;
+    InstallStateValueConfig customRegistryValue;
+    customRegistryValue.key = "Channel";
+    customRegistryValue.value = "stable";
+    customRegistryValue.type = RegistryValueType::STRING;
+    registryStore.values["channel"] = customRegistryValue;
+    config.installer.installState.registries.push_back(registryStore);
 
-    LayoutFolderConfig appFolder;
-    appFolder.id = "app";
-    appFolder.source = "bin";
-    appFolder.target = "%InstallDir%";
-    config.layout.folders.push_back(appFolder);
+    InstallStateFileStoreConfig fileStore;
+    fileStore.id = "mainFile";
+    fileStore.path = "%InstallDir%\\install.state.json";
+    fileStore.format = "json";
+    InstallStateValueConfig fileInstallDir;
+    fileInstallDir.name = "installDir";
+    fileInstallDir.value = "%InstallDir%";
+    fileStore.values["installDir"] = fileInstallDir;
+    InstallStateValueConfig customFileValue;
+    customFileValue.name = "customValue";
+    customFileValue.value = "custom";
+    fileStore.values["customValue"] = customFileValue;
+    config.installer.installState.files.push_back(fileStore);
+
+    config.installer.systemUninstallEntry.scope = UninstallEntryScope::LOCAL_MACHINE;
+    config.installer.systemUninstallEntry.displayName = "Sample Desktop App";
+    config.installer.systemUninstallEntry.publisher = "OpenAI";
+
+    PayloadConfig payload;
+    payload.id = "app";
+    payload.source = "bin";
+    payload.target = "%InstallDir%";
+    payload.required = true;
+    config.installer.payload.push_back(payload);
 
     ComponentConfig component;
     component.id = "core";
@@ -674,57 +881,63 @@ PackagerConfiguration BuildConfigFixture() {
     component.defaultSelected = true;
     component.folders.push_back("app");
     component.source.type = ComponentSourceType::EMBEDDED;
-    config.layout.components.push_back(component);
+    config.installer.components.push_back(component);
 
     RegistryEntry installRegistry;
     installRegistry.path = "HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp";
     installRegistry.key = "Publisher";
     installRegistry.value = "OpenAI";
     installRegistry.type = RegistryValueType::STRING;
-    config.lifecycle.registry.onInstall.push_back(installRegistry);
+    InstallerRegistryWriteGroup registryWrite;
+    registryWrite.path = installRegistry.path;
+    InstallStateValueConfig publisherValue;
+    publisherValue.value = installRegistry.value;
+    publisherValue.type = installRegistry.type;
+    registryWrite.values["Publisher"] = publisherValue;
+    config.installer.registry.write.push_back(std::move(registryWrite));
 
-    RegistryLookupEntry installRoot;
-    installRoot.path = "HKEY_LOCAL_MACHINE\\Software\\SampleDesktopApp";
-    installRoot.key = "InstallDir";
-    config.lifecycle.cleanup.onUpgrade.installRoots.push_back(installRoot);
-
-    UninstallEntryCleanup uninstallEntry;
-    uninstallEntry.name = "SampleDesktopApp";
-    uninstallEntry.scope = UninstallEntryScope::ANY;
-    config.lifecycle.cleanup.onUpgrade.uninstallEntries.push_back(uninstallEntry);
-    config.lifecycle.cleanup.onUninstall.uninstallEntries.push_back(uninstallEntry);
-
-    NamedCleanupEntry shortcut;
-    shortcut.name = "Sample Desktop App";
-    config.lifecycle.cleanup.onUpgrade.shortcuts.push_back(shortcut);
-    config.lifecycle.cleanup.onUninstall.shortcuts.push_back(shortcut);
-
-    NamedCleanupEntry startup;
-    startup.name = "SampleDesktopApp";
-    config.lifecycle.cleanup.onUpgrade.startup.push_back(startup);
-    config.lifecycle.cleanup.onUninstall.startup.push_back(startup);
-
-    NamedCleanupEntry process;
-    process.name = "SampleDesktopApp.exe";
-    config.lifecycle.cleanup.onUninstall.processes.push_back(process);
+    SystemUninstallEntryCleanupItem installerLegacyUninstallEntry;
+    installerLegacyUninstallEntry.displayName = "SampleDesktopApp";
+    installerLegacyUninstallEntry.scope = UninstallEntryScope::BOTH;
+    config.installer.cleanup.systemUninstallEntry.legacyEntries.push_back(installerLegacyUninstallEntry);
 
     RegistryEntry legacyRegistry;
     legacyRegistry.path = "HKEY_CURRENT_USER\\Software\\SampleDesktopAppLegacy";
     legacyRegistry.key = "";
-    config.lifecycle.cleanup.onUpgrade.registry.legacyKeys.push_back(legacyRegistry);
-    config.lifecycle.cleanup.onUninstall.registry.legacyKeys.push_back(legacyRegistry);
-
-    UninstallCleanupRule upgradePath;
-    upgradePath.path = "%LocalAppData%\\SampleDesktopAppLegacy";
-    upgradePath.recursive = true;
-    upgradePath.onlyIfEmpty = false;
-    config.lifecycle.cleanup.onUpgrade.extraPaths.push_back(upgradePath);
 
     UninstallCleanupRule uninstallPath;
     uninstallPath.path = "%LocalAppData%\\SampleDesktopApp\\Cache";
     uninstallPath.recursive = true;
     uninstallPath.onlyIfEmpty = false;
-    config.lifecycle.cleanup.onUninstall.paths.push_back(uninstallPath);
+
+    config.installer.ui = config.ui;
+    config.uninstaller.requireAdmin = true;
+    config.installer.installState.detect.primary.registry = "mainRegistry";
+    config.installer.installState.detect.primary.value = "installDir";
+    InstalledInstanceDetectInstallStateConfig legacyDetect;
+    legacyDetect.id = "legacy_v2";
+    legacyDetect.path = "HKEY_CURRENT_USER\\Software\\SampleDesktopAppLegacy";
+    legacyDetect.installDirValue = "InstallPath";
+    config.installer.installState.detect.legacy.push_back(legacyDetect);
+    config.uninstaller.killBeforeUninstall.push_back("SampleDesktopApp.exe");
+    config.uninstaller.cleanup.installedFiles = "manifest";
+    config.uninstaller.cleanup.missingManifestFallback = "safeDirectoryFallback";
+    config.uninstaller.cleanup.installState = "delete";
+    config.uninstaller.cleanup.autoStartup = "auto";
+    config.uninstaller.cleanup.desktopShortcut = "auto";
+    config.uninstaller.cleanup.systemUninstallEntry.displayName = "Sample Desktop App";
+    config.uninstaller.cleanup.systemUninstallEntry.scope = UninstallEntryScope::LOCAL_MACHINE;
+    SystemUninstallEntryCleanupItem uninstallerLegacyUninstallEntry;
+    uninstallerLegacyUninstallEntry.displayName = "SampleDesktopApp";
+    uninstallerLegacyUninstallEntry.scope = UninstallEntryScope::CURRENT_USER;
+    config.uninstaller.cleanup.systemUninstallEntry.legacyEntries.push_back(uninstallerLegacyUninstallEntry);
+    config.uninstaller.cleanup.legacy.desktopShortcutNames.push_back("Sample Desktop App");
+    config.uninstaller.cleanup.legacy.startupNames.push_back("SampleDesktopApp");
+    config.uninstaller.cleanup.registry.deleteKeys.push_back("HKEY_CURRENT_USER\\Software\\SampleDesktopAppLegacy");
+    config.uninstaller.cleanup.registry.deleteValues.push_back(legacyRegistry);
+    config.uninstaller.cleanup.paths.push_back(uninstallPath);
+    config.uninstaller.ui.defaultLanguage = "zh_CN";
+    config.uninstaller.ui.title = "Uninstall Sample Desktop App";
 
     return config;
 }
@@ -744,18 +957,25 @@ void TestMetadataRoundTrip() {
     result.algorithm = CompressionAlgorithm::LZMA2_XZ;
     result.fileIndex.push_back({"SampleDesktopApp.exe", 0, 123});
 
-    MetadataGenerator generator;
-    ExtendedInstallationMetadata generated =
-        generator.generateExtendedMetadata({result}, {folder}, config);
-    std::vector<uint8_t> bytes =
-        SerializePackageManifest(PackageManifestFromExtendedMetadata(generated));
+    PackageManifestBuilder builder;
+    PackageManifest manifest = builder.build({result}, {folder}, config);
+    std::vector<uint8_t> bytes = SerializePackageManifest(manifest);
 
     MetadataParser parser;
     ExtendedInstallationMetadata parsed = parser.deserializeExtendedMetadata(bytes);
 
     Require(parser.validateMetadata(parsed), "Parsed metadata should validate");
-    Require(parsed.installInfo.path == config.install.installInfo.path, "installInfo path lost in metadata");
-    Require(parsed.installMutexName == config.install.mutexName, "mutex name lost in metadata");
+    Require(parsed.installState.detect.primary.registry == "mainRegistry" &&
+                parsed.installState.detect.primary.value == "installDir",
+            "v3 installState detection lost in metadata");
+    Require(parsed.installState.detect.legacy.size() == 1 &&
+                parsed.installState.detect.legacy[0].id == "legacy_v2",
+            "v3 legacy installState detection lost in metadata");
+    Require(parsed.installerCleanup.systemUninstallEntry.legacyEntries.size() == 1 &&
+                parsed.installerCleanup.systemUninstallEntry.legacyEntries[0].displayName == "SampleDesktopApp",
+            "v3 legacy uninstall entries should remain in installer cleanup metadata");
+    Require(parsed.installState.registries.size() == 1, "v3 installState registry store lost in metadata");
+    Require(parsed.installMutexName == config.installer.mutex, "mutex name lost in metadata");
     Require(parsed.extendedPayloadMappings.size() == 1, "Expected one extended payload mapping");
     Require(parsed.extendedPayloadMappings[0].target == "%InstallDir%", "Folder target lost in metadata");
     Require(parsed.desktopShortcutDefaultName == "Sample Shortcut",
@@ -764,8 +984,10 @@ void TestMetadataRoundTrip() {
             "Desktop shortcut localized names lost in metadata");
     Require(parsed.uiLinkBindings.size() == 1, "UI links lost in metadata");
     Require(parsed.layoutComponents.size() == 1, "Components lost in metadata");
-    Require(parsed.lifecycleUpgradeCleanup.installRoots.size() == 1, "Upgrade installRoots lost in metadata");
-    Require(parsed.lifecycleUninstallCleanup.processes.size() == 1, "Uninstall processes lost in metadata");
+    Require(parsed.uninstallerCleanup.missingManifestFallback == "safeDirectoryFallback",
+            "v3 uninstall cleanup policy lost in metadata");
+    Require(parsed.uninstallerKillBeforeUninstall.size() == 1,
+            "Uninstall process policy should remain in v3 uninstaller metadata");
 }
 
 void TestPackageManifestBuilderAndCodecRoundTrip() {
@@ -786,8 +1008,34 @@ void TestPackageManifestBuilderAndCodecRoundTrip() {
     PackageManifestBuilder builder;
     PackageManifest manifest = builder.build({result}, {folder}, config);
     Require(manifest.identity.appName == config.app.name, "Manifest identity app name mismatch");
+    Require(manifest.identity.appPublisher == "OpenAI", "Manifest app publisher mismatch");
+    Require(manifest.install.defaultDir == config.installer.defaultDir,
+            "Manifest installer defaultDir mismatch");
+    Require(manifest.install.installState.registries.size() == 1,
+            "Manifest installState registry store lost");
+    Require(manifest.install.installState.files.size() == 1,
+            "Manifest installState file store lost");
+    Require(manifest.install.installState.registries[0].values.at("channel").value == "stable",
+            "Manifest custom registry installState value lost");
+    Require(manifest.install.installState.files[0].values.at("customValue").value == "custom",
+            "Manifest custom file installState value lost");
+    Require(manifest.install.systemUninstallEntry.displayName == "Sample Desktop App",
+            "Manifest system uninstall entry lost");
+    Require(manifest.install.registryWrite.size() == 1,
+            "Manifest registry.write lost");
     Require(manifest.payload.folders.size() == 1, "Manifest payload folder count mismatch");
+    Require(manifest.payload.folders[0].source == "bin", "Manifest payload source mismatch");
     Require(manifest.payload.folders[0].target == "%InstallDir%", "Manifest folder target mismatch");
+    Require(manifest.payload.folders[0].required, "Manifest payload required flag mismatch");
+    Require(manifest.components.definitions.size() == 1,
+            "Manifest v3 component definitions lost");
+    Require(manifest.components.definitions[0].payloadRefs[0] == "app",
+            "Manifest component payload refs lost");
+    Require(manifest.install.installState.detect.primary.registry == "mainRegistry" &&
+                manifest.install.installState.detect.primary.value == "installDir",
+            "Manifest installState detect policy lost");
+    Require(manifest.install.installState.detect.legacy.size() == 1,
+            "Manifest legacy installState detect policy lost");
     Require(manifest.ui.desktopShortcutLocalizedNames.at("zh_CN") == "示例应用",
             "Manifest UI localized shortcut mismatch");
 
@@ -802,16 +1050,52 @@ void TestPackageManifestBuilderAndCodecRoundTrip() {
             parseError.empty() ? "Manifest should deserialize" : parseError);
     Require(parsed.payload.folders[0].algorithm == CompressionAlgorithm::ZSTD,
             "Manifest payload algorithm lost after codec round-trip");
+    Require(parsed.payload.folders[0].source == "bin",
+            "Manifest payload source lost after codec round-trip");
+    Require(parsed.payload.folders[0].required,
+            "Manifest payload required flag lost after codec round-trip");
+    Require(parsed.install.installState.registries[0].values.at("channel").value == "stable",
+            "Manifest registry installState value lost after codec round-trip");
+    Require(parsed.install.installState.files[0].values.at("customValue").name == "customValue",
+            "Manifest file installState value name lost after codec round-trip");
+    Require(parsed.install.systemUninstallEntry.scope == UninstallEntryScope::LOCAL_MACHINE,
+            "Manifest system uninstall entry lost after codec round-trip");
+    Require(parsed.install.registryWrite.size() == 1,
+            "Manifest registry.write lost after codec round-trip");
+    Require(parsed.install.registryWrite[0].values.at("Publisher").value == "OpenAI",
+            "Manifest registry.write lost after codec round-trip");
     Require(parsed.ui.desktopShortcutDefaultName == "Sample Shortcut",
             "Manifest UI default shortcut lost after codec round-trip");
     Require(parsed.components.components.size() == 1,
             "Manifest components lost after codec round-trip");
+    Require(parsed.components.definitions[0].installAction.command.empty(),
+            "Manifest component install action should round-trip");
+    Require(parsed.lifecycle.uninstaller.cleanup.registry.deleteKeys.size() == 1,
+            "Manifest uninstaller cleanup policy lost after codec round-trip");
+    Require(parsed.install.installState.detect.legacy[0].installDirValue == "InstallPath",
+            "Manifest legacy detect policy lost after codec round-trip");
 
     MetadataParser parser;
     ExtendedInstallationMetadata projected = parser.deserializeExtendedMetadata(bytes);
     Require(parser.validateMetadata(projected), "Projected manifest should validate as metadata");
     Require(projected.extendedPayloadMappings[0].target == "%InstallDir%",
             "Projected metadata target mismatch");
+    Require(projected.installState.registries[0].values.at("channel").value == "stable",
+            "Projected metadata should preserve v3 installState registry store");
+    Require(projected.installerRegistryWrite.size() == 1 &&
+                projected.installerRegistryWrite[0].values.at("Publisher").value == "OpenAI",
+            "Projected metadata should expose v3 registry.write for current runtime");
+    Require(projected.systemUninstallEntry.displayName == "Sample Desktop App" &&
+                projected.systemUninstallEntry.scope == UninstallEntryScope::LOCAL_MACHINE,
+            "Projected metadata should include v3 system uninstall entry");
+    Require(projected.installState.detect.primary.registry == "mainRegistry" &&
+                projected.installState.detect.primary.value == "installDir",
+            "Projected metadata should include v3 installState detection");
+    Require(projected.installState.detect.legacy.size() == 1 &&
+                projected.installState.detect.legacy[0].id == "legacy_v2",
+            "Projected metadata should include v3 legacy installState detection");
+    Require(projected.uninstallerCleanup.missingManifestFallback == "safeDirectoryFallback",
+            "Projected metadata should include v3 cleanup fallback policy");
 }
 
 void TestPackageManifestValidatorRejectsInvalidPayloadAndComponents() {
@@ -866,17 +1150,88 @@ void TestPathResolverExpandEnvironmentVariables() {
             "Expanded path should keep suffix");
 }
 
+void TestInstallStateStoreApplyAndCleanup() {
+    fs::path root = CreateTestRoot("install_state_store");
+    const std::string registryPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\InstallStateStore";
+    deleteRegistryPath(registryPath);
+
+    InstallStateConfig config;
+    InstallStateRegistryStoreConfig registryStore;
+    registryStore.id = "main";
+    registryStore.path = registryPath;
+    InstallStateValueConfig installDirValue;
+    installDirValue.key = "InstallDir";
+    installDirValue.value = "%InstallDir%";
+    installDirValue.type = RegistryValueType::EXPAND_STRING;
+    registryStore.values["installDir"] = installDirValue;
+    InstallStateValueConfig stateValue;
+    stateValue.key = "InstallState";
+    stateValue.value = "%InstallState%";
+    registryStore.values["installState"] = stateValue;
+    InstallStateValueConfig appIdValue;
+    appIdValue.key = "AppId";
+    appIdValue.value = "%AppId%";
+    registryStore.values["appId"] = appIdValue;
+    config.registries.push_back(registryStore);
+
+    InstallStateFileStoreConfig fileStore;
+    fileStore.id = "file";
+    fileStore.path = (root / "state" / "install-state.json").string();
+    fileStore.format = "json";
+    InstallStateValueConfig customFileValue;
+    customFileValue.name = "custom";
+    customFileValue.value = "%AppId%:%InstallState%";
+    fileStore.values["customValue"] = customFileValue;
+    config.files.push_back(fileStore);
+
+    InstallerPathResolver resolver;
+    InstallStateContext context;
+    context.installDir = (root / "App").string();
+    context.version = "1.2.3";
+    context.appName = "Sample Desktop App";
+    context.appId = "SampleDesktopApp";
+    context.installSource = "C:\\Installer\\setup.exe";
+    context.state = "installed";
+    context.userName = "schema-user";
+
+    Require(ApplyInstallState(config, context, resolver), "ApplyInstallState should succeed");
+    std::string value;
+    Require(readRegistryStringValue(registryPath, "InstallDir", value),
+            "InstallDir registry value should be written");
+    Require(value == context.installDir, "InstallDir token should expand");
+    Require(readRegistryStringValue(registryPath, "AppId", value),
+            "AppId registry value should be written");
+    Require(value == "SampleDesktopApp", "AppId token should expand");
+
+    nlohmann::json fileJson;
+    Require(readManifest(fileStore.path, fileJson), "InstallState file store should be readable JSON");
+    Require(fileJson["custom"] == "SampleDesktopApp:installed",
+            "File store custom value should expand tokens");
+
+    Require(CleanupInstallState(config, "markUninstalled", context, resolver),
+            "markUninstalled cleanup should succeed");
+    Require(readRegistryStringValue(registryPath, "InstallState", value),
+            "InstallState registry value should still exist after markUninstalled");
+    Require(value == "uninstalled", "markUninstalled should update install state");
+
+    Require(CleanupInstallState(config, "keep", context, resolver),
+            "keep cleanup should succeed");
+    Require(fs::exists(fileStore.path), "keep cleanup should not remove file store");
+
+    Require(CleanupInstallState(config, "delete", context, resolver),
+            "delete cleanup should succeed");
+    Require(!readRegistryStringValue(registryPath, "InstallDir", value),
+            "delete cleanup should remove registry values");
+    Require(!fs::exists(fileStore.path), "delete cleanup should remove file store");
+    deleteRegistryPath(registryPath);
+}
+
 void TestWriteManifestPreservesExplicitCleanupSchema() {
     fs::path root = CreateTestRoot("manifest_schema");
     fs::path manifestPath = root / "install.manifest.json";
 
-    InstallInfoConfig installInfo;
-    installInfo.path = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\Manifest";
-    InstallInfoValueConfig installDirValue;
-    installDirValue.key = "InstallDir";
-    installDirValue.value = "%InstallDir%";
-    installDirValue.type = RegistryValueType::EXPAND_STRING;
-    installInfo.values["installDir"] = installDirValue;
+    const std::string stateRegistryPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\Manifest";
+    InstallStateConfig installState = BuildTestInstallStateConfig(stateRegistryPath);
 
     UninstallCleanupConfig cleanup;
     NamedCleanupEntry process;
@@ -901,6 +1256,8 @@ void TestWriteManifestPreservesExplicitCleanupSchema() {
     pathRule.recursive = true;
     pathRule.onlyIfEmpty = false;
     cleanup.paths.push_back(pathRule);
+    UninstallerCleanupConfigV3 uninstallerCleanupV3;
+    uninstallerCleanupV3.paths.push_back(pathRule);
 
     bool ok = writeManifest(manifestPath.string(),
                             "SampleDesktopApp",
@@ -910,29 +1267,42 @@ void TestWriteManifestPreservesExplicitCleanupSchema() {
                             {"C:\\Apps\\SampleDesktopApp"},
                             cleanup,
                             {"C:\\Apps\\SampleDesktopApp\\SampleDesktopApp.exe"},
-                            {},
                             {"SampleDesktopApp.exe"},
                             true,
                             true,
                             "Sample Desktop App",
-                            installInfo,
+                            installState,
+                            "delete",
                             "C:\\Apps\\SampleDesktopApp\\uninstall.exe",
                             "zh_CN",
-                            {});
+                            {},
+                            {},
+                            false,
+                            {},
+                            {},
+                            uninstallerCleanupV3);
     Require(ok, "writeManifest should succeed");
 
     nlohmann::json manifest;
     Require(readManifest(manifestPath.string(), manifest), "Manifest should round-trip as JSON");
-    Require(manifest.contains("lifecycleUninstallCleanup"),
-            "Manifest should contain lifecycleUninstallCleanup");
-    Require(manifest["lifecycleUninstallCleanup"]["processes"].size() == 1,
-            "Manifest should persist uninstall processes");
-    Require(manifest["lifecycleUninstallCleanup"]["uninstallEntries"]["entries"].size() == 1,
-            "Manifest should persist uninstall entries");
-    Require(manifest["installInfo"]["path"].is_string(),
-            "Manifest should contain installInfo.path");
-    Require(manifest["installInfo"]["values"]["installDir"]["key"] == "InstallDir",
-            "Manifest should persist installInfo values");
+    Require(!manifest.contains("lifecycleUninstallCleanup"),
+            "Manifest should not persist legacy lifecycleUninstallCleanup");
+    Require(manifest["systemUninstallEntry"]["writtenEntries"].size() == 1,
+            "Manifest should persist system uninstall entry snapshot");
+    Require(manifest["installState"]["registries"].size() == 1,
+            "Manifest should persist v3 installState registries");
+    Require(manifest["installState"]["registries"][0]["path"] == stateRegistryPath,
+            "Manifest should persist v3 installState registry path");
+    Require(manifest["uninstaller"]["cleanup"]["installState"] == "delete",
+            "Manifest should persist installState cleanup mode");
+    Require(manifest["app"]["id"] == "SampleDesktopApp",
+            "Manifest should persist v3 app snapshot");
+    Require(manifest["installer"]["payload"]["files"].is_array(),
+            "Manifest should persist v3 payload file snapshot");
+    Require(manifest["uninstaller"]["cleanup"]["paths"].size() == 1,
+            "Manifest should persist v3 uninstall cleanup paths");
+    Require(manifest["uninstaller"]["cleanup"]["actual"]["systemUninstallEntry"].size() == 1,
+            "Manifest should persist actual system uninstall entries");
 }
 
 void TestInstallerArgsParseUpgrade() {
@@ -955,12 +1325,8 @@ void TestInstallManifestPersistsPreviousInstallOptions() {
     fs::path root = CreateTestRoot("previous_install_options");
     fs::path manifestPath = root / "install.manifest.json";
 
-    InstallInfoConfig installInfo;
-    installInfo.path = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\PreviousOptions";
-    InstallInfoValueConfig installDirValue;
-    installDirValue.key = "InstallDir";
-    installDirValue.value = "%InstallDir%";
-    installInfo.values["installDir"] = installDirValue;
+    InstallStateConfig installState =
+        BuildTestInstallStateConfig("HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\PreviousOptions");
 
     Require(writeManifest(manifestPath.string(),
                           "SampleDesktopApp",
@@ -971,11 +1337,11 @@ void TestInstallManifestPersistsPreviousInstallOptions() {
                           UninstallCleanupConfig{},
                           {},
                           {},
-                          {},
                           true,
                           false,
                           "",
-                          installInfo,
+                          installState,
+                          "markUninstalled",
                           "",
                           "zh_CN",
                           {},
@@ -1001,8 +1367,8 @@ void TestInstallManifestPersistsPreviousInstallOptions() {
             "Missing selectedComponentIds/installAllComponents should fail previous option loading");
 }
 
-void TestBuildInstallExecutionPlanUsesConfiguredInstallRoots() {
-    fs::path root = CreateTestRoot("install_plan_roots");
+void TestBuildInstallExecutionPlanUsesV3InstallStateDiscovery() {
+    fs::path root = CreateTestRoot("install_plan_v3_state");
     fs::path previousInstallDir = root / "OldInstall";
     fs::create_directories(previousInstallDir);
     WriteTextFile(previousInstallDir / "install.manifest.json", R"({"desktopShortcutDisplayName":"Old Shortcut","installDir":"PLACEHOLDER"})");
@@ -1021,15 +1387,9 @@ void TestBuildInstallExecutionPlanUsesConfiguredInstallRoots() {
     metadata.appId = "SampleDesktopApp";
     metadata.appDirectoryName = "SampleDesktopApp";
     metadata.installDefaultDir = "%ProgramFiles%\\SampleDesktopApp";
-    metadata.installInfo.path = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\CurrentInstall";
-    InstallInfoValueConfig installDirValue;
-    installDirValue.key = "InstallDir";
-    installDirValue.value = "%InstallDir%";
-    metadata.installInfo.values["installDir"] = installDirValue;
-    RegistryLookupEntry lookup;
-    lookup.path = registryPath;
-    lookup.key = "InstallDir";
-    metadata.lifecycleUpgradeCleanup.installRoots.push_back(lookup);
+    metadata.installState = BuildTestInstallStateConfig(registryPath);
+    metadata.installState.detect.primary.registry = "main";
+    metadata.installState.detect.primary.value = "installDir";
 
     InstallServiceOptions options;
     options.installPath = "C:\\NewInstallPath";
@@ -1042,10 +1402,10 @@ void TestBuildInstallExecutionPlanUsesConfiguredInstallRoots() {
     deleteRegistryPath(registryPath);
 
     Require(built, error.empty() ? "BuildInstallExecutionPlan should succeed" : error);
-    Require(plan.hasPreviousInstall, "Plan should detect previous install from installRoots");
+    Require(plan.hasPreviousInstall, "Plan should detect previous install from v3 installState");
     Require(normalizePathForCompare(plan.previousInstallDir) ==
                 normalizePathForCompare(previousInstallDir.string()),
-            "Previous install dir should come from configured installRoots");
+            "Previous install dir should come from configured v3 installState");
     Require(plan.pathDecision.mode == InstallTargetMode::OverwriteInstall,
             "Plan should enter overwrite mode when previous install is found");
     Require(normalizePathForCompare(plan.pathDecision.resolvedInstallRoot) ==
@@ -1056,7 +1416,7 @@ void TestBuildInstallExecutionPlanUsesConfiguredInstallRoots() {
             "Overwrite cleanup target should remain the previous install root");
 }
 
-void TestBuildInstallExecutionPlanUpgradeUsesInstallInfoRegistry() {
+void TestBuildInstallExecutionPlanUpgradeUsesV3InstallStateRegistry() {
     fs::path root = CreateTestRoot("upgrade_plan_registry");
     fs::path previousInstallDir = root / "PreviousInstall";
     fs::create_directories(previousInstallDir);
@@ -1070,18 +1430,16 @@ void TestBuildInstallExecutionPlanUpgradeUsesInstallInfoRegistry() {
     entry.value = previousInstallDir.string();
     entry.type = RegistryValueType::STRING;
     Require(writeRegistryValue(entry, previousInstallDir.string(), RegistryValueType::STRING),
-            "Failed to seed upgrade installInfo registry value");
+            "Failed to seed upgrade installState registry value");
 
     ExtendedInstallationMetadata metadata;
     metadata.appName = "Sample Desktop App";
     metadata.appId = "SampleDesktopApp";
     metadata.appDirectoryName = "SampleDesktopApp";
     metadata.installDefaultDir = "%ProgramFiles%\\SampleDesktopApp";
-    metadata.installInfo.path = registryPath;
-    InstallInfoValueConfig installDirValue;
-    installDirValue.key = "InstallDir";
-    installDirValue.value = "%InstallDir%";
-    metadata.installInfo.values["installDir"] = installDirValue;
+    metadata.installState = BuildTestInstallStateConfig(registryPath);
+    metadata.installState.detect.primary.registry = "main";
+    metadata.installState.detect.primary.value = "installDir";
 
     InstallServiceOptions options;
     options.upgradeMode = true;
@@ -1100,13 +1458,13 @@ void TestBuildInstallExecutionPlanUpgradeUsesInstallInfoRegistry() {
             "Upgrade plan should use UpgradeInstall mode");
     Require(normalizePathForCompare(plan.pathDecision.resolvedInstallRoot) ==
                 normalizePathForCompare(previousInstallDir.string()),
-            "Upgrade install root should come from installInfo registry");
+            "Upgrade install root should come from v3 installState registry");
     Require(normalizePathForCompare(plan.pathDecision.cleanupTargetInstallRoot) ==
                 normalizePathForCompare(previousInstallDir.string()),
             "Upgrade cleanup target should be previous install root");
 }
 
-void TestBuildInstallExecutionPlanUpgradeFailsWithoutManifest() {
+void TestBuildInstallExecutionPlanUpgradeAllowsMissingManifest() {
     fs::path root = CreateTestRoot("upgrade_plan_missing_manifest");
     fs::path previousInstallDir = root / "PreviousInstall";
     fs::create_directories(previousInstallDir);
@@ -1118,15 +1476,14 @@ void TestBuildInstallExecutionPlanUpgradeFailsWithoutManifest() {
     entry.value = previousInstallDir.string();
     entry.type = RegistryValueType::STRING;
     Require(writeRegistryValue(entry, previousInstallDir.string(), RegistryValueType::STRING),
-            "Failed to seed upgrade installInfo registry value");
+            "Failed to seed upgrade installState registry value");
 
     ExtendedInstallationMetadata metadata;
     metadata.appName = "Sample Desktop App";
     metadata.appId = "SampleDesktopApp";
-    metadata.installInfo.path = registryPath;
-    InstallInfoValueConfig installDirValue;
-    installDirValue.key = "InstallDir";
-    metadata.installInfo.values["installDir"] = installDirValue;
+    metadata.installState = BuildTestInstallStateConfig(registryPath);
+    metadata.installState.detect.primary.registry = "main";
+    metadata.installState.detect.primary.value = "installDir";
 
     InstallServiceOptions options;
     options.upgradeMode = true;
@@ -1137,40 +1494,102 @@ void TestBuildInstallExecutionPlanUpgradeFailsWithoutManifest() {
 
     deleteRegistryPath(registryPath);
 
-    Require(!built, "Upgrade plan should fail when previous manifest is missing");
-    Require(!error.empty(), "Upgrade plan failure should explain the missing previous install state");
+    Require(built, error.empty() ? "Upgrade plan should allow missing previous manifest" : error);
+    Require(plan.previousManifest.empty(), "Upgrade plan should leave previous manifest empty when it is missing");
+    Require(normalizePathForCompare(plan.previousInstallDir) == normalizePathForCompare(previousInstallDir.string()),
+            "Upgrade plan should still fix install dir to detected previous install dir");
 }
 
-void TestInstallRootsAreOnlyDiscoverySource() {
-    fs::path root = CreateTestRoot("install_roots_only_source");
-    fs::path currentInstallDir = root / "CurrentInstall";
-    fs::create_directories(currentInstallDir);
+void TestInstallStateResolverUsesLegacyDetectInOrder() {
+    fs::path root = CreateTestRoot("detect_legacy_order");
+    fs::path primaryDir = root / "PrimaryInstall";
+    fs::path legacyDir = root / "LegacyInstall";
+    fs::create_directories(legacyDir);
+    WriteTextFile(legacyDir / "install.manifest.json", R"({"appVersion":"1.0.0"})");
 
-    const std::string installInfoPath =
-        "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\InstallRootsOnlySource";
-    RegistryEntry seededRegistry;
-    seededRegistry.path = installInfoPath;
-    seededRegistry.key = "InstallDir";
-    seededRegistry.value = currentInstallDir.string();
-    seededRegistry.type = RegistryValueType::STRING;
-    Require(writeRegistryValue(seededRegistry, seededRegistry.value, seededRegistry.type),
-            "Failed to seed installInfo registry value");
+    const std::string primaryPath =
+        "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\DetectPrimaryMissing";
+    const std::string legacyPath =
+        "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\DetectLegacy";
+    RegistryEntry entry;
+    entry.path = primaryPath;
+    entry.key = "InstallDir";
+    entry.value = primaryDir.string();
+    entry.type = RegistryValueType::STRING;
+    Require(writeRegistryValue(entry, entry.value, entry.type),
+            "Failed to seed primary detect registry value");
+    entry.path = legacyPath;
+    entry.key = "LegacyPath";
+    entry.value = legacyDir.string();
+    Require(writeRegistryValue(entry, entry.value, entry.type),
+            "Failed to seed legacy detect registry value");
+
+    ExtendedInstallationMetadata metadata;
+    metadata.appName = "Sample Desktop App";
+    metadata.appId = "SampleDesktopApp";
+    metadata.installState = BuildTestInstallStateConfig(primaryPath);
+    metadata.installState.detect.primary.registry = "main";
+    metadata.installState.detect.primary.value = "installDir";
+    InstalledInstanceDetectInstallStateConfig legacyDetect;
+    legacyDetect.id = "v2";
+    legacyDetect.path = legacyPath;
+    legacyDetect.installDirValue = "LegacyPath";
+    metadata.installState.detect.legacy.push_back(legacyDetect);
+
+    InstallerPathResolver resolver;
+    InstalledInstanceInfo instance;
+    std::string error;
+    const bool found = resolveInstalledInstanceFromInstallState(metadata, resolver, instance, &error);
+    deleteRegistryPath(primaryPath);
+    deleteRegistryPath(legacyPath);
+
+    Require(found, error.empty() ? "Legacy detect should resolve install dir" : error);
+    Require(normalizePathForCompare(instance.installDir) == normalizePathForCompare(legacyDir.string()),
+            "Legacy detect should be used after invalid primary detect");
+    Require(instance.detectSource == "legacy:v2",
+            "Resolver should report legacy detect source");
+    Require(!instance.manifestPath.empty(), "Resolver should return legacy manifest path");
+}
+
+void TestBuildInstallExecutionPlanUpgradeUsesLegacyDetectRegistry() {
+    fs::path root = CreateTestRoot("upgrade_plan_legacy_detect");
+    fs::path previousInstallDir = root / "PreviousInstall";
+    fs::create_directories(previousInstallDir);
+    WriteTextFile(previousInstallDir / "install.manifest.json",
+                  R"({"installAutoStartup":true,"installDesktopIcon":false,"language":"zh_CN","installAllComponents":false,"selectedComponentIds":["core"]})");
+
+    const std::string registryPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UpgradePlanLegacyDetect";
+    RegistryEntry entry;
+    entry.path = registryPath;
+    entry.key = "InstallPath";
+    entry.value = previousInstallDir.string();
+    entry.type = RegistryValueType::STRING;
+    Require(writeRegistryValue(entry, entry.value, entry.type),
+            "Failed to seed legacy upgrade detect registry value");
 
     ExtendedInstallationMetadata metadata;
     metadata.appName = "Sample Desktop App";
     metadata.appId = "SampleDesktopApp";
     metadata.installDefaultDir = "%ProgramFiles%\\SampleDesktopApp";
-    metadata.installInfo.path = installInfoPath;
-    InstallInfoValueConfig installDirValue;
-    installDirValue.key = "InstallDir";
-    installDirValue.value = "%InstallDir%";
-    metadata.installInfo.values["installDir"] = installDirValue;
+    InstalledInstanceDetectInstallStateConfig legacyDetect;
+    legacyDetect.id = "legacy_v2";
+    legacyDetect.path = registryPath;
+    legacyDetect.installDirValue = "InstallPath";
+    metadata.installState.detect.legacy.push_back(legacyDetect);
 
-    InstalledInstanceInfo installedInstance;
-    const bool found = resolveInstalledInstanceFromInstallRoots(metadata, installedInstance);
-    deleteRegistryPath(installInfoPath);
+    InstallServiceOptions options;
+    options.upgradeMode = true;
+    InstallerPathResolver resolver;
+    InstallExecutionPlan plan;
+    std::string error;
+    const bool built = BuildInstallExecutionPlan(metadata, resolver, options, plan, error);
+    deleteRegistryPath(registryPath);
 
-    Require(!found, "Installed instance discovery should ignore installInfo registry path");
+    Require(built, error.empty() ? "Upgrade plan should succeed through legacy detect" : error);
+    Require(plan.hasPreviousInstall, "Upgrade plan should detect previous install through legacy detect");
+    Require(normalizePathForCompare(plan.previousInstallDir) ==
+                normalizePathForCompare(previousInstallDir.string()),
+            "Upgrade install root should come from legacy detect registry");
 }
 
 void TestCompareSemanticVersion() {
@@ -1222,9 +1641,10 @@ void TestSameRootUpgradeCleanupIsolatesPayloadSubdirectories() {
     fs::path previousInstallDir = root / "InstallRoot";
     fs::create_directories(previousInstallDir / "resources" / "node_modules");
     WriteTextFile(previousInstallDir / "resources" / "node_modules" / "a.js", "stale");
+    WriteTextFile(previousInstallDir / "root-stale.dll", "stale");
     WriteTextFile(previousInstallDir / "user.dat", "keep");
     WriteTextFile(previousInstallDir / "install.manifest.json",
-                  R"({"files":["resources/node_modules/a.js"],"appVersion":"1.0.0"})");
+                  R"({"files":["resources/node_modules/a.js","root-stale.dll"],"appVersion":"1.0.0"})");
 
     UpgradeCleanupResult result = runPreviousInstallCleanupWithWatchdog(
         (previousInstallDir / "install.manifest.json").string(),
@@ -1245,8 +1665,38 @@ void TestSameRootUpgradeCleanupIsolatesPayloadSubdirectories() {
     Require(!result.partial, "Synchronous isolated cleanup should complete before installation continues");
     Require(fs::exists(previousInstallDir), "Synchronous cleanup must not rename the install root");
     Require(!fs::exists(previousInstallDir / "resources"), "Payload child directory should be isolated");
+    Require(!fs::exists(previousInstallDir / "root-stale.dll"),
+            "Isolated cleanup should still remove root-level files listed by manifest");
     Require(fs::exists(previousInstallDir / "user.dat"), "Root-level user file should be kept");
     Require(!pendingFound, "Pending payload child should be removed before cleanup returns");
+}
+
+void TestSameRootUpgradeCleanupRemovesManifestFilesOutsideReplacementTarget() {
+    fs::path root = CreateTestRoot("upgrade_cleanup_outside_replacement_target");
+    fs::path previousInstallDir = root / "InstallRoot";
+    fs::create_directories(previousInstallDir / "resources");
+    fs::create_directories(previousInstallDir / "legacy");
+    WriteTextFile(previousInstallDir / "resources" / "old.js", "stale");
+    WriteTextFile(previousInstallDir / "legacy" / "old.dat", "stale");
+    WriteTextFile(previousInstallDir / "user.dat", "keep");
+    WriteTextFile(previousInstallDir / "install.manifest.json",
+                  R"({"files":["resources/old.js","legacy/old.dat"],"appVersion":"1.0.0"})");
+
+    UpgradeCleanupResult result = runPreviousInstallCleanupWithWatchdog(
+        (previousInstallDir / "install.manifest.json").string(),
+        previousInstallDir.string(),
+        previousInstallDir.string(),
+        {(previousInstallDir / "resources").string()});
+
+    Require(result.success, "Same-root cleanup with replacement target should succeed");
+    Require(!fs::exists(previousInstallDir / "resources"),
+            "Replacement target directory should be isolated and cleaned");
+    Require(!fs::exists(previousInstallDir / "legacy" / "old.dat"),
+            "Manifest file outside replacement target should still be removed");
+    Require(!fs::exists(previousInstallDir / "legacy"),
+            "Empty legacy directory should be removed after manifest file cleanup");
+    Require(fs::exists(previousInstallDir / "user.dat"),
+            "Files not listed by manifest should be kept");
 }
 #endif
 
@@ -1293,13 +1743,13 @@ void TestCleanupUpgradeSystemArtifactsExecutesExplicitRules() {
     RegistryEntry legacyRegistry;
     legacyRegistry.path = registryPath;
     legacyRegistry.key = "";
-    metadata.lifecycleUpgradeCleanup.registry.legacyKeys.push_back(legacyRegistry);
+    metadata.installerCleanup.registry.deleteKeys.push_back(registryPath);
 
     UninstallCleanupRule cleanupRule;
     cleanupRule.path = legacyPath.string();
     cleanupRule.recursive = true;
     cleanupRule.onlyIfEmpty = false;
-    metadata.lifecycleUpgradeCleanup.extraPaths.push_back(cleanupRule);
+    metadata.installerCleanup.paths.push_back(cleanupRule);
 
     InstallerPathResolver resolver;
     CliSupport console;
@@ -1324,6 +1774,33 @@ void TestCleanupUpgradeSystemArtifactsExecutesExplicitRules() {
             "Upgrade cleanup should remove configured registry path");
     deleteRegistryPath(registryPath);
 }
+
+#ifdef _WIN32
+void TestDeleteUninstallEntryMatchesDisplayName() {
+    const std::string keyName = "SchemaRegressionTestsLegacyKey";
+    const std::string displayName = "Schema Regression Legacy Display";
+    const std::string uninstallPath =
+        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + keyName;
+
+    deleteUninstallRegistryEntry(keyName, false);
+    Require(writeUninstallRegistryEntry(keyName,
+                                        displayName,
+                                        "1.0.0",
+                                        "C:\\SchemaRegressionTests\\Legacy",
+                                        "C:\\SchemaRegressionTests\\Legacy\\uninstall.exe",
+                                        false,
+                                        "Schema Tests"),
+            "Failed to seed uninstall registry entry");
+
+    std::string value;
+    Require(readRegistryStringValue(uninstallPath, "DisplayName", value),
+            "Seeded uninstall registry entry should exist");
+    Require(deleteSystemUninstallEntryByDisplayName(displayName, UninstallEntryScope::CURRENT_USER),
+            "Uninstall registry deletion should match DisplayName when key differs");
+    Require(!readRegistryStringValue(uninstallPath, "DisplayName", value),
+            "Uninstall registry entry should be removed by DisplayName");
+}
+#endif
 
 void TestUpgradeExtraPathCleanupWithWatchdogRemovesPath() {
     fs::path root = CreateTestRoot("upgrade_extra_path_worker");
@@ -1419,41 +1896,14 @@ void TestUninstallFromManifestExecutesExplicitCleanup() {
     fs::path cleanupPath = root / "UserCache";
     WriteTextFile(cleanupPath / "cache.dat", "cache");
 
-    const std::string installInfoPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UninstallInstallInfo";
+    const std::string installStatePath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UninstallState";
     const std::string legacyRegistryPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UninstallLegacy";
+    const std::string legacyUninstallKey = "SchemaRegressionTestsLegacyUninstallKey";
+    const std::string legacyUninstallDisplayName = "Schema Regression Legacy Uninstall";
+    const std::string legacyUninstallPath =
+        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + legacyUninstallKey;
 
-    InstallInfoConfig installInfo;
-    installInfo.path = installInfoPath;
-
-    InstallInfoValueConfig installDirValue;
-    installDirValue.key = "InstallDir";
-    installDirValue.value = "%InstallDir%";
-    installDirValue.type = RegistryValueType::EXPAND_STRING;
-    installInfo.values["installDir"] = installDirValue;
-
-    InstallInfoValueConfig displayNameValue;
-    displayNameValue.key = "DisplayName";
-    displayNameValue.value = "%AppName%";
-    displayNameValue.type = RegistryValueType::STRING;
-    installInfo.values["displayName"] = displayNameValue;
-
-    InstallInfoValueConfig versionValue;
-    versionValue.key = "Version";
-    versionValue.value = "%Version%";
-    versionValue.type = RegistryValueType::STRING;
-    installInfo.values["displayVersion"] = versionValue;
-
-    InstallInfoValueConfig executableValue;
-    executableValue.key = "ExecutablePath";
-    executableValue.value = "%InstallDir%\\SampleDesktopApp.exe";
-    executableValue.type = RegistryValueType::EXPAND_STRING;
-    installInfo.values["executablePath"] = executableValue;
-
-    InstallInfoValueConfig stateValue;
-    stateValue.key = "InstallState";
-    stateValue.value = "%InstallState%";
-    stateValue.type = RegistryValueType::STRING;
-    installInfo.values["installState"] = stateValue;
+    InstallStateConfig installStateConfig = BuildTestInstallStateConfig(installStatePath);
 
     RegistryEntry legacyRegistry;
     legacyRegistry.path = legacyRegistryPath;
@@ -1462,6 +1912,17 @@ void TestUninstallFromManifestExecutesExplicitCleanup() {
     legacyRegistry.type = RegistryValueType::STRING;
     Require(writeRegistryValue(legacyRegistry, legacyRegistry.value, legacyRegistry.type),
             "Failed to seed uninstall legacy registry value");
+#ifdef _WIN32
+    deleteUninstallRegistryEntry(legacyUninstallKey, false);
+    Require(writeUninstallRegistryEntry(legacyUninstallKey,
+                                        legacyUninstallDisplayName,
+                                        "1.0.0",
+                                        installDir.string(),
+                                        (installDir / "legacy_uninstall.exe").string(),
+                                        false,
+                                        "Schema Tests"),
+            "Failed to seed uninstall legacy system uninstall entry");
+#endif
 
     UninstallCleanupConfig uninstallCleanup;
     NamedCleanupEntry process;
@@ -1479,6 +1940,16 @@ void TestUninstallFromManifestExecutesExplicitCleanup() {
     pathRule.onlyIfEmpty = false;
     uninstallCleanup.paths.push_back(pathRule);
 
+    UninstallerCleanupConfigV3 uninstallerCleanupV3;
+    uninstallerCleanupV3.systemUninstallEntry.displayName = "Sample Desktop App";
+    uninstallerCleanupV3.systemUninstallEntry.scope = UninstallEntryScope::CURRENT_USER;
+    uninstallerCleanupV3.registry.deleteKeys.push_back(legacyRegistryPath);
+    uninstallerCleanupV3.paths.push_back(pathRule);
+    SystemUninstallEntryCleanupItem legacyUninstallEntry;
+    legacyUninstallEntry.displayName = legacyUninstallDisplayName;
+    legacyUninstallEntry.scope = UninstallEntryScope::CURRENT_USER;
+    uninstallerCleanupV3.systemUninstallEntry.legacyEntries.push_back(legacyUninstallEntry);
+
     fs::path manifestPath = installDir / "install.manifest.json";
     Require(writeManifest(manifestPath.string(),
                           "SampleDesktopApp",
@@ -1489,14 +1960,19 @@ void TestUninstallFromManifestExecutesExplicitCleanup() {
                           uninstallCleanup,
                           {installedFile.string()},
                           {},
-                          {},
                           false,
                           false,
                           "",
-                          installInfo,
+                          installStateConfig,
+                          "markUninstalled",
                           "",
                           "zh_CN",
-                          {}),
+                          {},
+                          {},
+                          false,
+                          {},
+                          {},
+                          uninstallerCleanupV3),
             "Failed to write uninstall manifest fixture");
 
     InstallerPathResolver resolver;
@@ -1520,15 +1996,19 @@ void TestUninstallFromManifestExecutesExplicitCleanup() {
     std::string registryValue;
     Require(!readRegistryStringValue(legacyRegistryPath, "LegacyValue", registryValue),
             "Uninstall should remove configured legacy registry path");
+#ifdef _WIN32
+    Require(!readRegistryStringValue(legacyUninstallPath, "DisplayName", registryValue),
+            "Uninstall should remove configured legacy system uninstall entry");
+#endif
 
     std::string installState;
-    Require(readRegistryStringValue(installInfoPath, "InstallState", installState),
+    Require(readRegistryStringValue(installStatePath, "InstallState", installState),
             "Uninstall should persist final install state");
     Require(installState == "uninstalled",
             "Final install state should be 'uninstalled'");
 
     deleteRegistryPath(legacyRegistryPath);
-    deleteRegistryPath(installInfoPath);
+    deleteRegistryPath(installStatePath);
 }
 
 void TestUninstallContextExplicitManifestHasPriority() {
@@ -1537,11 +2017,16 @@ void TestUninstallContextExplicitManifestHasPriority() {
     fs::create_directories(installDir);
     fs::path manifestPath = installDir / "install.manifest.json";
     nlohmann::json manifest;
-    manifest["appId"] = "ExplicitApp";
-    manifest["appName"] = "Explicit App";
-    manifest["displayName"] = "Explicit Display";
+    manifest["schemaVersion"] = 3;
+    manifest["app"] = {{"id", "ExplicitApp"}, {"name", "Explicit Display"}, {"version", "1.0.0"}};
     manifest["installDir"] = installDir.string();
-    manifest["files"] = nlohmann::json::array();
+    manifest["installer"] = {
+        {"installState", nlohmann::json::object({{"registries", nlohmann::json::array()}, {"files", nlohmann::json::array()}})},
+        {"payload", nlohmann::json::object({{"files", nlohmann::json::array()}, {"roots", nlohmann::json::array({installDir.string()})}})}
+    };
+    manifest["uninstaller"] = {
+        {"cleanup", nlohmann::json::object({{"installedFiles", "manifest"}, {"installState", "delete"}})}
+    };
     WriteTextFile(manifestPath, manifest.dump());
 
     InstallerPathResolver resolver;
@@ -1555,8 +2040,8 @@ void TestUninstallContextExplicitManifestHasPriority() {
     Require(context.appName == "Explicit Display", "Context should prefer displayName from explicit manifest");
 }
 
-void TestUninstallContextFallsBackFromInstallInfoRegistry() {
-    fs::path root = CreateTestRoot("uninstall_context_fallback");
+void TestUninstallContextFallsBackFromV3InstallStateRegistry() {
+    fs::path root = CreateTestRoot("uninstall_context_v3_fallback");
     fs::path installDir = root / "InstallRoot";
     fs::create_directories(installDir);
     WriteTextFile(installDir / "app.exe", "payload");
@@ -1573,10 +2058,10 @@ void TestUninstallContextFallsBackFromInstallInfoRegistry() {
     ExtendedInstallationMetadata metadata;
     metadata.appName = "Fallback App";
     metadata.appId = "FallbackApp";
-    metadata.installInfo.path = registryPath;
-    InstallInfoValueConfig installDirValue;
-    installDirValue.key = "InstallDir";
-    metadata.installInfo.values["installDir"] = installDirValue;
+    metadata.installState = BuildTestInstallStateConfig(registryPath);
+    metadata.installState.detect.primary.registry = "main";
+    metadata.installState.detect.primary.value = "installDir";
+    metadata.uninstallerCleanup.missingManifestFallback = "safeDirectoryFallback";
 
     InstallerPathResolver resolver;
     UninstallContext context;
@@ -1584,11 +2069,49 @@ void TestUninstallContextFallsBackFromInstallInfoRegistry() {
 
     deleteRegistryPath(registryPath);
 
-    Require(resolved, "Missing manifest should resolve fallback uninstall context from installInfo registry");
+    Require(resolved, "Missing manifest should resolve fallback uninstall context from v3 installState registry");
     Require(!context.manifestReadable, "Fallback context should not claim manifest is readable");
     Require(context.fallbackAllowed, "Fallback context should be allowed for a safe install root");
     Require(normalizePathForCompare(context.installDir) == normalizePathForCompare(installDir.string()),
-            "Fallback installDir should come from installInfo registry");
+            "Fallback installDir should come from v3 installState registry");
+}
+
+void TestUninstallContextFallsBackFromLegacyDetectRegistry() {
+    fs::path root = CreateTestRoot("uninstall_context_legacy_detect");
+    fs::path installDir = root / "LegacyInstallRoot";
+    fs::create_directories(installDir);
+    WriteTextFile(installDir / "app.exe", "payload");
+
+    const std::string registryPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UninstallLegacyDetect";
+    RegistryEntry entry;
+    entry.path = registryPath;
+    entry.key = "InstallPath";
+    entry.value = installDir.string();
+    entry.type = RegistryValueType::STRING;
+    Require(writeRegistryValue(entry, entry.value, entry.type),
+            "Failed to seed legacy uninstall detect registry value");
+
+    ExtendedInstallationMetadata metadata;
+    metadata.appName = "Fallback App";
+    metadata.appId = "FallbackApp";
+    metadata.uninstallerCleanup.missingManifestFallback = "safeDirectoryFallback";
+    InstalledInstanceDetectInstallStateConfig legacyDetect;
+    legacyDetect.id = "legacy_uninstall";
+    legacyDetect.path = registryPath;
+    legacyDetect.installDirValue = "InstallPath";
+    metadata.installState.detect.legacy.push_back(legacyDetect);
+
+    InstallerPathResolver resolver;
+    UninstallContext context;
+    bool resolved = ResolveUninstallContext(&metadata, resolver, "", context);
+    deleteRegistryPath(registryPath);
+
+    Require(resolved, "Missing manifest should resolve fallback uninstall context from legacy detect registry");
+    Require(context.detectSource == "legacy:legacy_uninstall",
+            "Fallback context should record legacy detect source");
+    Require(context.fallbackAllowed, "Legacy detect fallback context should be allowed for a safe install root");
+    Require(normalizePathForCompare(context.installDir) == normalizePathForCompare(installDir.string()),
+            "Fallback installDir should come from legacy detect registry");
 }
 
 void TestUninstallFallbackRemovesSafeInstallDirectoryContents() {
@@ -1610,7 +2133,8 @@ void TestUninstallFallbackRemovesSafeInstallDirectoryContents() {
     context.installDir = installDir.string();
     context.appId = "FallbackApp";
     context.appName = "Fallback App";
-    context.installInfoRegistryPath = registryPath;
+    context.hasEmbeddedUninstallerCleanup = true;
+    context.embeddedUninstallerCleanup.registry.deleteKeys.push_back(registryPath);
     context.fallbackAllowed = true;
     context.manifestReadable = false;
 
@@ -1623,7 +2147,7 @@ void TestUninstallFallbackRemovesSafeInstallDirectoryContents() {
     Require(!fs::exists(installDir / "data.txt"), "Fallback uninstall should remove root files");
     std::string registryValue;
     Require(!readRegistryStringValue(registryPath, "InstallDir", registryValue),
-            "Fallback uninstall should remove installInfo registry path");
+            "Fallback uninstall should remove detected installState registry path");
 }
 
 void TestUninstallFallbackRejectsDangerousRoot() {
@@ -1640,6 +2164,58 @@ void TestUninstallFallbackRejectsDangerousRoot() {
     Require(!ok, "Fallback uninstall should reject a volume root");
 }
 
+void TestUninstallV3ManifestMissingRequiredSnapshotFails() {
+    fs::path root = CreateTestRoot("uninstall_v3_manifest_missing_required");
+    fs::path manifestPath = root / "install.manifest.json";
+    WriteTextFile(manifestPath,
+                  R"({
+                    "schemaVersion": 3,
+                    "app": {"id":"BrokenApp","name":"Broken App","version":"1.0.0"},
+                    "installer": {"installState": {"registries":[],"files":[]}},
+                    "uninstaller": {"cleanup": {"installedFiles":"manifest","installState":"delete"}}
+                  })");
+
+    InstallerPathResolver resolver;
+    CliSupport console;
+    Require(!uninstallFromManifest(manifestPath.string(), resolver, console),
+            "v3 manifest missing installer.payload.files should fail instead of falling back");
+}
+
+void TestUninstallFallbackPolicyFailRejectsDirectoryCleanup() {
+    fs::path root = CreateTestRoot("uninstall_fallback_policy_fail");
+    fs::path installDir = root / "InstallRoot";
+    fs::create_directories(installDir);
+    WriteTextFile(installDir / "stale.txt", "keep");
+
+    const std::string registryPath =
+        "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UninstallFallbackPolicyFail";
+    RegistryEntry entry;
+    entry.path = registryPath;
+    entry.key = "InstallDir";
+    entry.value = installDir.string();
+    entry.type = RegistryValueType::STRING;
+    Require(writeRegistryValue(entry, entry.value, entry.type),
+            "Failed to seed v3 fallback detection registry value");
+
+    ExtendedInstallationMetadata metadata;
+    metadata.appName = "Fallback Policy App";
+    metadata.appId = "FallbackPolicyApp";
+    metadata.installState = BuildTestInstallStateConfig(registryPath);
+    metadata.installState.detect.primary.registry = "main";
+    metadata.installState.detect.primary.value = "installDir";
+    metadata.uninstallerCleanup.missingManifestFallback = "fail";
+
+    InstallerPathResolver resolver;
+    UninstallContext context;
+    bool resolved = ResolveUninstallContext(&metadata, resolver, "", context);
+    deleteRegistryPath(registryPath);
+
+    Require(!resolved, "fallback policy fail should reject missing-manifest uninstall");
+    Require(!context.fallbackAllowed, "fallback policy fail should not allow directory cleanup");
+    Require(fs::exists(installDir / "stale.txt"),
+            "fallback policy fail should not delete install directory contents");
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -1648,10 +2224,14 @@ int main(int argc, char* argv[]) {
     const std::vector<std::pair<std::string, void(*)()>> tests = {
         {"load_valid_schema", &TestLoadValidSchema},
         {"reject_old_schema", &TestRejectOldSchema},
+        {"reject_uninstaller_detect_field", &TestRejectUninstallerDetectField},
+        {"reject_legacy_system_uninstall_entry_fields", &TestRejectLegacySystemUninstallEntryFields},
         {"configuration_loads_only_from_config_directory_and_resolves_icon_there",
          &TestConfigurationLoadsOnlyFromConfigDirectoryAndResolvesIconThere},
         {"require_admin_false_rejects_admin_only_configuration",
          &TestRequireAdminFalseRejectsAdminOnlyConfiguration},
+        {"install_state_detect_validation_supports_legacy_sources",
+         &TestInstallStateDetectValidationSupportsLegacySources},
 #ifdef _WIN32
         {"update_installer_execution_level_writes_manifest",
          &TestUpdateInstallerExecutionLevelWritesManifest},
@@ -1664,17 +2244,20 @@ int main(int argc, char* argv[]) {
         {"package_manifest_validator_rejects_invalid_payload_and_components",
          &TestPackageManifestValidatorRejectsInvalidPayloadAndComponents},
         {"path_resolver_expand_environment_variables", &TestPathResolverExpandEnvironmentVariables},
+        {"install_state_store_apply_and_cleanup", &TestInstallStateStoreApplyAndCleanup},
         {"write_manifest_preserves_explicit_cleanup_schema", &TestWriteManifestPreservesExplicitCleanupSchema},
         {"install_manifest_persists_previous_install_options",
          &TestInstallManifestPersistsPreviousInstallOptions},
-        {"build_install_execution_plan_uses_configured_install_roots",
-         &TestBuildInstallExecutionPlanUsesConfiguredInstallRoots},
-        {"build_install_execution_plan_upgrade_uses_install_info_registry",
-         &TestBuildInstallExecutionPlanUpgradeUsesInstallInfoRegistry},
-        {"build_install_execution_plan_upgrade_fails_without_manifest",
-         &TestBuildInstallExecutionPlanUpgradeFailsWithoutManifest},
-        {"install_roots_are_only_discovery_source",
-         &TestInstallRootsAreOnlyDiscoverySource},
+        {"build_install_execution_plan_uses_v3_install_state_discovery",
+         &TestBuildInstallExecutionPlanUsesV3InstallStateDiscovery},
+        {"build_install_execution_plan_upgrade_uses_v3_install_state_registry",
+         &TestBuildInstallExecutionPlanUpgradeUsesV3InstallStateRegistry},
+        {"build_install_execution_plan_upgrade_allows_missing_manifest",
+         &TestBuildInstallExecutionPlanUpgradeAllowsMissingManifest},
+        {"install_state_resolver_uses_legacy_detect_in_order",
+         &TestInstallStateResolverUsesLegacyDetectInOrder},
+        {"build_install_execution_plan_upgrade_uses_legacy_detect_registry",
+         &TestBuildInstallExecutionPlanUpgradeUsesLegacyDetectRegistry},
         {"compare_semantic_version",
          &TestCompareSemanticVersion},
         {"append_path_leaf_if_missing",
@@ -1704,11 +2287,17 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
         {"same_root_upgrade_cleanup_isolates_payload_subdirectories",
          &TestSameRootUpgradeCleanupIsolatesPayloadSubdirectories},
+        {"same_root_upgrade_cleanup_removes_manifest_files_outside_replacement_target",
+         &TestSameRootUpgradeCleanupRemovesManifestFilesOutsideReplacementTarget},
 #endif
         {"upgrade_cleanup_missing_manifest_removes_safe_directory_contents",
          &TestUpgradeCleanupMissingManifestRemovesSafeDirectoryContents},
         {"cleanup_upgrade_system_artifacts_executes_explicit_rules",
          &TestCleanupUpgradeSystemArtifactsExecutesExplicitRules},
+#ifdef _WIN32
+        {"delete_uninstall_entry_matches_display_name",
+         &TestDeleteUninstallEntryMatchesDisplayName},
+#endif
         {"upgrade_extra_path_cleanup_with_watchdog_removes_path",
          &TestUpgradeExtraPathCleanupWithWatchdogRemovesPath},
 #ifdef _WIN32
@@ -1719,12 +2308,18 @@ int main(int argc, char* argv[]) {
 #endif
         {"uninstall_context_explicit_manifest_has_priority",
          &TestUninstallContextExplicitManifestHasPriority},
-        {"uninstall_context_falls_back_from_install_info_registry",
-         &TestUninstallContextFallsBackFromInstallInfoRegistry},
+        {"uninstall_context_falls_back_from_v3_install_state_registry",
+         &TestUninstallContextFallsBackFromV3InstallStateRegistry},
+        {"uninstall_context_falls_back_from_legacy_detect_registry",
+         &TestUninstallContextFallsBackFromLegacyDetectRegistry},
         {"uninstall_fallback_removes_safe_install_directory_contents",
          &TestUninstallFallbackRemovesSafeInstallDirectoryContents},
         {"uninstall_fallback_rejects_dangerous_root",
          &TestUninstallFallbackRejectsDangerousRoot},
+        {"uninstall_v3_manifest_missing_required_snapshot_fails",
+         &TestUninstallV3ManifestMissingRequiredSnapshotFails},
+        {"uninstall_fallback_policy_fail_rejects_directory_cleanup",
+         &TestUninstallFallbackPolicyFailRejectsDirectoryCleanup},
         {"uninstall_from_manifest_executes_explicit_cleanup",
          &TestUninstallFromManifestExecutesExplicitCleanup},
     };

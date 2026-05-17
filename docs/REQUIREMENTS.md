@@ -1,103 +1,68 @@
 # Requirements
 
-## Goal
+## Tools
 
-This project provides a Windows packaging and installation solution with three executables:
 - `packager.exe`
-- `installer.exe`
-- `uninstaller.exe`
+- generated `installer.exe`
+- generated `uninstaller.exe`
 
-Current architecture assumptions:
-- packager input is configured by `packager.yaml` or `packager.yml`
-- configuration schema is `schemaVersion: 2`
-- old JSON config and old flat schema are not supported
-- each top-level input folder is packaged as a single standard folder payload
-- folder payload compression supports `XZ/LZMA2` and `ZSTD`
+## Configuration
 
-## Functional Requirements
+- Packager reads `packager.yaml` or `packager.yml` only from the `--config` directory.
+- The only supported configuration schema is `schemaVersion: 3`.
+- Older schemas are intentionally incompatible and must fail during packager configuration loading.
 
-### Packager
-
-- scan an input directory and find top-level folders to package
-- read `packager.yaml` / `packager.yml`
-- validate configuration against schema version 2
-- compress each folder as one standard payload
-- generate installer metadata
-- embed metadata and payloads into the final installer
-- optionally generate an external data package
-- apply icon and version resources when configured
-
-### Installer
-
-- GUI install
-- silent install
-- GUI uninstall
-- silent uninstall
-- component-aware install
-- folder payload extraction and tar stream file write
-- install-state tracking
-- registry writes, shortcut creation, startup item creation
-- upgrade cleanup and uninstall cleanup
-
-### Configuration Schema
-
-Required top-level structure:
+Minimal structure:
 
 ```yaml
-schemaVersion: 2
-
+schemaVersion: 3
 app:
 package:
-install:
-ui:
-layout:
-lifecycle:
+installer:
+uninstaller:
 ```
 
-Required fields:
-- `schemaVersion`
+Required configuration:
+- `app.id`
 - `app.name`
 - `app.version`
-- `install.defaultDir`
-- `layout.folders`
+- `installer.defaultDir`
+- `installer.directoryName`
+- `installer.payload[]`
+- `installer.installState.detect.primary` or `installer.installState.detect.legacy[]`
+- `uninstaller.cleanup`
 
-Supported compression algorithms:
-- `xz`
-- `zstd`
+## Packager CLI
 
-### Layout and Components
+Supported public arguments:
+- `--input` / `-i`: payload source directory
+- `--config` / `-c`: configuration and UI resource directory
+- `--output` / `-o`: generated installer executable
+- `--help` / `-h`
 
-- `layout.folders[].id` must be unique
-- `layout.folders[].source` must exist under input directory
-- `layout.folders[].destination.type` must be valid
-- `layout.components[].folders[]` must reference declared folder ids
-- component dependency graph must be acyclic
-- local component installers must stay under install directory
-- download component installers must use `https://` and valid SHA256
+No positional paths or legacy compression CLI options are supported.
 
-## Non-Functional Requirements
+## Validation
 
-- Windows-focused build and runtime
-- maintainable module boundaries
-- predictable logging
-- explicit validation errors
-- no hidden compatibility branches for old package schema
+- `installer.payload[].id` must be unique.
+- `installer.payload[].source` must exist under the input directory.
+- `installer.payload[].target` is the install-time destination.
+- `installer.components[].payload[]` must reference declared payload ids.
+- component dependencies must not contain cycles.
+- `installer.installState.registries[]` and `installer.installState.files[]` support multiple stores and custom values.
+- `installer.installState.detect` supports one primary source plus ordered legacy sources for old-version discovery.
+- `uninstaller.detect` is not supported; packager rejects it and reports to use `installer.installState.detect`.
+- `installer.requireAdmin=false` rejects configurations that clearly require elevation.
 
-## Build Requirements
+## Runtime
 
-- CMake-based build
-- Visual Studio 2022 / MSVC on Windows
-- `yaml-cpp`, `liblzma`, `zstd`, and DuiLib dependencies available in `third_party`
+- The packager writes the installer execution level from `installer.requireAdmin`.
+- The installer records a v3 `install.manifest.json` snapshot after installation.
+- Overwrite and upgrade discovery use `installer.installState.detect`: primary first, then legacy entries in order.
+- Uninstall uses the local v3 manifest snapshot first and only uses safe fallback when the manifest is missing and policy allows it.
 
-Build products:
-- `build/Release/packager.exe`
-- `build/Release/installer.exe`
-- `build/Release/uninstaller.exe`
+## Acceptance
 
-## Acceptance Criteria
-
-- packager loads a valid schema v2 YAML file and produces an installer
-- installer can install payloads produced by the current packager
-- uninstaller can remove installed files and cleanup artifacts
-- invalid config fails with explicit field-path errors
-- no old flat schema or JSON config path remains in public documentation
+- A valid v3 config can be packaged into an installer.
+- A v2 config is rejected with an explicit unsupported schema error.
+- GUI install, silent install, overwrite/upgrade install, manifest uninstall, and safe fallback uninstall are covered by regression tests.

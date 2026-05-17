@@ -1,0 +1,289 @@
+schemaVersion: 3
+
+app:
+  id: mti_acceptance_app
+  name: MTI Acceptance App
+  version: 3.0.0
+  publisher: MTI Test Publisher
+  website: https://example.com/mti-acceptance
+  icon: app.ico
+  versionInfo:
+    productName: MTI Acceptance App
+    fileDescription: MTI Acceptance Installer
+    fileVersion: 3.0.0.0
+    productVersion: 3.0.0.0
+    companyName: MTI Test Publisher
+
+package:
+  compression:
+    algorithm: xz
+    level: 9
+
+installer:
+  requireAdmin: true
+  defaultDir: "%ProgramFiles%\\MTIAcceptanceApp"
+  directoryName: MTIAcceptanceApp
+  minWindows: "10.0.19041"
+  largeFileThresholdBytes: 4194304
+  mutex: "Global\\mti_acceptance_app_Install"
+  killBeforeInstall:
+    - MTIAcceptanceApp.exe
+    - MTIAcceptanceHelper.exe
+
+  defaults:
+    autoStartup: true
+    desktopShortcut: true
+
+  installState:
+    registries:
+      - id: currentUser
+        path: "HKCU\\Software\\MTITest_AcceptanceApp"
+        values:
+          installDir:
+            key: InstallDir
+            value: "%InstallDir%"
+            type: expand
+          installState:
+            key: InstallState
+            value: "%InstallState%"
+            type: string
+          version:
+            key: Version
+            value: "%Version%"
+            type: string
+          installSource:
+            key: InstallSource
+            value: "%InstallSource%"
+            type: expand
+          channel:
+            key: Channel
+            value: acceptance
+            type: string
+      - id: machine
+        path: "HKLM\\Software\\MTITest_AcceptanceApp"
+        values:
+          installDir:
+            key: InstallDir
+            value: "%InstallDir%"
+            type: expand
+          installState:
+            key: InstallState
+            value: "%InstallState%"
+            type: string
+    files:
+      - id: programData
+        path: "%ProgramData%\\MTITest\\AcceptanceApp\\install-state.json"
+        format: json
+        values:
+          installDir:
+            name: installDir
+            value: "%InstallDir%"
+          installState:
+            name: state
+            value: "%InstallState%"
+          version:
+            name: version
+            value: "%Version%"
+          userName:
+            name: userName
+            value: "%UserName%"
+      - id: localUser
+        path: "%LocalAppData%\\MTITest\\AcceptanceApp\\install-state.json"
+        format: json
+        values:
+          installDir:
+            name: installDir
+            value: "%InstallDir%"
+          source:
+            name: source
+            value: "%InstallSource%"
+    detect:
+      primary:
+        registry: currentUser
+        value: installDir
+      legacy:
+        - id: legacy_v2
+          path: "HKCU\\Software\\MTITest_AcceptanceApp_LegacyV2"
+          installDirValue: InstallPath
+        - id: legacy_v1
+          path: "HKLM\\Software\\MTITest_AcceptanceApp_LegacyV1"
+          installDirValue: InstallDir
+
+  systemUninstallEntry:
+    scope: both
+    displayName: MTI Acceptance App
+    publisher: MTI Test Publisher
+
+  cleanup:
+    systemUninstallEntry:
+      legacyEntries:
+        - displayName: MTI Acceptance App Legacy
+          scope: user
+        - displayName: MTI Acceptance App Legacy Machine
+          scope: machine
+
+  ui:
+    defaultLanguage: zh_CN
+    desktopShortcutName:
+      default: MTI Acceptance App
+      zh_CN: MTI 验收测试应用
+      en_US: MTI Acceptance App
+    links:
+      - control: btnWebsite
+        url: https://example.com/mti-acceptance
+      - control: btnHelp
+        url: https://example.com/mti-acceptance/help
+    componentSelection:
+      mode: embeddedInExistingPages
+      binding:
+        strategy: xml_userdata
+        tokenPrefix: "component:"
+        pages:
+          - skin: welcome_page.xml
+            controls:
+              - chkChrome
+              - chkPPt
+
+  payload:
+    - id: app
+      source: app
+      target: "%InstallDir%"
+      required: true
+    - id: resources
+      source: resources
+      target: "%InstallDir%\\resources"
+      required: true
+    - id: plugins
+      source: plugins
+      target: "%InstallDir%\\plugins"
+      required: false
+
+  components:
+    - id: core
+      name: Core Application
+      description: Required executable and runtime files.
+      required: true
+      defaultSelected: true
+      payload:
+        - app
+        - resources
+    - id: optional_plugins
+      name: Optional Plugins
+      description: Optional plugin payload used by component selection tests.
+      required: false
+      defaultSelected: true
+      dependsOn:
+        - core
+      payload:
+        - plugins
+      install:
+        command: "install_plugins.bat"
+        workingDirectory: "%InstallDir%\\addon"
+        wait: true
+        timeoutSec: 900
+      uninstall:
+        command: "uninstall_plugins.bat"
+        workingDirectory: "%InstallDir%\\addon"
+        wait: true
+        timeoutSec: 900
+    - id: post_setup_agent
+      name: Post Setup Agent
+      description: Validates token expansion, file URL decoding, and Chinese install paths.
+      required: false
+      defaultSelected: false
+      dependsOn:
+        - core
+      payload:
+        - app
+      install:
+        command: "%InstallDir%\\post_setup_agent.exe"
+        args: >
+          --install-dir "%InstallDir%"
+          --app-version "%Version%"
+          --config-url "file:///%InstallDir%/resources/runtime-config.json"
+          --state-path "%ProgramData%\\MTITest\\AcceptanceApp\\post_setup_state.json"
+          --log-path "%ProgramData%\\MTITest\\AcceptanceApp\\post_setup_agent.log"
+        workingDirectory: "%InstallDir%"
+        wait: true
+        timeoutSec: 1800
+      uninstall:
+        command: "%InstallDir%\\post_setup_agent.exe"
+        args: >
+          --uninstall
+          --state-path "%ProgramData%\\MTITest\\AcceptanceApp\\post_setup_state.json"
+          --log-path "%ProgramData%\\MTITest\\AcceptanceApp\\post_setup_agent.log"
+        workingDirectory: "%InstallDir%"
+        wait: true
+        timeoutSec: 900
+
+  registry:
+    write:
+      - path: "HKCU\\Software\\MTITest_AcceptanceApp"
+        values:
+          LaunchCommand:
+            key: LaunchCommand
+            value: "\"%InstallDir%\\MTIAcceptanceApp.exe\""
+            type: expand
+          Publisher:
+            key: Publisher
+            value: MTI Test Publisher
+            type: string
+      - path: "HKLM\\Software\\MTITest_AcceptanceApp"
+        values:
+          MachineInstall:
+            key: MachineInstall
+            value: "1"
+            type: dword
+
+uninstaller:
+  requireAdmin: true
+  killBeforeUninstall:
+    - MTIAcceptanceApp.exe
+    - MTIAcceptanceHelper.exe
+
+  cleanup:
+    installedFiles: manifest
+    missingManifestFallback: safeDirectoryFallback
+    installState: markUninstalled
+    autoStartup: auto
+    desktopShortcut: auto
+    systemUninstallEntry:
+      scope: both
+      displayName: MTI Acceptance App
+      legacyEntries:
+        - displayName: MTI Acceptance App Legacy
+          scope: user
+        - displayName: MTI Acceptance App Legacy Machine
+          scope: machine
+    legacy:
+      desktopShortcutNames:
+        - MTI Acceptance App Legacy
+      startupNames:
+        - MTIAcceptanceLegacy
+    registry:
+      deleteKeys:
+        - "HKCU\\Software\\MTITest_AcceptanceApp_LegacyV2"
+        - "HKLM\\Software\\MTITest_AcceptanceApp_LegacyV1"
+      deleteValues:
+        - path: "HKCU\\Software\\MTITest_AcceptanceApp"
+          key: InstallDir
+        - path: "HKLM\\Software\\MTITest_AcceptanceApp"
+          key: Version
+    paths:
+      - path: "%LocalAppData%\\MTITest\\AcceptanceApp\\Cache"
+        recursive: true
+        onlyIfEmpty: false
+      - path: "%LocalAppData%\\MTITest\\AcceptanceApp\\Logs"
+        recursive: true
+        onlyIfEmpty: false
+      - path: "%LocalAppData%\\MTITest\\AcceptanceApp"
+        recursive: true
+        onlyIfEmpty: true
+      - path: "%ProgramData%\\MTITest\\AcceptanceApp\\Temp"
+        recursive: true
+        onlyIfEmpty: false
+
+  ui:
+    defaultLanguage: zh_CN
+    title: 卸载 MTI Acceptance App
+    confirmMessage: 是否卸载 MTI Acceptance App？

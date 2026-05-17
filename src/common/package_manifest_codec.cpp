@@ -152,6 +152,247 @@ InstallInfoConfig InstallInfoFromJson(const json& value) {
     return info;
 }
 
+json InstallStateValueToJson(const InstallStateValueConfig& value) {
+    return json{
+        {"key", value.key},
+        {"name", value.name},
+        {"value", value.value},
+        {"type", static_cast<int>(value.type)},
+    };
+}
+
+InstallStateValueConfig InstallStateValueFromJson(const json& value) {
+    InstallStateValueConfig out;
+    out.key = value.value("key", "");
+    out.name = value.value("name", "");
+    out.value = value.value("value", "");
+    out.type = static_cast<RegistryValueType>(value.value("type", 0));
+    return out;
+}
+
+json InstallStateValuesToJson(const std::unordered_map<std::string, InstallStateValueConfig>& values) {
+    json out = json::object();
+    std::vector<std::pair<std::string, InstallStateValueConfig>> ordered(values.begin(), values.end());
+    std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
+    for (const auto& pair : ordered) {
+        out[pair.first] = InstallStateValueToJson(pair.second);
+    }
+    return out;
+}
+
+std::unordered_map<std::string, InstallStateValueConfig> InstallStateValuesFromJson(const json& value) {
+    std::unordered_map<std::string, InstallStateValueConfig> out;
+    if (!value.is_object()) {
+        return out;
+    }
+    for (auto it = value.begin(); it != value.end(); ++it) {
+        out[it.key()] = InstallStateValueFromJson(it.value());
+    }
+    return out;
+}
+
+json DetectPolicyToJson(const InstalledInstanceDetectConfig& detect) {
+    json legacy = json::array();
+    for (const auto& item : detect.legacy) {
+        legacy.push_back({
+            {"id", item.id},
+            {"path", item.path},
+            {"installDirValue", item.installDirValue},
+        });
+    }
+    return json{
+        {"primary", {
+            {"registry", detect.primary.registry},
+            {"value", detect.primary.value},
+        }},
+        {"legacy", legacy},
+    };
+}
+
+InstalledInstanceDetectConfig DetectPolicyFromJson(const json& value) {
+    InstalledInstanceDetectConfig detect;
+    const json primary = value.value("primary", json::object());
+    detect.primary.registry = primary.value("registry", "");
+    detect.primary.value = primary.value("value", "");
+    const json legacy = value.value("legacy", json::array());
+    if (legacy.is_array()) {
+        for (const auto& item : legacy) {
+            if (!item.is_object()) {
+                continue;
+            }
+            InstalledInstanceDetectInstallStateConfig legacyItem;
+            legacyItem.id = item.value("id", "");
+            legacyItem.path = item.value("path", "");
+            legacyItem.installDirValue = item.value("installDirValue", "");
+            detect.legacy.push_back(std::move(legacyItem));
+        }
+    }
+    return detect;
+}
+
+json InstallStateToJson(const PackageInstallStateManifest& state) {
+    json registries = json::array();
+    for (const auto& store : state.registries) {
+        registries.push_back({
+            {"id", store.id},
+            {"path", store.path},
+            {"values", InstallStateValuesToJson(store.values)},
+        });
+    }
+    json files = json::array();
+    for (const auto& store : state.files) {
+        files.push_back({
+            {"id", store.id},
+            {"path", store.path},
+            {"format", store.format},
+            {"values", InstallStateValuesToJson(store.values)},
+        });
+    }
+    return json{{"registries", registries}, {"files", files}, {"detect", DetectPolicyToJson(state.detect)}};
+}
+
+PackageInstallStateManifest InstallStateFromJson(const json& value) {
+    PackageInstallStateManifest state;
+    for (const auto& item : value.value("registries", json::array())) {
+        InstallStateRegistryStoreConfig store;
+        store.id = item.value("id", "");
+        store.path = item.value("path", "");
+        store.values = InstallStateValuesFromJson(item.value("values", json::object()));
+        state.registries.push_back(std::move(store));
+    }
+    for (const auto& item : value.value("files", json::array())) {
+        InstallStateFileStoreConfig store;
+        store.id = item.value("id", "");
+        store.path = item.value("path", "");
+        store.format = item.value("format", "json");
+        store.values = InstallStateValuesFromJson(item.value("values", json::object()));
+        state.files.push_back(std::move(store));
+    }
+    state.detect = DetectPolicyFromJson(value.value("detect", json::object()));
+    return state;
+}
+
+json SystemUninstallEntryToJson(const PackageSystemUninstallEntryManifest& entry) {
+    return json{
+        {"scope", static_cast<int>(entry.scope)},
+        {"displayName", entry.displayName},
+        {"publisher", entry.publisher},
+    };
+}
+
+PackageSystemUninstallEntryManifest SystemUninstallEntryFromJson(const json& value) {
+    PackageSystemUninstallEntryManifest entry;
+    entry.scope = static_cast<UninstallEntryScope>(value.value("scope", 3));
+    entry.displayName = value.value("displayName", "");
+    entry.publisher = value.value("publisher", "");
+    return entry;
+}
+
+json SystemUninstallCleanupItemsToJson(const std::vector<SystemUninstallEntryCleanupItem>& entries) {
+    json out = json::array();
+    for (const auto& entry : entries) {
+        out.push_back({
+            {"displayName", entry.displayName},
+            {"scope", static_cast<int>(entry.scope)},
+        });
+    }
+    return out;
+}
+
+std::vector<SystemUninstallEntryCleanupItem> SystemUninstallCleanupItemsFromJson(const json& value) {
+    std::vector<SystemUninstallEntryCleanupItem> entries;
+    if (!value.is_array()) {
+        return entries;
+    }
+    for (const auto& item : value) {
+        SystemUninstallEntryCleanupItem entry;
+        entry.displayName = item.value("displayName", "");
+        entry.scope = static_cast<UninstallEntryScope>(item.value("scope", 3));
+        entries.push_back(std::move(entry));
+    }
+    return entries;
+}
+
+json SystemUninstallCleanupToJson(const SystemUninstallEntryCleanupConfig& cleanup) {
+    return json{
+        {"scope", static_cast<int>(cleanup.scope)},
+        {"displayName", cleanup.displayName},
+        {"legacyEntries", SystemUninstallCleanupItemsToJson(cleanup.legacyEntries)},
+    };
+}
+
+SystemUninstallEntryCleanupConfig SystemUninstallCleanupFromJson(const json& value) {
+    SystemUninstallEntryCleanupConfig cleanup;
+    cleanup.scope = static_cast<UninstallEntryScope>(value.value("scope", 3));
+    cleanup.displayName = value.value("displayName", "");
+    cleanup.legacyEntries =
+        SystemUninstallCleanupItemsFromJson(value.value("legacyEntries", json::array()));
+    return cleanup;
+}
+
+json CleanupRulesToJson(const std::vector<UninstallCleanupRule>& rules);
+std::vector<UninstallCleanupRule> CleanupRulesFromJson(const json& value);
+
+json InstallerCleanupToJson(const InstallerCleanupConfig& cleanup) {
+    return json{
+        {"systemUninstallEntry", SystemUninstallCleanupToJson(cleanup.systemUninstallEntry)},
+        {"legacy", {
+            {"desktopShortcutNames", cleanup.legacy.desktopShortcutNames},
+            {"startupNames", cleanup.legacy.startupNames},
+        }},
+        {"registry", {
+            {"deleteKeys", cleanup.registry.deleteKeys},
+            {"deleteValues", RegistryListToJson(cleanup.registry.deleteValues)},
+        }},
+        {"paths", CleanupRulesToJson(cleanup.paths)},
+    };
+}
+
+InstallerCleanupConfig InstallerCleanupFromJson(const json& value) {
+    InstallerCleanupConfig cleanup;
+    cleanup.systemUninstallEntry =
+        SystemUninstallCleanupFromJson(value.value("systemUninstallEntry", json::object()));
+    const json legacy = value.value("legacy", json::object());
+    cleanup.legacy.desktopShortcutNames =
+        legacy.value("desktopShortcutNames", std::vector<std::string>{});
+    cleanup.legacy.startupNames =
+        legacy.value("startupNames", std::vector<std::string>{});
+    const json registry = value.value("registry", json::object());
+    cleanup.registry.deleteKeys =
+        registry.value("deleteKeys", std::vector<std::string>{});
+    cleanup.registry.deleteValues =
+        RegistryListFromJson(registry.value("deleteValues", json::array()));
+    cleanup.paths = CleanupRulesFromJson(value.value("paths", json::array()));
+    return cleanup;
+}
+
+json RegistryWriteToJson(const std::vector<InstallerRegistryWriteGroup>& groups) {
+    json out = json::array();
+    for (const auto& group : groups) {
+        out.push_back({
+            {"path", group.path},
+            {"values", InstallStateValuesToJson(group.values)},
+        });
+    }
+    return out;
+}
+
+std::vector<InstallerRegistryWriteGroup> RegistryWriteFromJson(const json& value) {
+    std::vector<InstallerRegistryWriteGroup> groups;
+    if (!value.is_array()) {
+        return groups;
+    }
+    for (const auto& item : value) {
+        InstallerRegistryWriteGroup group;
+        group.path = item.value("path", "");
+        group.values = InstallStateValuesFromJson(item.value("values", json::object()));
+        groups.push_back(std::move(group));
+    }
+    return groups;
+}
+
 json NamedListToJson(const std::vector<NamedCleanupEntry>& entries) {
     json out = json::array();
     for (const auto& entry : entries) {
@@ -385,6 +626,130 @@ std::vector<ComponentConfig> ComponentsFromJson(const json& value) {
     return components;
 }
 
+json ComponentActionToJson(const PackageComponentAction& action) {
+    return json{
+        {"command", action.command},
+        {"args", action.args},
+        {"workingDirectory", action.workingDirectory},
+        {"wait", action.wait},
+        {"timeoutSec", action.timeoutSec},
+    };
+}
+
+PackageComponentAction ComponentActionFromJson(const json& value) {
+    PackageComponentAction action;
+    action.command = value.value("command", "");
+    action.args = value.value("args", "");
+    action.workingDirectory = value.value("workingDirectory", "");
+    action.wait = value.value("wait", true);
+    action.timeoutSec = value.value("timeoutSec", 900u);
+    return action;
+}
+
+json ComponentDefinitionsToJson(const std::vector<PackageComponentDefinition>& components) {
+    json out = json::array();
+    for (const auto& component : components) {
+        out.push_back({
+            {"id", component.id},
+            {"name", component.name},
+            {"description", component.description},
+            {"required", component.required},
+            {"defaultSelected", component.defaultSelected},
+            {"sizeHintMB", component.sizeHintMB},
+            {"dependsOn", component.dependsOn},
+            {"payloadRefs", component.payloadRefs},
+            {"installAction", ComponentActionToJson(component.installAction)},
+            {"uninstallAction", ComponentActionToJson(component.uninstallAction)},
+        });
+    }
+    return out;
+}
+
+std::vector<PackageComponentDefinition> ComponentDefinitionsFromJson(const json& value) {
+    std::vector<PackageComponentDefinition> components;
+    if (!value.is_array()) {
+        return components;
+    }
+    for (const auto& item : value) {
+        PackageComponentDefinition component;
+        component.id = item.value("id", "");
+        component.name = item.value("name", "");
+        component.description = item.value("description", "");
+        component.required = item.value("required", false);
+        component.defaultSelected = item.value("defaultSelected", true);
+        component.sizeHintMB = item.value("sizeHintMB", 0u);
+        component.dependsOn = item.value("dependsOn", std::vector<std::string>{});
+        component.payloadRefs = item.value("payloadRefs", std::vector<std::string>{});
+        component.installAction = ComponentActionFromJson(item.value("installAction", json::object()));
+        component.uninstallAction = ComponentActionFromJson(item.value("uninstallAction", json::object()));
+        components.push_back(std::move(component));
+    }
+    return components;
+}
+
+json UninstallerPolicyToJson(const UninstallerConfig& uninstaller) {
+    return json{
+        {"requireAdmin", uninstaller.requireAdmin},
+        {"killBeforeUninstall", uninstaller.killBeforeUninstall},
+        {"cleanup", {
+            {"installedFiles", uninstaller.cleanup.installedFiles},
+            {"missingManifestFallback", uninstaller.cleanup.missingManifestFallback},
+            {"installState", uninstaller.cleanup.installState},
+            {"autoStartup", uninstaller.cleanup.autoStartup},
+            {"desktopShortcut", uninstaller.cleanup.desktopShortcut},
+            {"systemUninstallEntry", SystemUninstallCleanupToJson(uninstaller.cleanup.systemUninstallEntry)},
+            {"legacy", {
+                {"desktopShortcutNames", uninstaller.cleanup.legacy.desktopShortcutNames},
+                {"startupNames", uninstaller.cleanup.legacy.startupNames},
+            }},
+            {"registry", {
+                {"deleteKeys", uninstaller.cleanup.registry.deleteKeys},
+                {"deleteValues", RegistryListToJson(uninstaller.cleanup.registry.deleteValues)},
+            }},
+            {"paths", CleanupRulesToJson(uninstaller.cleanup.paths)},
+        }},
+        {"ui", {
+            {"defaultLanguage", uninstaller.ui.defaultLanguage},
+            {"title", uninstaller.ui.title},
+            {"confirmMessage", uninstaller.ui.confirmMessage},
+        }},
+    };
+}
+
+UninstallerConfig UninstallerPolicyFromJson(const json& value) {
+    UninstallerConfig uninstaller;
+    uninstaller.requireAdmin = value.value("requireAdmin", false);
+    uninstaller.killBeforeUninstall =
+        value.value("killBeforeUninstall", std::vector<std::string>{});
+
+    const json cleanup = value.value("cleanup", json::object());
+    uninstaller.cleanup.installedFiles = cleanup.value("installedFiles", "manifest");
+    uninstaller.cleanup.missingManifestFallback =
+        cleanup.value("missingManifestFallback", "safeDirectoryFallback");
+    uninstaller.cleanup.installState = cleanup.value("installState", "delete");
+    uninstaller.cleanup.autoStartup = cleanup.value("autoStartup", "auto");
+    uninstaller.cleanup.desktopShortcut = cleanup.value("desktopShortcut", "auto");
+    uninstaller.cleanup.systemUninstallEntry =
+        SystemUninstallCleanupFromJson(cleanup.value("systemUninstallEntry", json::object()));
+    const json legacy = cleanup.value("legacy", json::object());
+    uninstaller.cleanup.legacy.desktopShortcutNames =
+        legacy.value("desktopShortcutNames", std::vector<std::string>{});
+    uninstaller.cleanup.legacy.startupNames =
+        legacy.value("startupNames", std::vector<std::string>{});
+    const json registry = cleanup.value("registry", json::object());
+    uninstaller.cleanup.registry.deleteKeys =
+        registry.value("deleteKeys", std::vector<std::string>{});
+    uninstaller.cleanup.registry.deleteValues =
+        RegistryListFromJson(registry.value("deleteValues", json::array()));
+    uninstaller.cleanup.paths = CleanupRulesFromJson(cleanup.value("paths", json::array()));
+
+    const json ui = value.value("ui", json::object());
+    uninstaller.ui.defaultLanguage = ui.value("defaultLanguage", "");
+    uninstaller.ui.title = ui.value("title", "");
+    uninstaller.ui.confirmMessage = ui.value("confirmMessage", "");
+    return uninstaller;
+}
+
 json UiToJson(const PackageUiManifest& ui) {
     json pages = json::array();
     for (const auto& page : ui.componentSelection.pages) {
@@ -445,7 +810,9 @@ json PayloadToJson(const PackagePayloadManifest& payload) {
         folders.push_back({
             {"folderId", folder.folderId},
             {"folderName", folder.folderName},
+            {"source", folder.source},
             {"target", folder.target},
+            {"required", folder.required},
             {"offset", folder.offset},
             {"compressedSize", folder.compressedSize},
             {"originalSize", folder.originalSize},
@@ -464,7 +831,9 @@ PackagePayloadManifest PayloadFromJson(const json& value) {
         PackagePayloadFolder folder;
         folder.folderId = item.value("folderId", "");
         folder.folderName = item.value("folderName", "");
+        folder.source = item.value("source", "");
         folder.target = item.value("target", "");
+        folder.required = item.value("required", false);
         folder.offset = item.value("offset", 0ULL);
         folder.compressedSize = item.value("compressedSize", 0ULL);
         folder.originalSize = item.value("originalSize", 0ULL);
@@ -498,6 +867,7 @@ std::vector<uint8_t> SerializePackageManifest(const PackageManifest& manifest) {
         {"appDirectoryName", manifest.identity.appDirectoryName},
         {"appVersion", manifest.identity.appVersion},
         {"appWebsite", manifest.identity.appWebsite},
+        {"appPublisher", manifest.identity.appPublisher},
     });
     AddSection(sections, SectionType::InstallPolicy, {
         {"defaultDir", manifest.install.defaultDir},
@@ -511,17 +881,20 @@ std::vector<uint8_t> SerializePackageManifest(const PackageManifest& manifest) {
         {"sparseFileThresholdBytes", manifest.install.sparseFileThresholdBytes},
         {"useMutex", manifest.install.useMutex},
         {"mutexName", manifest.install.mutexName},
-        {"installInfo", InstallInfoToJson(manifest.install.installInfo)},
-        {"installRegistry", RegistryListToJson(manifest.install.installRegistry)},
+        {"installState", InstallStateToJson(manifest.install.installState)},
+        {"systemUninstallEntry", SystemUninstallEntryToJson(manifest.install.systemUninstallEntry)},
+        {"cleanup", InstallerCleanupToJson(manifest.install.cleanup)},
+        {"registryWrite", RegistryWriteToJson(manifest.install.registryWrite)},
         {"killProcesses", manifest.install.killProcesses},
     });
     AddSection(sections, SectionType::PayloadManifest, PayloadToJson(manifest.payload));
-    AddSection(sections, SectionType::ComponentManifest,
-               {{"components", ComponentsToJson(manifest.components.components)}});
+    AddSection(sections, SectionType::ComponentManifest, {
+        {"components", ComponentsToJson(manifest.components.components)},
+        {"definitions", ComponentDefinitionsToJson(manifest.components.definitions)},
+    });
     AddSection(sections, SectionType::UiManifest, UiToJson(manifest.ui));
     AddSection(sections, SectionType::LifecyclePolicy, {
-        {"uninstallCleanup", UninstallCleanupToJson(manifest.lifecycle.uninstallCleanup)},
-        {"upgradeCleanup", UpgradeCleanupToJson(manifest.lifecycle.upgradeCleanup)},
+        {"uninstaller", UninstallerPolicyToJson(manifest.lifecycle.uninstaller)},
     });
 
     PackageManifestHeader header;
@@ -634,6 +1007,7 @@ bool DeserializePackageManifest(const std::vector<uint8_t>& data,
     manifest.identity.appDirectoryName = identity.value("appDirectoryName", "");
     manifest.identity.appVersion = identity.value("appVersion", "");
     manifest.identity.appWebsite = identity.value("appWebsite", "");
+    manifest.identity.appPublisher = identity.value("appPublisher", "");
 
     manifest.install.defaultDir = install.value("defaultDir", "");
     manifest.install.autoStartup = install.value("autoStartup", false);
@@ -648,18 +1022,21 @@ bool DeserializePackageManifest(const std::vector<uint8_t>& data,
     manifest.install.sparseFileThresholdBytes = install.value("sparseFileThresholdBytes", 0ULL);
     manifest.install.useMutex = install.value("useMutex", true);
     manifest.install.mutexName = install.value("mutexName", "");
-    manifest.install.installInfo = InstallInfoFromJson(install.value("installInfo", json::object()));
-    manifest.install.installRegistry = RegistryListFromJson(install.value("installRegistry", json::array()));
+    manifest.install.installState = InstallStateFromJson(install.value("installState", json::object()));
+    manifest.install.systemUninstallEntry =
+        SystemUninstallEntryFromJson(install.value("systemUninstallEntry", json::object()));
+    manifest.install.cleanup = InstallerCleanupFromJson(install.value("cleanup", json::object()));
+    manifest.install.registryWrite = RegistryWriteFromJson(install.value("registryWrite", json::array()));
     manifest.install.killProcesses = install.value("killProcesses", std::vector<std::string>{});
 
     manifest.payload = PayloadFromJson(payload);
     manifest.components.components =
         ComponentsFromJson(components.value("components", json::array()));
+    manifest.components.definitions =
+        ComponentDefinitionsFromJson(components.value("definitions", json::array()));
     manifest.ui = UiFromJson(ui);
-    manifest.lifecycle.uninstallCleanup =
-        UninstallCleanupFromJson(lifecycle.value("uninstallCleanup", json::object()));
-    manifest.lifecycle.upgradeCleanup =
-        UpgradeCleanupFromJson(lifecycle.value("upgradeCleanup", json::object()));
+    manifest.lifecycle.uninstaller =
+        UninstallerPolicyFromJson(lifecycle.value("uninstaller", json::object()));
     return true;
 }
 

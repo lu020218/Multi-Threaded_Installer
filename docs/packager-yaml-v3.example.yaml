@@ -1,0 +1,352 @@
+# packager.yaml
+# Schema v3 设计示例。
+# 顶层职责划分：
+# - app：产品身份、版本、发布者等产品信息。
+# - package：打包与压缩行为。
+# - installer：安装阶段配置，包括安装策略、UI、payload、组件和安装状态持久化。
+# - uninstaller：卸载阶段配置，包括安装发现、清理、UI 和组件回滚。
+
+schemaVersion: 3
+
+app:
+  # 稳定的产品内部 id。用于注册表、互斥量、manifest 身份等。
+  id: my_desktop_app
+
+  # 用户可见的产品名称。
+  name: MyDesktopApp
+
+  # 应用版本号，会显示在 UI、注册表和安装 manifest 中。
+  version: 1.2.3
+
+  # 产品发布者或公司名称。
+  publisher: MyCompany
+
+  # 产品官网，可用于 UI 链接或注册表元数据。
+  website: https://example.com
+
+  # 安装程序 exe 图标。相对路径基于 config 目录解析。
+  icon: app.ico
+
+  # 生成 installer exe 时写入的 Windows 版本资源信息。
+  versionInfo:
+    productName: MyDesktopApp
+    fileDescription: MyDesktopApp Installer
+    fileVersion: 1.2.3.4
+    productVersion: 1.2.3.4
+    companyName: MyCompany
+    copyright: Copyright (c) 2026 MyCompany
+
+package:
+  compression:
+    # 压缩算法。示例：xz、zstd、none。
+    algorithm: xz
+
+    # 压缩等级。具体有效范围由压缩算法决定。
+    level: 9
+
+installer:
+  # 生成的安装程序是否需要管理员权限。
+  # 该值会在打包阶段写入 installer 的 Windows application manifest。
+  requireAdmin: true
+
+  # GUI 默认展示的安装目录；静默安装未覆盖时也使用该路径。
+  defaultDir: "%ProgramFiles%\\MyDesktopApp"
+  # 用户选择父目录后自动补齐的安装目录名，必填，不从 app.id/name 推导。
+  directoryName: MyDesktopApp
+
+  # 最低支持的 Windows 版本。
+  minWindows: "10.0.19041"
+
+  # 大文件或稀疏文件处理阈值。
+  largeFileThresholdBytes: 4194304
+
+  # 安装互斥量名称，用于避免多个安装流程并发运行。
+  mutex: "Global\\my_desktop_app_Install"
+
+  # 安装或升级前需要关闭的进程。
+  killBeforeInstall:
+    - MyDesktopApp.exe
+    - MyDesktopAppHelper.exe
+
+  defaults:
+    # 开机自启动的默认选择。
+    autoStartup: true
+
+    # 桌面快捷方式的默认选择。
+    desktopShortcut: true
+
+  # 安装状态持久化配置。安装、升级、卸载发现都可以依赖该信息。
+  # 支持同时写入多个注册表位置和多个文件位置。
+  # values 支持自定义字段；key/name 为实际写入名称，value 支持安装期 token。
+  installState:
+    registries:
+      - id: main
+        path: "HKCU\\Software\\my_desktop_app"
+        values:
+          installDir:
+            key: InstallDir
+            value: "%InstallDir%"
+            type: expand
+          installState:
+            key: InstallState
+            value: "%InstallState%"
+            type: string
+          version:
+            key: Version
+            value: "%Version%"
+            type: string
+          executablePath:
+            key: ExecutablePath
+            value: "%InstallDir%\\MyDesktopApp.exe"
+            type: expand
+          # 自定义业务字段示例。
+          channel:
+            key: Channel
+            value: stable
+            type: string
+          lastInstallSource:
+            key: LastInstallSource
+            value: "%InstallSource%"
+            type: string
+
+      - id: compatibility
+        path: "HKCU\\Software\\MyCompany\\MyDesktopApp"
+        values:
+          installDir:
+            key: Path
+            value: "%InstallDir%"
+            type: expand
+          version:
+            key: CurrentVersion
+            value: "%Version%"
+            type: string
+
+    files:
+      - id: main
+        path: "%ProgramData%\\my_desktop_app\\install-state.json"
+        format: json
+        values:
+          installDir:
+            name: installDir
+            value: "%InstallDir%"
+          installState:
+            name: state
+            value: "%InstallState%"
+    detect:
+      # 覆盖安装和 --upgrade 通过当前 installState 主来源发现旧安装目录。
+      primary:
+        registry: main
+        value: installDir
+      # legacy 用于兼容旧版本安装目录发现，按顺序兜底尝试。
+      legacy:
+        - id: legacy_v2
+          path: "HKCU\\Software\\my_desktop_app"
+          installDirValue: InstallDir
+
+  # Windows 设置/控制面板中的系统卸载入口。
+  systemUninstallEntry:
+    # user 表示写入 HKCU 卸载项；machine 表示写入 HKLM 卸载项。
+    scope: machine
+    displayName: MyDesktopApp
+    publisher: MyCompany
+
+  cleanup:
+    systemUninstallEntry:
+      legacyEntries:
+        - displayName: MyDesktopAppLegacy
+          scope: both
+
+  ui:
+    # 安装器默认语言。
+    defaultLanguage: zh_CN
+
+    # 桌面快捷方式显示名称。是否创建由 installer.defaults.desktopShortcut 控制。
+    desktopShortcutName:
+      default: MyDesktopApp
+      zh_CN: 我的应用
+      en_US: MyDesktopApp
+
+    # UI 控件链接配置。
+    links:
+      - control: btnWebsite
+        url: https://example.com
+      - control: btnHelp
+        url: https://example.com/help
+
+    # 组件选择 UI 绑定配置。
+    componentSelection:
+      mode: embeddedInExistingPages
+      binding:
+        strategy: xml_userdata
+        tokenPrefix: "component:"
+        pages:
+          - skin: welcome_page.xml
+            controls:
+              - chkChrome
+              - chkPpt
+
+  # 要嵌入安装包的 payload 目录。
+  # source 相对 --input 目录解析。
+  # target 是安装时的最终释放位置。
+  payload:
+    - id: app
+      source: app
+      target: "%InstallDir%"
+      required: true
+
+    - id: resources
+      source: resources
+      target: "%InstallDir%\\resources"
+      required: true
+
+    - id: plugins
+      source: plugins
+      target: "%InstallDir%\\plugins"
+      required: false
+
+  components:
+    - id: core
+      name: Core Application
+      description: Required application runtime and resources.
+      required: true
+      defaultSelected: true
+      payload:
+        - app
+        - resources
+
+    - id: chrome_plugin
+      name: Chrome Plugin
+      description: Optional Chrome extension integration.
+      required: false
+      defaultSelected: true
+      dependsOn:
+        - core
+      payload:
+        - plugins
+      install:
+        command: "%InstallDir%\\components\\chrome_plugin\\install.bat"
+        workingDirectory: "%InstallDir%\\components\\chrome_plugin"
+        wait: true
+        timeoutSec: 900
+      uninstall:
+        command: "%InstallDir%\\components\\chrome_plugin\\uninstall.bat"
+        workingDirectory: "%InstallDir%\\components\\chrome_plugin"
+        wait: true
+        timeoutSec: 900
+
+    - id: post_setup_agent
+      name: Post Setup Agent
+      description: Fetch remote runtime config and apply environment setup.
+      required: false
+      defaultSelected: true
+      dependsOn:
+        - core
+      payload:
+        - app
+      install:
+        command: "%InstallDir%\\components\\post_setup_agent\\post_setup_agent.exe"
+        args: >
+          --install-dir "%InstallDir%"
+          --app-version "%Version%"
+          --config-url "https://example.com/runtime-config.json"
+          --state-path "%ProgramData%\\my_desktop_app\\post_setup_state.json"
+          --log-path "%ProgramData%\\my_desktop_app\\post_setup_agent.log"
+        wait: true
+        timeoutSec: 1800
+      uninstall:
+        command: "%InstallDir%\\components\\post_setup_agent\\post_setup_agent.exe"
+        args: >
+          --uninstall
+          --state-path "%ProgramData%\\my_desktop_app\\post_setup_state.json"
+          --log-path "%ProgramData%\\my_desktop_app\\post_setup_agent.log"
+        wait: true
+        timeoutSec: 900
+
+  registry:
+    # 安装时额外写入的注册表项。
+    write:
+      - path: "HKCU\\Software\\my_desktop_app"
+        values:
+          InstallLocation:
+            value: "%InstallDir%"
+            type: expand
+          LaunchCommand:
+            value: "\"%InstallDir%\\MyDesktopApp.exe\""
+            type: expand
+
+uninstaller:
+  # 卸载程序是否需要管理员权限。
+  # 如果后续支持，应同样在打包阶段写入 uninstaller 的 application manifest。
+  requireAdmin: true
+
+  # 当本地 manifest 不可用时，卸载器或升级流程如何发现已安装实例。
+  # 卸载前需要关闭的进程。
+  killBeforeUninstall:
+    - MyDesktopApp.exe
+    - MyDesktopAppHelper.exe
+    - MyDesktopAppTray.exe
+
+  cleanup:
+    # manifest 表示按 install.manifest.json 中记录的文件清理。
+    # safeDirectoryFallback 表示 manifest 缺失时，在安全校验通过后清理安装目录内容。
+    installedFiles: manifest
+    missingManifestFallback: safeDirectoryFallback
+
+    # delete 表示删除 installState 注册表路径。
+    # markUninstalled 表示保留路径并写入 InstallState=uninstalled。
+    # keep 表示不处理 installState。
+    installState: delete
+
+    # auto 表示根据安装 manifest 中的实际安装结果清理。
+    autoStartup: auto
+    desktopShortcut: auto
+    systemUninstallEntry:
+      scope: machine
+      displayName: MyDesktopApp
+      legacyEntries:
+        - displayName: MyDesktopAppLegacy
+          scope: both
+
+    # 旧版本兼容清理，用于处理历史名称或历史卸载项。
+    legacy:
+      desktopShortcutNames:
+        - MyDesktopApp Legacy
+        - My Desktop App
+      startupNames:
+        - MyDesktopAppLegacy
+
+    registry:
+      # 删除整棵注册表 key。
+      deleteKeys:
+        - "HKCU\\Software\\MyDesktopAppLegacy"
+        - "HKLM\\Software\\MyDesktopAppLegacy"
+
+      # 删除单个注册表 value。
+      deleteValues:
+        - path: "HKCU\\Software\\my_desktop_app"
+          key: TemporaryValue
+
+    paths:
+      # 额外清理的非安装根目录路径。
+      # 安装器会拒绝危险根目录，避免误删系统目录。
+      - path: "%LocalAppData%\\MyDesktopApp\\Cache"
+        recursive: true
+        onlyIfEmpty: false
+
+      - path: "%LocalAppData%\\MyDesktopApp\\Logs"
+        recursive: true
+        onlyIfEmpty: false
+
+      - path: "%LocalAppData%\\MyDesktopApp"
+        recursive: true
+        onlyIfEmpty: true
+
+  ui:
+    # 卸载器默认语言。
+    defaultLanguage: zh_CN
+
+    # 卸载器窗口标题。
+    title: 卸载 MyDesktopApp
+
+    # 卸载确认文案。
+    confirmMessage: 是否卸载 MyDesktopApp？

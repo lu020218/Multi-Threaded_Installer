@@ -22,9 +22,14 @@ struct UninstallContext {
     std::string installDir;
     std::string appId;
     std::string appName;
-    std::string installInfoRegistryPath;
+    UninstallerCleanupConfigV3 embeddedUninstallerCleanup;
+    bool hasEmbeddedUninstallerCleanup = false;
+    std::vector<std::string> embeddedKillBeforeUninstall;
+    bool manifestValidV3 = false;
     bool manifestReadable = false;
     bool fallbackAllowed = false;
+    std::string fallbackPolicy;
+    std::string detectSource;
     std::string errorMessage;
 };
 
@@ -42,6 +47,13 @@ bool uninstallFromManifest(const std::string& manifestPath,
                            InstallerPathResolver& resolver,
                            CliSupport& console);
 bool uninstallFromManifest(const std::string& manifestPath,
+                           InstallerPathResolver& resolver,
+                           CliSupport& console,
+                           const UninstallProgressCallback& progressCallback,
+                           const std::function<bool()>& cancellationCallback = {});
+bool uninstallFromManifest(const std::string& manifestPath,
+                           const UninstallerCleanupConfigV3* embeddedCleanup,
+                           const std::vector<std::string>* embeddedKillBeforeUninstall,
                            InstallerPathResolver& resolver,
                            CliSupport& console,
                            const UninstallProgressCallback& progressCallback,

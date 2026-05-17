@@ -11,21 +11,20 @@ namespace MultiThreadedInstaller::GUIInstallFlowUtils {
 
 namespace {
 
-std::wstring ResolveEffectiveAppIdFromConfig(const InstallConfig& config) {
-    return Utf8ToWide(resolveEffectiveAppId(WideToUtf8(config.appId),
-                                            WideToUtf8(config.applicationName)));
+std::wstring ResolveDirectoryNameFromConfig(const InstallConfig& config) {
+    return config.directoryName;
 }
 
 } // namespace
 std::wstring ResolveSelectedInstallPath(const InstallConfig& config,
                                         const std::wstring& selectedPath) {
-    const std::wstring effectiveAppId = ResolveEffectiveAppIdFromConfig(config);
-    if (selectedPath.empty() || effectiveAppId.empty()) {
+    const std::wstring directoryName = ResolveDirectoryNameFromConfig(config);
+    if (selectedPath.empty() || directoryName.empty()) {
         return selectedPath;
     }
 
     const std::string adjustedPath =
-        appendPathLeafIfMissing(WideToUtf8(selectedPath), WideToUtf8(effectiveAppId));
+        appendPathLeafIfMissing(WideToUtf8(selectedPath), WideToUtf8(directoryName));
     return Utf8ToWide(adjustedPath);
 }
 

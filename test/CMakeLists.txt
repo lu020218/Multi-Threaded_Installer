@@ -23,7 +23,6 @@ add_executable(SchemaRegressionTests
     ../src/packager/configuration_validator.cpp
     ../src/packager/configuration_manager.cpp
     ../src/packager/version_info_updater.cpp
-    ../src/packager/metadata_generator.cpp
     ../src/packager/package_manifest_builder.cpp
     ../src/installer/metadata_parser.cpp
     ../src/installer/package_manifest_validator.cpp
@@ -36,6 +35,7 @@ add_executable(SchemaRegressionTests
     ../src/installer/install_manifest_store.cpp
     ../src/installer/installed_instance_resolver.cpp
     ../src/installer/install_state_utils.cpp
+    ../src/installer/install_state_store.cpp
     ../src/installer/console_interface.cpp
     ../src/installer/shortcut_startup_utils.cpp
     ../src/installer/self_delete_scheduler.cpp

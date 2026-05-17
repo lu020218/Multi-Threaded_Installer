@@ -301,15 +301,9 @@ InstallConfig CreateInstallConfigFromMetadata(const ExtendedInstallationMetadata
     InstallConfig config;
     config.applicationName = Utf8ToWide(metadata.appName);
     config.appId = Utf8ToWide(resolveEffectiveAppId(metadata.appId, metadata.appName));
-    config.directoryName =
-        Utf8ToWide(resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName));
+    config.directoryName = Utf8ToWide(metadata.appDirectoryName);
     config.version = Utf8ToWide(metadata.appVersion);
     config.defaultInstallPath = Utf8ToWide(metadata.installDefaultDir);
-    const auto installDirIt = metadata.installInfo.values.find("installDir");
-    if (installDirIt != metadata.installInfo.values.end()) {
-        config.registryPath = Utf8ToWide(metadata.installInfo.path);
-        config.registryKey = Utf8ToWide(installDirIt->second.key);
-    }
     config.webPageUrl = Utf8ToWide(metadata.appWebsite);
     config.executableName = Utf8ToWide(metadata.appName + ".exe");
     config.autoStartup = metadata.installAutoStartup;
@@ -401,7 +395,7 @@ std::string ResolveInstallPathForSilentRun(const ExtendedInstallationMetadata& m
     }
 
     InstalledInstanceInfo installedInstance;
-    if (resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
+    if (resolveInstalledInstanceFromInstallState(metadata, pathResolver, installedInstance, nullptr) &&
         installedInstance.found &&
         !installedInstance.installDir.empty()) {
         existingManifest = installedInstance.manifestPath;
@@ -452,7 +446,7 @@ std::string ResolveUninstallManifestPath(const ExtendedInstallationMetadata* met
         return {};
     }
     InstalledInstanceInfo installedInstance;
-    if (resolveInstalledInstanceFromInstallRoots(*metadata, installedInstance) &&
+    if (resolveInstalledInstanceFromInstallState(*metadata, resolver, installedInstance, nullptr) &&
         !installedInstance.manifestPath.empty()) {
         return installedInstance.manifestPath;
     }
@@ -481,22 +475,38 @@ InstallConfig BuildUninstallConfigFromManifest(const std::string& manifestPath) 
 }
 
 bool ApplyPreviousOptionsForUpgrade(const ExtendedInstallationMetadata& metadata,
+                                    InstallerPathResolver& resolver,
                                     InstallServiceOptions& options,
                                     std::string& installDir,
+                                    bool* restoredPreviousOptions,
                                     std::string& error) {
     std::string manifestPath;
-    if (!ResolveUpgradeInstallFromInstallInfo(metadata, installDir, manifestPath, error)) {
-        return false;
+    if (restoredPreviousOptions) {
+        *restoredPreviousOptions = false;
     }
-
-    PreviousInstallOptions previous;
-    if (!loadPreviousInstallOptions(manifestPath, previous, error)) {
+    if (!ResolveUpgradeInstallFromInstallStateDetect(metadata, resolver, installDir, manifestPath, error)) {
         return false;
     }
 
     options.upgradeMode = true;
     options.installPath = installDir;
     options.installPathExplicit = true;
+
+    if (manifestPath.empty()) {
+        error.clear();
+        logInstallerWarning("[Upgrade] Previous install manifest not found; using current package defaults.");
+        return true;
+    }
+
+    PreviousInstallOptions previous;
+    std::string previousOptionsError;
+    if (!loadPreviousInstallOptions(manifestPath, previous, previousOptionsError)) {
+        error.clear();
+        logInstallerWarning("[Upgrade] Failed to load previous install options from " + manifestPath +
+                            "; using current package defaults. error=" + previousOptionsError);
+        return true;
+    }
+
     options.overrideAutoStartup = true;
     options.autoStartupEnabled = previous.autoStartup;
     options.overrideDesktopIcons = true;
@@ -504,6 +514,9 @@ bool ApplyPreviousOptionsForUpgrade(const ExtendedInstallationMetadata& metadata
     options.languageCode = previous.languageCode;
     options.selectedComponentIds = previous.selectedComponentIds;
     options.installAllComponents = previous.installAllComponents;
+    if (restoredPreviousOptions) {
+        *restoredPreviousOptions = true;
+    }
     return true;
 }
 
@@ -524,14 +537,20 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
     std::string installPath;
     if (context.args.upgrade) {
         std::string upgradeError;
-        if (!ApplyPreviousOptionsForUpgrade(metadata, options, installPath, upgradeError)) {
+        bool restoredPreviousOptions = false;
+        if (!ApplyPreviousOptionsForUpgrade(metadata,
+                                            pathResolver,
+                                            options,
+                                            installPath,
+                                            &restoredPreviousOptions,
+                                            upgradeError)) {
             console.showError(upgradeError.empty() ? "Upgrade mode requires an existing installation." : upgradeError);
             return INSTALLER_EXIT_FAILED;
         }
     } else {
         InstalledInstanceInfo installedInstance;
         const bool hasInstalledInstance =
-            resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
+            resolveInstalledInstanceFromInstallState(metadata, pathResolver, installedInstance, nullptr) &&
             installedInstance.found;
 
         if (hasInstalledInstance) {
@@ -599,7 +618,13 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
 
     if (upgradeMode) {
         std::string upgradeError;
-        if (!ApplyPreviousOptionsForUpgrade(metadata, upgradeOptions, upgradeInstallDir, upgradeError)) {
+        bool restoredPreviousOptions = false;
+        if (!ApplyPreviousOptionsForUpgrade(metadata,
+                                            pathResolver,
+                                            upgradeOptions,
+                                            upgradeInstallDir,
+                                            &restoredPreviousOptions,
+                                            upgradeError)) {
             GUIHelpers::ShowErrorDialog(nullptr,
                                         GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L""),
                                         Utf8ToWide(upgradeError.empty()
@@ -611,7 +636,7 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     } else {
         InstalledInstanceInfo installedInstance;
         overwriteMode =
-            resolveInstalledInstanceFromInstallRoots(metadata, installedInstance) &&
+            resolveInstalledInstanceFromInstallState(metadata, pathResolver, installedInstance, nullptr) &&
             installedInstance.found;
         if (overwriteMode && !installedInstance.installDir.empty()) {
             upgradeInstallDir = installedInstance.installDir;
@@ -623,10 +648,16 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     if (!upgradeInstallDir.empty()) {
         config.defaultInstallPath = Utf8ToWide(upgradeInstallDir);
     }
-    if (upgradeMode) {
+    bool restoredPreviousOptions = upgradeOptions.overrideAutoStartup || upgradeOptions.overrideDesktopIcons ||
+                                   !upgradeOptions.languageCode.empty() ||
+                                   !upgradeOptions.selectedComponentIds.empty() ||
+                                   upgradeOptions.installAllComponents;
+    if (upgradeMode && restoredPreviousOptions) {
         config.autoStartup = upgradeOptions.autoStartupEnabled;
         config.desktopIcons = upgradeOptions.desktopIconsEnabled;
-        config.languageCode = Utf8ToWide(upgradeOptions.languageCode);
+        if (!upgradeOptions.languageCode.empty()) {
+            config.languageCode = Utf8ToWide(upgradeOptions.languageCode);
+        }
     }
 
     // Deferred: only needed by child processes spawned during installation.
@@ -646,12 +677,22 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     frame->SetInstallConfig(config);
     frame->SetInstallMetadata(metadata);
     if (upgradeMode) {
+        const bool autoStartAutoRun = restoredPreviousOptions
+                                          ? upgradeOptions.autoStartupEnabled
+                                          : config.autoStartup;
+        const bool autoStartDesktopIcons = restoredPreviousOptions
+                                               ? upgradeOptions.desktopIconsEnabled
+                                               : config.desktopIcons;
+        const std::wstring autoStartLanguage = restoredPreviousOptions
+                                                   ? Utf8ToWide(upgradeOptions.languageCode)
+                                                   : config.languageCode;
         frame->SetAutoStartInstallRequest(Utf8ToWide(upgradeInstallDir),
-                                          upgradeOptions.autoStartupEnabled,
-                                          upgradeOptions.desktopIconsEnabled,
-                                          Utf8ToWide(upgradeOptions.languageCode),
-                                          upgradeOptions.selectedComponentIds,
-                                          upgradeOptions.installAllComponents,
+                                          autoStartAutoRun,
+                                          autoStartDesktopIcons,
+                                          autoStartLanguage,
+                                          restoredPreviousOptions ? upgradeOptions.selectedComponentIds
+                                                                  : std::vector<std::string>{},
+                                          restoredPreviousOptions && upgradeOptions.installAllComponents,
                                           true);
     }
 

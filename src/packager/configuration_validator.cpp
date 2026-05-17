@@ -6,6 +6,7 @@
 #include <cctype>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -77,6 +78,36 @@ bool InstallDirectoryRequiresAdmin(const std::string& path) {
            lowered.find("%programfiles(x86)%") != std::string::npos;
 }
 
+bool IsOneOf(std::string value, std::initializer_list<const char*> allowed) {
+    value = ToLowerCopy(value);
+    return std::any_of(allowed.begin(), allowed.end(), [&](const char* item) {
+        return value == item;
+    });
+}
+
+bool IsExplicitUserMachineOrBoth(UninstallEntryScope scope) {
+    return scope == UninstallEntryScope::CURRENT_USER ||
+           scope == UninstallEntryScope::LOCAL_MACHINE ||
+           scope == UninstallEntryScope::BOTH;
+}
+
+void ValidateSystemUninstallLegacyEntries(const std::vector<SystemUninstallEntryCleanupItem>& entries,
+                                          const std::string& fieldPath,
+                                          ConfigurationValidator::ValidationResult& result) {
+    for (size_t i = 0; i < entries.size(); ++i) {
+        const auto& entry = entries[i];
+        const std::string position = fieldPath + "[" + std::to_string(i) + "]";
+        if (entry.displayName.empty()) {
+            result.errors.push_back("ERROR: " + position + ".displayName is required");
+            result.isValid = false;
+        }
+        if (!IsExplicitUserMachineOrBoth(entry.scope)) {
+            result.errors.push_back("ERROR: " + position + ".scope must be user, machine, or both");
+            result.isValid = false;
+        }
+    }
+}
+
 } // namespace
 
 ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
@@ -85,8 +116,13 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
     const std::string& configDirectory) {
     ValidationResult result;
 
-    if (config.schemaVersion != 2) {
-        result.errors.push_back("ERROR: schemaVersion must be 2");
+    if (config.schemaVersion != 3) {
+        result.errors.push_back("ERROR: schemaVersion must be 3");
+        result.isValid = false;
+    }
+
+    if (config.app.id.empty()) {
+        result.errors.push_back("ERROR: Missing required field 'app.id'");
         result.isValid = false;
     }
 
@@ -115,28 +151,59 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         }
     }
 
-    if (config.install.defaultDir.empty()) {
-        result.errors.push_back("ERROR: Missing required field 'install.defaultDir'");
+    if (config.installer.defaultDir.empty()) {
+        result.errors.push_back("ERROR: Missing required field 'installer.defaultDir'");
         result.isValid = false;
-    } else if (!validateTargetDirectory(config.install.defaultDir, result.errors)) {
+    } else if (!validateTargetDirectory(config.installer.defaultDir, result.errors)) {
+        result.isValid = false;
+    }
+    if (config.installer.directoryName.empty()) {
+        result.errors.push_back("ERROR: Missing required field 'installer.directoryName'");
         result.isValid = false;
     }
 
-    if (!config.install.requireAdmin) {
-        if (InstallDirectoryRequiresAdmin(config.install.defaultDir)) {
+    if (!config.installer.requireAdmin) {
+        if (InstallDirectoryRequiresAdmin(config.installer.defaultDir)) {
             result.errors.push_back(
-                "ERROR: install.requireAdmin=false cannot use Program Files install.defaultDir");
+                "ERROR: installer.requireAdmin=false cannot use Program Files installer.defaultDir");
             result.isValid = false;
         }
-        if (RegistryPathRequiresAdmin(config.install.installInfo.path)) {
+        for (const auto& store : config.installer.installState.registries) {
+            if (RegistryPathRequiresAdmin(store.path)) {
+                result.errors.push_back(
+                    "ERROR: installer.requireAdmin=false cannot write installer.installState.registries[] to HKLM");
+                result.isValid = false;
+                break;
+            }
+        }
+        for (const auto& group : config.installer.registry.write) {
+            if (RegistryPathRequiresAdmin(group.path)) {
+                result.errors.push_back(
+                    "ERROR: installer.requireAdmin=false cannot write installer.registry.write[] to HKLM");
+                result.isValid = false;
+                break;
+            }
+        }
+        if ((config.installer.systemUninstallEntry.scope == UninstallEntryScope::LOCAL_MACHINE ||
+             config.installer.systemUninstallEntry.scope == UninstallEntryScope::BOTH)) {
             result.errors.push_back(
-                "ERROR: install.requireAdmin=false cannot write install.installInfo to HKLM");
+                "ERROR: installer.requireAdmin=false cannot create machine system uninstall entry");
             result.isValid = false;
         }
     }
 
-    if (!config.app.product.iconPath.empty()) {
-        fs::path iconPath = PathFromUtf8(config.app.product.iconPath);
+    if (config.installer.systemUninstallEntry.displayName.empty()) {
+        result.errors.push_back("ERROR: Missing required field 'installer.systemUninstallEntry.displayName'");
+        result.isValid = false;
+    }
+    ValidateSystemUninstallLegacyEntries(
+        config.installer.cleanup.systemUninstallEntry.legacyEntries,
+        "installer.cleanup.systemUninstallEntry.legacyEntries",
+        result);
+
+    const std::string icon = config.app.icon.empty() ? config.app.product.iconPath : config.app.icon;
+    if (!icon.empty()) {
+        fs::path iconPath = PathFromUtf8(icon);
         if (!iconPath.is_absolute()) {
             iconPath = PathFromUtf8(configDirectory) / iconPath;
         }
@@ -149,152 +216,140 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         }
     }
 
-    for (const auto& reg : config.lifecycle.registry.onInstall) {
-        if (reg.path.empty() || reg.key.empty()) {
-            result.errors.push_back("ERROR: Invalid lifecycle.registry.onInstall entry: path and key are required");
-            result.isValid = false;
-            break;
-        }
-        if (!config.install.requireAdmin && RegistryPathRequiresAdmin(reg.path)) {
-            result.errors.push_back(
-                "ERROR: install.requireAdmin=false cannot write lifecycle.registry.onInstall to HKLM");
-            result.isValid = false;
-            break;
-        }
-    }
-
-    if (config.install.useMutex && config.install.mutexName.empty()) {
-        result.errors.push_back("ERROR: install.mutexName is required when install.useMutex is true");
+    if (config.installer.mutex.empty()) {
+        result.errors.push_back("ERROR: installer.mutex is required");
         result.isValid = false;
     }
 
-    if (config.install.installInfo.path.empty()) {
-        result.errors.push_back("ERROR: install.installInfo.path is required");
-        result.isValid = false;
-    }
-
-    static const std::vector<std::string> kRequiredInstallInfoFields = {
-        "installDir", "displayName", "displayVersion", "executablePath", "installState"
-    };
-    for (const auto& field : kRequiredInstallInfoFields) {
-        auto it = config.install.installInfo.values.find(field);
-        if (it == config.install.installInfo.values.end() || it->second.key.empty()) {
-            result.errors.push_back("ERROR: install.installInfo.values." + field + ".key is required");
+    std::unordered_set<std::string> registryStoreIds;
+    for (size_t i = 0; i < config.installer.installState.registries.size(); ++i) {
+        const auto& store = config.installer.installState.registries[i];
+        const std::string position = "installer.installState.registries[" + std::to_string(i) + "]";
+        if (store.id.empty()) {
+            result.errors.push_back("ERROR: " + position + ".id is required");
+            result.isValid = false;
+        } else if (!registryStoreIds.insert(store.id).second) {
+            result.errors.push_back("ERROR: Duplicate installer.installState.registries id: " + store.id);
             result.isValid = false;
         }
-    }
-
-    for (const auto& entry : config.lifecycle.cleanup.onUpgrade.installRoots) {
-        if (entry.path.empty() || entry.key.empty()) {
-            result.errors.push_back("ERROR: lifecycle.cleanup.onUpgrade.installRoots[] requires path and key");
-            result.isValid = false;
-            break;
-        }
-    }
-
-    for (const auto& entry : config.lifecycle.cleanup.onUpgrade.uninstallEntries) {
-        if (entry.name.empty()) {
-            result.errors.push_back("ERROR: lifecycle.cleanup.onUpgrade.uninstallEntries.entries[].name is required");
-            result.isValid = false;
-            break;
-        }
-    }
-
-    for (const auto& entry : config.lifecycle.cleanup.onUninstall.uninstallEntries) {
-        if (entry.name.empty()) {
-            result.errors.push_back("ERROR: lifecycle.cleanup.onUninstall.uninstallEntries.entries[].name is required");
-            result.isValid = false;
-            break;
-        }
-    }
-
-    for (const auto& entry : config.lifecycle.cleanup.onUninstall.processes) {
-        if (entry.name.empty()) {
-            result.errors.push_back("ERROR: lifecycle.cleanup.onUninstall.processes[].name is required");
-            result.isValid = false;
-            break;
-        }
-    }
-
-    for (const auto& entry : config.lifecycle.cleanup.onUninstall.shortcuts) {
-        if (entry.name.empty()) {
-            result.errors.push_back("ERROR: lifecycle.cleanup.onUninstall.shortcuts[].name is required");
-            result.isValid = false;
-            break;
-        }
-    }
-
-    for (const auto& entry : config.lifecycle.cleanup.onUninstall.startup) {
-        if (entry.name.empty()) {
-            result.errors.push_back("ERROR: lifecycle.cleanup.onUninstall.startup[].name is required");
-            result.isValid = false;
-            break;
-        }
-    }
-
-    for (const auto& entry : config.lifecycle.cleanup.onUninstall.registry.legacyKeys) {
-        if (entry.path.empty()) {
-            result.errors.push_back("ERROR: lifecycle.cleanup.onUninstall.registry.legacyKeys[].path is required");
-            result.isValid = false;
-            break;
-        }
-    }
-
-    for (const auto& entry : config.lifecycle.cleanup.onUpgrade.registry.legacyKeys) {
-        if (entry.path.empty()) {
-            result.errors.push_back("ERROR: lifecycle.cleanup.onUpgrade.registry.legacyKeys[].path is required");
-            result.isValid = false;
-            break;
-        }
-    }
-
-    for (const auto& folder : config.layout.folders) {
-        if (folder.target.empty()) {
-            result.errors.push_back("ERROR: layout.folders[].target is required");
-            result.isValid = false;
-            continue;
-        }
-        if (!validateTargetDirectory(folder.target, result.errors)) {
+        if (store.path.empty()) {
+            result.errors.push_back("ERROR: " + position + ".path is required");
             result.isValid = false;
         }
-    }
-
-    for (const auto& reg : config.lifecycle.registry.onInstall) {
-        if (reg.path == config.install.installInfo.path) {
-            for (const auto& pair : config.install.installInfo.values) {
-                if (reg.key == pair.second.key) {
-                    result.errors.push_back("ERROR: lifecycle.registry.onInstall must not duplicate install.installInfo field key '" + reg.key + "'");
-                    result.isValid = false;
-                }
+        if (store.values.empty()) {
+            result.errors.push_back("ERROR: " + position + ".values is required");
+            result.isValid = false;
+        }
+        for (const auto& pair : store.values) {
+            if (pair.second.key.empty()) {
+                result.errors.push_back("ERROR: " + position + ".values." + pair.first + ".key is required");
+                result.isValid = false;
             }
         }
     }
 
-    for (const auto& pair : config.install.installInfo.values) {
-        if (pair.second.value.empty()) {
-            result.errors.push_back("ERROR: install.installInfo.values." + pair.first + ".value is required");
+    std::unordered_set<std::string> fileStoreIds;
+    for (size_t i = 0; i < config.installer.installState.files.size(); ++i) {
+        const auto& store = config.installer.installState.files[i];
+        const std::string position = "installer.installState.files[" + std::to_string(i) + "]";
+        if (store.id.empty()) {
+            result.errors.push_back("ERROR: " + position + ".id is required");
+            result.isValid = false;
+        } else if (!fileStoreIds.insert(store.id).second) {
+            result.errors.push_back("ERROR: Duplicate installer.installState.files id: " + store.id);
+            result.isValid = false;
+        }
+        if (store.path.empty()) {
+            result.errors.push_back("ERROR: " + position + ".path is required");
+            result.isValid = false;
+        }
+        if (ToLowerCopy(store.format) != "json") {
+            result.errors.push_back("ERROR: " + position + ".format only supports json");
+            result.isValid = false;
+        }
+        if (store.values.empty()) {
+            result.errors.push_back("ERROR: " + position + ".values is required");
             result.isValid = false;
         }
     }
 
-    if (config.install.installInfo.mode != InstallStateMode::REGISTRY) {
-        result.errors.push_back("ERROR: install.installInfo.mode must be 'registry'");
+    const auto& detect = config.installer.installState.detect;
+    const bool hasPrimaryDetect = !detect.primary.registry.empty() && !detect.primary.value.empty();
+    if (detect.primary.registry.empty() != detect.primary.value.empty()) {
+        result.errors.push_back(
+            "ERROR: installer.installState.detect.primary.registry and value must be specified together");
+        result.isValid = false;
+    }
+    if (hasPrimaryDetect) {
+        auto registryIt = std::find_if(config.installer.installState.registries.begin(),
+                                       config.installer.installState.registries.end(),
+                                       [&](const InstallStateRegistryStoreConfig& store) {
+                                           return store.id == detect.primary.registry;
+                                       });
+        if (registryIt == config.installer.installState.registries.end()) {
+            result.errors.push_back("ERROR: installer.installState.detect.primary.registry references unknown registry store: " +
+                                    detect.primary.registry);
+            result.isValid = false;
+        } else if (registryIt->values.find(detect.primary.value) == registryIt->values.end()) {
+            result.errors.push_back("ERROR: installer.installState.detect.primary.value references unknown registry value: " +
+                                    detect.primary.value);
+            result.isValid = false;
+        }
+    }
+    std::unordered_set<std::string> legacyDetectIds;
+    bool hasLegacyDetect = false;
+    for (size_t i = 0; i < detect.legacy.size(); ++i) {
+        const auto& legacy = detect.legacy[i];
+        const std::string position =
+            "installer.installState.detect.legacy[" + std::to_string(i) + "]";
+        if (legacy.id.empty()) {
+            result.errors.push_back("ERROR: " + position + ".id is required");
+            result.isValid = false;
+        } else if (!legacyDetectIds.insert(legacy.id).second) {
+            result.errors.push_back("ERROR: Duplicate installer.installState.detect.legacy id: " + legacy.id);
+            result.isValid = false;
+        }
+        if (legacy.path.empty()) {
+            result.errors.push_back("ERROR: " + position + ".path is required");
+            result.isValid = false;
+        }
+        if (legacy.installDirValue.empty()) {
+            result.errors.push_back("ERROR: " + position + ".installDirValue is required");
+            result.isValid = false;
+        }
+        if (!legacy.path.empty() && !legacy.installDirValue.empty()) {
+            hasLegacyDetect = true;
+        }
+    }
+    if (!hasPrimaryDetect && !hasLegacyDetect) {
+        result.errors.push_back(
+            "ERROR: installer.installState.detect requires primary or at least one legacy entry");
         result.isValid = false;
     }
 
-    std::unordered_set<std::string> folderIds;
-    folderIds.reserve(config.layout.folders.size());
-    for (const auto& folder : config.layout.folders) {
-        if (folder.id.empty()) {
-            result.errors.push_back("ERROR: layout.folders[].id is required");
+    std::unordered_set<std::string> payloadIds;
+    payloadIds.reserve(config.installer.payload.size());
+    if (config.installer.payload.empty()) {
+        result.errors.push_back("ERROR: installer.payload must contain at least one entry");
+        result.isValid = false;
+    }
+    for (size_t i = 0; i < config.installer.payload.size(); ++i) {
+        const auto& payload = config.installer.payload[i];
+        const std::string position = "installer.payload[" + std::to_string(i) + "]";
+        if (payload.id.empty()) {
+            result.errors.push_back("ERROR: " + position + ".id is required");
             result.isValid = false;
-            continue;
-        }
-        if (!folderIds.insert(folder.id).second) {
-            result.errors.push_back("ERROR: Duplicate layout.folders id: " + folder.id);
+        } else if (!payloadIds.insert(payload.id).second) {
+            result.errors.push_back("ERROR: Duplicate installer.payload id: " + payload.id);
             result.isValid = false;
         }
-        if (!validateFolderExists(folder.source, inputDirectory, result.errors)) {
+        if (!validateFolderExists(payload.source, inputDirectory, result.errors)) {
+            result.isValid = false;
+        }
+        if (payload.target.empty()) {
+            result.errors.push_back("ERROR: " + position + ".target is required");
+            result.isValid = false;
+        } else if (!validateTargetDirectory(payload.target, result.errors)) {
             result.isValid = false;
         }
     }
@@ -302,6 +357,30 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
     if (!validateComponents(config, result.errors)) {
         result.isValid = false;
     }
+
+    if (!IsOneOf(config.uninstaller.cleanup.missingManifestFallback,
+                 {"safedirectoryfallback", "fail", "none", "disabled"})) {
+        result.errors.push_back(
+            "ERROR: Invalid uninstaller.cleanup.missingManifestFallback");
+        result.isValid = false;
+    }
+    if (!IsOneOf(config.uninstaller.cleanup.installState,
+                 {"delete", "markuninstalled", "keep"})) {
+        result.errors.push_back("ERROR: Invalid uninstaller.cleanup.installState");
+        result.isValid = false;
+    }
+    if (config.uninstaller.cleanup.systemUninstallEntry.displayName.empty()) {
+        result.errors.push_back("ERROR: Missing required field 'uninstaller.cleanup.systemUninstallEntry.displayName'");
+        result.isValid = false;
+    }
+    if (config.uninstaller.cleanup.systemUninstallEntry.scope == UninstallEntryScope::ANY) {
+        result.errors.push_back("ERROR: Missing required field 'uninstaller.cleanup.systemUninstallEntry.scope'");
+        result.isValid = false;
+    }
+    ValidateSystemUninstallLegacyEntries(
+        config.uninstaller.cleanup.systemUninstallEntry.legacyEntries,
+        "uninstaller.cleanup.systemUninstallEntry.legacyEntries",
+        result);
 
     return result;
 }
@@ -331,17 +410,17 @@ bool ConfigurationValidator::validateFolderExists(const std::string& folder,
                                                   const std::string& inputDir,
                                                   std::vector<std::string>& errors) {
     if (folder.empty()) {
-        errors.push_back("ERROR: layout.folders[].source must not be empty");
+        errors.push_back("ERROR: installer.payload[].source must not be empty");
         return false;
     }
 
     const fs::path folderPath = PathFromUtf8(inputDir) / PathFromUtf8(folder);
     if (!fs::exists(folderPath)) {
-        errors.push_back("ERROR: Layout source folder does not exist: " + Utf8FromPath(folderPath));
+        errors.push_back("ERROR: Payload source folder does not exist: " + Utf8FromPath(folderPath));
         return false;
     }
     if (!fs::is_directory(folderPath)) {
-        errors.push_back("ERROR: Layout source path is not a directory: " + Utf8FromPath(folderPath));
+        errors.push_back("ERROR: Payload source path is not a directory: " + Utf8FromPath(folderPath));
         return false;
     }
     return true;
@@ -401,21 +480,21 @@ bool ConfigurationValidator::validateTargetDirectory(const std::string& targetDi
 
 bool ConfigurationValidator::validateComponents(const PackagerConfiguration& config,
                                                 std::vector<std::string>& errors) {
-    if (config.layout.components.empty()) {
+    if (config.installer.components.empty()) {
         return true;
     }
 
     bool valid = true;
     std::unordered_map<std::string, size_t> idIndex;
-    std::unordered_set<std::string> folderIds;
-    for (const auto& folder : config.layout.folders) {
-        folderIds.insert(folder.id);
+    std::unordered_set<std::string> payloadIds;
+    for (const auto& payload : config.installer.payload) {
+        payloadIds.insert(payload.id);
     }
 
-    idIndex.reserve(config.layout.components.size());
-    for (size_t i = 0; i < config.layout.components.size(); ++i) {
-        const auto& component = config.layout.components[i];
-        const std::string position = "layout.components[" + std::to_string(i) + "]";
+    idIndex.reserve(config.installer.components.size());
+    for (size_t i = 0; i < config.installer.components.size(); ++i) {
+        const auto& component = config.installer.components[i];
+        const std::string position = "installer.components[" + std::to_string(i) + "]";
 
         if (component.id.empty()) {
             errors.push_back("ERROR: " + position + ".id is required");
@@ -435,8 +514,8 @@ bool ConfigurationValidator::validateComponents(const PackagerConfiguration& con
         }
 
         for (const auto& folderId : component.folders) {
-            if (folderIds.find(folderId) == folderIds.end()) {
-                errors.push_back("ERROR: " + position + ".folders references unknown folder id: " + folderId);
+            if (payloadIds.find(folderId) == payloadIds.end()) {
+                errors.push_back("ERROR: " + position + ".payload references unknown payload id: " + folderId);
                 valid = false;
             }
         }
@@ -475,9 +554,9 @@ bool ConfigurationValidator::validateComponents(const PackagerConfiguration& con
         }
     }
 
-    for (size_t i = 0; i < config.layout.components.size(); ++i) {
-        const auto& component = config.layout.components[i];
-        const std::string position = "layout.components[" + std::to_string(i) + "]";
+    for (size_t i = 0; i < config.installer.components.size(); ++i) {
+        const auto& component = config.installer.components[i];
+        const std::string position = "installer.components[" + std::to_string(i) + "]";
         for (const auto& dep : component.dependsOn) {
             if (idIndex.find(dep) == idIndex.end()) {
                 errors.push_back("ERROR: " + position + ".dependsOn references unknown component: " + dep);
@@ -509,7 +588,7 @@ bool ConfigurationValidator::validateComponents(const PackagerConfiguration& con
         itState->second = VisitState::Visiting;
         const auto itIndex = idIndex.find(id);
         if (itIndex != idIndex.end()) {
-            const auto& dependsOn = config.layout.components[itIndex->second].dependsOn;
+            const auto& dependsOn = config.installer.components[itIndex->second].dependsOn;
             for (const auto& dep : dependsOn) {
                 if (idIndex.find(dep) != idIndex.end() && !dfs(dep)) {
                     return false;

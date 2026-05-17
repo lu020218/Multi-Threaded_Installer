@@ -2,13 +2,13 @@
 
 ## Overview
 
-This project uses `packager.exe` to turn a payload input directory plus a config directory into a GUI installer.
+`packager.exe` reads a payload input directory and a config directory, then generates a self-extracting GUI installer.
 
 Current configuration rules:
-- configuration file format: YAML only
+- configuration file format: YAML
 - supported filenames: `packager.yaml`, `packager.yml`
-- required schema: `schemaVersion: 2`
-- older schemas are not supported
+- required schema: `schemaVersion: 3`
+- v2 and older schemas are not compatible and fail at packager configuration loading
 
 ## Build
 
@@ -28,15 +28,16 @@ Build outputs:
 
 ## Directory Layout
 
-Recommended payload input directory:
+Payload input directory:
 
 ```text
-input/
-├─ bin/
+payload/
+├─ app/
+├─ resources/
 └─ plugins/
 ```
 
-Recommended config directory:
+Config directory:
 
 ```text
 build-config/
@@ -45,7 +46,7 @@ build-config/
 └─ resources/
 ```
 
-Each top-level folder listed in `layout.folders` becomes one compressed folder payload in the package.
+`installer.payload[].source` is resolved relative to `--input`. `packager.yaml`, UI `resources/`, and relative `app.icon` are resolved relative to `--config`.
 
 ## Packager Usage
 
@@ -53,18 +54,17 @@ Each top-level folder listed in `layout.folders` becomes one compressed folder p
 .\build\Release\packager.exe --input <input_directory> --config <config_directory> --output <output_installer.exe>
 ```
 
-Examples:
+Named arguments can be passed in any order:
 
 ```powershell
-.\build\Release\packager.exe --input .\input --config .\build-config --output .\dist\MyAppSetup.exe
-.\build\Release\packager.exe -o .\dist\MyAppSetup.exe -c .\build-config -i .\input
+.\build\Release\packager.exe -o .\dist\MyAppSetup.exe -c .\build-config -i .\payload
 ```
 
-Notes:
-- `packager.exe` reads `packager.yaml`, `resources/`, and relative icon paths from the config directory.
-- `packager.exe` reads installer and uninstaller templates from its own directory.
-- generated installers embed UI resources and an embedded uninstaller
-- `packager.yaml` controls packaging, install defaults, UI metadata, layout, and lifecycle behaviors
+Only these public arguments are supported:
+- `--input` / `-i`
+- `--config` / `-c`
+- `--output` / `-o`
+- `--help` / `-h`
 
 ## Installer Usage
 
@@ -80,7 +80,7 @@ Silent install:
 .\dist\MyAppSetup.exe --silent
 ```
 
-Silent install with destination and components:
+Silent install with overrides:
 
 ```powershell
 .\dist\MyAppSetup.exe --silent `
@@ -88,6 +88,13 @@ Silent install with destination and components:
   --components all `
   --auto-startup true `
   --desktop-icon false
+```
+
+Upgrade install:
+
+```powershell
+.\dist\MyAppSetup.exe --upgrade
+.\dist\MyAppSetup.exe --upgrade --silent
 ```
 
 Silent uninstall:
@@ -101,35 +108,32 @@ Silent uninstall:
 Top-level blocks:
 
 ```yaml
-schemaVersion: 2
+schemaVersion: 3
 
 app:
 package:
-install:
-ui:
-layout:
-lifecycle:
+installer:
+uninstaller:
 ```
 
 ### app
 
-Product identity and version metadata.
+Product identity, icon, and Windows version resource metadata.
 
 ```yaml
 app:
-  name: MyDesktopApp
   id: my_desktop_app
+  name: MyDesktopApp
   version: 1.2.3
-  directoryName: MyDesktopApp
+  publisher: MyCompany
   website: https://example.com
-  product:
-    icon: app.ico
+  icon: app.ico
+  versionInfo:
     productName: MyDesktopApp
+    fileDescription: MyDesktopApp Installer
     fileVersion: 1.2.3.4
     productVersion: 1.2.3.4
     companyName: MyCompany
-    fileDescription: MyDesktopApp Installer
-    copyright: Copyright (c) 2026 MyCompany
 ```
 
 ### package
@@ -139,184 +143,148 @@ Compression behavior.
 ```yaml
 package:
   compression:
-    algorithm: xz   # xz | zstd
+    algorithm: xz
     level: 9
-    threads: auto   # auto | integer
 ```
 
-### install
+### installer
 
-Installer defaults and install-state behavior.
+Installer policy, UI defaults, payload, components, registry writes, system uninstall entry, and installState persistence.
 
 ```yaml
-install:
-  defaultDir: "%ProgramFiles%\\MyDesktopApp"
+installer:
   requireAdmin: true
-  autoCleanOldInstall: true
-  autoStartup: false
-  desktopIcon: true
-  minWindows:
-    major: 10
-    minor: 0
-    build: 19045
-  sparseFileThresholdBytes: 4194304
-  killProcesses:
-    - MyDesktopApp.exe
+  defaultDir: "%ProgramFiles%\\MyDesktopApp"
+  directoryName: MyDesktopApp
+  minWindows: "10.0.19041"
+  mutex: "Global\\my_desktop_app_Install"
+  defaults:
+    autoStartup: true
+    desktopShortcut: true
   installState:
-    mode: registry   # registry | file | both
-    registryPath: HKEY_CURRENT_USER\\Software\\my_desktop_app
-    registryKey: InstallState
-    filePath: "%ProgramData%\\my_desktop_app\\install.state"
-    useMutex: true
-    mutexName: Global\\my_desktop_app_Install
-```
-
-### ui
-
-Display language, shortcut display names, links, and component selection UI binding.
-
-```yaml
-ui:
-  defaultLanguage: zh_CN
-  desktopShortcut:
-    defaultName: MyDesktopApp
-    i18n:
-      zh_CN: My Desktop App
-      en_US: MyDesktopApp
-  links:
-    - control: btnChrome
-      url: https://example.com/chrome-plugin
-  componentSelection:
-    mode: embeddedInExistingPages
-    binding:
-      strategy: xml_userdata
-      tokenPrefix: "component:"
-      pages:
-        - skin: welcome_page.xml
-          controls:
-            - chkChrome
-```
-
-### layout
-
-Folder payloads and optional components.
-
-```yaml
-layout:
-  folders:
-    - id: bin
-      source: bin
-      destination:
-        type: install   # install | programFiles | programFilesX86 | appDataRoaming | appDataLocal | programData | userProfile | custom
-        appendDirectoryName: false
-
-    - id: plugins
-      source: plugins
-      destination:
-        type: appDataRoaming
-        appendDirectoryName: true
-
+    registries:
+      - id: main
+        path: "HKCU\\Software\\my_desktop_app"
+        values:
+          installDir:
+            key: InstallDir
+            value: "%InstallDir%"
+            type: expand
+          installState:
+            key: InstallState
+            value: "%InstallState%"
+            type: string
+    files:
+      - id: main
+        path: "%ProgramData%\\my_desktop_app\\install-state.json"
+        format: json
+        values:
+          installDir:
+            name: installDir
+            value: "%InstallDir%"
+    detect:
+      primary:
+        registry: main
+        value: installDir
+      legacy:
+        - id: legacy_v2
+          path: "HKCU\\Software\\OldCompany\\OldApp"
+          installDirValue: InstallPath
+  systemUninstallEntry:
+    scope: machine
+    displayName: MyDesktopApp
+    publisher: MyCompany
+  cleanup:
+    systemUninstallEntry:
+      legacyEntries:
+        - displayName: Old Desktop App
+          scope: user
+  payload:
+    - id: app
+      source: app
+      target: "%InstallDir%"
+      required: true
   components:
-    - id: main_app
-      name: Main Application
+    - id: core
+      name: Core Application
       required: true
       defaultSelected: true
-      folders:
-        - bin
-        - plugins
-      source:
-        type: embedded
+      payload:
+        - app
 ```
 
-### lifecycle
+### uninstaller
 
-Compatibility IDs, install-time registry writes, upgrade cleanup, uninstall cleanup, and post-setup agent configuration.
+Cleanup policy, process closing, and uninstall UI. Installed-instance discovery is configured under `installer.installState.detect`.
 
 ```yaml
-lifecycle:
-  compatibility:
-    legacyAppIds:
-      - MyDesktopAppLegacy
-    legacyDesktopShortcutNames:
-      - MyDesktopApp Legacy
-
-  registry:
-    onInstall:
-      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-        key: InstallDir
-        value: "%InstallDir%"
-        type: expand
-
+uninstaller:
+  requireAdmin: true
+  killBeforeUninstall:
+    - MyDesktopApp.exe
   cleanup:
-    onUpgrade:
-      registry:
-        deleteFromManifest: true
-        legacyKeys: []
-      extraPaths: []
-    onUninstall:
-      paths: []
-
+    installedFiles: manifest
+    missingManifestFallback: safeDirectoryFallback
+    installState: delete
+    autoStartup: auto
+    desktopShortcut: auto
+    systemUninstallEntry:
+      scope: machine
+      displayName: MyDesktopApp
+      legacyEntries:
+        - displayName: Old Desktop App
+          scope: user
+    paths:
+      - path: "%LocalAppData%\\MyDesktopApp\\Cache"
+        recursive: true
+        onlyIfEmpty: false
 ```
 
 ## Validation Rules
 
 Required fields:
 - `schemaVersion`
+- `app.id`
 - `app.name`
 - `app.version`
-- `install.defaultDir`
-- `layout.folders`
+- `installer.defaultDir`
+- `installer.directoryName`
+- `installer.payload[].id`
+- `installer.payload[].source`
+- `installer.payload[].target`
+- `installer.installState.detect.primary` or `installer.installState.detect.legacy[]`
 
 Important validation rules:
-- `schemaVersion` must be `2`
-- `package.compression.algorithm` must be `xz` or `zstd`
-- `layout.folders[].id` must be unique
-- `layout.components[].folders[]` must reference declared folder IDs
-- `layout.folders[].destination.type` must be a supported destination type
+- `schemaVersion` must be `3`.
+- `installer.payload[].source` must exist under the input directory.
+- `installer.components[].payload[]` must reference declared payload ids.
+- component dependencies must not contain cycles.
+- `installer.installState.registries[]` and `installer.installState.files[]` ids must be unique.
+- `installer.installState.detect.primary.registry/value` must reference a configured registry store and logical value.
+- `installer.installState.detect.legacy[].id` must be unique; detection tries primary first, then legacy entries in order.
+- `installer.requireAdmin=false` rejects Program Files defaults, HKLM registry writes, and machine/both system uninstall entries.
 
 ## Troubleshooting
 
-### Missing required field
-
-Example:
+### Unsupported schema
 
 ```text
-Missing required field 'app.name'
+Unsupported schemaVersion. Only schemaVersion 3 is supported.
 ```
 
-Fix the path exactly as reported in the error.
+Convert the configuration to the v3 `app/package/installer/uninstaller` structure.
 
-### Invalid destination type
+### Missing payload source
 
-Example:
-
-```text
-Invalid field 'layout.folders[].destination.type'
-```
-
-Use one of:
-- `install`
-- `programFiles`
-- `programFilesX86`
-- `appDataRoaming`
-- `appDataLocal`
-- `programData`
-- `userProfile`
-- `custom`
-
-For content that should live under the current user's Roaming profile, prefer `appDataRoaming`.
-Do not use `custom` with `%AppData%\\Roaming`, because `%AppData%` already resolves to the Roaming directory.
-
-### Input folder not found
-
-The `layout.folders[].source` path is resolved relative to the input directory passed to `packager.exe`.
+`installer.payload[].source` is resolved relative to the input directory passed to `packager.exe`.
 
 ### Icon file not found
 
-`app.product.icon` is resolved relative to the config directory unless an absolute path is provided.
+`app.icon` is resolved relative to the config directory unless an absolute path is provided.
 
 ## Reference Example
 
 See:
 
 - [examples/packager.yaml](/e:/Work/GitHub/Multi-Threaded_Installer-master/examples/packager.yaml)
+- [docs/packager-yaml-v3.example.yaml](/e:/Work/GitHub/Multi-Threaded_Installer-master/docs/packager-yaml-v3.example.yaml)

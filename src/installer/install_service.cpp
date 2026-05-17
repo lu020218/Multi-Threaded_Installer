@@ -8,6 +8,7 @@
 #include "installer/install_precheck.h"
 #include "installer/install_progress_reporter.h"
 #include "installer/install_state_utils.h"
+#include "installer/install_state_store.h"
 #include "installer/installer_helpers.h"
 
 #ifdef _WIN32
@@ -20,6 +21,24 @@ namespace {
 
 bool IsCancellationRequested(const InstallServiceOptions& options) {
     return options.cancellationCallback && options.cancellationCallback();
+}
+
+InstallStateContext BuildServiceInstallStateContext(const ExtendedInstallationMetadata& metadata,
+                                                    const InstallExecutionPlan& plan,
+                                                    const InstallServiceOptions& options,
+                                                    const std::string& state) {
+    InstallStateContext context;
+    context.installDir = plan.pathDecision.resolvedInstallRoot;
+    context.version = metadata.appVersion;
+    context.appName = metadata.appName;
+    context.appId = plan.effectiveAppId.empty() ? metadata.appId : plan.effectiveAppId;
+    context.installSource = getCurrentExecutablePath();
+    context.state = state;
+    context.userName = GetCurrentUserNameForInstallState();
+    if (context.installDir.empty()) {
+        context.installDir = options.installPath;
+    }
+    return context;
 }
 
 } // namespace
@@ -58,12 +77,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                             reporter.CurrentPhaseProgress(),
                             cancelled ? "Installation cancelled." : "Installation failed.");
         if (coreInstallInfoApplied) {
-            applyCoreInstallInfo(metadata.installInfo,
-                                 plan.pathDecision.resolvedInstallRoot,
-                                 metadata.appVersion,
-                                 metadata.appName,
-                                 "install_failed",
-                                 pathResolver);
+            ApplyInstallState(metadata.installState,
+                              BuildServiceInstallStateContext(metadata, plan, options, "install_failed"),
+                              pathResolver);
             coreInstallInfoApplied = false;
         }
         releaseResources();
@@ -156,12 +172,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             return result;
         }
 
-        applyCoreInstallInfo(metadata.installInfo,
-                             plan.pathDecision.resolvedInstallRoot,
-                             metadata.appVersion,
-                             metadata.appName,
-                             "installing",
-                             pathResolver);
+        ApplyInstallState(metadata.installState,
+                          BuildServiceInstallStateContext(metadata, plan, options, "installing"),
+                          pathResolver);
         coreInstallInfoApplied = true;
 
         InstallExecutionOutput executionOutput;

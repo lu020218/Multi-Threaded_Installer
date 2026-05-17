@@ -68,6 +68,7 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::string appName;
     std::string appId;
     std::string appDirectoryName;
+    std::string appPublisher;
     std::string desktopShortcutDefaultName;
     std::unordered_map<std::string, std::string> desktopShortcutLocalizedNames;
     std::string appVersion;
@@ -84,6 +85,12 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     bool installUseMutex;
     std::string installMutexName;
     InstallInfoConfig installInfo;
+    InstallStateConfig installState;
+    SystemUninstallEntryConfig systemUninstallEntry;
+    InstallerCleanupConfig installerCleanup;
+    UninstallerCleanupConfigV3 uninstallerCleanup;
+    std::vector<InstallerRegistryWriteGroup> installerRegistryWrite;
+    std::vector<std::string> uninstallerKillBeforeUninstall;
     std::vector<ExtendedFolderMapping> extendedPayloadMappings;
     std::vector<RegistryEntry> lifecycleInstallRegistry;
     std::vector<std::string> installKillProcesses;
@@ -92,12 +99,14 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     std::vector<UiLinkBinding> uiLinkBindings;
     UninstallCleanupConfig lifecycleUninstallCleanup;
     UpgradeCleanupConfig lifecycleUpgradeCleanup;
+    std::string installStateCleanupMode;
 
     ExtendedInstallationMetadata()
         : InstallationMetadata(),
           appName("MyApplication"),
           appId(""),
           appDirectoryName(""),
+          appPublisher(""),
           desktopShortcutDefaultName(""),
           appVersion("1.0"),
           installDefaultDir("%ProgramFiles%"),

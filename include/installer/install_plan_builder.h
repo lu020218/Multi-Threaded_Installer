@@ -56,10 +56,11 @@ const char* InstallTargetModeName(InstallTargetMode mode);
 std::string ResolveLanguageCode(const std::string& preferredLanguage);
 std::string ResolveDesktopShortcutDisplayName(const ExtendedInstallationMetadata& metadata,
                                               const std::string& languageCode);
-bool ResolveUpgradeInstallFromInstallInfo(const ExtendedInstallationMetadata& metadata,
-                                          std::string& installDir,
-                                          std::string& manifestPath,
-                                          std::string& error);
+bool ResolveUpgradeInstallFromInstallStateDetect(const ExtendedInstallationMetadata& metadata,
+                                                 InstallerPathResolver& pathResolver,
+                                                 std::string& installDir,
+                                                 std::string& manifestPath,
+                                                 std::string& error);
 
 bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
                                InstallerPathResolver& pathResolver,

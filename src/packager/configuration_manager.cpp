@@ -26,12 +26,11 @@ bool ConfigurationManager::initialize(const std::string& inputDirectory,
     auto configOpt = loader_.loadConfiguration(configDirectory);
     auto applyInstallDefaults = [](PackagerConfiguration& config) {
         const std::string identity = ResolveInstallIdentity(config);
-        if (config.install.mutexName.empty()) {
-            config.install.mutexName = "Global\\" + identity + "_Install";
+        if (config.installer.mutex.empty()) {
+            config.installer.mutex = "Global\\" + identity + "_Install";
         }
-        if (config.install.installInfo.path.empty()) {
-            config.install.installInfo.path = "HKEY_CURRENT_USER\\Software\\" + identity;
-        }
+        config.install.mutexName = config.installer.mutex;
+        config.install.useMutex = !config.installer.mutex.empty();
     };
     
     if (configOpt.has_value()) {

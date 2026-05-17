@@ -30,7 +30,8 @@ bool IsValidUninstallEntryScope(UninstallEntryScope scope) {
     return scope == UninstallEntryScope::CURRENT_USER ||
            scope == UninstallEntryScope::LOCAL_MACHINE ||
            scope == UninstallEntryScope::WOW6432 ||
-           scope == UninstallEntryScope::ANY;
+           scope == UninstallEntryScope::ANY ||
+           scope == UninstallEntryScope::BOTH;
 }
 
 bool IsHexSha256(const std::string& value) {
@@ -87,8 +88,17 @@ bool ValidatePackageManifest(const PackageManifest& manifest, std::string& error
         error = "Package manifest install default directory is empty.";
         return false;
     }
-    if (!ValidateRegistryList(manifest.install.installRegistry, error)) {
-        return false;
+    for (const auto& group : manifest.install.registryWrite) {
+        if (group.path.empty()) {
+            error = "Package manifest installer registry write path is empty.";
+            return false;
+        }
+        for (const auto& pair : group.values) {
+            if (pair.first.empty() && pair.second.key.empty()) {
+                error = "Package manifest installer registry write value key is empty.";
+                return false;
+            }
+        }
     }
 
     std::unordered_set<std::string> folderIds;
@@ -189,10 +199,6 @@ bool ValidatePackageManifest(const PackageManifest& manifest, std::string& error
         }
     }
 
-    if (!ValidateCleanup(manifest.lifecycle.uninstallCleanup, error) ||
-        !ValidateCleanup(manifest.lifecycle.upgradeCleanup, error)) {
-        return false;
-    }
     return true;
 }
 

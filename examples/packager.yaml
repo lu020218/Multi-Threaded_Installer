@@ -1,220 +1,137 @@
-schemaVersion: 2
+schemaVersion: 3
 
 app:
-  name: MyTestApp
   id: my_desktop_app
+  name: MyDesktopApp
   version: 1.2.3
-  directoryName: MyDesktopApp
-  website: https://example.com/intro
-  product:
-    icon: app.ico
+  publisher: MyCompany
+  website: https://example.com
+  icon: app.ico
+  versionInfo:
     productName: MyDesktopApp
+    fileDescription: MyDesktopApp Installer
     fileVersion: 1.2.3.4
     productVersion: 1.2.3.4
     companyName: MyCompany
-    fileDescription: MyTestApp Installer
-    copyright: Copyright (c) 2026 MyCompany
 
 package:
   compression:
     algorithm: xz
     level: 9
-    threads: auto
 
-install:
-  defaultDir: "%ProgramFiles%"
+installer:
   requireAdmin: true
-  autoCleanOldInstall: true
-  autoStartup: true
-  desktopIcon: true
-  minWindows:
-    major: 10
-    minor: 0
-    build: 19041
-  sparseFileThresholdBytes: 4194304
-  killProcesses:
+  defaultDir: "%ProgramFiles%\\MyDesktopApp"
+  directoryName: MyDesktopApp
+  minWindows: "10.0.19041"
+  largeFileThresholdBytes: 4194304
+  mutex: "Global\\my_desktop_app_Install"
+  killBeforeInstall:
     - MyDesktopApp.exe
-    - MyDesktopAppHelper.exe
-    - MyDesktopAppTray.exe
+  defaults:
+    autoStartup: true
+    desktopShortcut: true
   installState:
-    mode: registry
-    registryPath: HKEY_CURRENT_USER\\Software\\my_desktop_app
-    registryKey: InstallState
-    filePath: "%ProgramData%\\my_desktop_app\\install.state"
-    useMutex: true
-    mutexName: Global\\my_desktop_app_Install
-
-ui:
-  defaultLanguage: zh_CN
-  desktopShortcut:
-    defaultName: MyTestApp
-    i18n:
-      zh_CN: My Test App
-      en_US: MyTestApp
-  links:
-    - control: btnChrome
-      url: https://example.com/chrome-plugin
-    - control: btnPPt
-      url: https://example.com/ppt-plugin
-  componentSelection:
-    mode: embeddedInExistingPages
-    binding:
-      strategy: xml_userdata
-      tokenPrefix: "component:"
-      pages:
-        - skin: welcome_page.xml
-          controls:
-            - chkChrome
-            - chkPPt
-
-layout:
-  folders:
-    - id: bin
-      source: bin
-      destination:
-        type: install
-        appendDirectoryName: false
-    - id: plugins
-      source: plugins
-      destination:
-        type: appDataRoaming
-        appendDirectoryName: true
-    - id: config
-      source: .config
-      destination:
-        type: userProfile
-        appendDirectoryName: false
-
+    registries:
+      - id: main
+        path: "HKCU\\Software\\my_desktop_app"
+        values:
+          installDir:
+            key: InstallDir
+            value: "%InstallDir%"
+            type: expand
+          installState:
+            key: InstallState
+            value: "%InstallState%"
+            type: string
+          version:
+            key: Version
+            value: "%Version%"
+            type: string
+    files:
+      - id: main
+        path: "%ProgramData%\\my_desktop_app\\install-state.json"
+        format: json
+        values:
+          installDir:
+            name: installDir
+            value: "%InstallDir%"
+          installState:
+            name: state
+            value: "%InstallState%"
+    detect:
+      primary:
+        registry: main
+        value: installDir
+      legacy:
+        - id: legacy_v2
+          path: "HKCU\\Software\\MyCompany\\MyDesktopApp"
+          installDirValue: Path
+  systemUninstallEntry:
+    scope: machine
+    displayName: MyDesktopApp
+    publisher: MyCompany
+  cleanup:
+    systemUninstallEntry:
+      legacyEntries:
+        - displayName: MyDesktopAppLegacy
+          scope: both
+  ui:
+    defaultLanguage: zh_CN
+    desktopShortcutName:
+      default: MyDesktopApp
+      zh_CN: 我的应用
+      en_US: MyDesktopApp
+  payload:
+    - id: app
+      source: app
+      target: "%InstallDir%"
+      required: true
+    - id: resources
+      source: resources
+      target: "%InstallDir%\\resources"
+      required: true
   components:
-    - id: main_app
-      name: Main Application
-      description: Main application runtime and required binaries.
+    - id: core
+      name: Core Application
       required: true
       defaultSelected: true
-      sizeHintMB: 120
-      folders:
-        - bin
-        - plugins
-        - config
-      source:
-        type: embedded
-
-    - id: chrome_plugin
-      name: Chrome Plugin
-      description: Install the optional Chrome browser plugin.
-      required: false
-      defaultSelected: true
-      sizeHintMB: 60
-      dependsOn:
-        - main_app
-      folders:
-        - plugins
-      source:
-        type: local
-        local:
-          base: "%InstallDir%\\components"
-          installer: "chrome_plugin\\install_chrome_plugin.bat"
-          args: ""
-          wait: true
-          timeoutSec: 900
-          uninstall: "%InstallDir%\\components\\chrome_plugin\\uninstall_chrome_plugin.bat"
-
-    - id: ppt_plugin
-      name: PPT Plugin
-      description: Install the optional PowerPoint plugin.
-      required: false
-      defaultSelected: true
-      sizeHintMB: 35
-      dependsOn:
-        - main_app
-      folders:
-        - plugins
-      source:
-        type: local
-        local:
-          base: "%InstallDir%\\components"
-          installer: "ppt_plugin\\install_ppt_plugin.bat"
-          args: ""
-          wait: true
-          timeoutSec: 900
-          uninstall: "%InstallDir%\\components\\ppt_plugin\\uninstall_ppt_plugin.bat"
-
-    - id: post_setup_agent
-      name: Post Setup Agent
-      description: Fetch remote runtime config and apply environment setup.
-      required: false
-      defaultSelected: true
-      sizeHintMB: 5
-      dependsOn:
-        - main_app
-      folders:
-        - bin
-      source:
-        type: local
-        local:
-          base: "%InstallDir%\\components"
-          installer: "post_setup_agent\\post_setup_agent.exe"
-          args: "--install-dir \"%InstallDir%\" --app-version \"%AppVersion%\" --config-url \"https://example.com/runtime-config.json\" --state-path \"%ProgramData%\\%AppId%\\post_setup_state.json\" --log-path \"%ProgramData%\\%AppId%\\post_setup_agent.log\""
-          wait: true
-          timeoutSec: 1800
-
-lifecycle:
-  compatibility:
-    legacyAppIds:
-      - MyDesktopAppLegacy
-    legacyDesktopShortcutNames:
-      - MyDesktopApp Legacy
-      - My Desktop App Legacy
-      - My Desktop App
-
+      payload:
+        - app
+        - resources
   registry:
-    onInstall:
-      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-        key: InstallDir
-        value: "%InstallDir%"
-        type: expand
-      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-        key: InstallLocation
-        value: "%InstallDir%"
-        type: expand
-      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-        key: ExecutablePath
-        value: "%InstallDir%\\MyDesktopApp.exe"
-        type: expand
-      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-        key: LaunchCommand
-        value: "\"%InstallDir%\\MyDesktopApp.exe\""
-        type: expand
-      - path: HKEY_CURRENT_USER\\Software\\my_desktop_app
-        key: Version
-        value: "%Version%"
-        type: string
+    write:
+      - path: "HKCU\\Software\\my_desktop_app"
+        values:
+          InstallLocation:
+            value: "%InstallDir%"
+            type: expand
 
+uninstaller:
+  requireAdmin: true
+  killBeforeUninstall:
+    - MyDesktopApp.exe
   cleanup:
-    onUpgrade:
-      registry:
-        deleteFromManifest: true
-        legacyKeys:
-          - path: HKEY_CURRENT_USER\\Software\\MyDesktopAppLegacy
-            key: ""
-          - path: HKEY_LOCAL_MACHINE\\Software\\MyDesktopAppLegacy
-            key: ""
-      extraPaths:
-        - path: "%AppData%\\MyDesktopAppLegacy"
-          recursive: true
-          onlyIfEmpty: false
-        - path: "%LocalAppData%\\MyDesktopAppLegacy\\Cache"
-          recursive: true
-          onlyIfEmpty: false
-
-    onUninstall:
-      paths:
-        - path: "%LocalAppData%\\MyDesktopApp\\Cache"
-          recursive: true
-          onlyIfEmpty: false
-        - path: "%LocalAppData%\\MyDesktopApp\\Logs"
-          recursive: true
-          onlyIfEmpty: false
-        - path: "%LocalAppData%\\MyDesktopApp"
-          recursive: true
-          onlyIfEmpty: true
+    installedFiles: manifest
+    missingManifestFallback: safeDirectoryFallback
+    installState: delete
+    autoStartup: auto
+    desktopShortcut: auto
+    systemUninstallEntry:
+      scope: machine
+      displayName: MyDesktopApp
+      legacyEntries:
+        - displayName: MyDesktopAppLegacy
+          scope: both
+    registry:
+      deleteKeys:
+        - "HKCU\\Software\\MyDesktopAppLegacy"
+      deleteValues: []
+    paths:
+      - path: "%LocalAppData%\\MyDesktopApp\\Cache"
+        recursive: true
+        onlyIfEmpty: false
+  ui:
+    defaultLanguage: zh_CN
+    title: 卸载 MyDesktopApp
+    confirmMessage: 是否卸载 MyDesktopApp？

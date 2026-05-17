@@ -117,27 +117,6 @@ std::vector<std::string> CollectManifestFiles(const json& manifest) {
     return files;
 }
 
-std::vector<RegistryEntry> CollectManifestRegistryEntries(const json& manifest) {
-    std::vector<RegistryEntry> entries;
-    if (!manifest.contains("lifecycleInstallRegistry") || !manifest["lifecycleInstallRegistry"].is_array()) {
-        return entries;
-    }
-    for (const auto& item : manifest["lifecycleInstallRegistry"]) {
-        if (!item.is_object()) {
-            continue;
-        }
-        RegistryEntry entry;
-        entry.path = item.value("path", "");
-        entry.key = item.value("key", "");
-        entry.value = item.value("value", "");
-        entry.type = static_cast<RegistryValueType>(item.value("type", static_cast<int>(RegistryValueType::STRING)));
-        if (!entry.path.empty()) {
-            entries.push_back(std::move(entry));
-        }
-    }
-    return entries;
-}
-
 std::string GetManifestDisplayName(const json& manifest) {
     std::string displayName = manifest.value("displayName", "");
     if (!displayName.empty()) {
@@ -510,7 +489,10 @@ void DeleteSinglePath(CleanupExecutionState& state,
         logInstallerWarning("[InstallFlow][Cleanup] delete failed path=" + Utf8FromPath(path) +
                             " error=" + ec.message());
     } else if (!removed) {
-        ++state.result.skippedCount;
+        // remove() returns false when the path is already gone or when an
+        // empty-directory cleanup target is still non-empty. Both are normal
+        // best-effort cleanup outcomes and should not turn the whole upgrade
+        // cleanup into a partial warning.
     } else {
         ++state.result.deletedCount;
         if (elapsed >= state.task.policy.slowItemLogMs) {
@@ -533,7 +515,10 @@ void RecordParallelDeleteResult(CleanupExecutionState& state,
         logInstallerWarning("[InstallFlow][Cleanup] delete failed path=" +
                             Utf8FromPath(path) + " error=" + ec.message());
     } else if (!removed) {
-        ++state.result.skippedCount;
+        // Parallel delete tasks are file paths from the old manifest. A missing
+        // file usually means it was already removed by a prior directory
+        // isolation step, so treat it as an idempotent cleanup success instead
+        // of a partial cleanup warning.
     } else {
         ++state.result.deletedCount;
         if (elapsed >= state.task.policy.slowItemLogMs) {
@@ -1446,7 +1431,6 @@ UpgradeCleanupResult runPreviousInstallCleanupWithWatchdog(
             if (result.message.empty()) {
                 result.message = "Previous install subdirectories isolated and cleaned";
             }
-            return result;
         }
     }
 
@@ -1456,7 +1440,24 @@ UpgradeCleanupResult runPreviousInstallCleanupWithWatchdog(
     task.newInstallDir = newInstallDir;
     task.manifestPath = manifestPath;
     task.policy = policy;
-    return RunTaskWithWatchdog(std::move(task), progressCallback, cancellationCallback);
+    UpgradeCleanupResult manifestResult =
+        RunTaskWithWatchdog(std::move(task), progressCallback, cancellationCallback);
+    manifestResult.deletedCount += result.deletedCount;
+    manifestResult.failedCount += result.failedCount;
+    manifestResult.skippedCount += result.skippedCount;
+    manifestResult.partial = manifestResult.partial || result.partial;
+    manifestResult.timedOut = manifestResult.timedOut || result.timedOut;
+    if (manifestResult.timedOutPath.empty()) {
+        manifestResult.timedOutPath = result.timedOutPath;
+    }
+    if (!result.success) {
+        manifestResult.partial = true;
+    }
+    manifestResult.success = manifestResult.success && (result.success || policy.allowPartialSuccess);
+    if (manifestResult.message.empty()) {
+        manifestResult.message = result.message;
+    }
+    return manifestResult;
 }
 
 UpgradeCleanupResult runUpgradeExtraPathCleanupWithWatchdog(
@@ -1503,15 +1504,16 @@ bool cleanupUpgradeSystemArtifacts(
 
     std::vector<std::string> installAutoStartupNames;
     std::set<std::string> seenNames;
-    for (const auto& startup : metadata.lifecycleUpgradeCleanup.startup) {
-        AppendUniqueName(installAutoStartupNames, seenNames, startup.name);
+    for (const auto& name : metadata.installerCleanup.legacy.startupNames) {
+        AppendUniqueName(installAutoStartupNames, seenNames, name);
     }
 
     const size_t totalSteps = installAutoStartupNames.size() +
-                              metadata.lifecycleUpgradeCleanup.shortcuts.size() +
-                              metadata.lifecycleUpgradeCleanup.uninstallEntries.size() +
-                              metadata.lifecycleUpgradeCleanup.registry.legacyKeys.size() +
-                              (cleanupExtraPaths ? metadata.lifecycleUpgradeCleanup.extraPaths.size() : 0);
+                              metadata.installerCleanup.legacy.desktopShortcutNames.size() +
+                              metadata.installerCleanup.systemUninstallEntry.legacyEntries.size() +
+                              metadata.installerCleanup.registry.deleteKeys.size() +
+                              metadata.installerCleanup.registry.deleteValues.size() +
+                              (cleanupExtraPaths ? metadata.installerCleanup.paths.size() : 0);
     size_t completedSteps = 0;
     auto emitStep = [&](const std::string& item) {
         ++completedSteps;
@@ -1532,66 +1534,54 @@ bool cleanupUpgradeSystemArtifacts(
         emitStep("Removing legacy auto startup: " + name);
     }
 
-    for (const auto& shortcut : metadata.lifecycleUpgradeCleanup.shortcuts) {
+    for (const auto& shortcutName : metadata.installerCleanup.legacy.desktopShortcutNames) {
         if (IsCancelled(cancellationCallback)) {
             console.showWarning("Upgrade system cleanup cancelled while removing shortcuts.");
             return false;
         }
-        if (!shortcut.name.empty()) {
-            deleteDesktopShortcut(shortcut.name);
-            deleteStartMenuShortcut(shortcut.name);
+        if (!shortcutName.empty()) {
+            deleteDesktopShortcut(shortcutName);
+            deleteStartMenuShortcut(shortcutName);
         }
         emitStep("Removing legacy shortcut");
     }
 
 #ifdef _WIN32
-    for (const auto& entry : metadata.lifecycleUpgradeCleanup.uninstallEntries) {
+    for (const auto& entry : metadata.installerCleanup.systemUninstallEntry.legacyEntries) {
         if (IsCancelled(cancellationCallback)) {
             console.showWarning("Upgrade system cleanup cancelled while removing uninstall entries.");
             return false;
         }
-        switch (entry.scope) {
-        case UninstallEntryScope::CURRENT_USER:
-            deleteUninstallRegistryEntry(entry.name, false);
-            break;
-        case UninstallEntryScope::LOCAL_MACHINE:
-        case UninstallEntryScope::WOW6432:
-            deleteUninstallRegistryEntry(entry.name, true);
-            break;
-        case UninstallEntryScope::ANY:
-        default:
-            deleteUninstallRegistryEntry(entry.name, false);
-            deleteUninstallRegistryEntry(entry.name, true);
-            break;
-        }
+        deleteSystemUninstallEntryByDisplayName(entry.displayName, entry.scope);
         emitStep("Removing uninstall entry");
     }
 #endif
 
-    for (const auto& entry : metadata.lifecycleUpgradeCleanup.registry.legacyKeys) {
+    for (const auto& path : metadata.installerCleanup.registry.deleteKeys) {
         if (IsCancelled(cancellationCallback)) {
             console.showWarning("Upgrade system cleanup cancelled while removing registry.");
             return false;
         }
-        bool removed = false;
-        if (entry.key.empty()) {
-            removed = deleteRegistryPath(entry.path);
-            if (!removed) {
-                console.showWarning("Upgrade cleanup failed to remove registry path: " + entry.path);
-            }
-        } else {
-            removed = deleteRegistryValue(entry);
-            if (!removed) {
-                console.showWarning("Upgrade cleanup failed to remove registry value: " +
-                                    entry.path + "\\" + entry.key);
-            }
+        if (!deleteRegistryPath(path)) {
+            console.showWarning("Upgrade cleanup failed to remove registry path: " + path);
         }
-        (void)removed;
         emitStep("Removing legacy registry entry");
     }
 
+    for (const auto& entry : metadata.installerCleanup.registry.deleteValues) {
+        if (IsCancelled(cancellationCallback)) {
+            console.showWarning("Upgrade system cleanup cancelled while removing registry.");
+            return false;
+        }
+        if (!deleteRegistryValue(entry)) {
+            console.showWarning("Upgrade cleanup failed to remove registry value: " +
+                                entry.path + "\\" + entry.key);
+        }
+        emitStep("Removing legacy registry value");
+    }
+
     if (cleanupExtraPaths) {
-        for (const auto& rule : metadata.lifecycleUpgradeCleanup.extraPaths) {
+        for (const auto& rule : metadata.installerCleanup.paths) {
             if (IsCancelled(cancellationCallback)) {
                 console.showWarning("Upgrade system cleanup cancelled while removing extra paths.");
                 return false;

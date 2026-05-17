@@ -656,14 +656,6 @@ void GUIManager::OnUninstallConfirmClick() {
     }
 
     UninstallContext context = m_uninstallContext;
-    if (context.manifestPath.empty() && m_installMetadataLoaded) {
-        InstalledInstanceInfo installedInstance;
-        if (resolveInstalledInstanceFromInstallRoots(m_installMetadata, installedInstance)) {
-            context.manifestPath = installedInstance.manifestPath;
-            context.manifestReadable = !context.manifestPath.empty();
-        }
-    }
-
     if (!context.manifestReadable && !context.fallbackAllowed) {
         CompletionMessageData* pData = new CompletionMessageData();
         pData->success = false;

@@ -92,7 +92,7 @@ std::string ExpandRuntimeTokens(const std::string& text,
     const std::vector<std::pair<std::string, std::string>> tokens = {
         { "%AppVersion%", metadata.appVersion },
         { "%AppId%", resolveEffectiveAppId(metadata.appId, metadata.appName) },
-        { "%appDirectoryName%", resolveEffectiveDirectoryName(metadata.appDirectoryName, metadata.appName) },
+        { "%appDirectoryName%", metadata.appDirectoryName },
         { "%ComponentInstallDir%", componentInstallDir }
     };
     for (const auto& token : tokens) {

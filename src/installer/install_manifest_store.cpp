@@ -76,6 +76,153 @@ std::vector<std::string> EnsureUtf8List(const std::vector<std::string>& values) 
     return safeValues;
 }
 
+json InstallStateValueToManifestJson(const InstallStateValueConfig& value) {
+    return {
+        {"key", EnsureUtf8(value.key)},
+        {"name", EnsureUtf8(value.name)},
+        {"value", EnsureUtf8(value.value)},
+        {"type", static_cast<int>(value.type)}
+    };
+}
+
+json InstallStateValuesToManifestJson(const std::unordered_map<std::string, InstallStateValueConfig>& values) {
+    json out = json::object();
+    for (const auto& pair : values) {
+        out[EnsureUtf8(pair.first)] = InstallStateValueToManifestJson(pair.second);
+    }
+    return out;
+}
+
+json DetectPolicyToManifestJson(const InstalledInstanceDetectConfig& detect) {
+    json legacy = json::array();
+    for (const auto& item : detect.legacy) {
+        legacy.push_back({
+            {"id", EnsureUtf8(item.id)},
+            {"path", EnsureUtf8(item.path)},
+            {"installDirValue", EnsureUtf8(item.installDirValue)}
+        });
+    }
+    return {
+        {"primary", {
+            {"registry", EnsureUtf8(detect.primary.registry)},
+            {"value", EnsureUtf8(detect.primary.value)}
+        }},
+        {"legacy", legacy}
+    };
+}
+
+json InstallStateToManifestJson(const InstallStateConfig& installState) {
+    json state;
+    state["registries"] = json::array();
+    for (const auto& store : installState.registries) {
+        state["registries"].push_back({
+            {"id", EnsureUtf8(store.id)},
+            {"path", EnsureUtf8(store.path)},
+            {"values", InstallStateValuesToManifestJson(store.values)}
+        });
+    }
+    state["files"] = json::array();
+    for (const auto& store : installState.files) {
+        state["files"].push_back({
+            {"id", EnsureUtf8(store.id)},
+            {"path", EnsureUtf8(store.path)},
+            {"format", EnsureUtf8(store.format)},
+            {"values", InstallStateValuesToManifestJson(store.values)}
+        });
+    }
+    state["detect"] = DetectPolicyToManifestJson(installState.detect);
+    return state;
+}
+
+json UninstallEntryScopeToJson(UninstallEntryScope scope) {
+    return static_cast<int>(scope);
+}
+
+json RegistryEntryToManifestJson(const RegistryEntry& entry) {
+    return {
+        {"path", EnsureUtf8(entry.path)},
+        {"key", EnsureUtf8(entry.key)},
+        {"value", EnsureUtf8(entry.value)},
+        {"type", static_cast<int>(entry.type)}
+    };
+}
+
+json NamedEntriesToManifestJson(const std::vector<NamedCleanupEntry>& entries) {
+    json out = json::array();
+    for (const auto& entry : entries) {
+        if (!entry.name.empty()) {
+            out.push_back({{"name", EnsureUtf8(entry.name)}});
+        }
+    }
+    return out;
+}
+
+json UninstallEntriesToManifestJson(const std::vector<UninstallEntryCleanup>& entries) {
+    json out = json::array();
+    for (const auto& entry : entries) {
+        if (!entry.name.empty()) {
+            out.push_back({
+                {"name", EnsureUtf8(entry.name)},
+                {"scope", UninstallEntryScopeToJson(entry.scope)}
+            });
+        }
+    }
+    return out;
+}
+
+json SystemUninstallCleanupItemsToManifestJson(const std::vector<SystemUninstallEntryCleanupItem>& entries) {
+    json out = json::array();
+    for (const auto& entry : entries) {
+        if (!entry.displayName.empty()) {
+            out.push_back({
+                {"displayName", EnsureUtf8(entry.displayName)},
+                {"scope", UninstallEntryScopeToJson(entry.scope)}
+            });
+        }
+    }
+    return out;
+}
+
+json SystemUninstallCleanupToManifestJson(const SystemUninstallEntryCleanupConfig& cleanup) {
+    return {
+        {"displayName", EnsureUtf8(cleanup.displayName)},
+        {"scope", UninstallEntryScopeToJson(cleanup.scope)},
+        {"legacyEntries", SystemUninstallCleanupItemsToManifestJson(cleanup.legacyEntries)}
+    };
+}
+
+json CleanupRulesToManifestJson(const std::vector<UninstallCleanupRule>& rules) {
+    json out = json::array();
+    for (const auto& rule : rules) {
+        if (!rule.path.empty()) {
+            out.push_back({
+                {"path", EnsureUtf8(rule.path)},
+                {"recursive", rule.recursive},
+                {"onlyIfEmpty", rule.onlyIfEmpty}
+            });
+        }
+    }
+    return out;
+}
+
+json ComponentActionsToManifestJson(const std::vector<ComponentExecutionRecord>& actions) {
+    json out = json::array();
+    for (const auto& action : actions) {
+        if (action.uninstallCommand.empty()) {
+            continue;
+        }
+        out.push_back({
+            {"componentId", EnsureUtf8(action.componentId)},
+            {"sourceType", EnsureUtf8(action.sourceType)},
+            {"uninstallCommand", EnsureUtf8(action.uninstallCommand)},
+            {"workingDirectory", EnsureUtf8(action.workingDirectory)},
+            {"wait", action.wait},
+            {"timeoutSec", action.timeoutSec}
+        });
+    }
+    return out;
+}
+
 }  // namespace
 
 bool writeManifest(const std::string& manifestPath,
@@ -84,19 +231,23 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& appVersion,
                    const std::string& installDir,
                    const std::vector<std::string>& cleanupRoots,
-                   const UninstallCleanupConfig& lifecycleUninstallCleanup,
+                   const UninstallCleanupConfig& actualCleanupSnapshot,
                    const std::vector<std::string>& filePaths,
-                   const std::vector<RegistryEntry>& lifecycleInstallRegistry,
-                   const std::vector<std::string>& installKillProcesses,
+                   const std::vector<std::string>& uninstallerKillBeforeUninstall,
                    bool installAutoStartup,
                    bool installDesktopIcon,
                    const std::string& desktopShortcutDisplayName,
-                   const InstallInfoConfig& installInfo,
+                   const InstallStateConfig& installState,
+                   const std::string& installStateCleanupMode,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
                    const std::vector<ComponentExecutionRecord>& componentActions,
                    const std::vector<std::string>& selectedComponentIds,
-                   bool installAllComponents) {
+                   bool installAllComponents,
+                   const std::string& appPublisher,
+                   const std::string& appWebsite,
+                   const UninstallerCleanupConfigV3& uninstallerCleanup,
+                   const SystemUninstallEntryConfig& systemUninstallEntry) {
     if (manifestPath.empty()) {
         return false;
     }
@@ -104,6 +255,8 @@ bool writeManifest(const std::string& manifestPath,
     try {
         json root;
         root["version"] = "1.0";
+        root["schemaVersion"] = 3;
+        root["manifestVersion"] = 2;
         root["appId"] = EnsureUtf8(appId);
         root["displayName"] = EnsureUtf8(displayName);
         root["appName"] = EnsureUtf8(displayName);
@@ -111,46 +264,23 @@ bool writeManifest(const std::string& manifestPath,
         root["installDir"] = EnsureUtf8(installDir);
         root["uninstallPath"] = EnsureUtf8(uninstallPath);
         root["cleanupRoots"] = EnsureUtf8List(cleanupRoots);
-        json cleanup;
-        cleanup["processes"] = json::array();
-        for (const auto& process : lifecycleUninstallCleanup.processes) {
-            cleanup["processes"].push_back({{"name", EnsureUtf8(process.name)}});
-        }
-        cleanup["registry"] = json::object();
-        cleanup["registry"]["legacyKeys"] = json::array();
-        for (const auto& entry : lifecycleUninstallCleanup.registry.legacyKeys) {
-            cleanup["registry"]["legacyKeys"].push_back({
-                {"path", EnsureUtf8(entry.path)},
-                {"key", EnsureUtf8(entry.key)},
-                {"value", EnsureUtf8(entry.value)},
-                {"type", static_cast<int>(entry.type)}
-            });
-        }
-        cleanup["uninstallEntries"] = json::object();
-        cleanup["uninstallEntries"]["entries"] = json::array();
-        for (const auto& entry : lifecycleUninstallCleanup.uninstallEntries) {
-            cleanup["uninstallEntries"]["entries"].push_back({
+        root["app"] = {
+            {"id", EnsureUtf8(appId)},
+            {"name", EnsureUtf8(displayName)},
+            {"version", EnsureUtf8(appVersion)},
+            {"publisher", EnsureUtf8(appPublisher)},
+            {"website", EnsureUtf8(appWebsite)}
+        };
+        json systemUninstallEntrySnapshot;
+        systemUninstallEntrySnapshot["writtenEntries"] = json::array();
+        for (const auto& entry : actualCleanupSnapshot.uninstallEntries) {
+            json item = {
                 {"name", EnsureUtf8(entry.name)},
                 {"scope", static_cast<int>(entry.scope)}
-            });
+            };
+            systemUninstallEntrySnapshot["writtenEntries"].push_back(std::move(item));
         }
-        cleanup["shortcuts"] = json::array();
-        for (const auto& shortcut : lifecycleUninstallCleanup.shortcuts) {
-            cleanup["shortcuts"].push_back({{"name", EnsureUtf8(shortcut.name)}});
-        }
-        cleanup["startup"] = json::array();
-        for (const auto& startup : lifecycleUninstallCleanup.startup) {
-            cleanup["startup"].push_back({{"name", EnsureUtf8(startup.name)}});
-        }
-        cleanup["paths"] = json::array();
-        for (const auto& rule : lifecycleUninstallCleanup.paths) {
-            cleanup["paths"].push_back({
-                {"path", EnsureUtf8(rule.path)},
-                {"recursive", rule.recursive},
-                {"onlyIfEmpty", rule.onlyIfEmpty}
-            });
-        }
-        root["lifecycleUninstallCleanup"] = std::move(cleanup);
+        root["systemUninstallEntry"] = std::move(systemUninstallEntrySnapshot);
 
         std::vector<std::string> safeFiles;
         safeFiles.reserve(filePaths.size());
@@ -165,52 +295,76 @@ bool writeManifest(const std::string& manifestPath,
         root["desktopShortcutDisplayName"] = EnsureUtf8(desktopShortcutDisplayName);
         root["language"] = EnsureUtf8(languageCode);
 
-        json reg = json::array();
-        for (const auto& entry : lifecycleInstallRegistry) {
-            json item;
-            item["path"] = EnsureUtf8(entry.path);
-            item["key"] = EnsureUtf8(entry.key);
-            item["value"] = EnsureUtf8(entry.value);
-            item["type"] = static_cast<int>(entry.type);
-            reg.push_back(item);
-        }
-        root["lifecycleInstallRegistry"] = reg;
-
         std::vector<std::string> safeInstallKill;
-        safeInstallKill.reserve(installKillProcesses.size());
-        for (const auto& name : installKillProcesses) {
+        safeInstallKill.reserve(uninstallerKillBeforeUninstall.size());
+        for (const auto& name : uninstallerKillBeforeUninstall) {
             safeInstallKill.push_back(EnsureUtf8(name));
         }
         root["killProcesses"] = safeInstallKill;
 
-        json actions = json::array();
-        for (const auto& action : componentActions) {
-            if (action.uninstallCommand.empty()) {
-                continue;
-            }
-            json item;
-            item["componentId"] = EnsureUtf8(action.componentId);
-            item["sourceType"] = EnsureUtf8(action.sourceType);
-            item["uninstallCommand"] = EnsureUtf8(action.uninstallCommand);
-            item["workingDirectory"] = EnsureUtf8(action.workingDirectory);
-            item["wait"] = action.wait;
-            item["timeoutSec"] = action.timeoutSec;
-            actions.push_back(item);
-        }
+        json actions = ComponentActionsToManifestJson(componentActions);
         root["componentActions"] = actions;
 
-        json state;
-        state["mode"] = static_cast<int>(installInfo.mode);
-        state["path"] = EnsureUtf8(installInfo.path);
-        state["values"] = json::object();
-        for (const auto& pair : installInfo.values) {
-            state["values"][EnsureUtf8(pair.first)] = {
-                {"key", EnsureUtf8(pair.second.key)},
-                {"value", EnsureUtf8(pair.second.value)},
-                {"type", static_cast<int>(pair.second.type)}
-            };
+        root["installState"] = InstallStateToManifestJson(installState);
+        root["installer"] = {
+            {"installState", InstallStateToManifestJson(installState)},
+            {"systemUninstallEntry", {
+                {"scope", UninstallEntryScopeToJson(systemUninstallEntry.scope)},
+                {"displayName", EnsureUtf8(systemUninstallEntry.displayName)},
+                {"publisher", EnsureUtf8(systemUninstallEntry.publisher)}
+            }},
+            {"defaults", {
+                {"autoStartup", installAutoStartup},
+                {"desktopShortcut", installDesktopIcon}
+            }},
+            {"payload", {
+                {"files", safeFiles},
+                {"roots", EnsureUtf8List(cleanupRoots)}
+            }},
+            {"components", {
+                {"selectedComponentIds", EnsureUtf8List(selectedComponentIds)},
+                {"installAllComponents", installAllComponents},
+                {"actions", actions}
+            }}
+        };
+
+        json cleanupV3;
+        cleanupV3["installedFiles"] = EnsureUtf8(
+            uninstallerCleanup.installedFiles.empty() ? "manifest" : uninstallerCleanup.installedFiles);
+        cleanupV3["missingManifestFallback"] = EnsureUtf8(
+            uninstallerCleanup.missingManifestFallback.empty() ? "safeDirectoryFallback"
+                                                               : uninstallerCleanup.missingManifestFallback);
+        cleanupV3["installState"] = EnsureUtf8(installStateCleanupMode.empty() ? "delete" : installStateCleanupMode);
+        cleanupV3["autoStartup"] = EnsureUtf8(
+            uninstallerCleanup.autoStartup.empty() ? "auto" : uninstallerCleanup.autoStartup);
+        cleanupV3["desktopShortcut"] = EnsureUtf8(
+            uninstallerCleanup.desktopShortcut.empty() ? "auto" : uninstallerCleanup.desktopShortcut);
+        cleanupV3["systemUninstallEntry"] =
+            SystemUninstallCleanupToManifestJson(uninstallerCleanup.systemUninstallEntry);
+        cleanupV3["legacy"] = {
+            {"desktopShortcutNames", EnsureUtf8List(uninstallerCleanup.legacy.desktopShortcutNames)},
+            {"startupNames", EnsureUtf8List(uninstallerCleanup.legacy.startupNames)}
+        };
+        cleanupV3["registry"] = {
+            {"deleteKeys", EnsureUtf8List(uninstallerCleanup.registry.deleteKeys)},
+            {"deleteValues", json::array()}
+        };
+        for (const auto& entry : uninstallerCleanup.registry.deleteValues) {
+            cleanupV3["registry"]["deleteValues"].push_back(RegistryEntryToManifestJson(entry));
         }
-        root["installInfo"] = state;
+        cleanupV3["paths"] = CleanupRulesToManifestJson(uninstallerCleanup.paths);
+        cleanupV3["actual"] = {
+            {"autoStartup", NamedEntriesToManifestJson(actualCleanupSnapshot.startup)},
+            {"desktopShortcut", NamedEntriesToManifestJson(actualCleanupSnapshot.shortcuts)},
+            {"systemUninstallEntry", UninstallEntriesToManifestJson(actualCleanupSnapshot.uninstallEntries)}
+        };
+        root["uninstaller"] = {
+            {"killBeforeUninstall", EnsureUtf8List(uninstallerKillBeforeUninstall)},
+            {"cleanup", cleanupV3},
+            {"components", {
+                {"actions", actions}
+            }}
+        };
 
         std::filesystem::path path = PathFromUtf8(manifestPath);
         std::filesystem::path parent = path.parent_path();

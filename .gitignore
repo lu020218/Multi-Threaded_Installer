@@ -45,3 +45,4 @@ build/ZERO_CHECK.vcxproj.filters
 /test/build
 /build_codex
 /third_party/spdlog
+/test-work

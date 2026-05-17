@@ -10,6 +10,19 @@ struct PackageIdentity {
     std::string appDirectoryName;
     std::string appVersion;
     std::string appWebsite;
+    std::string appPublisher;
+};
+
+struct PackageInstallStateManifest {
+    std::vector<InstallStateRegistryStoreConfig> registries;
+    std::vector<InstallStateFileStoreConfig> files;
+    InstalledInstanceDetectConfig detect;
+};
+
+struct PackageSystemUninstallEntryManifest {
+    UninstallEntryScope scope = UninstallEntryScope::ANY;
+    std::string displayName;
+    std::string publisher;
 };
 
 struct PackageInstallPolicy {
@@ -24,15 +37,19 @@ struct PackageInstallPolicy {
     uint64_t sparseFileThresholdBytes = 4 * 1024 * 1024;
     bool useMutex = true;
     std::string mutexName;
-    InstallInfoConfig installInfo;
-    std::vector<RegistryEntry> installRegistry;
+    PackageInstallStateManifest installState;
+    PackageSystemUninstallEntryManifest systemUninstallEntry;
+    InstallerCleanupConfig cleanup;
+    std::vector<InstallerRegistryWriteGroup> registryWrite;
     std::vector<std::string> killProcesses;
 };
 
 struct PackagePayloadFolder {
     std::string folderId;
     std::string folderName;
+    std::string source;
     std::string target;
+    bool required = false;
     uint64_t offset = 0;
     uint64_t compressedSize = 0;
     uint64_t originalSize = 0;
@@ -46,8 +63,30 @@ struct PackagePayloadManifest {
     std::vector<PackagePayloadFolder> folders;
 };
 
+struct PackageComponentAction {
+    std::string command;
+    std::string args;
+    std::string workingDirectory;
+    bool wait = true;
+    uint32_t timeoutSec = 900;
+};
+
+struct PackageComponentDefinition {
+    std::string id;
+    std::string name;
+    std::string description;
+    bool required = false;
+    bool defaultSelected = true;
+    uint32_t sizeHintMB = 0;
+    std::vector<std::string> dependsOn;
+    std::vector<std::string> payloadRefs;
+    PackageComponentAction installAction;
+    PackageComponentAction uninstallAction;
+};
+
 struct PackageComponentManifest {
     std::vector<ComponentConfig> components;
+    std::vector<PackageComponentDefinition> definitions;
 };
 
 struct PackageUiManifest {
@@ -60,6 +99,7 @@ struct PackageUiManifest {
 struct PackageLifecyclePolicy {
     UninstallCleanupConfig uninstallCleanup;
     UpgradeCleanupConfig upgradeCleanup;
+    UninstallerConfig uninstaller;
 };
 
 struct PackageManifest {

@@ -500,13 +500,8 @@ bool requiresAdminForInstall(const std::string& installPath,
         return true;
     }
 
-    if (!metadata.installInfo.path.empty() &&
-        registryPathRequiresAdmin(metadata.installInfo.path)) {
-        return true;
-    }
-
-    for (const auto& entry : metadata.lifecycleInstallRegistry) {
-        if (registryPathRequiresAdmin(entry.path)) {
+    for (const auto& group : metadata.installerRegistryWrite) {
+        if (registryPathRequiresAdmin(group.path)) {
             return true;
         }
     }

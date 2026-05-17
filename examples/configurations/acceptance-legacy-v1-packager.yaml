@@ -1,0 +1,149 @@
+schemaVersion: 3
+
+app:
+  id: mti_acceptance_legacy_v1
+  name: MTI Acceptance App Legacy V1
+  version: 1.0.0
+  publisher: MTI Test Publisher
+  website: https://example.com/mti-acceptance/legacy-v1
+  icon: app.ico
+  versionInfo:
+    productName: MTI Acceptance App Legacy V1
+    fileDescription: MTI Acceptance Legacy V1 Installer
+    fileVersion: 1.0.0.0
+    productVersion: 1.0.0.0
+    companyName: MTI Test Publisher
+
+package:
+  compression:
+    algorithm: xz
+    level: 6
+
+installer:
+  requireAdmin: true
+  defaultDir: "%ProgramFiles%\\MTIAcceptanceApp"
+  directoryName: MTIAcceptanceApp
+  minWindows: "10.0.19041"
+  largeFileThresholdBytes: 4194304
+  mutex: "Global\\mti_acceptance_legacy_v1_Install"
+  killBeforeInstall:
+    - MTIAcceptanceApp.exe
+  defaults:
+    autoStartup: true
+    desktopShortcut: true
+
+  installState:
+    registries:
+      - id: legacyMachine
+        path: "HKLM\\Software\\MTITest_AcceptanceApp_LegacyV1"
+        values:
+          installDir:
+            key: InstallDir
+            value: "%InstallDir%"
+            type: expand
+          installState:
+            key: InstallState
+            value: "%InstallState%"
+            type: string
+          version:
+            key: Version
+            value: "%Version%"
+            type: string
+    files:
+      - id: legacyProgramData
+        path: "%ProgramData%\\MTITest\\AcceptanceAppLegacyV1\\install-state.json"
+        format: json
+        values:
+          installDir:
+            name: installDir
+            value: "%InstallDir%"
+          installState:
+            name: state
+            value: "%InstallState%"
+    detect:
+      primary:
+        registry: legacyMachine
+        value: installDir
+
+  systemUninstallEntry:
+    scope: machine
+    displayName: MTI Acceptance App Legacy Machine
+    publisher: MTI Test Publisher
+
+  cleanup:
+    systemUninstallEntry:
+      legacyEntries: []
+
+  ui:
+    defaultLanguage: zh_CN
+    desktopShortcutName:
+      default: MTI Acceptance App Legacy V1
+      zh_CN: MTI 验收旧版 V1
+      en_US: MTI Acceptance App Legacy V1
+    componentSelection:
+      mode: embeddedInExistingPages
+      binding:
+        strategy: xml_userdata
+        tokenPrefix: "component:"
+        pages: []
+
+  payload:
+    - id: app
+      source: app
+      target: "%InstallDir%"
+      required: true
+    - id: resources
+      source: resources
+      target: "%InstallDir%\\resources"
+      required: false
+
+  components:
+    - id: core
+      name: Legacy Core Application
+      description: Legacy V1 executable and resources.
+      required: true
+      defaultSelected: true
+      payload:
+        - app
+        - resources
+
+  registry:
+    write:
+      - path: "HKLM\\Software\\MTITest_AcceptanceApp_LegacyV1"
+        values:
+          LegacyMarker:
+            key: LegacyMarker
+            value: v1
+            type: string
+
+uninstaller:
+  requireAdmin: true
+  killBeforeUninstall:
+    - MTIAcceptanceApp.exe
+  cleanup:
+    installedFiles: manifest
+    missingManifestFallback: safeDirectoryFallback
+    installState: delete
+    autoStartup: auto
+    desktopShortcut: auto
+    systemUninstallEntry:
+      scope: machine
+      displayName: MTI Acceptance App Legacy Machine
+      legacyEntries: []
+    legacy:
+      desktopShortcutNames:
+        - MTI Acceptance App Legacy V1
+      startupNames:
+        - MTIAcceptanceLegacyV1
+    registry:
+      deleteKeys:
+        - "HKLM\\Software\\MTITest_AcceptanceApp_LegacyV1"
+      deleteValues: []
+    paths:
+      - path: "%LocalAppData%\\MTITest\\AcceptanceAppLegacyV1\\Cache"
+        recursive: true
+        onlyIfEmpty: false
+  ui:
+    defaultLanguage: zh_CN
+    title: 卸载 MTI Acceptance App Legacy V1
+    confirmMessage: 是否卸载 MTI Acceptance App Legacy V1？

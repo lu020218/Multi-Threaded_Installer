@@ -288,6 +288,25 @@ static void MergeEmbeddedUninstallerCleanup(UninstallCleanupConfig& cleanup,
         }
     }
 
+    std::set<std::string> uninstallEntrySeen;
+    for (const auto& entry : cleanup.uninstallEntries) {
+        uninstallEntrySeen.insert(entry.name + "\n" + std::to_string(static_cast<int>(entry.scope)));
+    }
+    auto appendUninstallEntry = [&](const std::string& displayName, UninstallEntryScope scope) {
+        const std::string key = displayName + "\n" + std::to_string(static_cast<int>(scope));
+        if (!displayName.empty() && uninstallEntrySeen.insert(key).second) {
+            UninstallEntryCleanup entry;
+            entry.name = displayName;
+            entry.scope = scope;
+            cleanup.uninstallEntries.push_back(std::move(entry));
+        }
+    };
+    appendUninstallEntry(embeddedCleanup->systemUninstallEntry.displayName,
+                         embeddedCleanup->systemUninstallEntry.scope);
+    for (const auto& legacyEntry : embeddedCleanup->systemUninstallEntry.legacyEntries) {
+        appendUninstallEntry(legacyEntry.displayName, legacyEntry.scope);
+    }
+
     std::set<std::string> registrySeen;
     for (const auto& entry : cleanup.registry.legacyKeys) {
         registrySeen.insert(entry.path + "\n" + entry.key);
@@ -1584,10 +1603,16 @@ static bool ExecuteFallbackUninstall(const UninstallContext& context,
     if (context.hasEmbeddedUninstallerCleanup) {
         const auto& systemEntry = context.embeddedUninstallerCleanup.systemUninstallEntry;
         if (!systemEntry.displayName.empty()) {
-            deleteSystemUninstallEntryByDisplayName(systemEntry.displayName, systemEntry.scope);
+            if (!deleteSystemUninstallEntryByDisplayName(systemEntry.displayName, systemEntry.scope)) {
+                console.showWarning("Fallback uninstall failed to remove system uninstall entry: " +
+                                    systemEntry.displayName);
+            }
         }
         for (const auto& legacyEntry : systemEntry.legacyEntries) {
-            DeleteSystemUninstallCleanupItem(legacyEntry);
+            if (!DeleteSystemUninstallCleanupItem(legacyEntry)) {
+                console.showWarning("Fallback uninstall failed to remove legacy system uninstall entry: " +
+                                    legacyEntry.displayName);
+            }
         }
     }
 #endif
@@ -2050,7 +2075,11 @@ bool uninstallFromManifest(const std::string& manifestPath,
 #ifdef _WIN32
     if (!uninstallCleanup.uninstallEntries.empty()) {
         for (const auto& entry : uninstallCleanup.uninstallEntries) {
-            removedUninstall = DeleteUninstallEntryByScope(entry) || removedUninstall;
+            const bool removed = DeleteUninstallEntryByScope(entry);
+            if (!removed) {
+                console.showWarning("Failed to remove system uninstall entry: " + entry.name);
+            }
+            removedUninstall = removed || removedUninstall;
         }
         completeWorkUnit("Removing uninstall registry entry");
     }

@@ -1552,7 +1552,12 @@ bool cleanupUpgradeSystemArtifacts(
             console.showWarning("Upgrade system cleanup cancelled while removing uninstall entries.");
             return false;
         }
-        deleteSystemUninstallEntryByDisplayName(entry.displayName, entry.scope);
+        if (!deleteSystemUninstallEntryByDisplayName(entry.displayName, entry.scope)) {
+            const std::string message =
+                "Upgrade system cleanup failed to remove legacy uninstall entry: " + entry.displayName;
+            console.showWarning(message);
+            logInstallerWarning(message);
+        }
         emitStep("Removing uninstall entry");
     }
 #endif

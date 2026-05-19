@@ -1731,6 +1731,10 @@ void TestCleanupUpgradeSystemArtifactsExecutesExplicitRules() {
     WriteTextFile(legacyPath / "stale.txt", "legacy");
 
     const std::string registryPath = "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UpgradeCleanup";
+    const std::string legacyUninstallKey = "SchemaRegressionTestsUpgradeCleanupLegacyUninstall";
+    const std::string legacyUninstallDisplayName = "Schema Regression Upgrade Cleanup Legacy";
+    const std::string legacyUninstallPath =
+        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + legacyUninstallKey;
     RegistryEntry seededRegistry;
     seededRegistry.path = registryPath;
     seededRegistry.key = "LegacyValue";
@@ -1744,6 +1748,21 @@ void TestCleanupUpgradeSystemArtifactsExecutesExplicitRules() {
     legacyRegistry.path = registryPath;
     legacyRegistry.key = "";
     metadata.installerCleanup.registry.deleteKeys.push_back(registryPath);
+    SystemUninstallEntryCleanupItem legacyUninstallEntry;
+    legacyUninstallEntry.displayName = legacyUninstallDisplayName;
+    legacyUninstallEntry.scope = UninstallEntryScope::CURRENT_USER;
+    metadata.installerCleanup.systemUninstallEntry.legacyEntries.push_back(legacyUninstallEntry);
+#ifdef _WIN32
+    deleteUninstallRegistryEntry(legacyUninstallKey, false);
+    Require(writeUninstallRegistryEntry(legacyUninstallKey,
+                                        legacyUninstallDisplayName,
+                                        "1.0.0",
+                                        previousInstallDir.string(),
+                                        (previousInstallDir / "legacy_uninstall.exe").string(),
+                                        false,
+                                        "Schema Tests"),
+            "Failed to seed upgrade cleanup legacy system uninstall entry");
+#endif
 
     UninstallCleanupRule cleanupRule;
     cleanupRule.path = legacyPath.string();
@@ -1772,6 +1791,10 @@ void TestCleanupUpgradeSystemArtifactsExecutesExplicitRules() {
     std::string registryValue;
     Require(!readRegistryStringValue(registryPath, "LegacyValue", registryValue),
             "Upgrade cleanup should remove configured registry path");
+#ifdef _WIN32
+    Require(!readRegistryStringValue(legacyUninstallPath, "DisplayName", registryValue),
+            "Upgrade cleanup should remove configured legacy system uninstall entry");
+#endif
     deleteRegistryPath(registryPath);
 }
 
@@ -1799,6 +1822,46 @@ void TestDeleteUninstallEntryMatchesDisplayName() {
             "Uninstall registry deletion should match DisplayName when key differs");
     Require(!readRegistryStringValue(uninstallPath, "DisplayName", value),
             "Uninstall registry entry should be removed by DisplayName");
+}
+
+void TestDeleteUninstallEntryBothScopeAttemptsAllViews() {
+    const std::string userKeyName = "SchemaRegressionTestsBothUserKey";
+    const std::string machineKeyName = "SchemaRegressionTestsBothMachineKey";
+    const std::string displayName = "Schema Regression Both Scope Display";
+    const std::string userUninstallPath =
+        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + userKeyName;
+    const std::string machineUninstallPath =
+        "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + machineKeyName;
+
+    deleteUninstallRegistryEntry(userKeyName, false);
+    deleteUninstallRegistryEntry(machineKeyName, true);
+    Require(writeUninstallRegistryEntry(userKeyName,
+                                        displayName,
+                                        "1.0.0",
+                                        "C:\\SchemaRegressionTests\\BothUser",
+                                        "C:\\SchemaRegressionTests\\BothUser\\uninstall.exe",
+                                        false,
+                                        "Schema Tests"),
+            "Failed to seed current-user uninstall registry entry");
+    const bool machineSeeded = writeUninstallRegistryEntry(machineKeyName,
+                                                          displayName,
+                                                          "1.0.0",
+                                                          "C:\\SchemaRegressionTests\\BothMachine",
+                                                          "C:\\SchemaRegressionTests\\BothMachine\\uninstall.exe",
+                                                          true,
+                                                          "Schema Tests");
+
+    std::string value;
+    Require(readRegistryStringValue(userUninstallPath, "DisplayName", value),
+            "Seeded current-user uninstall entry should exist");
+    Require(deleteSystemUninstallEntryByDisplayName(displayName, UninstallEntryScope::BOTH),
+            "Both-scope uninstall registry deletion should remove at least one matching entry");
+    Require(!readRegistryStringValue(userUninstallPath, "DisplayName", value),
+            "Both-scope deletion should remove current-user uninstall entry");
+    if (machineSeeded) {
+        Require(!readRegistryStringValue(machineUninstallPath, "DisplayName", value),
+                "Both-scope deletion should remove local-machine uninstall entry without short-circuiting");
+    }
 }
 #endif
 
@@ -2297,6 +2360,8 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
         {"delete_uninstall_entry_matches_display_name",
          &TestDeleteUninstallEntryMatchesDisplayName},
+        {"delete_uninstall_entry_both_scope_attempts_all_views",
+         &TestDeleteUninstallEntryBothScopeAttemptsAllViews},
 #endif
         {"upgrade_extra_path_cleanup_with_watchdog_removes_path",
          &TestUpgradeExtraPathCleanupWithWatchdogRemovesPath},

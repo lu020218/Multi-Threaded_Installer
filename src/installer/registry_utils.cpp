@@ -111,6 +111,44 @@ bool deleteRegistryTree(HKEY root, const std::string& subkey) {
     return status == ERROR_SUCCESS;
 }
 
+bool deleteRegistryTreeInView(HKEY root, const std::string& subkey, REGSAM viewFlags) {
+    if (viewFlags == 0) {
+        return deleteRegistryTree(root, subkey);
+    }
+
+    std::wstring subkeyW = Utf8ToWide(subkey);
+    if (subkeyW.empty()) {
+        return false;
+    }
+
+    const size_t slash = subkeyW.find_last_of(L'\\');
+    const std::wstring parentPath = slash == std::wstring::npos ? std::wstring{} : subkeyW.substr(0, slash);
+    const std::wstring leafName = slash == std::wstring::npos ? subkeyW : subkeyW.substr(slash + 1);
+    if (leafName.empty()) {
+        return false;
+    }
+
+    HKEY parentKey = nullptr;
+    LONG status = RegOpenKeyExW(root,
+                                parentPath.empty() ? nullptr : parentPath.c_str(),
+                                0,
+                                DELETE | KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | viewFlags,
+                                &parentKey);
+    if (status == ERROR_FILE_NOT_FOUND) {
+        return true;
+    }
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+
+    status = RegDeleteTreeW(parentKey, leafName.c_str());
+    RegCloseKey(parentKey);
+    if (status == ERROR_FILE_NOT_FOUND) {
+        return true;
+    }
+    return status == ERROR_SUCCESS;
+}
+
 std::string queryRegistryString(HKEY key, const wchar_t* valueName) {
     DWORD type = 0;
     DWORD size = 0;
@@ -156,16 +194,26 @@ std::string normalizeRegistryNameForCompare(std::string value) {
     return value;
 }
 
-bool deleteUninstallRegistryEntriesByDisplayName(const std::string& displayName, bool perMachine) {
+void uppercaseAsciiInPlace(std::string& value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+}
+
+bool deleteUninstallRegistryEntriesByDisplayNameInView(const std::string& displayName,
+                                                       HKEY root,
+                                                       REGSAM viewFlags) {
     const std::string targetName = normalizeRegistryNameForCompare(displayName);
     if (targetName.empty()) {
         return false;
     }
 
-    HKEY root = perMachine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
     const wchar_t* uninstallSubkeyW = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
     HKEY uninstallKey = nullptr;
-    LONG status = RegOpenKeyExW(root, uninstallSubkeyW, 0, KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE, &uninstallKey);
+    LONG status = RegOpenKeyExW(root,
+                                uninstallSubkeyW,
+                                0,
+                                KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | viewFlags,
+                                &uninstallKey);
     if (status != ERROR_SUCCESS) {
         return false;
     }
@@ -196,11 +244,18 @@ bool deleteUninstallRegistryEntriesByDisplayName(const std::string& displayName,
 
     bool removedAny = false;
     for (const auto& subkey : matchedSubkeys) {
-        if (deleteRegistryTree(root, subkey)) {
+        if (deleteRegistryTreeInView(root, subkey, viewFlags)) {
             removedAny = true;
         }
     }
     return removedAny;
+}
+
+bool deleteUninstallRegistryEntriesByDisplayName(const std::string& displayName, bool perMachine) {
+    return deleteUninstallRegistryEntriesByDisplayNameInView(
+        displayName,
+        perMachine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER,
+        0);
 }
 #endif
 
@@ -228,7 +283,7 @@ bool deleteRegistryValue(const RegistryEntry& entry) {
     
     std::string path = entry.path;
     std::string pathUpper = path;
-    std::transform(pathUpper.begin(), pathUpper.end(), pathUpper.begin(), ::toupper);
+    uppercaseAsciiInPlace(pathUpper);
     
     HKEY root = nullptr;
     std::string subkey;
@@ -286,7 +341,7 @@ bool deleteRegistryPath(const std::string& path) {
     }
 
     std::string pathUpper = path;
-    std::transform(pathUpper.begin(), pathUpper.end(), pathUpper.begin(), ::toupper);
+    uppercaseAsciiInPlace(pathUpper);
 
     HKEY root = nullptr;
     std::string subkey;
@@ -332,7 +387,7 @@ bool writeRegistryValue(const RegistryEntry& entry, const std::string& value, Re
     
     std::string path = entry.path;
     std::string pathUpper = path;
-    std::transform(pathUpper.begin(), pathUpper.end(), pathUpper.begin(), ::toupper);
+    uppercaseAsciiInPlace(pathUpper);
     
     HKEY root = nullptr;
     std::string subkey;
@@ -435,7 +490,7 @@ bool readRegistryStringValue(const std::string& path, const std::string& key, st
     }
 
     std::string pathUpper = path;
-    std::transform(pathUpper.begin(), pathUpper.end(), pathUpper.begin(), ::toupper);
+    uppercaseAsciiInPlace(pathUpper);
 
     HKEY root = nullptr;
     std::string subkey;
@@ -606,7 +661,7 @@ bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine) {
     std::string fullPath = basePath + keyName;
 
     std::string pathUpper = fullPath;
-    std::transform(pathUpper.begin(), pathUpper.end(), pathUpper.begin(), ::toupper);
+    uppercaseAsciiInPlace(pathUpper);
 
     HKEY root = nullptr;
     std::string subkey;
@@ -642,16 +697,40 @@ bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine) {
 bool deleteSystemUninstallEntryByDisplayName(const std::string& displayName,
                                              UninstallEntryScope scope) {
 #ifdef _WIN32
+    if (displayName.empty()) {
+        return false;
+    }
+    auto deleteUser = [&]() {
+        return deleteUninstallRegistryEntriesByDisplayNameInView(displayName, HKEY_CURRENT_USER, 0);
+    };
+    auto deleteMachine64 = [&]() {
+        return deleteUninstallRegistryEntriesByDisplayNameInView(displayName, HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY);
+    };
+    auto deleteMachine32 = [&]() {
+        return deleteUninstallRegistryEntriesByDisplayNameInView(displayName, HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY);
+    };
+
     switch (scope) {
     case UninstallEntryScope::CURRENT_USER:
-        return deleteUninstallRegistryEntriesByDisplayName(displayName, false);
+        return deleteUser();
     case UninstallEntryScope::LOCAL_MACHINE:
+        return deleteMachine64();
     case UninstallEntryScope::WOW6432:
-        return deleteUninstallRegistryEntriesByDisplayName(displayName, true);
+        return deleteMachine32();
     case UninstallEntryScope::BOTH:
-        return deleteUninstallRegistryEntriesByDisplayName(displayName, false) ||
-               deleteUninstallRegistryEntriesByDisplayName(displayName, true);
+    {
+        const bool userRemoved = deleteUser();
+        const bool machine64Removed = deleteMachine64();
+        const bool machine32Removed = deleteMachine32();
+        return userRemoved || machine64Removed || machine32Removed;
+    }
     case UninstallEntryScope::ANY:
+    {
+        const bool userRemoved = deleteUser();
+        const bool machine64Removed = deleteMachine64();
+        const bool machine32Removed = deleteMachine32();
+        return userRemoved || machine64Removed || machine32Removed;
+    }
     default:
         return false;
     }

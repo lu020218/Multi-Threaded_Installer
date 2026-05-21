@@ -545,6 +545,8 @@ json ComponentSourceToJson(const ComponentSourceConfig& source) {
             {"wait", source.local.wait},
             {"timeoutSec", source.local.timeoutSec},
             {"uninstall", source.local.uninstall},
+            {"showWindow", source.local.showWindow},
+            {"showWindowConfigured", source.local.showWindowConfigured},
         }},
         {"download", {
             {"url", source.download.url},
@@ -553,7 +555,8 @@ json ComponentSourceToJson(const ComponentSourceConfig& source) {
             {"args", source.download.args},
             {"wait", source.download.wait},
             {"timeoutSec", source.download.timeoutSec},
-            {"uninstall", source.download.uninstall},
+            {"showWindow", source.download.showWindow},
+            {"showWindowConfigured", source.download.showWindowConfigured},
         }},
     };
 }
@@ -568,14 +571,17 @@ ComponentSourceConfig ComponentSourceFromJson(const json& value) {
     source.local.wait = local.value("wait", true);
     source.local.timeoutSec = local.value("timeoutSec", 900u);
     source.local.uninstall = local.value("uninstall", "");
+    source.local.showWindow = local.value("showWindow", false);
+    source.local.showWindowConfigured = local.value("showWindowConfigured", false);
     const json download = value.value("download", json::object());
     source.download.url = download.value("url", "");
     source.download.sha256 = download.value("sha256", "");
     source.download.saveAs = download.value("saveAs", "");
     source.download.args = download.value("args", "");
     source.download.wait = download.value("wait", true);
-    source.download.timeoutSec = download.value("timeoutSec", 1800u);
-    source.download.uninstall = download.value("uninstall", "");
+    source.download.timeoutSec = download.value("timeoutSec", 900u);
+    source.download.showWindow = download.value("showWindow", false);
+    source.download.showWindowConfigured = download.value("showWindowConfigured", false);
     return source;
 }
 
@@ -592,10 +598,6 @@ json ComponentsToJson(const std::vector<ComponentConfig>& components) {
             {"dependsOn", component.dependsOn},
             {"folders", component.folders},
             {"source", ComponentSourceToJson(component.source)},
-            {"registry", RegistryListToJson(component.registry)},
-            {"killProcesses", component.killProcesses},
-            {"createDesktopShortcut", component.createDesktopShortcut},
-            {"autoStartup", component.autoStartup},
         });
     }
     return out;
@@ -617,10 +619,6 @@ std::vector<ComponentConfig> ComponentsFromJson(const json& value) {
         component.dependsOn = item.value("dependsOn", std::vector<std::string>{});
         component.folders = item.value("folders", std::vector<std::string>{});
         component.source = ComponentSourceFromJson(item.value("source", json::object()));
-        component.registry = RegistryListFromJson(item.value("registry", json::array()));
-        component.killProcesses = item.value("killProcesses", std::vector<std::string>{});
-        component.createDesktopShortcut = item.value("createDesktopShortcut", false);
-        component.autoStartup = item.value("autoStartup", false);
         components.push_back(std::move(component));
     }
     return components;

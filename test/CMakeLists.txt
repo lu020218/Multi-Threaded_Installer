@@ -31,6 +31,7 @@ add_executable(SchemaRegressionTests
     ../src/installer/file_io_utils.cpp
     ../src/installer/file_system_operator.cpp
     ../src/installer/registry_utils.cpp
+    ../src/installer/component_launcher.cpp
     ../src/installer/install_plan_builder.cpp
     ../src/installer/install_manifest_store.cpp
     ../src/installer/installed_instance_resolver.cpp

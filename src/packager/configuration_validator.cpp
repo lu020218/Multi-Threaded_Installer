@@ -46,13 +46,22 @@ bool ContainsParentTraversal(const std::string& path) {
     return false;
 }
 
-bool IsHexSha256(const std::string& value) {
-    if (value.size() != 64) {
-        return false;
-    }
-    return std::all_of(value.begin(), value.end(), [](unsigned char c) {
-        return std::isxdigit(c) != 0;
-    });
+bool StartsWithInstallDirToken(const std::string& path) {
+    const std::string lowered = ToLowerCopy(path);
+    return lowered.rfind("%installdir%", 0) == 0 ||
+           lowered.rfind("installdirectory", 0) == 0;
+}
+
+bool IsHttpsUrl(const std::string& value) {
+    const std::string lowered = ToLowerCopy(value);
+    return lowered.rfind("https://", 0) == 0;
+}
+
+bool IsSha256Hex(const std::string& value) {
+    return value.size() == 64 &&
+           std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+               return std::isxdigit(ch) != 0;
+           });
 }
 
 const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
@@ -521,9 +530,13 @@ bool ConfigurationValidator::validateComponents(const PackagerConfiguration& con
         }
 
         if (component.source.type == ComponentSourceType::LOCAL) {
-            const std::string baseLower = ToLowerCopy(component.source.local.base);
+            if (component.source.local.installer.empty()) {
+                errors.push_back("ERROR: " + position +
+                                 ".install.command is required for local component installers");
+                valid = false;
+            }
             if (component.source.local.base.empty() ||
-                (baseLower.find("%installdir%") != 0 && baseLower.find("installdirectory") != 0)) {
+                !StartsWithInstallDirToken(component.source.local.base)) {
                 errors.push_back("ERROR: " + position +
                                  ".source.local.base must start with %InstallDir%/installDirectory");
                 valid = false;
@@ -538,20 +551,30 @@ bool ConfigurationValidator::validateComponents(const PackagerConfiguration& con
                 errors.push_back("ERROR: " + position + ".source.local contains parent path traversal ('..')");
                 valid = false;
             }
+        } else if (component.source.type == ComponentSourceType::DOWNLOAD) {
+            if (!IsHttpsUrl(component.source.download.url)) {
+                errors.push_back("ERROR: " + position +
+                                 ".install.url must start with https://");
+                valid = false;
+            }
+            if (!component.source.download.sha256.empty() &&
+                !IsSha256Hex(component.source.download.sha256)) {
+                errors.push_back("ERROR: " + position +
+                                 ".install.sha256 must be a 64-character hex SHA256");
+                valid = false;
+            }
+            if (component.source.download.saveAs.empty() ||
+                !StartsWithInstallDirToken(component.source.download.saveAs)) {
+                errors.push_back("ERROR: " + position +
+                                 ".install.saveAs must start with %InstallDir%/installDirectory");
+                valid = false;
+            }
+            if (ContainsParentTraversal(component.source.download.saveAs)) {
+                errors.push_back("ERROR: " + position + ".install.saveAs contains parent path traversal ('..')");
+                valid = false;
+            }
         }
 
-        if (component.source.type == ComponentSourceType::DOWNLOAD) {
-            const std::string urlLower = ToLowerCopy(component.source.download.url);
-            if (urlLower.rfind("https://", 0) != 0) {
-                errors.push_back("ERROR: " + position + ".source.download.url must use https://");
-                valid = false;
-            }
-            if (!IsHexSha256(component.source.download.sha256)) {
-                errors.push_back("ERROR: " + position +
-                                 ".source.download.sha256 must be 64 hex characters");
-                valid = false;
-            }
-        }
     }
 
     for (size_t i = 0; i < config.installer.components.size(); ++i) {

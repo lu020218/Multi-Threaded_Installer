@@ -29,10 +29,6 @@ struct ComponentSelectionPlan {
     bool hasComponents = false;
     std::vector<const ComponentConfig*> ordered;
     std::vector<std::string> embeddedFolders;
-    std::vector<RegistryEntry> registryEntries;
-    std::vector<std::string> killProcesses;
-    bool autoStartup = false;
-    bool desktopIcons = false;
 };
 
 struct InstallExecutionPlan {

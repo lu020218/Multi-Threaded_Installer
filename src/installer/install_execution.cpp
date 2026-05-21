@@ -2,22 +2,26 @@
 
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
+#include "installer/component_launcher.h"
 #include "installer/folder_payload_reader.h"
 #include "installer/installer_helpers.h"
 #include "installer/metadata_parser.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cwctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -48,21 +52,6 @@ std::string ResolveComponentDisplayName(const ComponentConfig& component) {
 
 bool IsCancellationRequested(const InstallServiceOptions& options) {
     return options.cancellationCallback && options.cancellationCallback();
-}
-
-void AppendUniqueRegistry(std::vector<RegistryEntry>& target,
-                          std::unordered_set<std::string>& seen,
-                          const RegistryEntry& entry) {
-    std::string key = entry.path;
-    key.push_back('\n');
-    key += entry.key;
-    key.push_back('\n');
-    key += entry.value;
-    key.push_back('\n');
-    key += std::to_string(static_cast<int>(entry.type));
-    if (seen.insert(key).second) {
-        target.push_back(entry);
-    }
 }
 
 std::string ExpandInstallDirToken(const std::string& text, const std::string& installDir) {
@@ -138,16 +127,6 @@ bool IsPathUnderBase(const std::filesystem::path& base, const std::filesystem::p
 }
 
 #ifdef _WIN32
-std::wstring QuoteProcessPath(const std::wstring& value) {
-    if (value.empty()) {
-        return L"\"\"";
-    }
-    if (value.front() == L'"' && value.back() == L'"') {
-        return value;
-    }
-    return L"\"" + value + L"\"";
-}
-
 std::wstring ExtractArgValueFromCommandLine(const std::string& argsUtf8, const std::wstring& flag) {
     if (argsUtf8.empty()) {
         return {};
@@ -186,14 +165,53 @@ std::string QuoteForCommand(const std::string& value) {
     return "\"" + value + "\"";
 }
 
-bool IsBatchScriptPath(const std::filesystem::path& executablePath) {
-    std::wstring extension = executablePath.extension().wstring();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
-    return extension == L".bat" || extension == L".cmd";
+HANDLE CreateComponentJobObject() {
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (!job) {
+        logInstallerWarning("[ComponentInstall] Failed to create job object for component process tree.");
+        return nullptr;
+    }
+
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job,
+                                 JobObjectExtendedLimitInformation,
+                                 &limits,
+                                 sizeof(limits))) {
+        logInstallerWarning("[ComponentInstall] Failed to configure component job object.");
+        CloseHandle(job);
+        return nullptr;
+    }
+    return job;
+}
+
+bool AssignComponentProcessToJob(HANDLE jobHandle, HANDLE processHandle) {
+    if (!jobHandle || !processHandle) {
+        return false;
+    }
+    if (AssignProcessToJobObject(jobHandle, processHandle)) {
+        return true;
+    }
+    logInstallerWarning("[ComponentInstall] Failed to assign component process to job object; "
+                        "falling back to single-process termination on timeout/cancel.");
+    return false;
+}
+
+void TerminateComponentProcessTree(HANDLE jobHandle, HANDLE processHandle) {
+    if (jobHandle && TerminateJobObject(jobHandle, 1)) {
+        return;
+    }
+    if (jobHandle) {
+        logInstallerWarning("[ComponentInstall] Failed to terminate component job object; "
+                            "falling back to launcher process termination.");
+    }
+    if (processHandle) {
+        TerminateProcess(processHandle, 1);
+    }
 }
 
 bool WaitForProcessExit(HANDLE processHandle,
+                        HANDLE jobHandle,
                         uint32_t timeoutSec,
                         const std::function<bool()>& cancellationCallback,
                         DWORD& exitCode,
@@ -205,7 +223,8 @@ bool WaitForProcessExit(HANDLE processHandle,
 
     while (true) {
         if (cancellationCallback && cancellationCallback()) {
-            TerminateProcess(processHandle, 1);
+            TerminateComponentProcessTree(jobHandle, processHandle);
+            WaitForSingleObject(processHandle, 2000);
             error = "Component execution cancelled.";
             return false;
         }
@@ -213,7 +232,8 @@ bool WaitForProcessExit(HANDLE processHandle,
         DWORD sliceMs = 200;
         if (timeoutMs != std::numeric_limits<uint64_t>::max()) {
             if (waitedMs >= timeoutMs) {
-                TerminateProcess(processHandle, 1);
+                TerminateComponentProcessTree(jobHandle, processHandle);
+                WaitForSingleObject(processHandle, 2000);
                 error = "Component execution timed out.";
                 return false;
             }
@@ -243,6 +263,8 @@ bool WaitForProcessExit(HANDLE processHandle,
 
 bool ExecuteProcess(const std::filesystem::path& executablePath,
                     const std::string& args,
+                    bool showWindow,
+                    bool showWindowConfigured,
                     bool wait,
                     uint32_t timeoutSec,
                     const std::function<bool()>& cancellationCallback,
@@ -254,16 +276,11 @@ bool ExecuteProcess(const std::filesystem::path& executablePath,
         return false;
     }
 
-    std::wstring argsW = Utf8ToWide(args);
-    const bool isBatchScript = IsBatchScriptPath(executablePath);
-    std::wstring commandLine = isBatchScript ? (L"cmd.exe /c " + QuoteProcessPath(executableW))
-                                             : QuoteProcessPath(executableW);
-    if (!argsW.empty()) {
-        commandLine.append(L" ");
-        commandLine.append(argsW);
-    }
+    const ComponentLaunchCommand launchCommand =
+        BuildComponentLaunchCommand(executablePath, args);
 
-    std::vector<wchar_t> commandLineBuffer(commandLine.begin(), commandLine.end());
+    std::vector<wchar_t> commandLineBuffer(launchCommand.commandLine.begin(),
+                                           launchCommand.commandLine.end());
     commandLineBuffer.push_back(L'\0');
 
     std::wstring workingDirectory;
@@ -274,12 +291,19 @@ bool ExecuteProcess(const std::filesystem::path& executablePath,
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(startupInfo);
     DWORD creationFlags = 0;
-    if (isBatchScript) {
+    if (showWindowConfigured) {
+        startupInfo.dwFlags = STARTF_USESHOWWINDOW;
+        startupInfo.wShowWindow = showWindow ? SW_SHOWNORMAL : SW_HIDE;
+        if (!showWindow) {
+            creationFlags = CREATE_NO_WINDOW;
+        }
+    } else if (launchCommand.hideByDefault) {
         startupInfo.dwFlags = STARTF_USESHOWWINDOW;
         startupInfo.wShowWindow = SW_HIDE;
         creationFlags = CREATE_NO_WINDOW;
     }
     PROCESS_INFORMATION processInfo{};
+    HANDLE jobHandle = wait ? CreateComponentJobObject() : nullptr;
 
     BOOL started = CreateProcessW(nullptr,
                                   commandLineBuffer.data(),
@@ -292,8 +316,17 @@ bool ExecuteProcess(const std::filesystem::path& executablePath,
                                   &startupInfo,
                                   &processInfo);
     if (!started) {
-        error = "Failed to start component process.";
+        if (jobHandle) {
+            CloseHandle(jobHandle);
+        }
+        error = launchCommand.startFailureMessage;
         return false;
+    }
+
+    const bool assignedToJob = AssignComponentProcessToJob(jobHandle, processInfo.hProcess);
+    if (jobHandle && !assignedToJob) {
+        CloseHandle(jobHandle);
+        jobHandle = nullptr;
     }
 
     CloseHandle(processInfo.hThread);
@@ -306,146 +339,146 @@ bool ExecuteProcess(const std::filesystem::path& executablePath,
     }
 
     bool ok = WaitForProcessExit(processInfo.hProcess,
+                                 jobHandle,
                                  timeoutSec,
                                  cancellationCallback,
                                  exitCode,
                                  error);
     CloseHandle(processInfo.hProcess);
+    if (jobHandle) {
+        CloseHandle(jobHandle);
+    }
     return ok;
 }
 
-bool DownloadFile(const std::string& url,
-                  const std::filesystem::path& targetPath,
-                  std::string& error) {
-    std::error_code ec;
-    const auto parent = targetPath.parent_path();
-    if (!parent.empty()) {
-        std::filesystem::create_directories(parent, ec);
-        if (ec) {
-            error = "Failed to create download directory: " + Utf8FromPath(parent);
-            return false;
-        }
-    }
-
-    std::wstring urlW = Utf8ToWide(url);
-    std::wstring targetW = targetPath.wstring();
-    HRESULT hr = URLDownloadToFileW(nullptr, urlW.c_str(), targetW.c_str(), 0, nullptr);
+bool DownloadFileToPath(const std::string& url,
+                        const std::filesystem::path& targetPath,
+                        std::string& error) {
+    HRESULT hr = URLDownloadToFileW(nullptr,
+                                    Utf8ToWide(url).c_str(),
+                                    targetPath.wstring().c_str(),
+                                    0,
+                                    nullptr);
     if (FAILED(hr)) {
         std::ostringstream oss;
-        oss << "Download failed with HRESULT=0x" << std::hex
-            << static_cast<unsigned long>(hr);
+        oss << "Failed to download component installer. HRESULT=0x"
+            << std::hex << static_cast<unsigned long>(hr);
         error = oss.str();
         return false;
     }
     return true;
 }
 
-bool ComputeFileSha256(const std::filesystem::path& path,
-                       std::string& hashHex,
+bool ComputeFileSha256(const std::filesystem::path& filePath,
+                       std::string& sha256,
                        std::string& error) {
-    BCRYPT_ALG_HANDLE algorithmHandle = nullptr;
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
     BCRYPT_HASH_HANDLE hashHandle = nullptr;
-    std::vector<unsigned char> hashObject;
-    std::vector<unsigned char> hashValue;
-
-    NTSTATUS status = BCryptOpenAlgorithmProvider(&algorithmHandle,
-                                                  BCRYPT_SHA256_ALGORITHM,
-                                                  nullptr,
-                                                  0);
-    if (status < 0) {
-        error = "Failed to initialize SHA256 algorithm provider.";
-        return false;
-    }
-
     DWORD objectLength = 0;
     DWORD hashLength = 0;
-    DWORD resultLength = 0;
-    status = BCryptGetProperty(algorithmHandle,
+    DWORD bytesRead = 0;
+
+    auto cleanup = [&]() {
+        if (hashHandle) {
+            BCryptDestroyHash(hashHandle);
+            hashHandle = nullptr;
+        }
+        if (algorithm) {
+            BCryptCloseAlgorithmProvider(algorithm, 0);
+            algorithm = nullptr;
+        }
+    };
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    if (status < 0) {
+        error = "Failed to open SHA256 provider.";
+        return false;
+    }
+    status = BCryptGetProperty(algorithm,
                                BCRYPT_OBJECT_LENGTH,
                                reinterpret_cast<PUCHAR>(&objectLength),
                                sizeof(objectLength),
-                               &resultLength,
+                               &bytesRead,
                                0);
     if (status < 0) {
-        error = "Failed to query SHA256 object length.";
-        BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+        cleanup();
+        error = "Failed to read SHA256 object length.";
         return false;
     }
-
-    status = BCryptGetProperty(algorithmHandle,
+    status = BCryptGetProperty(algorithm,
                                BCRYPT_HASH_LENGTH,
                                reinterpret_cast<PUCHAR>(&hashLength),
                                sizeof(hashLength),
-                               &resultLength,
+                               &bytesRead,
                                0);
-    if (status < 0) {
-        error = "Failed to query SHA256 hash length.";
-        BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+    if (status < 0 || hashLength == 0) {
+        cleanup();
+        error = "Failed to read SHA256 hash length.";
         return false;
     }
 
-    hashObject.resize(objectLength);
-    hashValue.resize(hashLength);
-    status = BCryptCreateHash(algorithmHandle,
+    std::vector<unsigned char> hashObject(objectLength);
+    std::vector<unsigned char> hash(hashLength);
+    status = BCryptCreateHash(algorithm,
                               &hashHandle,
                               hashObject.data(),
-                              static_cast<ULONG>(hashObject.size()),
+                              objectLength,
                               nullptr,
                               0,
                               0);
     if (status < 0) {
-        error = "Failed to create SHA256 hash object.";
-        BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+        cleanup();
+        error = "Failed to create SHA256 hash.";
         return false;
     }
 
-    std::ifstream input(path, std::ios::binary);
-    if (!input.is_open()) {
-        error = "Failed to open downloaded file for hash verification.";
-        BCryptDestroyHash(hashHandle);
-        BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+    std::ifstream input(filePath, std::ios::binary);
+    if (!input) {
+        cleanup();
+        error = "Failed to open downloaded component installer for hashing.";
         return false;
     }
-
-    std::vector<char> buffer(1024 * 1024);
-    while (input.good()) {
+    std::array<char, 64 * 1024> buffer{};
+    while (input) {
         input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-        std::streamsize readSize = input.gcount();
-        if (readSize <= 0) {
+        const std::streamsize count = input.gcount();
+        if (count <= 0) {
             continue;
         }
         status = BCryptHashData(hashHandle,
                                 reinterpret_cast<PUCHAR>(buffer.data()),
-                                static_cast<ULONG>(readSize),
+                                static_cast<ULONG>(count),
                                 0);
         if (status < 0) {
-            error = "Failed to update SHA256 hash.";
-            BCryptDestroyHash(hashHandle);
-            BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+            cleanup();
+            error = "Failed to hash downloaded component installer.";
             return false;
         }
     }
 
-    status = BCryptFinishHash(hashHandle,
-                              hashValue.data(),
-                              static_cast<ULONG>(hashValue.size()),
-                              0);
-    BCryptDestroyHash(hashHandle);
-    BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+    status = BCryptFinishHash(hashHandle, hash.data(), hashLength, 0);
     if (status < 0) {
-        error = "Failed to finalize SHA256 hash.";
+        cleanup();
+        error = "Failed to finish SHA256 hash.";
         return false;
     }
 
-    static const char* kHex = "0123456789abcdef";
-    hashHex.clear();
-    hashHex.reserve(hashValue.size() * 2);
-    for (unsigned char b : hashValue) {
-        hashHex.push_back(kHex[(b >> 4) & 0x0F]);
-        hashHex.push_back(kHex[b & 0x0F]);
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (unsigned char byte : hash) {
+        oss << std::setw(2) << static_cast<unsigned int>(byte);
     }
+    sha256 = oss.str();
+    cleanup();
     return true;
 }
+
+std::string ToLowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
 #endif
 
 bool ExecuteLocalComponent(const ComponentConfig& component,
@@ -486,6 +519,8 @@ bool ExecuteLocalComponent(const ComponentConfig& component,
         std::string executeError;
         if (!ExecuteProcess(installerPath,
                             expandedArgs,
+                            component.source.local.showWindow,
+                            component.source.local.showWindowConfigured,
                             component.source.local.wait,
                             component.source.local.timeoutSec,
                             options.cancellationCallback,
@@ -550,90 +585,97 @@ bool ExecuteDownloadComponent(const ComponentConfig& component,
                               std::vector<ComponentExecutionRecord>& componentActions,
                               std::string& componentError) {
 #ifdef _WIN32
-    std::string saveAs = component.source.download.saveAs;
-    if (saveAs.empty()) {
-        saveAs = "%InstallDir%\\downloads\\" + component.id + "_setup.bin";
+    const std::string saveAsUtf8 =
+        ExpandRuntimeTokens(component.source.download.saveAs,
+                            installRootForComponents,
+                            metadata,
+                            pathResolver);
+    std::filesystem::path installRoot = PathFromUtf8(installRootForComponents);
+    std::filesystem::path targetPath = PathFromUtf8(saveAsUtf8).lexically_normal();
+    if (targetPath.empty()) {
+        componentError = "Downloaded component installer save path is empty.";
+        return false;
     }
-    const std::string componentInstallDir;
-    std::string targetUtf8 = ExpandRuntimeTokens(saveAs,
-                                                 installRootForComponents,
-                                                 metadata,
-                                                 pathResolver,
-                                                 componentInstallDir);
-    std::filesystem::path targetPath = PathFromUtf8(targetUtf8);
-    if (!targetPath.is_absolute()) {
-        targetPath = PathFromUtf8(installRootForComponents) / targetPath;
+    if (!IsPathUnderBase(installRoot, targetPath)) {
+        componentError = "Downloaded component installer save path escapes install directory.";
+        return false;
     }
-    targetPath = targetPath.lexically_normal();
+
+    std::error_code ec;
+    if (targetPath.has_parent_path()) {
+        std::filesystem::create_directories(targetPath.parent_path(), ec);
+        if (ec) {
+            componentError = "Failed to create download target directory: " + ec.message();
+            return false;
+        }
+    }
 
     const std::string downloadUrl =
         ExpandRuntimeTokens(component.source.download.url,
                             installRootForComponents,
                             metadata,
-                            pathResolver,
-                            componentInstallDir);
+                            pathResolver);
+    std::string error;
+    if (!DownloadFileToPath(downloadUrl, targetPath, error)) {
+        componentError = error;
+        return false;
+    }
+
+    if (!component.source.download.sha256.empty()) {
+        std::string actualSha256;
+        if (!ComputeFileSha256(targetPath, actualSha256, error)) {
+            std::filesystem::remove(targetPath, ec);
+            componentError = error;
+            return false;
+        }
+        if (ToLowerAscii(actualSha256) != ToLowerAscii(component.source.download.sha256)) {
+            std::filesystem::remove(targetPath, ec);
+            componentError = "Downloaded component installer SHA256 mismatch.";
+            return false;
+        }
+    }
+
+    const std::string componentInstallDir = Utf8FromPath(targetPath.parent_path());
     const std::string expandedArgs =
         ExpandRuntimeTokens(component.source.download.args,
                             installRootForComponents,
                             metadata,
                             pathResolver,
                             componentInstallDir);
-    if (!IsPathUnderBase(PathFromUtf8(installRootForComponents), targetPath)) {
-        componentError = "Downloaded installer target path must stay under install directory.";
-    } else {
-        std::string downloadError;
-        if (!DownloadFile(downloadUrl, targetPath, downloadError)) {
-            componentError = downloadError.empty() ? "Failed to download component installer."
-                                                   : downloadError;
-        } else {
-            std::string actualHash;
-            std::string hashError;
-            if (!ComputeFileSha256(targetPath, actualHash, hashError)) {
-                componentError = hashError.empty() ? "Failed to verify downloaded component hash."
-                                                   : hashError;
-            } else {
-                std::string expectedHash = component.source.download.sha256;
-                std::transform(expectedHash.begin(), expectedHash.end(), expectedHash.begin(),
-                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                if (actualHash != expectedHash) {
-                    componentError = "Downloaded component hash mismatch.";
-                    std::error_code removeEc;
-                    std::filesystem::remove(targetPath, removeEc);
-                } else {
-                    DWORD exitCode = 0;
-                    std::string executeError;
-                    if (!ExecuteProcess(targetPath,
-                                        expandedArgs,
-                                        component.source.download.wait,
-                                        component.source.download.timeoutSec,
-                                        options.cancellationCallback,
-                                        exitCode,
-                                        executeError)) {
-                        componentError = executeError.empty()
-                                             ? "Failed to execute downloaded component installer."
-                                             : executeError;
-                    } else if (component.source.download.wait && exitCode != 0) {
-                        componentError =
-                            "Downloaded component installer failed with exit code " +
-                            std::to_string(exitCode);
-                    } else if (!component.source.download.uninstall.empty()) {
-                        ComponentExecutionRecord record;
-                        record.componentId = component.id;
-                        record.sourceType = "download";
-                        record.uninstallCommand =
-                            ExpandRuntimeTokens(component.source.download.uninstall,
-                                                installRootForComponents,
-                                                metadata,
-                                                pathResolver,
-                                                componentInstallDir);
-                        record.workingDirectory = Utf8FromPath(targetPath.parent_path());
-                        record.wait = component.source.download.wait;
-                        record.timeoutSec = component.source.download.timeoutSec;
-                        componentActions.push_back(std::move(record));
-                    }
-                }
-            }
-        }
+
+    DWORD exitCode = 0;
+    if (!ExecuteProcess(targetPath,
+                        expandedArgs,
+                        component.source.download.showWindow,
+                        component.source.download.showWindowConfigured,
+                        component.source.download.wait,
+                        component.source.download.timeoutSec,
+                        options.cancellationCallback,
+                        exitCode,
+                        error)) {
+        componentError = error.empty() ? "Failed to execute downloaded component installer." : error;
+        return false;
+    }
+    if (component.source.download.wait && exitCode != 0) {
+        componentError = "Downloaded component installer failed with exit code " +
+                         std::to_string(exitCode);
+        return false;
+    }
+
+    if (!component.source.local.uninstall.empty()) {
+        ComponentExecutionRecord record;
+        record.componentId = component.id;
+        record.sourceType = "download";
+        record.uninstallCommand =
+            ExpandRuntimeTokens(component.source.local.uninstall,
+                                installRootForComponents,
+                                metadata,
+                                pathResolver,
+                                componentInstallDir);
+        record.workingDirectory = componentInstallDir;
+        record.wait = component.source.download.wait;
+        record.timeoutSec = component.source.download.timeoutSec;
+        componentActions.push_back(std::move(record));
     }
 #else
     (void)component;
@@ -642,7 +684,7 @@ bool ExecuteDownloadComponent(const ComponentConfig& component,
     (void)pathResolver;
     (void)options;
     (void)componentActions;
-    componentError = "Downloaded component installers are currently supported on Windows only.";
+    componentError = "Download component installers are currently supported on Windows only.";
 #endif
     return componentError.empty();
 }
@@ -865,12 +907,10 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
             }
 
             std::string successMessage;
-            if (component->source.type == ComponentSourceType::LOCAL &&
-                !component->source.local.wait) {
-                successMessage = "Component '" + componentDisplayName +
-                                 "' installer launched (not waiting for completion).";
-            } else if (component->source.type == ComponentSourceType::DOWNLOAD &&
-                       !component->source.download.wait) {
+            if ((component->source.type == ComponentSourceType::LOCAL &&
+                 !component->source.local.wait) ||
+                (component->source.type == ComponentSourceType::DOWNLOAD &&
+                 !component->source.download.wait)) {
                 successMessage = "Component '" + componentDisplayName +
                                  "' installer launched (not waiting for completion).";
             } else {
@@ -884,36 +924,9 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
     }
 
     output.effectiveRegistry = plan.effectiveRegistry;
-    std::unordered_set<std::string> registrySeen;
-    registrySeen.reserve(output.effectiveRegistry.size() + metadata.layoutComponents.size() * 2);
-    for (const auto& entry : output.effectiveRegistry) {
-        std::string key = entry.path;
-        key.push_back('\n');
-        key += entry.key;
-        key.push_back('\n');
-        key += entry.value;
-        key.push_back('\n');
-        key += std::to_string(static_cast<int>(entry.type));
-        registrySeen.insert(key);
-    }
     output.effectiveAutoStartup = plan.effectiveAutoStartup;
     output.effectiveDesktopIcons = plan.effectiveDesktopIcons;
     output.effectiveKillProcesses = plan.effectiveKillProcesses;
-
-    for (const auto* component : plan.componentPlan.ordered) {
-        if (!component) {
-            continue;
-        }
-        if (failedOptionalComponentIds.find(component->id) != failedOptionalComponentIds.end()) {
-            continue;
-        }
-        for (const auto& entry : component->registry) {
-            AppendUniqueRegistry(output.effectiveRegistry, registrySeen, entry);
-        }
-        output.effectiveAutoStartup = output.effectiveAutoStartup || component->autoStartup;
-        output.effectiveDesktopIcons =
-            output.effectiveDesktopIcons || component->createDesktopShortcut;
-    }
 
     if (!failedOptionalComponentIds.empty()) {
         std::string message = "Optional components failed:";

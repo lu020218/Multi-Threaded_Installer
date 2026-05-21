@@ -26,19 +26,44 @@ bool IsValidComponentSourceType(ComponentSourceType type) {
            type == ComponentSourceType::DOWNLOAD;
 }
 
+std::string ToLowerCopy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+bool StartsWithInstallDirToken(const std::string& path) {
+    const std::string lowered = ToLowerCopy(path);
+    return lowered.rfind("%installdir%", 0) == 0 ||
+           lowered.rfind("installdirectory", 0) == 0;
+}
+
+bool IsHttpsUrl(const std::string& value) {
+    return ToLowerCopy(value).rfind("https://", 0) == 0;
+}
+
+bool IsSha256Hex(const std::string& value) {
+    return value.size() == 64 &&
+           std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+               return std::isxdigit(ch) != 0;
+           });
+}
+
+bool ContainsParentTraversal(const std::string& path) {
+    std::string normalized = path;
+    std::replace(normalized.begin(), normalized.end(), '/', '\\');
+    return normalized == ".." ||
+           normalized.rfind("..\\", 0) == 0 ||
+           normalized.find("\\..\\") != std::string::npos ||
+           (normalized.size() >= 3 && normalized.compare(normalized.size() - 3, 3, "\\..") == 0);
+}
+
 bool IsValidUninstallEntryScope(UninstallEntryScope scope) {
     return scope == UninstallEntryScope::CURRENT_USER ||
            scope == UninstallEntryScope::LOCAL_MACHINE ||
            scope == UninstallEntryScope::WOW6432 ||
            scope == UninstallEntryScope::ANY ||
            scope == UninstallEntryScope::BOTH;
-}
-
-bool IsHexSha256(const std::string& value) {
-    return value.size() == 64 &&
-           std::all_of(value.begin(), value.end(), [](unsigned char ch) {
-               return std::isxdigit(ch) != 0;
-           });
 }
 
 bool ValidateRegistryList(const std::vector<RegistryEntry>& entries, std::string& error) {
@@ -149,20 +174,30 @@ bool ValidatePackageManifest(const PackageManifest& manifest, std::string& error
             error = "Package manifest contains invalid component source type.";
             return false;
         }
-        for (const auto& folderId : component.folders) {
-            if (folderIds.find(folderId) == folderIds.end()) {
-                error = "Package manifest component references unknown folder: " + folderId;
-                return false;
-            }
-        }
-        if (!ValidateRegistryList(component.registry, error)) {
+        if (component.source.type == ComponentSourceType::LOCAL &&
+            component.source.local.installer.empty()) {
+            error = "Package manifest local component installer command is empty.";
             return false;
         }
         if (component.source.type == ComponentSourceType::DOWNLOAD) {
-            const std::string url = component.source.download.url;
-            if (url.rfind("https://", 0) != 0 ||
-                !IsHexSha256(component.source.download.sha256)) {
-                error = "Package manifest download component has invalid URL or SHA256.";
+            if (!IsHttpsUrl(component.source.download.url)) {
+                error = "Package manifest download component URL must use HTTPS.";
+                return false;
+            }
+            if (!component.source.download.sha256.empty() &&
+                !IsSha256Hex(component.source.download.sha256)) {
+                error = "Package manifest download component SHA256 is invalid.";
+                return false;
+            }
+            if (!StartsWithInstallDirToken(component.source.download.saveAs) ||
+                ContainsParentTraversal(component.source.download.saveAs)) {
+                error = "Package manifest download component save path must be under install dir.";
+                return false;
+            }
+        }
+        for (const auto& folderId : component.folders) {
+            if (folderIds.find(folderId) == folderIds.end()) {
+                error = "Package manifest component references unknown folder: " + folderId;
                 return false;
             }
         }

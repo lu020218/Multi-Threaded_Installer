@@ -75,21 +75,6 @@ void AppendUniqueString(std::vector<std::string>& target,
     }
 }
 
-void AppendUniqueRegistry(std::vector<RegistryEntry>& target,
-                          std::unordered_set<std::string>& seen,
-                          const RegistryEntry& entry) {
-    std::string key = entry.path;
-    key.push_back('\n');
-    key += entry.key;
-    key.push_back('\n');
-    key += entry.value;
-    key.push_back('\n');
-    key += std::to_string(static_cast<int>(entry.type));
-    if (seen.insert(key).second) {
-        target.push_back(entry);
-    }
-}
-
 void AppendShortcutNameCandidate(std::vector<std::string>& target,
                                  std::unordered_set<std::string>& seen,
                                  const std::string& value) {
@@ -236,11 +221,7 @@ bool BuildComponentSelectionPlan(const ExtendedInstallationMetadata& metadata,
     }
 
     std::unordered_set<std::string> seenFolders;
-    std::unordered_set<std::string> seenKillProcesses;
-    std::unordered_set<std::string> seenRegistry;
     seenFolders.reserve(plan.ordered.size() * 2);
-    seenKillProcesses.reserve(plan.ordered.size() * 2);
-    seenRegistry.reserve(plan.ordered.size() * 2);
 
     for (const auto* component : plan.ordered) {
         if (!component) {
@@ -251,14 +232,6 @@ bool BuildComponentSelectionPlan(const ExtendedInstallationMetadata& metadata,
                 AppendUniqueString(plan.embeddedFolders, seenFolders, folder);
             }
         }
-        for (const auto& name : component->killProcesses) {
-            AppendUniqueString(plan.killProcesses, seenKillProcesses, name);
-        }
-        for (const auto& entry : component->registry) {
-            AppendUniqueRegistry(plan.registryEntries, seenRegistry, entry);
-        }
-        plan.autoStartup = plan.autoStartup || component->autoStartup;
-        plan.desktopIcons = plan.desktopIcons || component->createDesktopShortcut;
     }
 
     return true;
@@ -415,29 +388,7 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
             plan.effectiveRegistry.push_back(std::move(entry));
         }
     }
-    std::unordered_set<std::string> registrySeen;
-    registrySeen.reserve(plan.effectiveRegistry.size() + metadata.layoutComponents.size() * 2);
-    for (const auto& entry : plan.effectiveRegistry) {
-        std::string key = entry.path;
-        key.push_back('\n');
-        key += entry.key;
-        key.push_back('\n');
-        key += entry.value;
-        key.push_back('\n');
-        key += std::to_string(static_cast<int>(entry.type));
-        registrySeen.insert(key);
-    }
-
     plan.effectiveKillProcesses = metadata.installKillProcesses;
-    std::unordered_set<std::string> processSeen;
-    processSeen.reserve(plan.effectiveKillProcesses.size() + plan.componentPlan.killProcesses.size());
-    for (const auto& process : plan.effectiveKillProcesses) {
-        processSeen.insert(process);
-    }
-    for (const auto& process : plan.componentPlan.killProcesses) {
-        AppendUniqueString(plan.effectiveKillProcesses, processSeen, process);
-    }
-
     plan.effectiveAutoStartup = options.overrideAutoStartup
                                     ? options.autoStartupEnabled
                                     : metadata.installAutoStartup;

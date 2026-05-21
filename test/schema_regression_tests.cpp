@@ -6,6 +6,7 @@
 #include "packager/version_info_updater.h"
 #include "installer/metadata_parser.h"
 #include "installer/console_interface.h"
+#include "installer/component_launcher.h"
 #include "common/package_manifest_codec.h"
 #include "common/utf8_utils.h"
 #include "installer/package_manifest_validator.h"
@@ -503,6 +504,201 @@ void TestRejectOldSchema() {
     ConfigurationManager manager;
     Require(!manager.initialize(inputDir.string(), configDir.string()), "Old schema should be rejected");
     Require(!manager.getLastError().empty(), "Old schema rejection should provide an error message");
+}
+
+void TestComponentInstallTypeIsRequired() {
+    fs::path root = CreateTestRoot("component_install_type_required");
+    fs::path inputDir = root / "payload";
+    fs::path configDir = root / "config";
+    fs::create_directories(inputDir / "bin");
+    fs::create_directories(inputDir / "templates");
+    fs::create_directories(configDir);
+    WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
+
+    std::string yaml = MinimalValidYaml();
+    ReplaceAll(yaml,
+               "      install:\n        type: local\n        command: addon\\\\install_plugins.bat\n",
+               "      install:\n        command: addon\\\\install_plugins.bat\n");
+    if (yaml.find("command: addon\\\\install_plugins.bat") == std::string::npos) {
+        ReplaceAll(yaml,
+                   "      defaultSelected: true\n      payload:\n        - app\n",
+                   "      defaultSelected: true\n      payload:\n        - app\n"
+                   "      install:\n"
+                   "        command: addon\\\\install_plugins.bat\n");
+    }
+    WriteTextFile(configDir / "packager.yaml", yaml);
+
+    ConfigurationManager manager;
+    Require(!manager.initialize(inputDir.string(), configDir.string()),
+            "component install object without type should be rejected");
+    Require(manager.getLastError().find("installer.components[].install.type is required") != std::string::npos,
+            "missing install.type error should be explicit");
+}
+
+void TestComponentLocalInstallRequiresCommand() {
+    fs::path root = CreateTestRoot("component_local_requires_command");
+    fs::path inputDir = root / "payload";
+    fs::path configDir = root / "config";
+    fs::create_directories(inputDir / "bin");
+    fs::create_directories(inputDir / "templates");
+    fs::create_directories(configDir);
+    WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
+
+    std::string yaml = MinimalValidYaml();
+    ReplaceAll(yaml,
+               "      defaultSelected: true\n      payload:\n        - app\n",
+               "      defaultSelected: true\n      payload:\n        - app\n"
+               "      install:\n"
+               "        type: local\n");
+    WriteTextFile(configDir / "packager.yaml", yaml);
+
+    ConfigurationManager manager;
+    Require(!manager.initialize(inputDir.string(), configDir.string()),
+            "local component install without command should be rejected");
+    Require(manager.getLastError().find("installer.components[].install.command") != std::string::npos,
+            "missing local command error should be explicit");
+}
+
+void TestComponentDownloadInstallValidationAndRoundTrip() {
+    fs::path root = CreateTestRoot("component_download_validation");
+    fs::path inputDir = root / "payload";
+    fs::path configDir = root / "config";
+    fs::create_directories(inputDir / "bin");
+    fs::create_directories(inputDir / "templates");
+    fs::create_directories(configDir);
+    WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
+
+    const std::string validSha =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    std::string yaml = MinimalValidYaml();
+    ReplaceAll(yaml,
+               "      defaultSelected: true\n      payload:\n        - app\n",
+               "      defaultSelected: true\n      payload:\n        - app\n"
+               "      install:\n"
+               "        type: download\n"
+               "        url: https://example.com/plugin-installer.exe\n"
+               "        sha256: " + validSha + "\n"
+               "        saveAs: \"%InstallDir%\\\\downloads\\\\plugin-installer.exe\"\n"
+               "        args: /quiet\n"
+               "        wait: true\n"
+               "        showWindow: false\n"
+               "        timeoutSec: 120\n");
+    WriteTextFile(configDir / "packager.yaml", yaml);
+
+    ConfigurationManager manager;
+    Require(manager.initialize(inputDir.string(), configDir.string()),
+            manager.getLastError().empty() ? "download component schema should initialize"
+                                           : manager.getLastError());
+    const auto& component = manager.getConfiguration().installer.components[0];
+    Require(component.source.type == ComponentSourceType::DOWNLOAD,
+            "download component source type should parse");
+    Require(component.source.download.url == "https://example.com/plugin-installer.exe",
+            "download URL should parse");
+    Require(component.source.download.sha256 == validSha,
+            "download SHA256 should parse");
+    Require(component.source.download.showWindowConfigured &&
+                !component.source.download.showWindow,
+            "download showWindow=false should parse");
+
+    FolderInfo folder;
+    folder.id = "app";
+    folder.sourcePath = "bin";
+    folder.targetPath = "%InstallDir%";
+    CompressionResult result;
+    result.originalSize = 10;
+    result.compressedSize = 5;
+    result.algorithm = CompressionAlgorithm::LZMA2_XZ;
+    PackageManifestBuilder builder;
+    PackageManifest manifest = builder.build({result}, {folder}, manager.getConfiguration());
+    auto encoded = SerializePackageManifest(manifest);
+    PackageManifest decoded;
+    std::string error;
+    Require(DeserializePackageManifest(encoded, decoded, error),
+            error.empty() ? "download manifest should deserialize" : error);
+    Require(decoded.components.components[0].source.type == ComponentSourceType::DOWNLOAD,
+            "download component source type should round-trip");
+    Require(decoded.components.components[0].source.download.saveAs ==
+                "%InstallDir%\\downloads\\plugin-installer.exe",
+            "download saveAs should round-trip");
+    Require(decoded.components.components[0].source.download.showWindowConfigured &&
+                !decoded.components.components[0].source.download.showWindow,
+            "download showWindow should round-trip");
+
+    ReplaceAll(yaml, "https://example.com/plugin-installer.exe", "http://example.com/plugin-installer.exe");
+    WriteTextFile(configDir / "packager.yaml", yaml);
+    ConfigurationManager badHttp;
+    Require(!badHttp.initialize(inputDir.string(), configDir.string()),
+            "http download URL should be rejected");
+
+    ReplaceAll(yaml, "http://example.com/plugin-installer.exe", "https://example.com/plugin-installer.exe");
+    ReplaceAll(yaml, validSha, "not-a-sha");
+    WriteTextFile(configDir / "packager.yaml", yaml);
+    ConfigurationManager badSha;
+    Require(!badSha.initialize(inputDir.string(), configDir.string()),
+            "invalid download SHA256 should be rejected");
+
+    ReplaceAll(yaml, "        sha256: not-a-sha\n", "");
+    WriteTextFile(configDir / "packager.yaml", yaml);
+    ConfigurationManager noSha;
+    Require(noSha.initialize(inputDir.string(), configDir.string()),
+            noSha.getLastError().empty() ? "download component without SHA256 should initialize"
+                                         : noSha.getLastError());
+    Require(noSha.getConfiguration().installer.components[0].source.download.sha256.empty(),
+            "download SHA256 should remain empty when omitted");
+}
+
+void TestComponentLauncherBuildsExpectedCommands() {
+    {
+        ComponentLaunchCommand command =
+            BuildComponentLaunchCommand(fs::path("C:\\Program Files\\Vendor App\\setup.exe"), "/S");
+        Require(command.type == ComponentLauncherType::Direct,
+                "exe should use direct launcher");
+        Require(WideToUtf8(command.commandLine) ==
+                    "\"C:\\Program Files\\Vendor App\\setup.exe\" /S",
+                "exe command line should quote path and append args");
+        Require(!command.hideByDefault, "exe should not hide by default");
+    }
+    {
+        ComponentLaunchCommand command =
+            BuildComponentLaunchCommand(fs::path("C:\\Program Files\\Vendor App\\install.bat"), "/quiet");
+        Require(command.type == ComponentLauncherType::Batch,
+                "bat should use batch launcher");
+        Require(WideToUtf8(command.commandLine) ==
+                    "cmd.exe /c \"C:\\Program Files\\Vendor App\\install.bat\" /quiet",
+                "bat command line should use cmd.exe /c");
+        Require(command.hideByDefault, "batch scripts should keep hidden default");
+    }
+    {
+        ComponentLaunchCommand command =
+            BuildComponentLaunchCommand(fs::path("C:\\Program Files\\Vendor App\\install.cmd"), "");
+        Require(command.type == ComponentLauncherType::Batch,
+                "cmd should use batch launcher");
+        Require(WideToUtf8(command.commandLine) ==
+                    "cmd.exe /c \"C:\\Program Files\\Vendor App\\install.cmd\"",
+                "cmd command line should use cmd.exe /c without trailing space");
+    }
+    {
+        ComponentLaunchCommand command =
+            BuildComponentLaunchCommand(fs::path("C:\\Program Files\\Vendor App\\install.ps1"), "-Mode Silent");
+        Require(command.type == ComponentLauncherType::PowerShell,
+                "ps1 should use PowerShell launcher");
+        Require(WideToUtf8(command.commandLine) ==
+                    "powershell.exe -NoProfile -ExecutionPolicy Bypass -File "
+                    "\"C:\\Program Files\\Vendor App\\install.ps1\" -Mode Silent",
+                "ps1 command line should use powershell.exe -File");
+        Require(!command.hideByDefault, "ps1 should not hide by default");
+    }
+    {
+        ComponentLaunchCommand command =
+            BuildComponentLaunchCommand(fs::path("C:\\Program Files\\Vendor App\\package.msi"),
+                                        "/qn /norestart");
+        Require(command.type == ComponentLauncherType::Msi,
+                "msi should use msiexec launcher");
+        Require(WideToUtf8(command.commandLine) ==
+                    "msiexec.exe /i \"C:\\Program Files\\Vendor App\\package.msi\" /qn /norestart",
+                "msi command line should use msiexec.exe /i");
+        Require(!command.hideByDefault, "msi should not hide by default");
+    }
 }
 
 void TestRejectUninstallerDetectField() {
@@ -1133,12 +1329,10 @@ void TestPackageManifestValidatorRejectsInvalidPayloadAndComponents() {
     Require(!ValidatePackageManifest(badDependency, error),
             "Validator should reject component dependency cycle");
 
-    PackageManifest badDownload = manifest;
-    badDownload.components.components[0].source.type = ComponentSourceType::DOWNLOAD;
-    badDownload.components.components[0].source.download.url = "http://example.com/setup.exe";
-    badDownload.components.components[0].source.download.sha256 = "not-a-sha";
-    Require(!ValidatePackageManifest(badDownload, error),
-            "Validator should reject invalid download component metadata");
+    PackageManifest badSourceType = manifest;
+    badSourceType.components.components[0].source.type = static_cast<ComponentSourceType>(99);
+    Require(!ValidatePackageManifest(badSourceType, error),
+            "Validator should reject invalid component source type");
 }
 
 void TestPathResolverExpandEnvironmentVariables() {
@@ -2287,6 +2481,12 @@ int main(int argc, char* argv[]) {
     const std::vector<std::pair<std::string, void(*)()>> tests = {
         {"load_valid_schema", &TestLoadValidSchema},
         {"reject_old_schema", &TestRejectOldSchema},
+        {"component_install_type_is_required", &TestComponentInstallTypeIsRequired},
+        {"component_local_install_requires_command", &TestComponentLocalInstallRequiresCommand},
+        {"component_download_install_validation_and_round_trip",
+         &TestComponentDownloadInstallValidationAndRoundTrip},
+        {"component_launcher_builds_expected_commands",
+         &TestComponentLauncherBuildsExpectedCommands},
         {"reject_uninstaller_detect_field", &TestRejectUninstallerDetectField},
         {"reject_legacy_system_uninstall_entry_fields", &TestRejectLegacySystemUninstallEntryFields},
         {"configuration_loads_only_from_config_directory_and_resolves_icon_there",

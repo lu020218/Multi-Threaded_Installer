@@ -333,11 +333,24 @@ bool ParseComponentSourceTypeValue(const std::string& raw,
         out = ComponentSourceType::LOCAL;
         return true;
     }
+    lastError = "Invalid field 'layout.components[].source.type': expected 'embedded' or 'local'";
+    return false;
+}
+
+bool ParseV3ComponentInstallTypeValue(const std::string& raw,
+                                      ComponentSourceType& out,
+                                      const std::string& fieldLabel,
+                                      std::string& lastError) {
+    const std::string normalized = ToLowerCopy(raw);
+    if (normalized == "local") {
+        out = ComponentSourceType::LOCAL;
+        return true;
+    }
     if (normalized == "download") {
         out = ComponentSourceType::DOWNLOAD;
         return true;
     }
-    lastError = "Invalid field 'layout.components[].source.type': expected 'embedded', 'local', or 'download'";
+    lastError = "Invalid field '" + fieldLabel + "': expected 'local' or 'download'";
     return false;
 }
 
@@ -665,39 +678,6 @@ bool ParseLayoutConfig(const json& root, LayoutConfig& out, std::string& lastErr
                 return false;
             }
             component.source.local.timeoutSec = static_cast<uint32_t>(timeout);
-        }
-
-        json download;
-        if (GetOptionalObject(source, "download", download)) {
-            if (!GetOptionalString(download, "url", component.source.download.url, lastError) ||
-                !GetOptionalString(download, "sha256", component.source.download.sha256, lastError) ||
-                !GetOptionalString(download, "saveAs", component.source.download.saveAs, lastError) ||
-                !GetOptionalString(download, "args", component.source.download.args, lastError) ||
-                !GetOptionalBool(download, "wait", component.source.download.wait, lastError) ||
-                !GetOptionalString(download, "uninstall", component.source.download.uninstall, lastError)) {
-                return false;
-            }
-            uint64_t timeout = component.source.download.timeoutSec;
-            if (!GetOptionalUInt64(download, "timeoutSec", timeout, lastError)) {
-                return false;
-            }
-            component.source.download.timeoutSec = static_cast<uint32_t>(timeout);
-        }
-
-        json install;
-        if (GetOptionalObject(componentJson, "install", install)) {
-            if (install.contains("registry") &&
-                !ParseRegistryEntryArray(install["registry"],
-                                         "layout.components[].install.registry",
-                                         component.registry,
-                                         lastError)) {
-                return false;
-            }
-            if (!GetOptionalStringList(install, "killProcesses", component.killProcesses, lastError) ||
-                !GetOptionalBool(install, "desktopShortcut", component.createDesktopShortcut, lastError) ||
-                !GetOptionalBool(install, "autoStartup", component.autoStartup, lastError)) {
-                return false;
-            }
         }
 
         out.components.push_back(std::move(component));
@@ -1086,23 +1066,66 @@ bool ParseV3Components(const json& installer, std::vector<ComponentConfig>& out,
         }
         json install;
         if (GetOptionalObject(item, "install", install)) {
-            std::string command;
-            std::string workingDirectory;
-            if (!GetOptionalString(install, "command", command, lastError) ||
-                !GetOptionalString(install, "args", component.source.local.args, lastError) ||
-                !GetOptionalString(install, "workingDirectory", workingDirectory, lastError) ||
-                !GetOptionalBool(install, "wait", component.source.local.wait, lastError)) {
+            if (!install.contains("type")) {
+                lastError = "installer.components[].install.type is required";
                 return false;
             }
-            uint64_t timeout = component.source.local.timeoutSec;
-            if (!GetOptionalUInt64(install, "timeoutSec", timeout, lastError)) {
+            std::string type;
+            if (!GetRequiredString(install, "type", type, lastError) ||
+                !ParseV3ComponentInstallTypeValue(type,
+                                                  component.source.type,
+                                                  "installer.components[].install.type",
+                                                  lastError)) {
                 return false;
             }
-            if (!command.empty()) {
-                component.source.type = ComponentSourceType::LOCAL;
+            uint64_t timeout = 0;
+            if (component.source.type == ComponentSourceType::LOCAL) {
+                std::string command;
+                std::string workingDirectory;
+                bool showWindow = component.source.local.showWindow;
+                timeout = component.source.local.timeoutSec;
+                if (!GetRequiredString(install, "command", command, lastError) ||
+                    !GetOptionalString(install, "args", component.source.local.args, lastError) ||
+                    !GetOptionalString(install, "workingDirectory", workingDirectory, lastError) ||
+                    !GetOptionalBool(install, "wait", component.source.local.wait, lastError) ||
+                    !GetOptionalBool(install, "showWindow", showWindow, lastError)) {
+                    if (lastError == "Missing required field 'command'") {
+                        lastError = "Missing required field 'installer.components[].install.command'";
+                    }
+                    return false;
+                }
+                if (!GetOptionalUInt64(install, "timeoutSec", timeout, lastError)) {
+                    return false;
+                }
                 component.source.local.base = workingDirectory.empty() ? "%InstallDir%" : workingDirectory;
                 component.source.local.installer = command;
                 component.source.local.timeoutSec = static_cast<uint32_t>(timeout);
+                component.source.local.showWindow = showWindow;
+                component.source.local.showWindowConfigured = install.contains("showWindow");
+            } else if (component.source.type == ComponentSourceType::DOWNLOAD) {
+                bool showWindow = component.source.download.showWindow;
+                timeout = component.source.download.timeoutSec;
+                if (!GetRequiredString(install, "url", component.source.download.url, lastError) ||
+                    !GetOptionalString(install, "sha256", component.source.download.sha256, lastError) ||
+                    !GetOptionalString(install, "saveAs", component.source.download.saveAs, lastError) ||
+                    !GetOptionalString(install, "args", component.source.download.args, lastError) ||
+                    !GetOptionalBool(install, "wait", component.source.download.wait, lastError) ||
+                    !GetOptionalBool(install, "showWindow", showWindow, lastError)) {
+                    if (lastError == "Missing required field 'url'") {
+                        lastError = "Missing required field 'installer.components[].install.url'";
+                    }
+                    return false;
+                }
+                if (!GetOptionalUInt64(install, "timeoutSec", timeout, lastError)) {
+                    return false;
+                }
+                component.source.download.timeoutSec = static_cast<uint32_t>(timeout);
+                if (component.source.download.saveAs.empty()) {
+                    component.source.download.saveAs =
+                        "%InstallDir%\\downloads\\" + component.id + "_setup.exe";
+                }
+                component.source.download.showWindow = showWindow;
+                component.source.download.showWindowConfigured = install.contains("showWindow");
             }
         }
         json uninstall;

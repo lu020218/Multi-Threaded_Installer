@@ -111,9 +111,11 @@ struct LocalInstallerConfig {
     bool wait;
     uint32_t timeoutSec;
     std::string uninstall;
+    bool showWindow;
+    bool showWindowConfigured;
 
     LocalInstallerConfig()
-        : wait(true), timeoutSec(900) {}
+        : wait(true), timeoutSec(900), showWindow(false), showWindowConfigured(false) {}
 };
 
 struct DownloadInstallerConfig {
@@ -123,10 +125,11 @@ struct DownloadInstallerConfig {
     std::string args;
     bool wait;
     uint32_t timeoutSec;
-    std::string uninstall;
+    bool showWindow;
+    bool showWindowConfigured;
 
     DownloadInstallerConfig()
-        : wait(true), timeoutSec(1800) {}
+        : wait(true), timeoutSec(900), showWindow(false), showWindowConfigured(false) {}
 };
 
 struct ComponentSourceConfig {
@@ -148,17 +151,11 @@ struct ComponentConfig {
     std::vector<std::string> dependsOn;
     std::vector<std::string> folders;
     ComponentSourceConfig source;
-    std::vector<RegistryEntry> registry;
-    std::vector<std::string> killProcesses;
-    bool createDesktopShortcut;
-    bool autoStartup;
 
     ComponentConfig()
         : required(false),
           defaultSelected(true),
-          sizeHintMB(0),
-          createDesktopShortcut(false),
-          autoStartup(false) {}
+          sizeHintMB(0) {}
 };
 
 struct UiComponentBindingPage {

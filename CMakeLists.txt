@@ -309,6 +309,7 @@ set(INSTALLER_SOURCES
     src/installer/folder_install_executor.cpp
     src/installer/tar_stream_extractor.cpp
     src/installer/file_system_operator.cpp
+    src/installer/component_launcher.cpp
     src/installer/console_interface.cpp
     src/installer/path_resolver.cpp
     src/installer/installer_helpers.cpp
@@ -347,6 +348,7 @@ set(UNINSTALLER_SOURCES
     src/installer/folder_install_executor.cpp
     src/installer/tar_stream_extractor.cpp
     src/installer/file_system_operator.cpp
+    src/installer/component_launcher.cpp
     src/installer/console_interface.cpp
     src/installer/path_resolver.cpp
     src/installer/installer_helpers.cpp

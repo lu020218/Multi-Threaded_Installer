@@ -2,12 +2,36 @@
 
 #include "common/config_types.h"
 
+#include <memory>
+#include <unordered_map>
+
 namespace MultiThreadedInstaller {
+
+// Fingerprint of a previously installed file, recorded in install.manifest.json.
+// Used by the incremental "zero-read" skip path (Scheme A): the installer can
+// compare the new package's per-file hash against the previously installed
+// hash without reading file content from disk.
+struct InstalledFileFingerprint {
+    uint64_t size = 0;
+    uint64_t contentHash = 0;
+};
+
+// Keyed by normalizePathForCompare(absolute path).
+using InstalledFileFingerprintMap = std::unordered_map<std::string, InstalledFileFingerprint>;
 
 struct FileIndexEntry {
     std::string relativePath;
     uint64_t offset;
     uint64_t size;
+    // Per-file content fingerprint (FNV-1a 64) used by incremental install to
+    // skip rewriting unchanged files. 0 means "no fingerprint available"
+    // (older packages), which forces a fail-safe rewrite.
+    uint64_t contentHash = 0;
+    // Per-file compressed frame location within the folder payload. Only
+    // meaningful when the folder is framed (per-file compression); lets the
+    // installer seek to and decompress just the changed files (P2).
+    uint64_t frameOffset = 0;
+    uint64_t frameCompressedSize = 0;
 };
 
 struct CompressionResult {
@@ -17,6 +41,10 @@ struct CompressionResult {
     size_t originalSize;
     size_t compressedSize;
     CompressionAlgorithm algorithm;
+    // When true, compressedData is a concatenation of independently compressed
+    // per-file frames (see FileIndexEntry::frameOffset/frameCompressedSize)
+    // rather than a single stream over the whole folder tar.
+    bool framed = false;
     // File manifest for logging, validation, and post-install bookkeeping only.
     std::vector<FileIndexEntry> fileIndex;
 
@@ -48,6 +76,8 @@ struct FolderMapping {
 
 struct ExtendedFolderMapping : public FolderMapping {
     std::string target;
+    // When true the payload is per-file framed (see CompressionResult::framed).
+    bool framed = false;
     // File manifest for logging, validation, and post-install bookkeeping only.
     std::vector<FileIndexEntry> fileIndex;
 
@@ -130,6 +160,12 @@ struct DecompressionTask {
     uint32_t expectedChecksum;
     size_t originalSize;
     CompressionAlgorithm algorithm;
+    // Per-file fingerprints for this folder. When populated, the extractor may
+    // skip rewriting files whose on-disk content already matches.
+    std::vector<FileIndexEntry> fileIndex;
+    // Previously installed file fingerprints (from the old install manifest),
+    // enabling the zero-read skip decision (Scheme A). May be null.
+    std::shared_ptr<const InstalledFileFingerprintMap> oldInstalledFingerprints;
 
     DecompressionTask()
         : schedulerConcurrencyHint(1),

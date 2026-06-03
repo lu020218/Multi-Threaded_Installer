@@ -417,11 +417,6 @@ set(COMMON_SOURCES
     src/common/package_manifest_codec.cpp
 )
 
-set(POST_SETUP_AGENT_SOURCES
-    src/post_setup_agent/main.cpp
-    src/post_setup_agent/post_setup_url_utils.cpp
-)
-
 # Create packager executable
 add_executable(packager ${PACKAGER_SOURCES} ${COMMON_SOURCES})
 target_link_libraries(packager spdlog_header_only ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads ${YAML_CPP_LIBRARIES})
@@ -440,7 +435,7 @@ copy_dlls_to_target(packager)
 add_executable(installer WIN32 ${INSTALLER_SOURCES} ${COMMON_SOURCES})
 target_link_libraries(installer spdlog_header_only ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads)
 if(WIN32)
-    target_link_libraries(installer ole32 shell32 bcrypt urlmon dbghelp rstrtmgr)
+    target_link_libraries(installer ole32 shell32 bcrypt winhttp dbghelp rstrtmgr)
 endif()
 target_include_directories(installer PRIVATE ${LIBLZMA_INCLUDE_DIRS} ${ZSTD_INCLUDE_DIRS})
 if(LIBLZMA_STATIC)
@@ -452,7 +447,7 @@ copy_dlls_to_target(installer)
 add_executable(uninstaller WIN32 ${UNINSTALLER_SOURCES} ${COMMON_SOURCES})
 target_link_libraries(uninstaller spdlog_header_only ${LIBLZMA_LIBRARIES} ${ZSTD_LIBRARIES} Threads::Threads)
 if(WIN32)
-    target_link_libraries(uninstaller ole32 shell32 bcrypt urlmon dbghelp rstrtmgr)
+    target_link_libraries(uninstaller ole32 shell32 bcrypt winhttp dbghelp rstrtmgr)
 endif()
 target_include_directories(uninstaller PRIVATE ${LIBLZMA_INCLUDE_DIRS} ${ZSTD_INCLUDE_DIRS})
 if(LIBLZMA_STATIC)
@@ -460,15 +455,6 @@ if(LIBLZMA_STATIC)
 endif()
 apply_msvc_liblzma_link_fixes(uninstaller)
 copy_dlls_to_target(uninstaller)
-
-add_executable(post_setup_agent ${POST_SETUP_AGENT_SOURCES} src/common/utf8_utils.cpp)
-target_link_libraries(post_setup_agent Threads::Threads)
-if(WIN32)
-    target_link_libraries(post_setup_agent winhttp bcrypt advapi32 user32)
-endif()
-if(MSVC)
-    target_compile_definitions(post_setup_agent PRIVATE UNICODE _UNICODE)
-endif()
 
 if(MSVC)
     target_compile_definitions(installer PRIVATE UNICODE _UNICODE)

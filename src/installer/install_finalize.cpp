@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <unordered_set>
 
 namespace MultiThreadedInstaller {
 
@@ -22,6 +23,7 @@ std::vector<std::string> CollectFilesRecursive(const std::vector<std::string>& r
         const std::wstring filename = path.filename().wstring();
         return filename.size() >= 10 &&
                (filename.find(L".__mti_old") != std::wstring::npos ||
+                filename.find(L".__mti_new") != std::wstring::npos ||
                 filename.find(L".__mti_reboot_new") != std::wstring::npos);
     };
     auto isPendingCleanupDirectory = [](const std::filesystem::path& path) {
@@ -200,6 +202,49 @@ InstallStateContext BuildInstallStateContext(const ExtendedInstallationMetadata&
     return context;
 }
 
+// Resolves the per-file content fingerprints of the newly installed payload to
+// absolute target paths so they can be recorded in install.manifest.json. The
+// next upgrade uses these for the zero-read skip decision (Scheme A).
+InstalledFileFingerprintMap BuildInstalledFileFingerprints(const ExtendedInstallationMetadata& metadata,
+                                                           const InstallExecutionPlan& plan,
+                                                           InstallerPathResolver& pathResolver) {
+    InstalledFileFingerprintMap fingerprints;
+    std::unordered_set<std::string> selected(plan.selectedEmbeddedFolders.begin(),
+                                             plan.selectedEmbeddedFolders.end());
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
+        if (selected.find(mapping.folderId) == selected.end() || mapping.fileIndex.empty()) {
+            continue;
+        }
+        std::string target = mapping.target.empty() ? mapping.targetPath : mapping.target;
+        const std::string token = "%InstallDir%";
+        size_t pos = 0;
+        while ((pos = target.find(token, pos)) != std::string::npos) {
+            target.replace(pos, token.size(), plan.pathDecision.resolvedInstallRoot);
+            pos += plan.pathDecision.resolvedInstallRoot.size();
+        }
+        target = pathResolver.expandEnvironmentVariables(target);
+        if (target.empty()) {
+            continue;
+        }
+        for (const auto& file : mapping.fileIndex) {
+            if (file.relativePath.empty() || file.contentHash == 0) {
+                continue;
+            }
+            const std::filesystem::path candidate =
+                PathFromUtf8(target) / PathFromUtf8(file.relativePath);
+            const std::string key = normalizePathForCompare(Utf8FromPath(candidate));
+            if (key.empty()) {
+                continue;
+            }
+            InstalledFileFingerprint fingerprint;
+            fingerprint.size = file.size;
+            fingerprint.contentHash = file.contentHash;
+            fingerprints[key] = fingerprint;
+        }
+    }
+    return fingerprints;
+}
+
 } // namespace
 
 bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
@@ -330,6 +375,8 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
 
     if (!result.installRootPath.empty()) {
         std::filesystem::path localPath = PathFromUtf8(result.installRootPath) / "install.manifest.json";
+        const InstalledFileFingerprintMap fileFingerprints =
+            BuildInstalledFileFingerprints(metadata, plan, pathResolver);
         if (!writeManifest(Utf8FromPath(localPath),
                            plan.effectiveAppId,
                            metadata.appName,
@@ -352,7 +399,8 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                            metadata.appPublisher,
                            metadata.appWebsite,
                            metadata.uninstallerCleanup,
-                           metadata.systemUninstallEntry)) {
+                           metadata.systemUninstallEntry,
+                           fileFingerprints)) {
             reporter.EmitMessage(InstallServiceEventType::Warning,
                                  "Failed to write local install manifest");
         }

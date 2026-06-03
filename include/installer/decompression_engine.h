@@ -21,6 +21,7 @@ public:
         bool rebootRequired = false;
         std::vector<std::string> pendingReplaceFiles;
         std::vector<std::string> installedFiles;
+        std::vector<std::string> skippedFiles;
     };
 
     DecompressionEngine();

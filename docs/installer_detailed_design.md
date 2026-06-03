@@ -158,6 +158,13 @@ sequenceDiagram
 
 职责：
 - 从打包器生成的顺序流还原文件（路径 + 文件内容）并写入目标目录。
+- 写盘采用「暂存文件 `*.__mti_new` + `ReplaceFileW` 原子替换」（失败回退 `MoveFileEx`，锁定敏感二进制走 reboot 替换）。
+- 增量跳过：目标文件内容与新包一致时不重写（解出丢弃，仍登记进 manifest）。
+
+### 6.4 增量安装（见 `docs/INCREMENTAL_INSTALL_DESIGN.md`）
+- 每文件带内容指纹（`FileIndexEntry.contentHash`）。覆盖/升级安装时按文件做差异决策：未变更→跳过（不写盘、不触发 AV）；已移除→清理阶段差集删除；新增/变更→正常写入。
+- 跳过判据分两档：旧 `install.manifest.json` 带 `fileFingerprints[]` 时走「零读盘」比较（方案 A），否则读目标文件算哈希（方案 B）。
+- 可选「按文件分帧压缩」（打包 `package.compression.perFileFrames: true`）：`FolderInstallExecutor` 走分帧路径，未变更文件连解压都跳过；仅对变更/新增文件 seek 读取并解压其独立帧。
 
 ---
 

@@ -15,6 +15,17 @@ namespace MultiThreadedInstaller {
 class MetadataParser;
 class InstallerPathResolver;
 
+struct ComponentInstallTiming {
+    std::string id;
+    std::string name;
+    std::string type;
+    bool success = false;
+    uint64_t totalMs = 0;
+    uint64_t downloadMs = 0;
+    uint64_t installMs = 0;
+    std::string error;
+};
+
 struct InstallExecutionOutput {
     bool success = false;
     bool cancelled = false;
@@ -25,6 +36,7 @@ struct InstallExecutionOutput {
     std::vector<std::string> pendingReplaceFiles;
     std::vector<std::string> errors;
     ParallelInstallSummary timing;
+    std::vector<ComponentInstallTiming> componentTimings;
     std::vector<ComponentExecutionRecord> componentActions;
     std::vector<RegistryEntry> effectiveRegistry;
     std::vector<std::string> effectiveKillProcesses;

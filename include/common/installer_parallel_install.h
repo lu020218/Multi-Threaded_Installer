@@ -54,6 +54,8 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                                          const ProgressCallback& progressCallback,
                                          const LogCallback& infoCallback,
                                          const LogCallback& errorCallback,
-                                         const CancellationCallback& cancellationCallback = {});
+                                         const CancellationCallback& cancellationCallback = {},
+                                         std::shared_ptr<const InstalledFileFingerprintMap>
+                                             oldInstalledFingerprints = nullptr);
 
 } // namespace MultiThreadedInstaller

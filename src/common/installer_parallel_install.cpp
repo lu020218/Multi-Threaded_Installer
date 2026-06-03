@@ -49,7 +49,9 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
                                          const ProgressCallback& progressCallback,
                                          const LogCallback& infoCallback,
                                          const LogCallback& errorCallback,
-                                         const CancellationCallback& cancellationCallback) {
+                                         const CancellationCallback& cancellationCallback,
+                                         std::shared_ptr<const InstalledFileFingerprintMap>
+                                             oldInstalledFingerprints) {
     ParallelInstallResult result;
 
     auto logInfo = [&](const std::string& message) {
@@ -179,6 +181,7 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
             request.mapping = dispatch.mapping;
             request.resolvedTargetPath = dispatch.targetPath;
             request.schedulerConcurrencyHint = static_cast<unsigned int>(workerCount);
+            request.oldInstalledFingerprints = oldInstalledFingerprints;
             request.cancellationCallback = cancellationCallback;
             request.infoCallback = infoCallback;
             request.errorCallback = errorCallback;

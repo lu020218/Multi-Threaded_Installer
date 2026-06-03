@@ -17,6 +17,8 @@ struct FolderInstallRequest {
     ExtendedFolderMapping mapping;
     std::string resolvedTargetPath;
     unsigned int schedulerConcurrencyHint = 1;
+    // Previously installed fingerprints for the zero-read skip path. May be null.
+    std::shared_ptr<const InstalledFileFingerprintMap> oldInstalledFingerprints;
     std::function<bool()> cancellationCallback;
     std::function<void(const std::string&)> infoCallback;
     std::function<void(const std::string&)> errorCallback;

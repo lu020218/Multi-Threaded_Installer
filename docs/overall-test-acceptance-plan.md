@@ -34,7 +34,6 @@ cmake --build build_codex --config Release
 - `build_codex\Release\packager.exe`
 - `build_codex\Release\installer.exe`
 - `build_codex\Release\uninstaller.exe`
-- `build_codex\Release\post_setup_agent.exe`
 - `build_codex\test\Release\SchemaRegressionTests.exe`
 
 ### 2.3 测试目录
@@ -88,7 +87,7 @@ test-work/
 预期：
 
 - 全部 `[PASS]`。
-- 覆盖 v3 loader、manifest codec、installState、安装计划、升级清理、卸载上下文、清理 worker、多线程策略、路径格式化、post_setup 中文路径等核心回归。
+- 覆盖 v3 loader、manifest codec、installState、安装计划、升级清理、卸载上下文、清理 worker、多线程策略、路径格式化等核心回归。
 
 ### TC-A03 文档与示例没有旧主路径字段
 
@@ -351,7 +350,6 @@ test-work/
 预期：
 
 - 安装成功。
-- post_setup_agent 可处理中文路径。
 - manifest 和日志路径无乱码导致的失败。
 
 ## 8. 静默安装
@@ -712,27 +710,7 @@ setup.exe
 - 覆盖/升级清理同步完成后再释放文件。
 - 不再使用 detached 后台删除抢占解压资源。
 
-## 17. post_setup_agent
-
-### TC-PS01 中文路径 file URL
-
-步骤：
-
-1. 安装到中文路径。
-2. 触发 post_setup_agent。
-
-预期：
-
-- file URL 解码为正确 UTF-8 中文路径。
-- agent 执行成功。
-
-### TC-PS02 `%InstallDir%` 展开
-
-预期：
-
-- post_setup 参数中的 `%InstallDir%` 展开为实际安装目录。
-
-## 18. Smoke 流程
+## 17. Smoke 流程
 
 ### TC-E2E01 完整 GUI 安装 -> 覆盖安装 -> 卸载
 
@@ -823,7 +801,7 @@ setup.exe
 - 退出码均正确。
 - 日志记录关键阶段。
 
-## 19. 验收通过标准
+## 18. 验收通过标准
 
 整体通过需满足：
 

@@ -186,36 +186,6 @@ installer:
         workingDirectory: "%InstallDir%\\addon"
         wait: true
         timeoutSec: 900
-    - id: post_setup_agent
-      name: Post Setup Agent
-      description: Validates token expansion, file URL decoding, and Chinese install paths.
-      required: false
-      defaultSelected: false
-      dependsOn:
-        - core
-      payload:
-        - app
-      install:
-        command: "%InstallDir%\\post_setup_agent.exe"
-        args: >
-          --install-dir "%InstallDir%"
-          --app-version "%Version%"
-          --config-url "file:///%InstallDir%/resources/runtime-config.json"
-          --state-path "%ProgramData%\\MTITest\\AcceptanceApp\\post_setup_state.json"
-          --log-path "%ProgramData%\\MTITest\\AcceptanceApp\\post_setup_agent.log"
-        workingDirectory: "%InstallDir%"
-        wait: true
-        timeoutSec: 1800
-      uninstall:
-        command: "%InstallDir%\\post_setup_agent.exe"
-        args: >
-          --uninstall
-          --state-path "%ProgramData%\\MTITest\\AcceptanceApp\\post_setup_state.json"
-          --log-path "%ProgramData%\\MTITest\\AcceptanceApp\\post_setup_agent.log"
-        workingDirectory: "%InstallDir%"
-        wait: true
-        timeoutSec: 900
-
   registry:
     write:
       - path: "HKCU\\Software\\MTITest_AcceptanceApp"

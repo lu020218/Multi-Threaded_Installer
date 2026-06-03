@@ -373,6 +373,17 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
     plan.legacyDesktopShortcutCandidates =
         CollectLegacyDesktopShortcutCandidates(plan.previousManifest);
 
+    // Capture the previous install's per-file fingerprints now, while its
+    // manifest still exists. The cleanup phase deletes the old manifest before
+    // extraction runs, so this is the only point at which the zero-read skip
+    // data (Scheme A) can be read.
+    if (plan.hasPreviousInstall && !plan.previousManifest.empty()) {
+        auto fingerprints = std::make_shared<InstalledFileFingerprintMap>();
+        if (loadPreviousInstallFileFingerprints(plan.previousManifest, *fingerprints)) {
+            plan.previousInstalledFingerprints = std::move(fingerprints);
+        }
+    }
+
     if (!BuildComponentSelectionPlan(metadata, options, plan.componentPlan, error)) {
         return false;
     }

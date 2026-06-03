@@ -55,6 +55,7 @@ struct PackagePayloadFolder {
     uint64_t originalSize = 0;
     uint32_t checksum = 0;
     CompressionAlgorithm algorithm = CompressionAlgorithm::LZMA2_XZ;
+    bool framed = false;
     std::vector<FileIndexEntry> fileIndex;
 };
 

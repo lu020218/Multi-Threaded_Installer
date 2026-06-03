@@ -18,6 +18,8 @@ package:
   compression:
     algorithm: xz
     level: 9
+    # 按文件分帧压缩（增量安装优化，默认 false）：升级时未变更文件免解压、免写盘。
+    perFileFrames: false
 
 installer:
   requireAdmin: true

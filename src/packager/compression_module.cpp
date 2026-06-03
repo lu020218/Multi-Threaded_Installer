@@ -135,4 +135,8 @@ bool CompressionModule::setThreadCount(int requestedThreadCount) {
     return true;
 }
 
+void CompressionModule::setPerFileFrames(bool enabled) {
+    payloadCompressor->setPerFileFrames(enabled);
+}
+
 } // namespace MultiThreadedInstaller

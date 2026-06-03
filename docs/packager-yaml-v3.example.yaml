@@ -44,6 +44,14 @@ package:
     # 压缩等级。具体有效范围由压缩算法决定。
     level: 9
 
+    # 是否启用「按文件分帧压缩」（增量安装优化，默认 false）。
+    # - false：整个 folder 压成单流（压缩率最好）。
+    # - true ：每个文件单独压成一帧，覆盖/升级安装时未变更文件可被
+    #          完全跳过（既不解压也不写盘），代价是压缩率略降。
+    # 配合安装器的「内容指纹跳过」使用：两个相邻版本绝大多数文件相同、
+    # 仅少量变更的场景收益最大。
+    perFileFrames: false
+
 installer:
   # 生成的安装程序是否需要管理员权限。
   # 该值会在打包阶段写入 installer 的 Windows application manifest。
@@ -231,34 +239,6 @@ installer:
       uninstall:
         command: "%InstallDir%\\components\\chrome_plugin\\uninstall.bat"
         workingDirectory: "%InstallDir%\\components\\chrome_plugin"
-        wait: true
-        timeoutSec: 900
-
-    - id: post_setup_agent
-      name: Post Setup Agent
-      description: Fetch remote runtime config and apply environment setup.
-      required: false
-      defaultSelected: true
-      dependsOn:
-        - core
-      payload:
-        - app
-      install:
-        command: "%InstallDir%\\components\\post_setup_agent\\post_setup_agent.exe"
-        args: >
-          --install-dir "%InstallDir%"
-          --app-version "%Version%"
-          --config-url "https://example.com/runtime-config.json"
-          --state-path "%ProgramData%\\my_desktop_app\\post_setup_state.json"
-          --log-path "%ProgramData%\\my_desktop_app\\post_setup_agent.log"
-        wait: true
-        timeoutSec: 1800
-      uninstall:
-        command: "%InstallDir%\\components\\post_setup_agent\\post_setup_agent.exe"
-        args: >
-          --uninstall
-          --state-path "%ProgramData%\\my_desktop_app\\post_setup_state.json"
-          --log-path "%ProgramData%\\my_desktop_app\\post_setup_agent.log"
         wait: true
         timeoutSec: 900
 

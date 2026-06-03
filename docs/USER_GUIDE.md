@@ -145,7 +145,19 @@ package:
   compression:
     algorithm: xz
     level: 9
+    # Optional. Per-file framed compression (default false). When true, each
+    # file is compressed into its own independent frame so that, on
+    # overwrite/upgrade installs, files whose content is unchanged are skipped
+    # entirely (no decompress, no rewrite, no AV scan). Slightly lowers the
+    # compression ratio; best when consecutive builds share most files.
+    perFileFrames: false
 ```
+
+> Incremental install: regardless of `perFileFrames`, the installer records a
+> per-file content fingerprint in `install.manifest.json` and uses it on the
+> next overwrite/upgrade to skip rewriting unchanged files and to delete only
+> files removed in the new build. `perFileFrames: true` additionally lets it
+> skip decompressing unchanged files. See `docs/INCREMENTAL_INSTALL_DESIGN.md`.
 
 ### installer
 

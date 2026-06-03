@@ -1,10 +1,14 @@
 #include "installer/tar_stream_extractor.h"
 #include "installer/file_system_operator.h"
 #include "installer/installer_helpers.h"
+#include "common/content_hash.h"
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <filesystem>
+#include <fstream>
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cwctype>
 #include <exception>
 #include <cstring>
@@ -22,7 +26,17 @@ constexpr uint32_t kMaxTarFileSize = 2u * 1024u * 1024u * 1024u;
 
 #ifdef _WIN32
 constexpr int kOpenFileRetryCount = 8;
-constexpr DWORD kOpenFileRetryDelayMs = 200;
+constexpr DWORD kInitialRetryDelayMs = 25;
+constexpr DWORD kMaxRetryDelayMs = 400;
+
+// Converged retry backoff: front-loaded fast retries clear transient AV/indexer
+// locks quickly, then the delay grows and is capped so a lock that will not
+// clear does not stall the install with a long fixed wait per attempt.
+DWORD ComputeRetryDelayMs(int attempt) {
+    const DWORD shift = static_cast<DWORD>(attempt > 0 ? attempt - 1 : 0);
+    const DWORD delay = shift >= 31 ? kMaxRetryDelayMs : (kInitialRetryDelayMs << shift);
+    return delay > kMaxRetryDelayMs ? kMaxRetryDelayMs : delay;
+}
 
 std::string FormatWin32ErrorMessageLocal(DWORD errorCode) {
     LPWSTR buffer = nullptr;
@@ -104,12 +118,56 @@ std::string QueryLockingProcesses(const std::filesystem::path& filePath) {
     return result;
 }
 
-std::filesystem::path BuildBackupPath(const std::filesystem::path& fullPath) {
-    return fullPath.native() + L".__mti_old";
+// Content for a changed file is written to this sibling staging file, then
+// swapped into place atomically with ReplaceFileW (or MoveFileEx when the
+// target does not yet exist). This avoids disturbing the target until the new
+// content is fully written and verified by the OS write path.
+std::filesystem::path BuildStagingPath(const std::filesystem::path& fullPath) {
+    return fullPath.native() + L".__mti_new";
 }
 
-std::filesystem::path BuildRebootReplaceStagingPath(const std::filesystem::path& fullPath) {
-    return fullPath.native() + L".__mti_reboot_new";
+// Normalizes a relative path into a stable lookup key so the fingerprint built
+// from the packaged file index and the path parsed from the tar stream compare
+// equal regardless of separator or case differences.
+std::string NormalizeRelKey(const std::string& relativePath) {
+    std::string key = relativePath;
+    for (char& ch : key) {
+        if (ch == '/') {
+            ch = '\\';
+        } else {
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+    }
+    return key;
+}
+
+// Streams an existing file and returns true when its size and content hash both
+// match the packaged fingerprint. Any read error fails closed (no skip).
+bool ExistingFileMatchesFingerprint(const std::filesystem::path& fullPath,
+                                    uint64_t expectedSize,
+                                    uint64_t expectedHash) {
+    std::error_code ec;
+    const uint64_t actualSize = std::filesystem::file_size(fullPath, ec);
+    if (ec || actualSize != expectedSize) {
+        return false;
+    }
+    std::ifstream in(toLongPath(fullPath), std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    ContentHasher hasher;
+    std::array<char, 64 * 1024> buffer{};
+    while (in) {
+        in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize got = in.gcount();
+        if (got > 0) {
+            hasher.update(buffer.data(), static_cast<size_t>(got));
+        }
+    }
+    if (in.bad()) {
+        return false;
+    }
+    return hasher.finalize() == expectedHash;
 }
 
 bool IsSensitiveRebootReplacePath(const std::filesystem::path& path) {
@@ -123,7 +181,8 @@ bool IsSensitiveRebootReplacePath(const std::filesystem::path& path) {
 bool IsRebootReplaceEligibleError(DWORD errorCode) {
     return errorCode == ERROR_SHARING_VIOLATION ||
            errorCode == ERROR_LOCK_VIOLATION ||
-           errorCode == ERROR_ACCESS_DENIED;
+           errorCode == ERROR_ACCESS_DENIED ||
+           errorCode == ERROR_USER_MAPPED_FILE;
 }
 
 void ClearReadonlyAttributeIfNeeded(const std::filesystem::path& fullPath) {
@@ -135,35 +194,79 @@ void ClearReadonlyAttributeIfNeeded(const std::filesystem::path& fullPath) {
     SetFileAttributesW(longPath.c_str(), attributes & ~FILE_ATTRIBUTE_READONLY);
 }
 
-bool RenameExistingFileWithRetry(const std::filesystem::path& fullPath,
-                                 const std::filesystem::path& backupPath,
-                                 DWORD& lastError) {
-    const std::filesystem::path longFullPath = toLongPath(fullPath);
-    const std::filesystem::path longBackupPath = toLongPath(backupPath);
+// Moves the staging file onto a destination that does not currently exist.
+// Returns ERROR_SUCCESS on success, otherwise the last Win32 error.
+DWORD MoveFileWithRetry(const std::filesystem::path& source,
+                        const std::filesystem::path& destination) {
+    const std::filesystem::path longSource = toLongPath(source);
+    const std::filesystem::path longDestination = toLongPath(destination);
+    DWORD lastError = ERROR_SUCCESS;
     for (int attempt = 1; attempt <= kOpenFileRetryCount; ++attempt) {
-        ClearReadonlyAttributeIfNeeded(fullPath);
-        ClearReadonlyAttributeIfNeeded(backupPath);
+        ClearReadonlyAttributeIfNeeded(source);
+        ClearReadonlyAttributeIfNeeded(destination);
         SetLastError(ERROR_SUCCESS);
-        if (MoveFileExW(longFullPath.c_str(),
-                        longBackupPath.c_str(),
+        if (MoveFileExW(longSource.c_str(),
+                        longDestination.c_str(),
                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
-            lastError = ERROR_SUCCESS;
-            return true;
+            return ERROR_SUCCESS;
         }
         lastError = GetLastError();
         if (!IsRetriableOpenError(lastError) || attempt == kOpenFileRetryCount) {
-            std::string lockInfo = QueryLockingProcesses(fullPath);
+            std::string lockInfo = QueryLockingProcesses(destination);
             if (!lockInfo.empty()) {
-                logInstallerWarning("[DECOMP][PayloadWrite] rename_failed path=" +
-                                    Utf8FromPath(fullPath) + " attempt=" + std::to_string(attempt) +
+                logInstallerWarning("[DECOMP][PayloadWrite] move_into_place_failed path=" +
+                                    Utf8FromPath(destination) + " attempt=" + std::to_string(attempt) +
                                     " error=" + FormatWin32ErrorMessageLocal(lastError) +
                                     " " + lockInfo);
             }
-            return false;
+            return lastError;
         }
-        Sleep(kOpenFileRetryDelayMs);
+        Sleep(ComputeRetryDelayMs(attempt));
     }
-    return false;
+    return lastError;
+}
+
+// Atomically replaces an existing destination with the staging file, preserving
+// the destination's attributes/ACLs. ReplaceFileW deletes the staging file on
+// success. Returns ERROR_SUCCESS on success, otherwise the last Win32 error.
+DWORD ReplaceFileWithRetry(const std::filesystem::path& destination,
+                           const std::filesystem::path& staging) {
+    const std::filesystem::path longDestination = toLongPath(destination);
+    const std::filesystem::path longStaging = toLongPath(staging);
+    DWORD lastError = ERROR_SUCCESS;
+    for (int attempt = 1; attempt <= kOpenFileRetryCount; ++attempt) {
+        ClearReadonlyAttributeIfNeeded(destination);
+        ClearReadonlyAttributeIfNeeded(staging);
+        SetLastError(ERROR_SUCCESS);
+        if (ReplaceFileW(longDestination.c_str(),
+                         longStaging.c_str(),
+                         nullptr,
+                         REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS,
+                         nullptr,
+                         nullptr)) {
+            return ERROR_SUCCESS;
+        }
+        lastError = GetLastError();
+        // ReplaceFileW can transiently fail to remove the replaced file or move
+        // the replacement (e.g. AV/indexer touching the file); treat those as
+        // retriable in addition to the usual sharing/lock violations.
+        const bool retriable = IsRetriableOpenError(lastError) ||
+                               lastError == ERROR_UNABLE_TO_REMOVE_REPLACED ||
+                               lastError == ERROR_UNABLE_TO_MOVE_REPLACEMENT ||
+                               lastError == ERROR_UNABLE_TO_MOVE_REPLACEMENT_2;
+        if (!retriable || attempt == kOpenFileRetryCount) {
+            std::string lockInfo = QueryLockingProcesses(destination);
+            if (!lockInfo.empty()) {
+                logInstallerWarning("[DECOMP][PayloadWrite] replace_failed path=" +
+                                    Utf8FromPath(destination) + " attempt=" + std::to_string(attempt) +
+                                    " error=" + FormatWin32ErrorMessageLocal(lastError) +
+                                    " " + lockInfo);
+            }
+            return lastError;
+        }
+        Sleep(ComputeRetryDelayMs(attempt));
+    }
+    return lastError;
 }
 
 bool DeletePathBestEffort(const std::filesystem::path& path,
@@ -185,7 +288,7 @@ bool DeletePathBestEffort(const std::filesystem::path& path,
         if (!IsRetriableOpenError(lastError) || attempt == kOpenFileRetryCount) {
             return false;
         }
-        Sleep(kOpenFileRetryDelayMs);
+        Sleep(ComputeRetryDelayMs(attempt));
     }
     return false;
 }
@@ -222,7 +325,7 @@ HANDLE OpenOutputHandleWithRetry(const std::filesystem::path& fullPath,
             }
             return INVALID_HANDLE_VALUE;
         }
-        Sleep(kOpenFileRetryDelayMs);
+        Sleep(ComputeRetryDelayMs(attempt));
     }
     return INVALID_HANDLE_VALUE;
 }
@@ -270,6 +373,25 @@ TarStreamExtractor::~TarStreamExtractor() {
 void TarStreamExtractor::setCurrentFileChangedCallback(
     std::function<void(const std::string&)> callback) {
     currentFileChangedCallback_ = std::move(callback);
+}
+
+void TarStreamExtractor::setSkipFingerprints(const std::vector<FileIndexEntry>& fileIndex) {
+    skipFingerprints_.clear();
+    skipFingerprints_.reserve(fileIndex.size());
+    for (const auto& entry : fileIndex) {
+        if (entry.relativePath.empty() || entry.contentHash == 0) {
+            continue;
+        }
+        SkipFingerprint fingerprint;
+        fingerprint.size = entry.size;
+        fingerprint.contentHash = entry.contentHash;
+        skipFingerprints_[NormalizeRelKey(entry.relativePath)] = fingerprint;
+    }
+}
+
+void TarStreamExtractor::setOldInstalledFingerprints(
+    std::shared_ptr<const InstalledFileFingerprintMap> oldInstalledFingerprints) {
+    oldInstalledFingerprints_ = std::move(oldInstalledFingerprints);
 }
 
 // --- Platform-abstracted file I/O helpers ---
@@ -389,15 +511,44 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                 
                 currentPath_.assign(reinterpret_cast<const char*>(bufferData()), pathLength_);
                 consumeBytes(pathLength_);
-                
-                if (!openCurrentFile()) {
+
+                resetCurrentFileState();
+                if (canSkipCurrentFile()) {
+                    currentFileSkipped_ = true;
+                    if (currentFileChangedCallback_) {
+                        currentFileChangedCallback_(currentPath_);
+                    }
+                } else if (!openCurrentFile()) {
                     return false;
                 }
-                
+
                 state_ = State::ReadFileContent;
                 break;
             }
             case State::ReadFileContent: {
+                if (currentFileSkipped_) {
+                    // The on-disk file already matches; consume (decompress and
+                    // discard) the payload bytes without touching disk, since the
+                    // XZ/ZSTD stream is sequential and cannot be seeked past.
+                    if (remaining_ == 0) {
+                        finalizeCurrentFileSkipped();
+                        state_ = State::ReadPathLength;
+                        break;
+                    }
+                    if (available == 0) {
+                        return true;
+                    }
+                    const size_t toDiscard =
+                        (std::min)(static_cast<size_t>(remaining_), available);
+                    consumeBytes(toDiscard);
+                    remaining_ -= static_cast<uint32_t>(toDiscard);
+                    if (remaining_ == 0) {
+                        finalizeCurrentFileSkipped();
+                        state_ = State::ReadPathLength;
+                    }
+                    break;
+                }
+
                 if (remaining_ == 0) {
                     closeFile();
                     if (!finalizeCurrentFileSuccess()) {
@@ -406,11 +557,11 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                     state_ = State::ReadPathLength;
                     break;
                 }
-                
+
                 if (available == 0) {
                     return true;
                 }
-                
+
                 size_t toWrite = (std::min)(static_cast<size_t>(remaining_), available);
                 if (!writeToFile(bufferData(), toWrite)) {
 #ifdef _WIN32
@@ -482,77 +633,25 @@ bool TarStreamExtractor::openCurrentFile() {
         }
 
 #ifdef _WIN32
+        // Write the new content to a sibling staging file. The target is only
+        // touched at finalize time, via an atomic ReplaceFileW swap (or a plain
+        // move when the target does not exist yet). This keeps the existing file
+        // intact until the new content is fully and successfully written.
         DWORD lastError = ERROR_SUCCESS;
-        std::error_code existsEc;
-        if (std::filesystem::exists(fullPath, existsEc)) {
-            currentBackupPath_ = BuildBackupPath(fullPath);
-            if (!RenameExistingFileWithRetry(fullPath, currentBackupPath_, lastError)) {
-                lastFailureInfo_.hasFailure = true;
-                lastFailureInfo_.errorCode = lastError;
-                lastFailureInfo_.stage = "rename_old_failed";
-                lastFailureInfo_.path = Utf8FromPath(fullPath);
-                lastFailureInfo_.backupPath = Utf8FromPath(currentBackupPath_);
-                if (IsSensitiveRebootReplacePath(fullPath) && IsRebootReplaceEligibleError(lastError)) {
-                    currentPendingRebootReplace_ = true;
-                    currentStagingPath_ = BuildRebootReplaceStagingPath(fullPath);
-                    DWORD cleanupError = ERROR_SUCCESS;
-                    DeletePathBestEffort(currentStagingPath_, cleanupError);
-                    currentFileHandle_ = OpenOutputHandleWithRetry(currentStagingPath_, lastError);
-                    if (currentFileHandle_ == INVALID_HANDLE_VALUE) {
-                        logInstallerError("[DECOMP][PayloadWrite] rename_old_failed path=" +
-                                          Utf8FromPath(fullPath) + " backupPath=" +
-                                          Utf8FromPath(currentBackupPath_) + " currentPath=" + currentPath_ +
-                                          " error=" + FormatWin32ErrorMessageLocal(lastError));
-                        return false;
-                    }
-                    logInstallerWarning("[DECOMP][RebootReplace] staging_after_rename_conflict path=" +
-                                        Utf8FromPath(fullPath) + " stagingPath=" +
-                                        Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_ +
-                                        " error=" + FormatWin32ErrorMessageLocal(
-                                                      static_cast<DWORD>(lastFailureInfo_.errorCode)));
-                    if (currentFileChangedCallback_) {
-                        currentFileChangedCallback_(currentPath_);
-                    }
-                    return true;
-                }
-                logInstallerError("[DECOMP][PayloadWrite] rename_old_failed path=" +
-                                  Utf8FromPath(fullPath) + " backupPath=" +
-                                  Utf8FromPath(currentBackupPath_) + " currentPath=" + currentPath_ +
-                                  " error=" + FormatWin32ErrorMessageLocal(lastError));
-                return false;
-            }
-            currentFileRenamed_ = true;
-        }
-
-        currentFileHandle_ = OpenOutputHandleWithRetry(fullPath, lastError);
-
+        currentStagingPath_ = BuildStagingPath(fullPath);
+        DWORD cleanupError = ERROR_SUCCESS;
+        DeletePathBestEffort(currentStagingPath_, cleanupError);
+        currentFileHandle_ = OpenOutputHandleWithRetry(currentStagingPath_, lastError);
         if (currentFileHandle_ == INVALID_HANDLE_VALUE) {
             lastFailureInfo_.hasFailure = true;
             lastFailureInfo_.errorCode = lastError;
-            lastFailureInfo_.stage = "open_new_failed";
+            lastFailureInfo_.stage = "open_staging_failed";
             lastFailureInfo_.path = Utf8FromPath(fullPath);
-            lastFailureInfo_.backupPath = Utf8FromPath(currentBackupPath_);
-            if (IsSensitiveRebootReplacePath(fullPath) && IsRebootReplaceEligibleError(lastError)) {
-                currentPendingRebootReplace_ = true;
-                currentStagingPath_ = BuildRebootReplaceStagingPath(fullPath);
-                DWORD cleanupError = ERROR_SUCCESS;
-                DeletePathBestEffort(currentStagingPath_, cleanupError);
-                currentFileHandle_ = OpenOutputHandleWithRetry(currentStagingPath_, lastError);
-                if (currentFileHandle_ != INVALID_HANDLE_VALUE) {
-                    logInstallerWarning("[DECOMP][RebootReplace] staging_after_open_conflict path=" +
-                                        Utf8FromPath(fullPath) + " stagingPath=" +
-                                        Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_ +
-                                        " error=" + FormatWin32ErrorMessageLocal(
-                                                      static_cast<DWORD>(lastFailureInfo_.errorCode)));
-                    if (currentFileChangedCallback_) {
-                        currentFileChangedCallback_(currentPath_);
-                    }
-                    return true;
-                }
-            }
+            lastFailureInfo_.backupPath = Utf8FromPath(currentStagingPath_);
             finalizeCurrentFileFailure();
-            logInstallerError("[DECOMP][PayloadWrite] open_new_failed path=" +
-                              Utf8FromPath(fullPath) + " currentPath=" + currentPath_ +
+            logInstallerError("[DECOMP][PayloadWrite] open_staging_failed path=" +
+                              Utf8FromPath(fullPath) + " stagingPath=" +
+                              Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_ +
                               " error=" + FormatWin32ErrorMessageLocal(lastError));
             return false;
         }
@@ -580,57 +679,162 @@ bool TarStreamExtractor::openCurrentFile() {
     }
 }
 
-bool TarStreamExtractor::finalizeCurrentFileSuccess() {
-#ifdef _WIN32
-    if (currentPendingRebootReplace_) {
-        DWORD lastError = ERROR_SUCCESS;
-        bool ok = true;
-        if (currentFileRenamed_ && !currentBackupPath_.empty()) {
-            if (!ScheduleDeleteOnReboot(currentBackupPath_, lastError)) {
-                ok = false;
-                logInstallerError("[DECOMP][RebootReplace] delete_backup_failed path=" +
-                                  Utf8FromPath(currentBackupPath_) + " currentPath=" + currentPath_ +
-                                  " error=" + FormatWin32ErrorMessageLocal(lastError));
-            }
-        } else if (!currentFullPath_.empty()) {
-            if (!ScheduleDeleteOnReboot(currentFullPath_, lastError)) {
-                ok = false;
-                logInstallerError("[DECOMP][RebootReplace] delete_target_failed path=" +
-                                  Utf8FromPath(currentFullPath_) + " currentPath=" + currentPath_ +
-                                  " error=" + FormatWin32ErrorMessageLocal(lastError));
-            }
-        }
-
-        if (ok &&
-            !ScheduleMoveOnReboot(currentStagingPath_, currentFullPath_, lastError)) {
-            ok = false;
-            logInstallerError("[DECOMP][RebootReplace] schedule_move_failed path=" +
-                              Utf8FromPath(currentFullPath_) + " stagingPath=" +
-                              Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_ +
-                              " error=" + FormatWin32ErrorMessageLocal(lastError));
-        }
-
-        if (!ok) {
-            finalizeCurrentFileFailure();
+bool ExistingInstalledFileMatches(const std::filesystem::path& fullPath,
+                                  uint64_t expectedSize,
+                                  uint64_t expectedHash,
+                                  const InstalledFileFingerprintMap* oldFingerprints) {
+    if (expectedHash == 0) {
+        return false;
+    }
+    try {
+        // Cheap metadata probe (no content read): the target must exist and its
+        // size must match the packaged size for any skip to be possible.
+        std::error_code sizeEc;
+        const uint64_t actualSize = std::filesystem::file_size(fullPath, sizeEc);
+        if (sizeEc || actualSize != expectedSize) {
             return false;
         }
 
-        pendingReplaceFiles_.push_back(Utf8FromPath(currentFullPath_));
-        installedFiles_.push_back(Utf8FromPath(currentFullPath_));
-        logInstallerWarning("[DECOMP][RebootReplace] registered path=" +
-                            Utf8FromPath(currentFullPath_) + " stagingPath=" +
-                            Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_);
-        resetCurrentFileState();
-        return true;
+        // Scheme A (zero-read): when the previous install recorded a fingerprint
+        // for this exact target path, trust it. Equal hash => identical content
+        // => skip without reading the file; unequal => rewrite without reading.
+        if (oldFingerprints) {
+            const auto oldIt = oldFingerprints->find(normalizePathForCompare(Utf8FromPath(fullPath)));
+            if (oldIt != oldFingerprints->end()) {
+                return oldIt->second.contentHash == expectedHash &&
+                       oldIt->second.size == expectedSize;
+            }
+        }
+
+        // Scheme B (fallback): no recorded hash for this path, so read the
+        // on-disk content and compare. Trades read I/O for skipping write+AV.
+        return ExistingFileMatchesFingerprint(fullPath, expectedSize, expectedHash);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool TarStreamExtractor::canSkipCurrentFile() {
+    if (skipFingerprints_.empty()) {
+        return false;
+    }
+    auto it = skipFingerprints_.find(NormalizeRelKey(currentPath_));
+    if (it == skipFingerprints_.end()) {
+        return false;
+    }
+    const SkipFingerprint& fingerprint = it->second;
+    // Fail-safe: an absent fingerprint or a size mismatch means we cannot prove
+    // the file is unchanged, so fall through to a normal rewrite.
+    if (fingerprint.contentHash == 0 ||
+        fingerprint.size != static_cast<uint64_t>(fileSize_)) {
+        return false;
+    }
+    try {
+        std::filesystem::path root = PathFromUtf8(targetRoot_);
+        std::filesystem::path rel = PathFromUtf8(currentPath_);
+        if (!validateCurrentPath(rel)) {
+            return false;
+        }
+        std::filesystem::path fullPath = root / rel;
+        if (ExistingInstalledFileMatches(fullPath,
+                                         static_cast<uint64_t>(fileSize_),
+                                         fingerprint.contentHash,
+                                         oldInstalledFingerprints_.get())) {
+            currentFullPath_ = fullPath;
+            return true;
+        }
+        return false;
+    } catch (...) {
+        return false;
+    }
+}
+
+void TarStreamExtractor::finalizeCurrentFileSkipped() {
+    if (!currentFullPath_.empty()) {
+        const std::string pathUtf8 = Utf8FromPath(currentFullPath_);
+        installedFiles_.push_back(pathUtf8);
+        skippedFiles_.push_back(pathUtf8);
+    }
+    resetCurrentFileState();
+}
+
+bool TarStreamExtractor::finalizeCurrentFileSuccess() {
+#ifdef _WIN32
+    // The staging handle is already closed by the caller. Swap the staging file
+    // onto the target: ReplaceFileW when the target exists (atomic, preserves
+    // attributes/ACLs), or a plain move for a brand-new file.
+    std::error_code existsEc;
+    const bool targetExists =
+        std::filesystem::exists(currentFullPath_, existsEc) && !existsEc;
+    DWORD swapError = targetExists
+                          ? ReplaceFileWithRetry(currentFullPath_, currentStagingPath_)
+                          : MoveFileWithRetry(currentStagingPath_, currentFullPath_);
+
+    // ReplaceFileW occasionally fails with non-lock quirks (e.g. 1175
+    // ERROR_UNABLE_TO_REMOVE_REPLACED). When the failure is not a true lock
+    // (which would warrant the reboot path), fall back to an atomic MoveFileEx
+    // replace, which sidesteps those quirks while staying a single rename.
+    if (targetExists && swapError != ERROR_SUCCESS &&
+        !IsRebootReplaceEligibleError(swapError)) {
+        const DWORD moveError = MoveFileWithRetry(currentStagingPath_, currentFullPath_);
+        if (moveError == ERROR_SUCCESS) {
+            swapError = ERROR_SUCCESS;
+        }
     }
 
-    if (currentFileRenamed_ && !currentBackupPath_.empty()) {
-        DWORD lastError = ERROR_SUCCESS;
-        if (!DeletePathBestEffort(currentBackupPath_, lastError)) {
-            logInstallerWarning("[DECOMP][PayloadWrite] delete_backup_failed path=" +
-                                Utf8FromPath(currentBackupPath_) + " currentPath=" + currentPath_ +
-                                " error=" + FormatWin32ErrorMessageLocal(lastError));
+    if (swapError != ERROR_SUCCESS) {
+        lastFailureInfo_.hasFailure = true;
+        lastFailureInfo_.errorCode = swapError;
+        lastFailureInfo_.stage = targetExists ? "replace_failed" : "move_into_place_failed";
+        lastFailureInfo_.path = Utf8FromPath(currentFullPath_);
+        lastFailureInfo_.backupPath = Utf8FromPath(currentStagingPath_);
+
+        // Locked sensitive binaries (e.g. a running .exe/.dll): defer the swap to
+        // the next reboot. Keep the staging file so the scheduled move can find it.
+        if (IsSensitiveRebootReplacePath(currentFullPath_) &&
+            IsRebootReplaceEligibleError(swapError)) {
+            DWORD rebootError = ERROR_SUCCESS;
+            bool scheduled = true;
+            if (targetExists && !ScheduleDeleteOnReboot(currentFullPath_, rebootError)) {
+                scheduled = false;
+                logInstallerError("[DECOMP][RebootReplace] delete_target_failed path=" +
+                                  Utf8FromPath(currentFullPath_) + " currentPath=" + currentPath_ +
+                                  " error=" + FormatWin32ErrorMessageLocal(rebootError));
+            }
+            if (scheduled &&
+                !ScheduleMoveOnReboot(currentStagingPath_, currentFullPath_, rebootError)) {
+                scheduled = false;
+                logInstallerError("[DECOMP][RebootReplace] schedule_move_failed path=" +
+                                  Utf8FromPath(currentFullPath_) + " stagingPath=" +
+                                  Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_ +
+                                  " error=" + FormatWin32ErrorMessageLocal(rebootError));
+            }
+            if (scheduled) {
+                pendingReplaceFiles_.push_back(Utf8FromPath(currentFullPath_));
+                installedFiles_.push_back(Utf8FromPath(currentFullPath_));
+                logInstallerWarning("[DECOMP][RebootReplace] registered path=" +
+                                    Utf8FromPath(currentFullPath_) + " stagingPath=" +
+                                    Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_ +
+                                    " error=" + FormatWin32ErrorMessageLocal(swapError));
+                // Clear state without deleting the staging file (needed at reboot).
+                currentFullPath_.clear();
+                currentStagingPath_.clear();
+                currentBackupPath_.clear();
+                currentFileRenamed_ = false;
+                currentPendingRebootReplace_ = false;
+                currentFileSkipped_ = false;
+                lastFailureInfo_ = LastFailureInfo{};
+                return true;
+            }
         }
+
+        finalizeCurrentFileFailure();
+        logInstallerError("[DECOMP][PayloadWrite] " +
+                          std::string(targetExists ? "replace_failed" : "move_into_place_failed") +
+                          " path=" + Utf8FromPath(currentFullPath_) + " stagingPath=" +
+                          Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_ +
+                          " error=" + FormatWin32ErrorMessageLocal(swapError));
+        return false;
     }
 #endif
     if (!currentFullPath_.empty()) {
@@ -642,28 +846,19 @@ bool TarStreamExtractor::finalizeCurrentFileSuccess() {
 
 void TarStreamExtractor::finalizeCurrentFileFailure() {
 #ifdef _WIN32
-    const std::filesystem::path pathToDelete =
-        currentPendingRebootReplace_ ? currentStagingPath_ : currentFullPath_;
-    if (!isFileOpen() && !pathToDelete.empty()) {
-        DWORD lastError = ERROR_SUCCESS;
-        if (!DeletePathBestEffort(pathToDelete, lastError) && lastError != ERROR_SUCCESS) {
-            logInstallerWarning("[DECOMP][PayloadWrite] cleanup_new_failed path=" +
-                                Utf8FromPath(pathToDelete) + " currentPath=" + currentPath_ +
-                                " error=" + FormatWin32ErrorMessageLocal(lastError));
-        }
-    } else if (isFileOpen()) {
+    // The target is never disturbed before the atomic swap, so failure cleanup
+    // only needs to discard the staging file. The original file (if any) is
+    // left intact.
+    if (isFileOpen()) {
         closeFile();
+    }
+    if (!currentStagingPath_.empty()) {
         DWORD lastError = ERROR_SUCCESS;
-        if (!DeletePathBestEffort(pathToDelete, lastError) && lastError != ERROR_SUCCESS) {
-            logInstallerWarning("[DECOMP][PayloadWrite] cleanup_new_failed path=" +
-                                Utf8FromPath(pathToDelete) + " currentPath=" + currentPath_ +
+        if (!DeletePathBestEffort(currentStagingPath_, lastError) && lastError != ERROR_SUCCESS) {
+            logInstallerWarning("[DECOMP][PayloadWrite] cleanup_staging_failed path=" +
+                                Utf8FromPath(currentStagingPath_) + " currentPath=" + currentPath_ +
                                 " error=" + FormatWin32ErrorMessageLocal(lastError));
         }
-    }
-
-    if (currentFileRenamed_ && !currentBackupPath_.empty()) {
-        logInstallerWarning("[DECOMP][PayloadWrite] backup_left_behind path=" +
-                            Utf8FromPath(currentBackupPath_) + " currentPath=" + currentPath_);
     }
 #endif
     resetCurrentFileState();
@@ -676,6 +871,7 @@ void TarStreamExtractor::resetCurrentFileState() {
     currentStagingPath_.clear();
     currentFileRenamed_ = false;
     currentPendingRebootReplace_ = false;
+    currentFileSkipped_ = false;
     lastFailureInfo_ = LastFailureInfo{};
 }
 

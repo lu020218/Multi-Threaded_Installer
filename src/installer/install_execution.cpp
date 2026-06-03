@@ -4,14 +4,19 @@
 #include "common/utf8_utils.h"
 #include "installer/component_launcher.h"
 #include "installer/folder_payload_reader.h"
+#include "installer/install_manifest_store.h"
 #include "installer/installer_helpers.h"
 #include "installer/metadata_parser.h"
+
+#include <memory>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cwctype>
+#include <cwchar>
 #include <cstdio>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -29,7 +34,7 @@
 #endif
 #include <Windows.h>
 #include <bcrypt.h>
-#include <urlmon.h>
+#include <winhttp.h>
 #endif
 
 namespace MultiThreadedInstaller {
@@ -52,6 +57,45 @@ std::string ResolveComponentDisplayName(const ComponentConfig& component) {
 
 bool IsCancellationRequested(const InstallServiceOptions& options) {
     return options.cancellationCallback && options.cancellationCallback();
+}
+
+using SteadyTimePoint = std::chrono::steady_clock::time_point;
+
+uint64_t ElapsedMilliseconds(SteadyTimePoint start) {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count());
+}
+
+const char* ComponentSourceTypeName(ComponentSourceType type) {
+    switch (type) {
+        case ComponentSourceType::LOCAL:
+            return "local";
+        case ComponentSourceType::DOWNLOAD:
+            return "download";
+        default:
+            return "none";
+    }
+}
+
+ComponentInstallTiming BuildComponentInstallTiming(const ComponentConfig& component,
+                                                   const std::string& displayName,
+                                                   bool success,
+                                                   uint64_t totalMs,
+                                                   uint64_t downloadMs,
+                                                   uint64_t installMs,
+                                                   const std::string& error) {
+    ComponentInstallTiming timing;
+    timing.id = component.id;
+    timing.name = displayName;
+    timing.type = ComponentSourceTypeName(component.source.type);
+    timing.success = success;
+    timing.totalMs = totalMs;
+    timing.downloadMs = downloadMs;
+    timing.installMs = installMs;
+    timing.error = error;
+    return timing;
 }
 
 std::string ExpandInstallDirToken(const std::string& text, const std::string& installDir) {
@@ -97,6 +141,51 @@ std::string ExpandRuntimeTokens(const std::string& text,
     return resolver.expandEnvironmentVariables(expanded);
 }
 
+void RecordComponentUninstallAction(const ComponentConfig& component,
+                                    const std::string& sourceType,
+                                    const std::string& defaultWorkingDirectory,
+                                    const std::string& installRootForComponents,
+                                    const ExtendedInstallationMetadata& metadata,
+                                    InstallerPathResolver& pathResolver,
+                                    const std::string& componentInstallDir,
+                                    std::vector<ComponentExecutionRecord>& componentActions) {
+    if (component.uninstall.command.empty()) {
+        return;
+    }
+
+    const std::string expandedCommand =
+        ExpandRuntimeTokens(component.uninstall.command,
+                            installRootForComponents,
+                            metadata,
+                            pathResolver,
+                            componentInstallDir);
+    const std::string expandedArgs =
+        ExpandRuntimeTokens(component.uninstall.args,
+                            installRootForComponents,
+                            metadata,
+                            pathResolver,
+                            componentInstallDir);
+    const std::string configuredWorkingDirectory =
+        component.uninstall.workingDirectory.empty() ? defaultWorkingDirectory
+                                                    : component.uninstall.workingDirectory;
+    ComponentExecutionRecord record;
+    record.componentId = component.id;
+    record.sourceType = sourceType;
+    record.uninstallCommand = expandedCommand;
+    if (!expandedArgs.empty()) {
+        record.uninstallCommand += " " + expandedArgs;
+    }
+    record.workingDirectory =
+        ExpandRuntimeTokens(configuredWorkingDirectory,
+                            installRootForComponents,
+                            metadata,
+                            pathResolver,
+                            componentInstallDir);
+    record.wait = component.uninstall.wait;
+    record.timeoutSec = component.uninstall.timeoutSec;
+    componentActions.push_back(std::move(record));
+}
+
 std::string NormalizePathString(const std::filesystem::path& path) {
     std::string value = Utf8FromPath(path.lexically_normal());
     std::replace(value.begin(), value.end(), '/', '\\');
@@ -127,44 +216,6 @@ bool IsPathUnderBase(const std::filesystem::path& base, const std::filesystem::p
 }
 
 #ifdef _WIN32
-std::wstring ExtractArgValueFromCommandLine(const std::string& argsUtf8, const std::wstring& flag) {
-    if (argsUtf8.empty()) {
-        return {};
-    }
-
-    std::wstring synthetic = L"placeholder.exe ";
-    synthetic += Utf8ToWide(argsUtf8);
-    int argc = 0;
-    LPWSTR* argvW = CommandLineToArgvW(synthetic.c_str(), &argc);
-    if (!argvW) {
-        return {};
-    }
-
-    std::wstring value;
-    for (int i = 1; i + 1 < argc; ++i) {
-        std::wstring current = argvW[i] ? argvW[i] : L"";
-        std::transform(current.begin(), current.end(), current.begin(),
-                       [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
-        if (current == flag) {
-            value = argvW[i + 1] ? argvW[i + 1] : L"";
-            break;
-        }
-    }
-    LocalFree(argvW);
-    return value;
-}
-
-bool IsPostSetupAgentComponent(const ComponentConfig& component) {
-    std::wstring installer = Utf8ToWide(component.source.local.installer);
-    std::transform(installer.begin(), installer.end(), installer.begin(),
-                   [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
-    return installer.find(L"post_setup_agent.exe") != std::wstring::npos;
-}
-
-std::string QuoteForCommand(const std::string& value) {
-    return "\"" + value + "\"";
-}
-
 HANDLE CreateComponentJobObject() {
     HANDLE job = CreateJobObjectW(nullptr, nullptr);
     if (!job) {
@@ -214,12 +265,14 @@ bool WaitForProcessExit(HANDLE processHandle,
                         HANDLE jobHandle,
                         uint32_t timeoutSec,
                         const std::function<bool()>& cancellationCallback,
+                        const std::function<void(uint64_t, uint32_t)>& heartbeatCallback,
                         DWORD& exitCode,
                         std::string& error) {
     const uint64_t timeoutMs = timeoutSec == 0
                                    ? std::numeric_limits<uint64_t>::max()
                                    : static_cast<uint64_t>(timeoutSec) * 1000ULL;
     uint64_t waitedMs = 0;
+    uint64_t lastHeartbeatMs = 0;
 
     while (true) {
         if (cancellationCallback && cancellationCallback()) {
@@ -252,6 +305,10 @@ bool WaitForProcessExit(HANDLE processHandle,
             return false;
         }
         waitedMs += sliceMs;
+        if (heartbeatCallback && waitedMs - lastHeartbeatMs >= 1000ULL) {
+            lastHeartbeatMs = waitedMs;
+            heartbeatCallback(waitedMs / 1000ULL, timeoutSec);
+        }
     }
 
     if (!GetExitCodeProcess(processHandle, &exitCode)) {
@@ -268,6 +325,7 @@ bool ExecuteProcess(const std::filesystem::path& executablePath,
                     bool wait,
                     uint32_t timeoutSec,
                     const std::function<bool()>& cancellationCallback,
+                    const std::function<void(uint64_t, uint32_t)>& heartbeatCallback,
                     DWORD& exitCode,
                     std::string& error) {
     std::wstring executableW = executablePath.wstring();
@@ -342,6 +400,7 @@ bool ExecuteProcess(const std::filesystem::path& executablePath,
                                  jobHandle,
                                  timeoutSec,
                                  cancellationCallback,
+                                 heartbeatCallback,
                                  exitCode,
                                  error);
     CloseHandle(processInfo.hProcess);
@@ -351,125 +410,405 @@ bool ExecuteProcess(const std::filesystem::path& executablePath,
     return ok;
 }
 
-bool DownloadFileToPath(const std::string& url,
-                        const std::filesystem::path& targetPath,
-                        std::string& error) {
-    HRESULT hr = URLDownloadToFileW(nullptr,
-                                    Utf8ToWide(url).c_str(),
-                                    targetPath.wstring().c_str(),
-                                    0,
-                                    nullptr);
-    if (FAILED(hr)) {
-        std::ostringstream oss;
-        oss << "Failed to download component installer. HRESULT=0x"
-            << std::hex << static_cast<unsigned long>(hr);
-        error = oss.str();
-        return false;
-    }
-    return true;
-}
+std::string ToLowerAscii(std::string value);
 
-bool ComputeFileSha256(const std::filesystem::path& filePath,
-                       std::string& sha256,
-                       std::string& error) {
-    BCRYPT_ALG_HANDLE algorithm = nullptr;
-    BCRYPT_HASH_HANDLE hashHandle = nullptr;
-    DWORD objectLength = 0;
-    DWORD hashLength = 0;
-    DWORD bytesRead = 0;
-
-    auto cleanup = [&]() {
-        if (hashHandle) {
-            BCryptDestroyHash(hashHandle);
-            hashHandle = nullptr;
-        }
-        if (algorithm) {
-            BCryptCloseAlgorithmProvider(algorithm, 0);
-            algorithm = nullptr;
-        }
-    };
-
-    NTSTATUS status = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
-    if (status < 0) {
-        error = "Failed to open SHA256 provider.";
-        return false;
-    }
-    status = BCryptGetProperty(algorithm,
-                               BCRYPT_OBJECT_LENGTH,
-                               reinterpret_cast<PUCHAR>(&objectLength),
-                               sizeof(objectLength),
-                               &bytesRead,
-                               0);
-    if (status < 0) {
-        cleanup();
-        error = "Failed to read SHA256 object length.";
-        return false;
-    }
-    status = BCryptGetProperty(algorithm,
-                               BCRYPT_HASH_LENGTH,
-                               reinterpret_cast<PUCHAR>(&hashLength),
-                               sizeof(hashLength),
-                               &bytesRead,
-                               0);
-    if (status < 0 || hashLength == 0) {
-        cleanup();
-        error = "Failed to read SHA256 hash length.";
-        return false;
-    }
-
-    std::vector<unsigned char> hashObject(objectLength);
-    std::vector<unsigned char> hash(hashLength);
-    status = BCryptCreateHash(algorithm,
-                              &hashHandle,
-                              hashObject.data(),
-                              objectLength,
-                              nullptr,
-                              0,
-                              0);
-    if (status < 0) {
-        cleanup();
-        error = "Failed to create SHA256 hash.";
-        return false;
-    }
-
-    std::ifstream input(filePath, std::ios::binary);
-    if (!input) {
-        cleanup();
-        error = "Failed to open downloaded component installer for hashing.";
-        return false;
-    }
-    std::array<char, 64 * 1024> buffer{};
-    while (input) {
-        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-        const std::streamsize count = input.gcount();
-        if (count <= 0) {
-            continue;
-        }
-        status = BCryptHashData(hashHandle,
-                                reinterpret_cast<PUCHAR>(buffer.data()),
-                                static_cast<ULONG>(count),
-                                0);
+class StreamingSha256 {
+public:
+    bool Initialize(std::string& error) {
+        DWORD bytesRead = 0;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&algorithm_, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
         if (status < 0) {
-            cleanup();
+            error = "Failed to open SHA256 provider.";
+            return false;
+        }
+        status = BCryptGetProperty(algorithm_,
+                                   BCRYPT_OBJECT_LENGTH,
+                                   reinterpret_cast<PUCHAR>(&objectLength_),
+                                   sizeof(objectLength_),
+                                   &bytesRead,
+                                   0);
+        if (status < 0) {
+            error = "Failed to read SHA256 object length.";
+            Cleanup();
+            return false;
+        }
+        status = BCryptGetProperty(algorithm_,
+                                   BCRYPT_HASH_LENGTH,
+                                   reinterpret_cast<PUCHAR>(&hashLength_),
+                                   sizeof(hashLength_),
+                                   &bytesRead,
+                                   0);
+        if (status < 0 || hashLength_ == 0) {
+            error = "Failed to read SHA256 hash length.";
+            Cleanup();
+            return false;
+        }
+        hashObject_.resize(objectLength_);
+        status = BCryptCreateHash(algorithm_,
+                                  &hashHandle_,
+                                  hashObject_.data(),
+                                  objectLength_,
+                                  nullptr,
+                                  0,
+                                  0);
+        if (status < 0) {
+            error = "Failed to create SHA256 hash.";
+            Cleanup();
+            return false;
+        }
+        return true;
+    }
+
+    bool Update(const void* data, size_t size, std::string& error) {
+        if (!hashHandle_ || size == 0) {
+            return true;
+        }
+        if (size > static_cast<size_t>(std::numeric_limits<ULONG>::max())) {
+            error = "SHA256 chunk is too large.";
+            return false;
+        }
+        NTSTATUS status = BCryptHashData(hashHandle_,
+                                         reinterpret_cast<PUCHAR>(const_cast<void*>(data)),
+                                         static_cast<ULONG>(size),
+                                         0);
+        if (status < 0) {
             error = "Failed to hash downloaded component installer.";
             return false;
         }
+        return true;
     }
 
-    status = BCryptFinishHash(hashHandle, hash.data(), hashLength, 0);
-    if (status < 0) {
-        cleanup();
-        error = "Failed to finish SHA256 hash.";
+    bool Finish(std::string& sha256, std::string& error) {
+        if (!hashHandle_) {
+            sha256.clear();
+            return true;
+        }
+        std::vector<unsigned char> hash(hashLength_);
+        NTSTATUS status = BCryptFinishHash(hashHandle_, hash.data(), hashLength_, 0);
+        if (status < 0) {
+            error = "Failed to finish SHA256 hash.";
+            return false;
+        }
+        std::ostringstream oss;
+        oss << std::hex << std::setfill('0');
+        for (unsigned char byte : hash) {
+            oss << std::setw(2) << static_cast<unsigned int>(byte);
+        }
+        sha256 = oss.str();
+        return true;
+    }
+
+    ~StreamingSha256() {
+        Cleanup();
+    }
+
+private:
+    void Cleanup() {
+        if (hashHandle_) {
+            BCryptDestroyHash(hashHandle_);
+            hashHandle_ = nullptr;
+        }
+        if (algorithm_) {
+            BCryptCloseAlgorithmProvider(algorithm_, 0);
+            algorithm_ = nullptr;
+        }
+    }
+
+    BCRYPT_ALG_HANDLE algorithm_ = nullptr;
+    BCRYPT_HASH_HANDLE hashHandle_ = nullptr;
+    DWORD objectLength_ = 0;
+    DWORD hashLength_ = 0;
+    std::vector<unsigned char> hashObject_;
+};
+
+struct DownloadProgressState {
+    uint64_t bytesDownloaded = 0;
+    uint64_t contentLength = 0;
+};
+
+std::string FormatBytes(uint64_t bytes) {
+    static const char* units[] = { "B", "KB", "MB", "GB" };
+    constexpr size_t unitCount = sizeof(units) / sizeof(units[0]);
+    double value = static_cast<double>(bytes);
+    size_t unit = 0;
+    while (value >= 1024.0 && unit + 1 < unitCount) {
+        value /= 1024.0;
+        ++unit;
+    }
+    std::ostringstream oss;
+    if (unit == 0) {
+        oss << bytes << " " << units[unit];
+    } else {
+        oss << std::fixed << std::setprecision(1) << value << " " << units[unit];
+    }
+    return oss.str();
+}
+
+std::filesystem::path MakeDownloadTempPath(const std::filesystem::path& targetPath) {
+    std::wstring tempName = targetPath.filename().wstring();
+    tempName += L".mti_download_";
+    tempName += std::to_wstring(GetCurrentProcessId());
+    tempName += L".tmp";
+    return targetPath.parent_path() / tempName;
+}
+
+bool QueryContentLength(HINTERNET request, uint64_t& contentLength) {
+    contentLength = 0;
+    wchar_t buffer[64] = {};
+    DWORD bufferSize = sizeof(buffer);
+    if (!WinHttpQueryHeaders(request,
+                             WINHTTP_QUERY_CONTENT_LENGTH,
+                             WINHTTP_HEADER_NAME_BY_INDEX,
+                             buffer,
+                             &bufferSize,
+                             WINHTTP_NO_HEADER_INDEX)) {
+        return false;
+    }
+    wchar_t* end = nullptr;
+    unsigned long long parsed = std::wcstoull(buffer, &end, 10);
+    if (end == buffer) {
+        return false;
+    }
+    contentLength = static_cast<uint64_t>(parsed);
+    return true;
+}
+
+bool DownloadFileToPathStreaming(
+    const std::string& url,
+    const std::filesystem::path& targetPath,
+    const std::string& expectedSha256,
+    const std::function<bool()>& cancellationCallback,
+    const std::function<void(const DownloadProgressState&)>& progressCallback,
+    std::string& actualSha256,
+    std::string& error) {
+    const std::wstring urlW = Utf8ToWide(url);
+    URL_COMPONENTSW parts{};
+    parts.dwStructSize = sizeof(parts);
+    parts.dwSchemeLength = static_cast<DWORD>(-1);
+    parts.dwHostNameLength = static_cast<DWORD>(-1);
+    parts.dwUrlPathLength = static_cast<DWORD>(-1);
+    parts.dwExtraInfoLength = static_cast<DWORD>(-1);
+    if (!WinHttpCrackUrl(urlW.c_str(), 0, 0, &parts)) {
+        error = "Invalid component download URL.";
+        return false;
+    }
+    if (parts.nScheme != INTERNET_SCHEME_HTTPS) {
+        error = "Component download URL must use HTTPS.";
         return false;
     }
 
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-    for (unsigned char byte : hash) {
-        oss << std::setw(2) << static_cast<unsigned int>(byte);
+    const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
+    std::wstring path(parts.lpszUrlPath, parts.dwUrlPathLength);
+    if (parts.dwExtraInfoLength > 0) {
+        path.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
     }
-    sha256 = oss.str();
-    cleanup();
+    if (path.empty()) {
+        path = L"/";
+    }
+
+    HINTERNET session = WinHttpOpen(L"MTInstaller/1.0",
+                                    WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                    WINHTTP_NO_PROXY_NAME,
+                                    WINHTTP_NO_PROXY_BYPASS,
+                                    0);
+    if (!session) {
+        error = "Failed to initialize WinHTTP session.";
+        return false;
+    }
+    auto closeSession = [&]() {
+        if (session) {
+            WinHttpCloseHandle(session);
+            session = nullptr;
+        }
+    };
+    WinHttpSetTimeouts(session, 30000, 30000, 30000, 30000);
+
+    HINTERNET connection = WinHttpConnect(session, host.c_str(), parts.nPort, 0);
+    if (!connection) {
+        closeSession();
+        error = "Failed to connect to component download host.";
+        return false;
+    }
+    auto closeConnection = [&]() {
+        if (connection) {
+            WinHttpCloseHandle(connection);
+            connection = nullptr;
+        }
+    };
+
+    HINTERNET request = WinHttpOpenRequest(connection,
+                                           L"GET",
+                                           path.c_str(),
+                                           nullptr,
+                                           WINHTTP_NO_REFERER,
+                                           WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                           WINHTTP_FLAG_SECURE);
+    if (!request) {
+        closeConnection();
+        closeSession();
+        error = "Failed to create component download request.";
+        return false;
+    }
+    auto closeRequest = [&]() {
+        if (request) {
+            WinHttpCloseHandle(request);
+            request = nullptr;
+        }
+    };
+
+    auto fail = [&](const std::string& message) {
+        closeRequest();
+        closeConnection();
+        closeSession();
+        error = message;
+        return false;
+    };
+
+    if (!WinHttpSendRequest(request,
+                            WINHTTP_NO_ADDITIONAL_HEADERS,
+                            0,
+                            WINHTTP_NO_REQUEST_DATA,
+                            0,
+                            0,
+                            0) ||
+        !WinHttpReceiveResponse(request, nullptr)) {
+        return fail("Failed to download component installer.");
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    if (!WinHttpQueryHeaders(request,
+                             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                             WINHTTP_HEADER_NAME_BY_INDEX,
+                             &statusCode,
+                             &statusCodeSize,
+                             WINHTTP_NO_HEADER_INDEX) ||
+        statusCode < 200 || statusCode >= 300) {
+        std::ostringstream oss;
+        oss << "Component download failed with HTTP status " << statusCode << ".";
+        return fail(oss.str());
+    }
+
+    DownloadProgressState progress;
+    QueryContentLength(request, progress.contentLength);
+
+    const std::filesystem::path tempPath = MakeDownloadTempPath(targetPath);
+    std::error_code ec;
+    std::filesystem::remove(tempPath, ec);
+    std::ofstream output(tempPath, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        return fail("Failed to open temporary component download file.");
+    }
+
+    StreamingSha256 sha256;
+    const bool needsHash = !expectedSha256.empty();
+    if (needsHash && !sha256.Initialize(error)) {
+        output.close();
+        std::filesystem::remove(tempPath, ec);
+        closeRequest();
+        closeConnection();
+        closeSession();
+        return false;
+    }
+
+    auto lastProgressTime = std::chrono::steady_clock::now() - std::chrono::milliseconds(250);
+    uint64_t lastProgressBytes = 0;
+    auto emitProgress = [&](bool force) {
+        if (!progressCallback) {
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        const bool enoughTime =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastProgressTime).count() >= 250;
+        const bool enoughBytes = progress.bytesDownloaded - lastProgressBytes >= 1024ULL * 1024ULL;
+        if (force || enoughTime || enoughBytes) {
+            lastProgressTime = now;
+            lastProgressBytes = progress.bytesDownloaded;
+            progressCallback(progress);
+        }
+    };
+    emitProgress(true);
+
+    std::array<unsigned char, 64 * 1024> buffer{};
+    while (true) {
+        if (cancellationCallback && cancellationCallback()) {
+            output.close();
+            std::filesystem::remove(tempPath, ec);
+            return fail("Component download cancelled.");
+        }
+
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(request, &available)) {
+            output.close();
+            std::filesystem::remove(tempPath, ec);
+            return fail("Failed while reading component download.");
+        }
+        if (available == 0) {
+            break;
+        }
+
+        while (available > 0) {
+            const DWORD toRead = std::min<DWORD>(available, static_cast<DWORD>(buffer.size()));
+            DWORD bytesRead = 0;
+            if (!WinHttpReadData(request, buffer.data(), toRead, &bytesRead)) {
+                output.close();
+                std::filesystem::remove(tempPath, ec);
+                return fail("Failed while reading component download.");
+            }
+            if (bytesRead == 0) {
+                break;
+            }
+            output.write(reinterpret_cast<const char*>(buffer.data()), bytesRead);
+            if (!output) {
+                output.close();
+                std::filesystem::remove(tempPath, ec);
+                return fail("Failed to write component download file.");
+            }
+            if (needsHash && !sha256.Update(buffer.data(), bytesRead, error)) {
+                output.close();
+                std::filesystem::remove(tempPath, ec);
+                closeRequest();
+                closeConnection();
+                closeSession();
+                return false;
+            }
+            progress.bytesDownloaded += bytesRead;
+            available -= bytesRead;
+            emitProgress(false);
+        }
+    }
+
+    output.close();
+    if (!output) {
+        std::filesystem::remove(tempPath, ec);
+        return fail("Failed to finalize component download file.");
+    }
+    emitProgress(true);
+
+    if (needsHash) {
+        if (!sha256.Finish(actualSha256, error)) {
+            std::filesystem::remove(tempPath, ec);
+            closeRequest();
+            closeConnection();
+            closeSession();
+            return false;
+        }
+        if (ToLowerAscii(actualSha256) != ToLowerAscii(expectedSha256)) {
+            std::filesystem::remove(tempPath, ec);
+            return fail("Downloaded component installer SHA256 mismatch.");
+        }
+    }
+
+    if (!MoveFileExW(tempPath.wstring().c_str(),
+                     targetPath.wstring().c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
+        std::filesystem::remove(tempPath, ec);
+        return fail("Failed to move downloaded component installer into place.");
+    }
+
+    closeRequest();
+    closeConnection();
+    closeSession();
     return true;
 }
 
@@ -487,8 +826,11 @@ bool ExecuteLocalComponent(const ComponentConfig& component,
                            InstallerPathResolver& pathResolver,
                            const InstallServiceOptions& options,
                            std::vector<ComponentExecutionRecord>& componentActions,
+                           const std::function<void(float, const std::string&)>& progressCallback,
+                           uint64_t& installMs,
                            std::string& componentError) {
 #ifdef _WIN32
+    installMs = 0;
     const std::string baseUtf8 =
         ExpandRuntimeTokens(component.source.local.base,
                             installRootForComponents,
@@ -517,6 +859,7 @@ bool ExecuteLocalComponent(const ComponentConfig& component,
     } else {
         DWORD exitCode = 0;
         std::string executeError;
+        const auto executeStart = std::chrono::steady_clock::now();
         if (!ExecuteProcess(installerPath,
                             expandedArgs,
                             component.source.local.showWindow,
@@ -524,45 +867,48 @@ bool ExecuteLocalComponent(const ComponentConfig& component,
                             component.source.local.wait,
                             component.source.local.timeoutSec,
                             options.cancellationCallback,
+                            [&](uint64_t elapsedSec, uint32_t timeoutSec) {
+                                if (!progressCallback) {
+                                    return;
+                                }
+                                float offset = 0.0f;
+                                if (timeoutSec > 0) {
+                                    offset = std::min(0.9f,
+                                                      static_cast<float>(elapsedSec) /
+                                                          static_cast<float>(timeoutSec) * 0.9f);
+                                } else {
+                                    offset = std::min(0.9f,
+                                                      static_cast<float>(elapsedSec) /
+                                                          static_cast<float>(elapsedSec + 30ULL) * 0.9f);
+                                }
+                                std::string message = "Installing component: " +
+                                                      ResolveComponentDisplayName(component) +
+                                                      " (elapsed " + std::to_string(elapsedSec) + "s";
+                                if (timeoutSec > 0) {
+                                    message += "/" + std::to_string(timeoutSec) + "s";
+                                }
+                                message += ")";
+                                progressCallback(offset, message);
+                            },
                             exitCode,
                             executeError)) {
+            installMs = ElapsedMilliseconds(executeStart);
             componentError = executeError.empty() ? "Failed to execute local component installer."
                                                   : executeError;
         } else if (component.source.local.wait && exitCode != 0) {
+            installMs = ElapsedMilliseconds(executeStart);
             componentError = "Local component installer failed with exit code " +
                              std::to_string(exitCode);
-        } else if (!component.source.local.uninstall.empty() || IsPostSetupAgentComponent(component)) {
-            ComponentExecutionRecord record;
-            record.componentId = component.id;
-            record.sourceType = "local";
-            if (!component.source.local.uninstall.empty()) {
-                record.uninstallCommand =
-                    ExpandRuntimeTokens(component.source.local.uninstall,
-                                        installRootForComponents,
-                                        metadata,
-                                        pathResolver,
-                                        componentInstallDir);
-            } else {
-                const std::wstring statePathW =
-                    ExtractArgValueFromCommandLine(expandedArgs, L"--state-path");
-                const std::wstring logPathW =
-                    ExtractArgValueFromCommandLine(expandedArgs, L"--log-path");
-                if (!statePathW.empty()) {
-                    record.uninstallCommand =
-                        QuoteForCommand(Utf8FromPath(installerPath)) + " --uninstall --state-path " +
-                        QuoteForCommand(WideToUtf8(statePathW));
-                    if (!logPathW.empty()) {
-                        record.uninstallCommand +=
-                            " --log-path " + QuoteForCommand(WideToUtf8(logPathW));
-                    }
-                }
-            }
-            record.workingDirectory = Utf8FromPath(basePath);
-            record.wait = component.source.local.wait;
-            record.timeoutSec = component.source.local.timeoutSec;
-            if (!record.uninstallCommand.empty()) {
-                componentActions.push_back(std::move(record));
-            }
+        } else {
+            installMs = ElapsedMilliseconds(executeStart);
+            RecordComponentUninstallAction(component,
+                                           "local",
+                                           Utf8FromPath(basePath),
+                                           installRootForComponents,
+                                           metadata,
+                                           pathResolver,
+                                           componentInstallDir,
+                                           componentActions);
         }
     }
 #else
@@ -572,6 +918,8 @@ bool ExecuteLocalComponent(const ComponentConfig& component,
     (void)pathResolver;
     (void)options;
     (void)componentActions;
+    (void)progressCallback;
+    (void)installMs;
     componentError = "Local component installers are currently supported on Windows only.";
 #endif
     return componentError.empty();
@@ -583,8 +931,13 @@ bool ExecuteDownloadComponent(const ComponentConfig& component,
                               InstallerPathResolver& pathResolver,
                               const InstallServiceOptions& options,
                               std::vector<ComponentExecutionRecord>& componentActions,
+                              const std::function<void(float, const std::string&)>& progressCallback,
+                              uint64_t& downloadMs,
+                              uint64_t& installMs,
                               std::string& componentError) {
 #ifdef _WIN32
+    downloadMs = 0;
+    installMs = 0;
     const std::string saveAsUtf8 =
         ExpandRuntimeTokens(component.source.download.saveAs,
                             installRootForComponents,
@@ -616,23 +969,43 @@ bool ExecuteDownloadComponent(const ComponentConfig& component,
                             metadata,
                             pathResolver);
     std::string error;
-    if (!DownloadFileToPath(downloadUrl, targetPath, error)) {
+    std::string actualSha256;
+    auto downloadProgress = [&](const DownloadProgressState& state) {
+        if (!progressCallback) {
+            return;
+        }
+        float offset = 0.05f;
+        std::string bytesText = FormatBytes(state.bytesDownloaded);
+        if (state.contentLength > 0) {
+            const double ratio =
+                std::min(1.0, static_cast<double>(state.bytesDownloaded) /
+                                  static_cast<double>(state.contentLength));
+            offset = static_cast<float>(ratio * 0.6);
+            bytesText += " / " + FormatBytes(state.contentLength);
+        } else if (state.bytesDownloaded > 0) {
+            offset = 0.1f;
+        }
+        progressCallback(offset,
+                         "Downloading component: " + ResolveComponentDisplayName(component) +
+                             " (" + bytesText + ")");
+    };
+    const auto downloadStart = std::chrono::steady_clock::now();
+    if (!DownloadFileToPathStreaming(downloadUrl,
+                                     targetPath,
+                                     component.source.download.sha256,
+                                     options.cancellationCallback,
+                                     downloadProgress,
+                                     actualSha256,
+                                     error)) {
+        downloadMs = ElapsedMilliseconds(downloadStart);
         componentError = error;
         return false;
     }
+    downloadMs = ElapsedMilliseconds(downloadStart);
 
-    if (!component.source.download.sha256.empty()) {
-        std::string actualSha256;
-        if (!ComputeFileSha256(targetPath, actualSha256, error)) {
-            std::filesystem::remove(targetPath, ec);
-            componentError = error;
-            return false;
-        }
-        if (ToLowerAscii(actualSha256) != ToLowerAscii(component.source.download.sha256)) {
-            std::filesystem::remove(targetPath, ec);
-            componentError = "Downloaded component installer SHA256 mismatch.";
-            return false;
-        }
+    if (!component.source.download.sha256.empty() && progressCallback) {
+        progressCallback(0.6f,
+                         "Verified component download: " + ResolveComponentDisplayName(component));
     }
 
     const std::string componentInstallDir = Utf8FromPath(targetPath.parent_path());
@@ -644,6 +1017,7 @@ bool ExecuteDownloadComponent(const ComponentConfig& component,
                             componentInstallDir);
 
     DWORD exitCode = 0;
+    const auto executeStart = std::chrono::steady_clock::now();
     if (!ExecuteProcess(targetPath,
                         expandedArgs,
                         component.source.download.showWindow,
@@ -651,32 +1025,53 @@ bool ExecuteDownloadComponent(const ComponentConfig& component,
                         component.source.download.wait,
                         component.source.download.timeoutSec,
                         options.cancellationCallback,
+                        [&](uint64_t elapsedSec, uint32_t timeoutSec) {
+                            if (!progressCallback) {
+                                return;
+                            }
+                            float executeProgress = 0.0f;
+                            if (timeoutSec > 0) {
+                                executeProgress =
+                                    std::min(1.0f,
+                                             static_cast<float>(elapsedSec) /
+                                                 static_cast<float>(timeoutSec));
+                            } else {
+                                executeProgress =
+                                    std::min(1.0f,
+                                             static_cast<float>(elapsedSec) /
+                                                 static_cast<float>(elapsedSec + 30ULL));
+                            }
+                            const float offset = 0.6f + executeProgress * 0.35f;
+                            std::string message = "Installing component: " +
+                                                  ResolveComponentDisplayName(component) +
+                                                  " (elapsed " + std::to_string(elapsedSec) + "s";
+                            if (timeoutSec > 0) {
+                                message += "/" + std::to_string(timeoutSec) + "s";
+                            }
+                            message += ")";
+                            progressCallback(offset, message);
+                        },
                         exitCode,
                         error)) {
+        installMs = ElapsedMilliseconds(executeStart);
         componentError = error.empty() ? "Failed to execute downloaded component installer." : error;
         return false;
     }
+    installMs = ElapsedMilliseconds(executeStart);
     if (component.source.download.wait && exitCode != 0) {
         componentError = "Downloaded component installer failed with exit code " +
                          std::to_string(exitCode);
         return false;
     }
 
-    if (!component.source.local.uninstall.empty()) {
-        ComponentExecutionRecord record;
-        record.componentId = component.id;
-        record.sourceType = "download";
-        record.uninstallCommand =
-            ExpandRuntimeTokens(component.source.local.uninstall,
-                                installRootForComponents,
-                                metadata,
-                                pathResolver,
-                                componentInstallDir);
-        record.workingDirectory = componentInstallDir;
-        record.wait = component.source.download.wait;
-        record.timeoutSec = component.source.download.timeoutSec;
-        componentActions.push_back(std::move(record));
-    }
+    RecordComponentUninstallAction(component,
+                                   "download",
+                                   componentInstallDir,
+                                   installRootForComponents,
+                                   metadata,
+                                   pathResolver,
+                                   componentInstallDir,
+                                   componentActions);
 #else
     (void)component;
     (void)installRootForComponents;
@@ -684,6 +1079,9 @@ bool ExecuteDownloadComponent(const ComponentConfig& component,
     (void)pathResolver;
     (void)options;
     (void)componentActions;
+    (void)progressCallback;
+    (void)downloadMs;
+    (void)installMs;
     componentError = "Download component installers are currently supported on Windows only.";
 #endif
     return componentError.empty();
@@ -772,6 +1170,17 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
         logInstallerInfo(std::string("[InstallFlow][Extract] start folderCount=") +
                          std::to_string(plan.selectedEmbeddedFolders.size()) +
                          " installPath=" + options.installPath);
+
+        // Use the previous install's per-file fingerprints (captured during
+        // planning, before cleanup deleted the old manifest) so unchanged files
+        // can be skipped without reading them from disk (Scheme A, zero read).
+        std::shared_ptr<const InstalledFileFingerprintMap> oldInstalledFingerprints =
+            plan.previousInstalledFingerprints;
+        if (oldInstalledFingerprints) {
+            logInstallerInfo("[InstallFlow][Extract] zero-read fingerprints available count=" +
+                             std::to_string(oldInstalledFingerprints->size()));
+        }
+
         parallelResult = RunParallelInstall(metadata,
                                             payloadReader,
                                             pathResolver,
@@ -783,7 +1192,8 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                                             progressCallback,
                                             infoCallback,
                                             errorCallback,
-                                            options.cancellationCallback);
+                                            options.cancellationCallback,
+                                            oldInstalledFingerprints);
         logInstallerInfo(std::string("[InstallFlow][Extract] end success=") +
                          (parallelResult.success ? "true" : "false") +
                          " cancelled=" + (parallelResult.cancelled ? "true" : "false") +
@@ -838,12 +1248,14 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                                                          : output.installRootPath;
         size_t completedComponents = 0;
 
-        auto advanceComponentProgress = [&](const std::string& displayName, float offset) {
+        auto advanceComponentProgress = [&](const std::string& displayName,
+                                            float offset,
+                                            const std::string& detail = {}) {
             float progress = extractionWeight +
                              ((static_cast<float>(completedComponents) + offset) /
                               static_cast<float>(executableComponentCount)) *
                                  (1.0f - extractionWeight);
-            reporter.EmitProgress("component", displayName, progress);
+            reporter.EmitProgress("component", detail.empty() ? displayName : detail, progress);
         };
 
         for (const auto* component : plan.componentPlan.ordered) {
@@ -869,6 +1281,9 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                                      " (id=" + component->id + ")");
 
             std::string componentError;
+            uint64_t downloadMs = 0;
+            uint64_t installMs = 0;
+            const auto componentStart = std::chrono::steady_clock::now();
             if (component->source.type == ComponentSourceType::LOCAL) {
                 ExecuteLocalComponent(*component,
                                       installRootForComponents,
@@ -876,6 +1291,12 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                                       pathResolver,
                                       options,
                                       output.componentActions,
+                                      [&](float offset, const std::string& detail) {
+                                          advanceComponentProgress(componentDisplayName,
+                                                                   Clamp01(offset),
+                                                                   detail);
+                                      },
+                                      installMs,
                                       componentError);
             } else {
                 ExecuteDownloadComponent(*component,
@@ -884,8 +1305,24 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                                          pathResolver,
                                          options,
                                          output.componentActions,
+                                         [&](float offset, const std::string& detail) {
+                                             advanceComponentProgress(componentDisplayName,
+                                                                      Clamp01(offset),
+                                                                      detail);
+                                         },
+                                         downloadMs,
+                                         installMs,
                                          componentError);
             }
+            const uint64_t totalMs = ElapsedMilliseconds(componentStart);
+            output.componentTimings.push_back(
+                BuildComponentInstallTiming(*component,
+                                            componentDisplayName,
+                                            componentError.empty(),
+                                            totalMs,
+                                            downloadMs,
+                                            installMs,
+                                            componentError));
 
             if (!componentError.empty()) {
                 std::string failureMessage =

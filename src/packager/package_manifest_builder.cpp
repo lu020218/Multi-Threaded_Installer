@@ -20,9 +20,11 @@ PackageComponentAction BuildInstallAction(const ComponentConfig& component) {
 
 PackageComponentAction BuildUninstallAction(const ComponentConfig& component) {
     PackageComponentAction action;
-    action.command = component.source.local.uninstall;
-    action.wait = true;
-    action.timeoutSec = component.source.local.timeoutSec;
+    action.command = component.uninstall.command;
+    action.args = component.uninstall.args;
+    action.workingDirectory = component.uninstall.workingDirectory;
+    action.wait = component.uninstall.wait;
+    action.timeoutSec = component.uninstall.timeoutSec;
     return action;
 }
 
@@ -104,6 +106,7 @@ PackageManifest PackageManifestBuilder::build(const std::vector<CompressionResul
         folder.originalSize = static_cast<uint64_t>(result.originalSize);
         folder.checksum = result.checksum;
         folder.algorithm = result.algorithm;
+        folder.framed = result.framed;
         folder.fileIndex = result.fileIndex;
         manifest.payload.totalCompressedSize += folder.compressedSize;
         offset += folder.compressedSize;

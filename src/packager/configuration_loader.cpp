@@ -423,6 +423,10 @@ bool ParsePackageConfig(const json& root, PackageConfig& out, std::string& lastE
         }
     }
 
+    if (!GetOptionalBool(compression, "perFileFrames", out.compression.perFileFrames, lastError)) {
+        return false;
+    }
+
     return true;
 }
 
@@ -669,8 +673,7 @@ bool ParseLayoutConfig(const json& root, LayoutConfig& out, std::string& lastErr
             if (!GetOptionalString(local, "base", component.source.local.base, lastError) ||
                 !GetOptionalString(local, "installer", component.source.local.installer, lastError) ||
                 !GetOptionalString(local, "args", component.source.local.args, lastError) ||
-                !GetOptionalBool(local, "wait", component.source.local.wait, lastError) ||
-                !GetOptionalString(local, "uninstall", component.source.local.uninstall, lastError)) {
+                !GetOptionalBool(local, "wait", component.source.local.wait, lastError)) {
                 return false;
             }
             uint64_t timeout = component.source.local.timeoutSec;
@@ -1130,15 +1133,24 @@ bool ParseV3Components(const json& installer, std::vector<ComponentConfig>& out,
         }
         json uninstall;
         if (GetOptionalObject(item, "uninstall", uninstall)) {
-            std::string command;
-            std::string args;
-            if (!GetOptionalString(uninstall, "command", command, lastError) ||
-                !GetOptionalString(uninstall, "args", args, lastError)) {
+            uint64_t timeout = component.uninstall.timeoutSec;
+            if (!GetRequiredString(uninstall, "command", component.uninstall.command, lastError) ||
+                !GetOptionalString(uninstall, "args", component.uninstall.args, lastError) ||
+                !GetOptionalString(uninstall, "workingDirectory", component.uninstall.workingDirectory, lastError) ||
+                !GetOptionalBool(uninstall, "wait", component.uninstall.wait, lastError) ||
+                !GetOptionalUInt64(uninstall, "timeoutSec", timeout, lastError)) {
+                if (lastError == "Missing required field 'command'") {
+                    lastError = "Missing required field 'installer.components[].uninstall.command'";
+                }
                 return false;
             }
-            component.source.local.uninstall = command;
-            if (!args.empty()) {
-                component.source.local.uninstall += " " + args;
+            if (component.uninstall.command.empty()) {
+                lastError = "Missing required field 'installer.components[].uninstall.command'";
+                return false;
+            }
+            component.uninstall.timeoutSec = static_cast<uint32_t>(timeout);
+            if (component.uninstall.workingDirectory.empty()) {
+                component.uninstall.workingDirectory = "%InstallDir%";
             }
         }
         out.push_back(std::move(component));

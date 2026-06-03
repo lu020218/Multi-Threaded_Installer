@@ -247,7 +247,8 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& appPublisher,
                    const std::string& appWebsite,
                    const UninstallerCleanupConfigV3& uninstallerCleanup,
-                   const SystemUninstallEntryConfig& systemUninstallEntry) {
+                   const SystemUninstallEntryConfig& systemUninstallEntry,
+                   const InstalledFileFingerprintMap& fileFingerprints) {
     if (manifestPath.empty()) {
         return false;
     }
@@ -288,6 +289,28 @@ bool writeManifest(const std::string& manifestPath,
             safeFiles.push_back(EnsureUtf8(path));
         }
         root["files"] = safeFiles;
+
+        // Per-file fingerprints enable the next upgrade's zero-read skip path.
+        // Stored alongside (not replacing) the plain files[] list so existing
+        // readers that only consume files[] keep working.
+        if (!fileFingerprints.empty()) {
+            json fingerprintArray = json::array();
+            for (const auto& path : safeFiles) {
+                const auto it = fileFingerprints.find(normalizePathForCompare(path));
+                if (it == fileFingerprints.end()) {
+                    continue;
+                }
+                fingerprintArray.push_back({
+                    {"path", path},
+                    {"size", it->second.size},
+                    {"contentHash", it->second.contentHash},
+                });
+            }
+            if (!fingerprintArray.empty()) {
+                root["fileFingerprints"] = std::move(fingerprintArray);
+            }
+        }
+
         root["installAutoStartup"] = installAutoStartup;
         root["installDesktopIcon"] = installDesktopIcon;
         root["installAllComponents"] = installAllComponents;
@@ -437,6 +460,40 @@ bool loadPreviousInstallOptions(const std::string& manifestPath,
         options.selectedComponentIds.push_back(item.get<std::string>());
     }
     return true;
+}
+
+bool loadPreviousInstallFileFingerprints(const std::string& manifestPath,
+                                         InstalledFileFingerprintMap& out) {
+    out.clear();
+
+    json manifest;
+    if (!readManifest(manifestPath, manifest)) {
+        return false;
+    }
+    if (!manifest.contains("fileFingerprints") || !manifest["fileFingerprints"].is_array()) {
+        return false;
+    }
+    for (const auto& item : manifest["fileFingerprints"]) {
+        if (!item.is_object()) {
+            continue;
+        }
+        const std::string path = item.value("path", std::string{});
+        if (path.empty()) {
+            continue;
+        }
+        const std::string key = normalizePathForCompare(path);
+        if (key.empty()) {
+            continue;
+        }
+        InstalledFileFingerprint fingerprint;
+        fingerprint.size = item.value("size", 0ULL);
+        fingerprint.contentHash = item.value("contentHash", 0ULL);
+        if (fingerprint.contentHash == 0) {
+            continue;
+        }
+        out[key] = fingerprint;
+    }
+    return !out.empty();
 }
 
 }  // namespace MultiThreadedInstaller

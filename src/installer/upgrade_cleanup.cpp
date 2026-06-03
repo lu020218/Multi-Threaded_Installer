@@ -46,6 +46,9 @@ struct UpgradeCleanupTask {
     std::string resultPath;
     UpgradeCleanupPolicy policy;
     std::vector<UninstallCleanupRule> extraPaths;
+    // Normalized absolute paths kept in place during difference-set cleanup
+    // (files that also exist in the new package).
+    std::set<std::string> keepFiles;
 };
 
 bool IsCancelled(const std::function<bool()>& cancellationCallback) {
@@ -1212,7 +1215,15 @@ UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) 
             return;
         }
         const std::string key = NormalizePath(path);
-        if (!key.empty() && seen.insert(key).second) {
+        if (key.empty()) {
+            return;
+        }
+        // Difference-set cleanup: a file that also exists in the new package is
+        // left in place so the extractor can skip or overwrite it.
+        if (!state.task.keepFiles.empty() && state.task.keepFiles.count(key) > 0) {
+            return;
+        }
+        if (seen.insert(key).second) {
             filesToDelete.push_back(std::move(path));
         }
     };
@@ -1394,14 +1405,31 @@ UpgradeCleanupResult runPreviousInstallCleanupWithWatchdog(
     const std::vector<std::string>& replacementTargets,
     const UpgradeCleanupProgressCallback& progressCallback,
     const std::function<bool()>& cancellationCallback,
-    const UpgradeCleanupPolicy& policy) {
+    const UpgradeCleanupPolicy& policy,
+    const std::vector<std::string>& keepFiles) {
     UpgradeCleanupResult result;
     const std::filesystem::path previousRoot = PathFromUtf8(previousInstallDir).lexically_normal();
+
+    std::set<std::string> normalizedKeepFiles;
+    for (const auto& keep : keepFiles) {
+        if (keep.empty()) {
+            continue;
+        }
+        const std::string key = NormalizePath(PathFromUtf8(keep));
+        if (!key.empty()) {
+            normalizedKeepFiles.insert(key);
+        }
+    }
+    const bool incrementalCleanup = !normalizedKeepFiles.empty();
 
     json manifest;
     const bool hasManifest = ReadManifestJson(manifestPath, manifest);
     std::error_code existsEc;
-    if (!previousInstallDir.empty() &&
+    // Whole-subtree isolation moves entire directories aside, which would defeat
+    // incremental skip by relocating unchanged files. Skip it when a keep-set is
+    // available and rely on per-file difference-set deletion instead.
+    if (!incrementalCleanup &&
+        !previousInstallDir.empty() &&
         std::filesystem::exists(previousRoot, existsEc) &&
         std::filesystem::is_directory(previousRoot, existsEc) &&
         !IsProtectedFullCleanupRoot(previousRoot)) {
@@ -1440,6 +1468,7 @@ UpgradeCleanupResult runPreviousInstallCleanupWithWatchdog(
     task.newInstallDir = newInstallDir;
     task.manifestPath = manifestPath;
     task.policy = policy;
+    task.keepFiles = std::move(normalizedKeepFiles);
     UpgradeCleanupResult manifestResult =
         RunTaskWithWatchdog(std::move(task), progressCallback, cancellationCallback);
     manifestResult.deletedCount += result.deletedCount;

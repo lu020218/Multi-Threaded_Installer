@@ -47,6 +47,7 @@ PackageManifest PackageManifestFromExtendedMetadata(const ExtendedInstallationMe
         folder.originalSize = mapping.originalSize;
         folder.checksum = mapping.checksum;
         folder.algorithm = mapping.algorithm;
+        folder.framed = mapping.framed;
         folder.fileIndex = mapping.fileIndex;
         manifest.payload.folders.push_back(std::move(folder));
     }
@@ -67,7 +68,11 @@ PackageManifest PackageManifestFromExtendedMetadata(const ExtendedInstallationMe
         definition.installAction.workingDirectory = component.source.local.base;
         definition.installAction.wait = component.source.local.wait;
         definition.installAction.timeoutSec = component.source.local.timeoutSec;
-        definition.uninstallAction.command = component.source.local.uninstall;
+        definition.uninstallAction.command = component.uninstall.command;
+        definition.uninstallAction.args = component.uninstall.args;
+        definition.uninstallAction.workingDirectory = component.uninstall.workingDirectory;
+        definition.uninstallAction.wait = component.uninstall.wait;
+        definition.uninstallAction.timeoutSec = component.uninstall.timeoutSec;
         manifest.components.definitions.push_back(std::move(definition));
     }
 
@@ -130,6 +135,7 @@ ExtendedInstallationMetadata PackageManifestToExtendedMetadata(const PackageMani
         ext.originalSize = folder.originalSize;
         ext.checksum = folder.checksum;
         ext.algorithm = folder.algorithm;
+        ext.framed = folder.framed;
         ext.fileIndex = folder.fileIndex;
         metadata.extendedPayloadMappings.push_back(ext);
 
@@ -163,7 +169,11 @@ ExtendedInstallationMetadata PackageManifestToExtendedMetadata(const PackageMani
             component.source.local.base = definition.installAction.workingDirectory;
             component.source.local.wait = definition.installAction.wait;
             component.source.local.timeoutSec = definition.installAction.timeoutSec;
-            component.source.local.uninstall = definition.uninstallAction.command;
+            component.uninstall.command = definition.uninstallAction.command;
+            component.uninstall.args = definition.uninstallAction.args;
+            component.uninstall.workingDirectory = definition.uninstallAction.workingDirectory;
+            component.uninstall.wait = definition.uninstallAction.wait;
+            component.uninstall.timeoutSec = definition.uninstallAction.timeoutSec;
             metadata.layoutComponents.push_back(std::move(component));
         }
     }

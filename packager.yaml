@@ -57,6 +57,10 @@ package:
     # 压缩线程数，auto 表示自动选择
     threads: auto
 
+    # 按文件分帧压缩（增量安装优化，默认 false）。
+    # 开启后每个文件独立成帧，升级时未变更文件连解压都跳过；压缩率略降。
+    perFileFrames: false
+
 install:
   # 默认安装根目录
   # 由于 layout.folders 已使用显式 target，这里主要作为界面初始值

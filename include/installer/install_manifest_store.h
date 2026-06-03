@@ -1,9 +1,11 @@
 #pragma once
 
+#include "common/archive_types.h"
 #include "common/config_types.h"
 
 #include <json.hpp>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace MultiThreadedInstaller {
@@ -47,10 +49,16 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& appPublisher = {},
                    const std::string& appWebsite = {},
                    const UninstallerCleanupConfigV3& uninstallerCleanup = {},
-                   const SystemUninstallEntryConfig& systemUninstallEntry = {});
+                   const SystemUninstallEntryConfig& systemUninstallEntry = {},
+                   const InstalledFileFingerprintMap& fileFingerprints = {});
 bool readManifest(const std::string& manifestPath, nlohmann::json& outManifest);
 bool loadPreviousInstallOptions(const std::string& manifestPath,
                                 PreviousInstallOptions& options,
                                 std::string& error);
+// Loads per-file fingerprints recorded by a previous install (if present),
+// keyed by normalizePathForCompare(absolute path). Returns false when the
+// manifest is unreadable or carries no fingerprints.
+bool loadPreviousInstallFileFingerprints(const std::string& manifestPath,
+                                         InstalledFileFingerprintMap& out);
 
 } // namespace MultiThreadedInstaller

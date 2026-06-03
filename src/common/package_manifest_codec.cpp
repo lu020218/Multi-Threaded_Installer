@@ -544,7 +544,6 @@ json ComponentSourceToJson(const ComponentSourceConfig& source) {
             {"args", source.local.args},
             {"wait", source.local.wait},
             {"timeoutSec", source.local.timeoutSec},
-            {"uninstall", source.local.uninstall},
             {"showWindow", source.local.showWindow},
             {"showWindowConfigured", source.local.showWindowConfigured},
         }},
@@ -570,7 +569,6 @@ ComponentSourceConfig ComponentSourceFromJson(const json& value) {
     source.local.args = local.value("args", "");
     source.local.wait = local.value("wait", true);
     source.local.timeoutSec = local.value("timeoutSec", 900u);
-    source.local.uninstall = local.value("uninstall", "");
     source.local.showWindow = local.value("showWindow", false);
     source.local.showWindowConfigured = local.value("showWindowConfigured", false);
     const json download = value.value("download", json::object());
@@ -598,6 +596,13 @@ json ComponentsToJson(const std::vector<ComponentConfig>& components) {
             {"dependsOn", component.dependsOn},
             {"folders", component.folders},
             {"source", ComponentSourceToJson(component.source)},
+            {"uninstall", {
+                {"command", component.uninstall.command},
+                {"args", component.uninstall.args},
+                {"workingDirectory", component.uninstall.workingDirectory},
+                {"wait", component.uninstall.wait},
+                {"timeoutSec", component.uninstall.timeoutSec},
+            }},
         });
     }
     return out;
@@ -619,6 +624,12 @@ std::vector<ComponentConfig> ComponentsFromJson(const json& value) {
         component.dependsOn = item.value("dependsOn", std::vector<std::string>{});
         component.folders = item.value("folders", std::vector<std::string>{});
         component.source = ComponentSourceFromJson(item.value("source", json::object()));
+        const json uninstall = item.value("uninstall", json::object());
+        component.uninstall.command = uninstall.value("command", "");
+        component.uninstall.args = uninstall.value("args", "");
+        component.uninstall.workingDirectory = uninstall.value("workingDirectory", "");
+        component.uninstall.wait = uninstall.value("wait", true);
+        component.uninstall.timeoutSec = uninstall.value("timeoutSec", 900u);
         components.push_back(std::move(component));
     }
     return components;
@@ -803,6 +814,9 @@ json PayloadToJson(const PackagePayloadManifest& payload) {
                 {"relativePath", file.relativePath},
                 {"offset", file.offset},
                 {"size", file.size},
+                {"contentHash", file.contentHash},
+                {"frameOffset", file.frameOffset},
+                {"frameCompressedSize", file.frameCompressedSize},
             });
         }
         folders.push_back({
@@ -816,6 +830,7 @@ json PayloadToJson(const PackagePayloadManifest& payload) {
             {"originalSize", folder.originalSize},
             {"checksum", folder.checksum},
             {"algorithm", static_cast<int>(folder.algorithm)},
+            {"framed", folder.framed},
             {"fileIndex", files},
         });
     }
@@ -837,11 +852,15 @@ PackagePayloadManifest PayloadFromJson(const json& value) {
         folder.originalSize = item.value("originalSize", 0ULL);
         folder.checksum = item.value("checksum", 0u);
         folder.algorithm = static_cast<CompressionAlgorithm>(item.value("algorithm", 0));
+        folder.framed = item.value("framed", false);
         for (const auto& fileJson : item.value("fileIndex", json::array())) {
             FileIndexEntry file;
             file.relativePath = fileJson.value("relativePath", "");
             file.offset = fileJson.value("offset", 0ULL);
             file.size = fileJson.value("size", 0ULL);
+            file.contentHash = fileJson.value("contentHash", 0ULL);
+            file.frameOffset = fileJson.value("frameOffset", 0ULL);
+            file.frameCompressedSize = fileJson.value("frameCompressedSize", 0ULL);
             folder.fileIndex.push_back(std::move(file));
         }
         payload.folders.push_back(std::move(folder));

@@ -1,5 +1,6 @@
 #include "packager/folder_payload_compressor.h"
 
+#include "common/content_hash.h"
 #include "common/utf8_utils.h"
 
 #include <algorithm>
@@ -85,6 +86,40 @@ bool AppendXzStreamChunk(std::vector<uint8_t>& output,
         }
     }
 }
+
+// Compresses a single buffer into a self-contained XZ stream (one frame).
+std::vector<uint8_t> CompressBufferToXz(const uint8_t* data, size_t size, int level) {
+    lzma_stream stream = LZMA_STREAM_INIT;
+    if (lzma_easy_encoder(&stream, static_cast<uint32_t>(level), LZMA_CHECK_CRC32) != LZMA_OK) {
+        return {};
+    }
+    stream.next_in = data;
+    stream.avail_in = size;
+    std::vector<uint8_t> output;
+    if (!AppendXzStreamChunk(output, stream, LZMA_FINISH)) {
+        lzma_end(&stream);
+        return {};
+    }
+    lzma_end(&stream);
+    return output;
+}
+#endif
+
+#ifdef ZSTD_FOUND
+// Compresses a single buffer into a self-contained ZSTD frame.
+std::vector<uint8_t> CompressBufferToZstd(const uint8_t* data, size_t size, int level) {
+    const size_t bound = ZSTD_compressBound(size);
+    if (bound == 0) {
+        return {};
+    }
+    std::vector<uint8_t> output(bound);
+    const size_t produced = ZSTD_compress(output.data(), bound, data, size, level);
+    if (ZSTD_isError(produced)) {
+        return {};
+    }
+    output.resize(produced);
+    return output;
+}
 #endif
 
 } // namespace
@@ -130,10 +165,110 @@ bool FolderPayloadCompressor::setThreadCount(int count) {
 }
 
 CompressionResult FolderPayloadCompressor::compressFolder(const FolderInfo& folder) const {
+    if (perFileFrames_) {
+        return compressFolderFramed(folder);
+    }
     if (currentAlgorithm == CompressionAlgorithm::ZSTD) {
         return compressWithZstd(folder);
     }
     return compressWithXzLzma2(folder);
+}
+
+CompressionResult FolderPayloadCompressor::compressFolderFramed(const FolderInfo& folder) const {
+    CompressionResult result;
+    result.algorithm = currentAlgorithm;
+    result.framed = true;
+
+    std::vector<uint8_t> payload;
+    std::vector<FileIndexEntry> fileIndex;
+    fileIndex.reserve(folder.files.size());
+    uint64_t totalOriginal = 0;
+
+    const size_t sourcePrefixLength = folder.sourcePath.size();
+    for (const auto& filePath : folder.files) {
+        std::error_code sizeError;
+        const uint64_t fileSize64 = std::filesystem::file_size(PathFromUtf8(filePath), sizeError);
+        if (sizeError) {
+            std::cerr << "Failed to get file size: " << filePath << " (" << sizeError.message()
+                      << ")" << std::endl;
+            return CompressionResult{};
+        }
+        if (fileSize64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+            std::cerr << "File too large for payload entry format: " << filePath << std::endl;
+            return CompressionResult{};
+        }
+
+        std::vector<uint8_t> content(static_cast<size_t>(fileSize64));
+        if (fileSize64 > 0) {
+            std::ifstream file(PathFromUtf8(filePath), std::ios::binary);
+            if (!file) {
+                std::cerr << "Failed to open file: " << filePath << std::endl;
+                return CompressionResult{};
+            }
+            file.read(reinterpret_cast<char*>(content.data()),
+                      static_cast<std::streamsize>(fileSize64));
+            if (!file) {
+                std::cerr << "Failed to read file: " << filePath << std::endl;
+                return CompressionResult{};
+            }
+        }
+
+        std::string relativePath = filePath;
+        if (relativePath.compare(0, sourcePrefixLength, folder.sourcePath) == 0) {
+            relativePath = relativePath.substr(sourcePrefixLength);
+            if (!relativePath.empty() && (relativePath[0] == '/' || relativePath[0] == '\\')) {
+                relativePath = relativePath.substr(1);
+            }
+        }
+
+        std::vector<uint8_t> frame;
+        if (currentAlgorithm == CompressionAlgorithm::ZSTD) {
+#ifdef ZSTD_FOUND
+            frame = CompressBufferToZstd(content.data(), content.size(), compressionLevel);
+#else
+            std::cerr << "ZSTD support not compiled in" << std::endl;
+            return CompressionResult{};
+#endif
+        } else {
+#ifdef LibLZMA_FOUND
+            frame = CompressBufferToXz(content.data(), content.size(), compressionLevel);
+#else
+            frame = content; // stub: store uncompressed when no codec
+#endif
+        }
+        if (frame.empty()) {
+            std::cerr << "Failed to compress frame for file: " << filePath << std::endl;
+            return CompressionResult{};
+        }
+
+        FileIndexEntry entry;
+        entry.relativePath = relativePath;
+        entry.offset = 0;  // uncompressed offset is unused for framed payloads
+        entry.size = fileSize64;
+        entry.contentHash = ComputeContentHash64(content.data(), content.size());
+        entry.frameOffset = static_cast<uint64_t>(payload.size());
+        entry.frameCompressedSize = static_cast<uint64_t>(frame.size());
+        payload.insert(payload.end(), frame.begin(), frame.end());
+        fileIndex.push_back(std::move(entry));
+        totalOriginal += fileSize64;
+    }
+
+    std::cout << "[Packager][Payload] folder=" << folder.sourcePath
+              << " algorithm=" << (currentAlgorithm == CompressionAlgorithm::ZSTD ? "ZSTD" : "XZ/LZMA2")
+              << " mode=per-file-frames"
+              << " files=" << fileIndex.size()
+              << " originalSize=" << totalOriginal
+              << " compressedSize=" << payload.size()
+              << std::endl;
+
+    result.originalSize = totalOriginal;
+    result.compressedData = std::move(payload);
+    result.compressedSize = result.compressedData.size();
+    // Per-file contentHash provides integrity for framed payloads, so there is
+    // no single whole-folder stream to checksum.
+    result.checksum = 0;
+    result.fileIndex = std::move(fileIndex);
+    return result;
 }
 
 CompressionResult FolderPayloadCompressor::compressWithXzLzma2(const FolderInfo& folder) const {
@@ -338,6 +473,11 @@ std::vector<uint8_t> FolderPayloadCompressor::createTarData(
         entry.relativePath = relativePath;
         entry.offset = static_cast<uint64_t>(payloadOffset);
         entry.size = static_cast<uint64_t>(fileSize);
+        // The file content is already in tarData; fingerprint it in place so
+        // the installer can later skip rewriting unchanged files.
+        entry.contentHash =
+            fileSize > 0 ? ComputeContentHash64(tarData.data() + payloadOffset, fileSize)
+                         : ComputeContentHash64(nullptr, 0);
         fileIndex.push_back(std::move(entry));
     }
 

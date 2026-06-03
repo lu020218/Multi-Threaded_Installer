@@ -126,12 +126,20 @@ bool DecompressionEngine::decompressFolder(const DecompressionTask& task,
                                           DecompressionTiming* timing,
                                           DecompressionOutcome* outcome) {
     TarStreamExtractor extractor(task.targetPath);
+    extractor.setSkipFingerprints(task.fileIndex);
+    extractor.setOldInstalledFingerprints(task.oldInstalledFingerprints);
     Crc32Stream checksum;
     const bool ok = decompressToStream(task, extractor, &checksum, timing, outcome);
     if (ok && outcome) {
         outcome->rebootRequired = !extractor.pendingReplaceFiles().empty();
         outcome->pendingReplaceFiles = extractor.pendingReplaceFiles();
         outcome->installedFiles = extractor.installedFiles();
+        outcome->skippedFiles = extractor.skippedFiles();
+        if (!extractor.skippedFiles().empty()) {
+            logInstallerInfo("[DECOMP] incremental skip folder=" + task.folderName +
+                             " skipped=" + std::to_string(extractor.skippedFiles().size()) +
+                             " installed=" + std::to_string(extractor.installedFiles().size()));
+        }
     }
     return ok;
 }

@@ -37,6 +37,10 @@ struct InstallExecutionPlan {
     bool hasPreviousInstall = false;
     std::string previousManifest;
     std::string previousInstallDir;
+    // Per-file fingerprints captured from the previous install's manifest while
+    // it still exists (before cleanup deletes it), enabling the zero-read skip
+    // path (Scheme A) during extraction. May be null.
+    std::shared_ptr<const InstalledFileFingerprintMap> previousInstalledFingerprints;
     InstallPathDecision pathDecision;
     std::vector<std::string> legacyDesktopShortcutCandidates;
     ComponentSelectionPlan componentPlan;

@@ -238,7 +238,13 @@ int main(int argc, char* argv[]) {
     }
     
 
+    const bool perFileFrames = config.package.compression.perFileFrames;
+    if (perFileFrames) {
+        console.showInfo("Per-file framed compression enabled (incremental-friendly).");
+    }
+
     CompressionModule compressor;
+    compressor.setPerFileFrames(perFileFrames);
     if (!compressor.setCompressionAlgorithm(effectiveAlgorithm)) {
         console.showError("Failed to set compression algorithm");
         return 1;
@@ -273,6 +279,7 @@ int main(int argc, char* argv[]) {
     std::vector<double> folderCompressionSec(folders.size(), 0.0);
 
     auto configureCompressor = [&](CompressionModule& instance) -> bool {
+        instance.setPerFileFrames(perFileFrames);
         if (!instance.setCompressionAlgorithm(effectiveAlgorithm)) {
             return false;
         }

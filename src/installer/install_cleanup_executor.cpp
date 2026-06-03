@@ -68,6 +68,52 @@ std::vector<std::string> ResolveSelectedPayloadTargets(const ExtendedInstallatio
     return targets;
 }
 
+// Resolves the absolute on-disk path of every file in the selected payload
+// folders. This is the new package's file set; cleanup keeps these in place so
+// the extractor can skip unchanged files instead of them being deleted and
+// rewritten. Folders without a per-file index contribute nothing (fail-safe:
+// their files fall back to the normal delete-then-rewrite path).
+std::vector<std::string> ResolveSelectedPayloadFileTargets(const ExtendedInstallationMetadata& metadata,
+                                                           const InstallExecutionPlan& plan,
+                                                           InstallerPathResolver& pathResolver) {
+    std::unordered_set<std::string> selected(plan.selectedEmbeddedFolders.begin(),
+                                             plan.selectedEmbeddedFolders.end());
+    std::vector<std::string> files;
+    std::unordered_set<std::string> seen;
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
+        if (selected.find(mapping.folderId) == selected.end()) {
+            continue;
+        }
+        if (mapping.fileIndex.empty()) {
+            continue;
+        }
+        std::string target = mapping.target.empty() ? mapping.targetPath : mapping.target;
+        const std::string token = "%InstallDir%";
+        size_t pos = 0;
+        while ((pos = target.find(token, pos)) != std::string::npos) {
+            target.replace(pos, token.size(), plan.pathDecision.resolvedInstallRoot);
+            pos += plan.pathDecision.resolvedInstallRoot.size();
+        }
+        target = pathResolver.expandEnvironmentVariables(target);
+        if (target.empty()) {
+            continue;
+        }
+        for (const auto& file : mapping.fileIndex) {
+            if (file.relativePath.empty()) {
+                continue;
+            }
+            const std::filesystem::path candidate =
+                PathFromUtf8(target) / PathFromUtf8(file.relativePath);
+            const std::string candidateUtf8 = Utf8FromPath(candidate);
+            const std::string key = normalizePathForCompare(candidateUtf8);
+            if (!key.empty() && seen.insert(key).second) {
+                files.push_back(candidateUtf8);
+            }
+        }
+    }
+    return files;
+}
+
 std::string NormalizePolicyValue(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -116,6 +162,13 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         previousManifestReadable = readManifest(plan.previousManifest, previousManifestJson);
     }
 
+    const std::vector<std::string> keepFiles =
+        ResolveSelectedPayloadFileTargets(metadata, plan, pathResolver);
+    if (!keepFiles.empty()) {
+        logInstallerInfo("[InstallFlow][Cleanup] incremental difference-set cleanup keepFiles=" +
+                         std::to_string(keepFiles.size()));
+    }
+
     UpgradeCleanupResult previousCleanup;
     const std::string missingManifestFallback =
         NormalizePolicyValue(metadata.uninstallerCleanup.missingManifestFallback);
@@ -138,7 +191,9 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
                 plan.pathDecision.resolvedInstallRoot,
                 ResolveSelectedPayloadTargets(metadata, plan, pathResolver),
                 cleanupProgress,
-                options.cancellationCallback);
+                options.cancellationCallback,
+                UpgradeCleanupPolicy{},
+                keepFiles);
         }
     } else {
         previousCleanup = runPreviousInstallCleanupWithWatchdog(
@@ -147,7 +202,9 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
             plan.pathDecision.resolvedInstallRoot,
             ResolveSelectedPayloadTargets(metadata, plan, pathResolver),
             cleanupProgress,
-            options.cancellationCallback);
+            options.cancellationCallback,
+            UpgradeCleanupPolicy{},
+            keepFiles);
     }
     if (!previousCleanup.success && IsCancellationRequested(options)) {
         cancelled = true;

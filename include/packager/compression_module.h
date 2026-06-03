@@ -18,6 +18,7 @@ public:
     bool setCompressionAlgorithm(CompressionAlgorithm algorithm);
     bool setCompressionLevel(int level);
     bool setThreadCount(int threadCount);
+    void setPerFileFrames(bool enabled);
 
 private:
     CompressionAlgorithm currentAlgorithm;

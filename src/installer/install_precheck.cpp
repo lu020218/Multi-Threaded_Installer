@@ -12,6 +12,11 @@ bool IsCancellationRequested(const InstallServiceOptions& options) {
     return options.cancellationCallback && options.cancellationCallback();
 }
 
+std::string FormatWindowsVersion(uint16_t major, uint16_t minor, uint32_t build) {
+    return std::to_string(major) + "." + std::to_string(minor) + "." +
+           std::to_string(build);
+}
+
 } // namespace
 
 bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
@@ -46,9 +51,24 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
                                     currentMajor,
                                     currentMinor,
                                     currentBuild)) {
-        error = "Windows version does not meet minimum requirement.";
+        const std::string required = FormatWindowsVersion(metadata.installMinWindowsMajor,
+                                                          metadata.installMinWindowsMinor,
+                                                          metadata.installMinWindowsBuild);
+        const std::string current = FormatWindowsVersion(currentMajor,
+                                                         currentMinor,
+                                                         currentBuild);
+        error = "Windows version does not meet minimum requirement. required=" +
+                required + " current=" + current;
+        logInstallerError("[InstallFlow][Precheck][OS] failed required=" +
+                          required + " current=" + current);
         return false;
     }
+    logInstallerInfo("[InstallFlow][Precheck][OS] passed required=" +
+                     FormatWindowsVersion(metadata.installMinWindowsMajor,
+                                          metadata.installMinWindowsMinor,
+                                          metadata.installMinWindowsBuild) +
+                     " current=" +
+                     FormatWindowsVersion(currentMajor, currentMinor, currentBuild));
 #endif
     reporter.EmitProgress("", "OS version precheck", 0.40f);
 

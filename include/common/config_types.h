@@ -110,7 +110,6 @@ struct LocalInstallerConfig {
     std::string args;
     bool wait;
     uint32_t timeoutSec;
-    std::string uninstall;
     bool showWindow;
     bool showWindowConfigured;
 
@@ -141,6 +140,17 @@ struct ComponentSourceConfig {
         : type(ComponentSourceType::EMBEDDED) {}
 };
 
+struct ComponentUninstallConfig {
+    std::string command;
+    std::string args;
+    std::string workingDirectory;
+    bool wait;
+    uint32_t timeoutSec;
+
+    ComponentUninstallConfig()
+        : wait(true), timeoutSec(900) {}
+};
+
 struct ComponentConfig {
     std::string id;
     std::string name;
@@ -151,6 +161,7 @@ struct ComponentConfig {
     std::vector<std::string> dependsOn;
     std::vector<std::string> folders;
     ComponentSourceConfig source;
+    ComponentUninstallConfig uninstall;
 
     ComponentConfig()
         : required(false),
@@ -240,11 +251,16 @@ struct PackageCompressionConfig {
     CompressionAlgorithm algorithm;
     int level;
     int threads;
+    // When true, each file is compressed into its own independent frame so the
+    // installer can skip decompressing unchanged files entirely (P2). Trades a
+    // small compression-ratio loss for skippable per-file decode.
+    bool perFileFrames;
 
     PackageCompressionConfig()
         : algorithm(CompressionAlgorithm::LZMA2_XZ),
           level(-1),
-          threads(0) {}
+          threads(0),
+          perFileFrames(false) {}
 };
 
 struct PackageConfig {

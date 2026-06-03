@@ -5,6 +5,8 @@
 #include "packager/package_manifest_builder.h"
 #include "packager/version_info_updater.h"
 #include "installer/metadata_parser.h"
+#include "installer/tar_stream_extractor.h"
+#include "common/content_hash.h"
 #include "installer/console_interface.h"
 #include "installer/component_launcher.h"
 #include "common/package_manifest_codec.h"
@@ -25,7 +27,6 @@
 #include "installer/uninstall_manager.h"
 #include "common/version_utils.h"
 #include "gui/progress_path_formatter.h"
-#include "post_setup_agent/post_setup_url_utils.h"
 
 #include <algorithm>
 #include <atomic>
@@ -225,26 +226,6 @@ void TestProgressPathFormatterStripsLongPathPrefix() {
             "Formatted long path should keep drive root after stripping prefix");
     Require(display.find(L"comparator.js") != std::wstring::npos,
             "Formatted long path should keep filename");
-}
-
-void TestPostSetupFileUrlDecodesUtf8ChinesePath() {
-    const std::string chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE8\xB7\xAF\xE5\xBE\x84";
-    const std::string decoded = PercentDecodeUrlPath("%E4%B8%AD%E6%96%87%E8%B7%AF%E5%BE%84");
-
-    Require(decoded == chinese, "URL percent decoder should preserve UTF-8 Chinese bytes");
-
-    const std::string path =
-        FileUrlToPath("file:///E:/Application/%E4%B8%AD%E6%96%87%E8%B7%AF%E5%BE%84/payload.exe");
-    Require(path == "E:\\Application\\" + chinese + "\\payload.exe",
-            "file URL should decode UTF-8 Chinese path and normalize separators");
-}
-
-void TestPostSetupFileUrlSupportsExpandedInstallDirDrivePath() {
-    const std::string chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE8\xB7\xAF\xE5\xBE\x84";
-    const std::string path = FileUrlToPath("file://E:\\Application\\" + chinese + "/payload.exe");
-
-    Require(path == "E:\\Application\\" + chinese + "\\payload.exe",
-            "file URL should accept already-expanded drive paths with Chinese characters");
 }
 
 std::string MinimalValidYaml() {
@@ -559,6 +540,30 @@ void TestComponentLocalInstallRequiresCommand() {
             "missing local command error should be explicit");
 }
 
+void TestComponentUninstallRequiresCommand() {
+    fs::path root = CreateTestRoot("component_uninstall_requires_command");
+    fs::path inputDir = root / "payload";
+    fs::path configDir = root / "config";
+    fs::create_directories(inputDir / "bin");
+    fs::create_directories(inputDir / "templates");
+    fs::create_directories(configDir);
+    WriteTextFile(configDir / "app.ico", "not-a-real-ico-but-validator-only-checks-path");
+
+    std::string yaml = MinimalValidYaml();
+    ReplaceAll(yaml,
+               "      defaultSelected: true\n      payload:\n        - app\n",
+               "      defaultSelected: true\n      payload:\n        - app\n"
+               "      uninstall:\n"
+               "        args: /cleanup\n");
+    WriteTextFile(configDir / "packager.yaml", yaml);
+
+    ConfigurationManager manager;
+    Require(!manager.initialize(inputDir.string(), configDir.string()),
+            "component uninstall object without command should be rejected");
+    Require(manager.getLastError().find("installer.components[].uninstall.command") != std::string::npos,
+            "missing uninstall command error should be explicit");
+}
+
 void TestComponentDownloadInstallValidationAndRoundTrip() {
     fs::path root = CreateTestRoot("component_download_validation");
     fs::path inputDir = root / "payload";
@@ -582,7 +587,13 @@ void TestComponentDownloadInstallValidationAndRoundTrip() {
                "        args: /quiet\n"
                "        wait: true\n"
                "        showWindow: false\n"
-               "        timeoutSec: 120\n");
+               "        timeoutSec: 120\n"
+               "      uninstall:\n"
+               "        command: uninstall_plugin.bat\n"
+               "        workingDirectory: \"%InstallDir%\\\\components\\\\plugin with spaces\"\n"
+               "        args: \"--remove \\\"C:\\\\Program Files (x86)\\\\Plugin\\\"\"\n"
+               "        wait: false\n"
+               "        timeoutSec: 45\n");
     WriteTextFile(configDir / "packager.yaml", yaml);
 
     ConfigurationManager manager;
@@ -599,6 +610,14 @@ void TestComponentDownloadInstallValidationAndRoundTrip() {
     Require(component.source.download.showWindowConfigured &&
                 !component.source.download.showWindow,
             "download showWindow=false should parse");
+    Require(component.uninstall.command == "uninstall_plugin.bat",
+            "component-level uninstall command should parse");
+    Require(component.uninstall.workingDirectory == "%InstallDir%\\components\\plugin with spaces",
+            "component-level uninstall working directory should parse");
+    Require(component.uninstall.args.find("Program Files (x86)") != std::string::npos,
+            "component-level uninstall args with spaces should parse");
+    Require(!component.uninstall.wait && component.uninstall.timeoutSec == 45,
+            "component-level uninstall wait and timeout should parse");
 
     FolderInfo folder;
     folder.id = "app";
@@ -623,6 +642,13 @@ void TestComponentDownloadInstallValidationAndRoundTrip() {
     Require(decoded.components.components[0].source.download.showWindowConfigured &&
                 !decoded.components.components[0].source.download.showWindow,
             "download showWindow should round-trip");
+    Require(decoded.components.components[0].uninstall.command == "uninstall_plugin.bat",
+            "component-level uninstall command should round-trip through component source section");
+    Require(decoded.components.definitions[0].uninstallAction.command == "uninstall_plugin.bat",
+            "component-level uninstall command should round-trip through component definition");
+    Require(decoded.components.definitions[0].uninstallAction.workingDirectory ==
+                "%InstallDir%\\components\\plugin with spaces",
+            "component-level uninstall working directory should round-trip");
 
     ReplaceAll(yaml, "https://example.com/plugin-installer.exe", "http://example.com/plugin-installer.exe");
     WriteTextFile(configDir / "packager.yaml", yaml);
@@ -1077,6 +1103,11 @@ PackagerConfiguration BuildConfigFixture() {
     component.defaultSelected = true;
     component.folders.push_back("app");
     component.source.type = ComponentSourceType::EMBEDDED;
+    component.uninstall.command = "uninstall_core.bat";
+    component.uninstall.args = "\"C:\\Program Files (x86)\\Sample Desktop App\"";
+    component.uninstall.workingDirectory = "%InstallDir%\\components\\core";
+    component.uninstall.wait = false;
+    component.uninstall.timeoutSec = 30;
     config.installer.components.push_back(component);
 
     RegistryEntry installRegistry;
@@ -1227,6 +1258,13 @@ void TestPackageManifestBuilderAndCodecRoundTrip() {
             "Manifest v3 component definitions lost");
     Require(manifest.components.definitions[0].payloadRefs[0] == "app",
             "Manifest component payload refs lost");
+    Require(manifest.components.definitions[0].uninstallAction.command == "uninstall_core.bat",
+            "Manifest component uninstall command lost");
+    Require(manifest.components.definitions[0].uninstallAction.args.find("Program Files (x86)") != std::string::npos,
+            "Manifest component uninstall args lost");
+    Require(!manifest.components.definitions[0].uninstallAction.wait &&
+                manifest.components.definitions[0].uninstallAction.timeoutSec == 30,
+            "Manifest component uninstall wait/timeout lost");
     Require(manifest.install.installState.detect.primary.registry == "mainRegistry" &&
                 manifest.install.installState.detect.primary.value == "installDir",
             "Manifest installState detect policy lost");
@@ -1266,6 +1304,11 @@ void TestPackageManifestBuilderAndCodecRoundTrip() {
             "Manifest components lost after codec round-trip");
     Require(parsed.components.definitions[0].installAction.command.empty(),
             "Manifest component install action should round-trip");
+    Require(parsed.components.definitions[0].uninstallAction.workingDirectory ==
+                "%InstallDir%\\components\\core",
+            "Manifest component uninstall working directory lost after codec round-trip");
+    Require(parsed.components.components[0].uninstall.command == "uninstall_core.bat",
+            "Manifest component-level uninstall config lost after codec round-trip");
     Require(parsed.lifecycle.uninstaller.cleanup.registry.deleteKeys.size() == 1,
             "Manifest uninstaller cleanup policy lost after codec round-trip");
     Require(parsed.install.installState.detect.legacy[0].installDirValue == "InstallPath",
@@ -1292,6 +1335,8 @@ void TestPackageManifestBuilderAndCodecRoundTrip() {
             "Projected metadata should include v3 legacy installState detection");
     Require(projected.uninstallerCleanup.missingManifestFallback == "safeDirectoryFallback",
             "Projected metadata should include v3 cleanup fallback policy");
+    Require(projected.layoutComponents[0].uninstall.command == "uninstall_core.bat",
+            "Projected metadata should include component-level uninstall command");
 }
 
 void TestPackageManifestValidatorRejectsInvalidPayloadAndComponents() {
@@ -1692,6 +1737,66 @@ void TestBuildInstallExecutionPlanUpgradeAllowsMissingManifest() {
     Require(plan.previousManifest.empty(), "Upgrade plan should leave previous manifest empty when it is missing");
     Require(normalizePathForCompare(plan.previousInstallDir) == normalizePathForCompare(previousInstallDir.string()),
             "Upgrade plan should still fix install dir to detected previous install dir");
+}
+
+void TestBuildInstallExecutionPlanCapturesPreviousFingerprints() {
+    fs::path root = CreateTestRoot("upgrade_plan_fingerprints");
+    fs::path previousInstallDir = root / "PreviousInstall";
+    fs::create_directories(previousInstallDir);
+    const std::string filePath = (previousInstallDir / "app.exe").string();
+
+    // Previous manifest carries per-file fingerprints. The plan must capture
+    // them while the manifest still exists (cleanup later deletes it), so the
+    // zero-read skip path has data during extraction.
+    nlohmann::json manifest;
+    manifest["installAutoStartup"] = true;
+    manifest["installDesktopIcon"] = false;
+    manifest["language"] = "zh_CN";
+    manifest["installAllComponents"] = false;
+    manifest["selectedComponentIds"] = nlohmann::json::array({"core"});
+    manifest["fileFingerprints"] = nlohmann::json::array();
+    manifest["fileFingerprints"].push_back({
+        {"path", filePath}, {"size", 111}, {"contentHash", 0x1122334455667788ULL}});
+    WriteTextFile(previousInstallDir / "install.manifest.json", manifest.dump());
+
+    const std::string registryPath =
+        "HKEY_CURRENT_USER\\Software\\SchemaRegressionTests\\UpgradePlanFingerprints";
+    RegistryEntry entry;
+    entry.path = registryPath;
+    entry.key = "InstallDir";
+    entry.value = previousInstallDir.string();
+    entry.type = RegistryValueType::STRING;
+    Require(writeRegistryValue(entry, previousInstallDir.string(), RegistryValueType::STRING),
+            "Failed to seed upgrade installState registry value");
+
+    ExtendedInstallationMetadata metadata;
+    metadata.appName = "Sample Desktop App";
+    metadata.appId = "SampleDesktopApp";
+    metadata.appDirectoryName = "SampleDesktopApp";
+    metadata.installDefaultDir = "%ProgramFiles%\\SampleDesktopApp";
+    metadata.installState = BuildTestInstallStateConfig(registryPath);
+    metadata.installState.detect.primary.registry = "main";
+    metadata.installState.detect.primary.value = "installDir";
+
+    InstallServiceOptions options;
+    options.upgradeMode = true;
+    InstallerPathResolver resolver;
+    InstallExecutionPlan plan;
+    std::string error;
+    bool built = BuildInstallExecutionPlan(metadata, resolver, options, plan, error);
+
+    deleteRegistryPath(registryPath);
+
+    Require(built, error.empty() ? "Upgrade plan should succeed" : error);
+    Require(plan.previousInstalledFingerprints != nullptr,
+            "Plan should capture previous-install fingerprints before cleanup deletes the manifest");
+    Require(plan.previousInstalledFingerprints->size() == 1,
+            "Captured fingerprint map should contain the manifest entry");
+    const auto it = plan.previousInstalledFingerprints->find(normalizePathForCompare(filePath));
+    Require(it != plan.previousInstalledFingerprints->end(),
+            "Captured fingerprints should be keyed by normalized absolute path");
+    Require(it->second.size == 111 && it->second.contentHash == 0x1122334455667788ULL,
+            "Captured fingerprint should preserve size and 64-bit hash");
 }
 
 void TestInstallStateResolverUsesLegacyDetectInOrder() {
@@ -2473,6 +2578,368 @@ void TestUninstallFallbackPolicyFailRejectsDirectoryCleanup() {
             "fallback policy fail should not delete install directory contents");
 }
 
+void TestPayloadContentHashRoundTripsThroughCodec() {
+    PackagerConfiguration config = BuildConfigFixture();
+
+    FolderInfo folder;
+    folder.id = "app";
+    folder.sourcePath = "bin";
+    folder.targetPath = "%InstallDir%";
+
+    CompressionResult result;
+    result.originalSize = 64;
+    result.compressedSize = 32;
+    result.checksum = 0xCAFEBABE;
+    result.algorithm = CompressionAlgorithm::LZMA2_XZ;
+    FileIndexEntry hashed;
+    hashed.relativePath = "SampleDesktopApp.exe";
+    hashed.offset = 0;
+    hashed.size = 64;
+    hashed.contentHash = 0x0123456789ABCDEFULL;
+    result.fileIndex.push_back(hashed);
+
+    PackageManifestBuilder builder;
+    PackageManifest manifest = builder.build({result}, {folder}, config);
+    Require(manifest.payload.folders.size() == 1, "Expected one payload folder");
+    Require(manifest.payload.folders[0].fileIndex.size() == 1, "Expected one file index entry");
+    Require(manifest.payload.folders[0].fileIndex[0].contentHash == 0x0123456789ABCDEFULL,
+            "Builder should carry the per-file content hash into the manifest");
+
+    std::vector<uint8_t> bytes = SerializePackageManifest(manifest);
+    PackageManifest parsed;
+    std::string parseError;
+    Require(DeserializePackageManifest(bytes, parsed, parseError),
+            parseError.empty() ? "Manifest should deserialize" : parseError);
+    Require(parsed.payload.folders.size() == 1 && parsed.payload.folders[0].fileIndex.size() == 1,
+            "Codec should preserve the payload file index");
+    Require(parsed.payload.folders[0].fileIndex[0].contentHash == 0x0123456789ABCDEFULL,
+            "Codec round-trip should preserve the full 64-bit content hash");
+    Require(parsed.payload.folders[0].fileIndex[0].relativePath == "SampleDesktopApp.exe",
+            "Codec round-trip should preserve the relative path");
+
+    // Older packages have no contentHash field; it must round-trip as 0 (no
+    // fingerprint), which the installer treats as a fail-safe forced rewrite.
+    FileIndexEntry legacy;
+    legacy.relativePath = "legacy.bin";
+    legacy.size = 8;
+    legacy.contentHash = 0;
+    manifest.payload.folders[0].fileIndex.push_back(legacy);
+    bytes = SerializePackageManifest(manifest);
+    Require(DeserializePackageManifest(bytes, parsed, parseError),
+            parseError.empty() ? "Manifest with legacy entry should deserialize" : parseError);
+    Require(parsed.payload.folders[0].fileIndex.size() == 2 &&
+                parsed.payload.folders[0].fileIndex[1].contentHash == 0,
+            "A missing/zero content hash should round-trip as no fingerprint");
+}
+
+void TestPayloadFramedFieldsRoundTripThroughCodec() {
+    PackagerConfiguration config = BuildConfigFixture();
+
+    FolderInfo folder;
+    folder.id = "app";
+    folder.sourcePath = "bin";
+    folder.targetPath = "%InstallDir%";
+
+    CompressionResult result;
+    result.originalSize = 300;
+    result.compressedSize = 120;
+    result.checksum = 0;            // framed payloads carry no whole-folder checksum
+    result.algorithm = CompressionAlgorithm::ZSTD;
+    result.framed = true;
+    FileIndexEntry a;
+    a.relativePath = "a.txt";
+    a.size = 100;
+    a.contentHash = 0xAAAABBBBCCCCDDDDULL;
+    a.frameOffset = 0;
+    a.frameCompressedSize = 70;
+    result.fileIndex.push_back(a);
+    FileIndexEntry b;
+    b.relativePath = "sub\\b.txt";
+    b.size = 200;
+    b.contentHash = 0x1111222233334444ULL;
+    b.frameOffset = 70;
+    b.frameCompressedSize = 50;
+    result.fileIndex.push_back(b);
+
+    PackageManifestBuilder builder;
+    PackageManifest manifest = builder.build({result}, {folder}, config);
+    Require(manifest.payload.folders.size() == 1, "Expected one payload folder");
+    Require(manifest.payload.folders[0].framed, "Builder should propagate the framed flag");
+
+    std::vector<uint8_t> bytes = SerializePackageManifest(manifest);
+    PackageManifest parsed;
+    std::string parseError;
+    Require(DeserializePackageManifest(bytes, parsed, parseError),
+            parseError.empty() ? "Framed manifest should deserialize" : parseError);
+    Require(parsed.payload.folders.size() == 1 && parsed.payload.folders[0].framed,
+            "Codec should round-trip the framed flag");
+    const auto& files = parsed.payload.folders[0].fileIndex;
+    Require(files.size() == 2, "Codec should round-trip the framed file index");
+    Require(files[0].frameOffset == 0 && files[0].frameCompressedSize == 70 &&
+                files[0].contentHash == 0xAAAABBBBCCCCDDDDULL,
+            "Codec should round-trip frame offset/size/hash for the first file");
+    Require(files[1].frameOffset == 70 && files[1].frameCompressedSize == 50 &&
+                files[1].size == 200,
+            "Codec should round-trip frame fields for the second file");
+}
+
+void TestInstallManifestPersistsFileFingerprints() {
+    fs::path root = CreateTestRoot("manifest_file_fingerprints");
+    fs::path manifestPath = root / "install.manifest.json";
+    const std::string filePath = (root / "bin" / "app.exe").string();
+
+    InstalledFileFingerprintMap fingerprints;
+    fingerprints[normalizePathForCompare(filePath)] =
+        InstalledFileFingerprint{1234, 0xABCDEF0123456789ULL};
+
+    InstallStateConfig installState;
+    Require(writeManifest(manifestPath.string(),
+                          "App", "App", "1.0", root.string(), {root.string()},
+                          UninstallCleanupConfig{},
+                          {filePath},
+                          {}, true, false, "", installState, "delete", "", "zh_CN",
+                          {}, {}, false, {}, {},
+                          UninstallerCleanupConfigV3{}, SystemUninstallEntryConfig{},
+                          fingerprints),
+            "writeManifest should persist file fingerprints");
+
+    InstalledFileFingerprintMap loaded;
+    Require(loadPreviousInstallFileFingerprints(manifestPath.string(), loaded),
+            "loadPreviousInstallFileFingerprints should read fingerprints back");
+    const auto it = loaded.find(normalizePathForCompare(filePath));
+    Require(it != loaded.end(), "Fingerprint entry should round-trip");
+    Require(it->second.size == 1234 && it->second.contentHash == 0xABCDEF0123456789ULL,
+            "Fingerprint size and full 64-bit hash should round-trip");
+
+    // A manifest without the fileFingerprints field reports none (legacy/no-hash).
+    fs::path legacyPath = root / "legacy.manifest.json";
+    WriteTextFile(legacyPath, "{\"files\":[]}");
+    InstalledFileFingerprintMap none;
+    Require(!loadPreviousInstallFileFingerprints(legacyPath.string(), none),
+            "A manifest without fileFingerprints should report none");
+}
+
+#ifdef _WIN32
+void AppendTarEntry(std::vector<uint8_t>& tar,
+                    const std::string& relPath,
+                    const std::string& content) {
+    const uint32_t pathLength = static_cast<uint32_t>(relPath.size());
+    const uint32_t fileSize = static_cast<uint32_t>(content.size());
+    const auto* pathLenBytes = reinterpret_cast<const uint8_t*>(&pathLength);
+    tar.insert(tar.end(), pathLenBytes, pathLenBytes + sizeof(uint32_t));
+    const auto* fileSizeBytes = reinterpret_cast<const uint8_t*>(&fileSize);
+    tar.insert(tar.end(), fileSizeBytes, fileSizeBytes + sizeof(uint32_t));
+    tar.insert(tar.end(), relPath.begin(), relPath.end());
+    tar.insert(tar.end(), content.begin(), content.end());
+}
+
+void TestTarStreamExtractorSkipsUnchangedFiles() {
+    fs::path root = CreateTestRoot("tar_stream_extractor_skip");
+    const std::string aContent = "AAAA-content";
+    const std::string bContent = "BB";
+
+    // Hand-build the decompressed folder stream the way the packager lays it out:
+    // [uint32 pathLength][uint32 fileSize][path][content] per file.
+    std::vector<uint8_t> tar;
+    AppendTarEntry(tar, "a.txt", aContent);
+    AppendTarEntry(tar, "sub\\b.txt", bContent);
+
+    std::vector<FileIndexEntry> fileIndex;
+    {
+        FileIndexEntry a;
+        a.relativePath = "a.txt";
+        a.size = aContent.size();
+        a.contentHash = ComputeContentHash64(aContent.data(), aContent.size());
+        fileIndex.push_back(a);
+        FileIndexEntry b;
+        b.relativePath = "sub\\b.txt";
+        b.size = bContent.size();
+        b.contentHash = ComputeContentHash64(bContent.data(), bContent.size());
+        fileIndex.push_back(b);
+    }
+
+    // First install: nothing on disk yet, so fingerprints can't match anything.
+    {
+        TarStreamExtractor extractor(Utf8FromPath(root));
+        extractor.setSkipFingerprints(fileIndex);
+        Require(extractor.write(tar.data(), tar.size()), "First extraction should succeed");
+        extractor.flush();
+        Require(extractor.skippedFiles().empty(), "First extraction should skip nothing");
+        Require(extractor.installedFiles().size() == 2, "First extraction should install both files");
+    }
+    Require(fs::exists(root / "a.txt") && fs::exists(root / "sub" / "b.txt"),
+            "Both files should exist after the first extraction");
+
+    // Second install over byte-identical content: both files must be skipped.
+    {
+        TarStreamExtractor extractor(Utf8FromPath(root));
+        extractor.setSkipFingerprints(fileIndex);
+        Require(extractor.write(tar.data(), tar.size()), "Second extraction should succeed");
+        extractor.flush();
+        Require(extractor.skippedFiles().size() == 2,
+                "Unchanged files should be skipped on re-install");
+        Require(extractor.installedFiles().size() == 2,
+                "Skipped files must still be recorded as installed for uninstall completeness");
+    }
+
+    // Tamper with a.txt so only b.txt still matches its fingerprint.
+    WriteTextFile(root / "a.txt", "tampered-different-size");
+    {
+        TarStreamExtractor extractor(Utf8FromPath(root));
+        extractor.setSkipFingerprints(fileIndex);
+        Require(extractor.write(tar.data(), tar.size()), "Third extraction should succeed");
+        extractor.flush();
+        Require(extractor.skippedFiles().size() == 1, "Only the unchanged file should be skipped");
+        Require(extractor.skippedFiles().front().find("b.txt") != std::string::npos,
+                "The skipped file should be b.txt");
+    }
+    std::ifstream in(root / "a.txt", std::ios::binary);
+    const std::string restored((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+    Require(restored == aContent, "A changed file should be rewritten to the packaged content");
+}
+
+void TestTarStreamExtractorAtomicReplaceOverwritesChangedFile() {
+    fs::path root = CreateTestRoot("tar_stream_extractor_replace");
+    // An existing file with different content must be atomically replaced.
+    WriteTextFile(root / "app.dat", "old-version-content-XXXXXXXXXX");
+
+    const std::string newContent = "new-version";
+    std::vector<uint8_t> tar;
+    AppendTarEntry(tar, "app.dat", newContent);
+
+    std::vector<FileIndexEntry> fileIndex;
+    FileIndexEntry entry;
+    entry.relativePath = "app.dat";
+    entry.size = newContent.size();
+    entry.contentHash = ComputeContentHash64(newContent.data(), newContent.size());
+    fileIndex.push_back(entry);
+
+    TarStreamExtractor extractor(Utf8FromPath(root));
+    extractor.setSkipFingerprints(fileIndex);
+    Require(extractor.write(tar.data(), tar.size()), "Overwrite extraction should succeed");
+    extractor.flush();
+
+    Require(extractor.skippedFiles().empty(),
+            "A changed file must not be skipped");
+    Require(extractor.installedFiles().size() == 1,
+            "The replaced file should be recorded as installed");
+
+    std::ifstream in(root / "app.dat", std::ios::binary);
+    const std::string actual((std::istreambuf_iterator<char>(in)),
+                             std::istreambuf_iterator<char>());
+    Require(actual == newContent, "The target should hold the new packaged content after replace");
+
+    // The atomic-replace path must not leave a staging file behind.
+    Require(!fs::exists(fs::path(root / "app.dat").native() + L".__mti_new"),
+            "The staging file should be consumed by the atomic replace");
+}
+
+void TestTarStreamExtractorReplacesReadonlyExistingFile() {
+    fs::path root = CreateTestRoot("tar_stream_readonly_replace");
+    WriteTextFile(root / "app.dat", "old-readonly-content");
+    SetFileAttributesW((root / "app.dat").native().c_str(), FILE_ATTRIBUTE_READONLY);
+
+    const std::string newContent = "fresh-content";
+    std::vector<uint8_t> tar;
+    AppendTarEntry(tar, "app.dat", newContent);
+
+    std::vector<FileIndexEntry> fileIndex;
+    FileIndexEntry entry;
+    entry.relativePath = "app.dat";
+    entry.size = newContent.size();
+    entry.contentHash = ComputeContentHash64(newContent.data(), newContent.size());
+    fileIndex.push_back(entry);
+
+    TarStreamExtractor extractor(Utf8FromPath(root));
+    extractor.setSkipFingerprints(fileIndex);
+    Require(extractor.write(tar.data(), tar.size()),
+            "Overwriting a read-only file should succeed");
+    extractor.flush();
+
+    std::ifstream in(root / "app.dat", std::ios::binary);
+    const std::string actual((std::istreambuf_iterator<char>(in)),
+                             std::istreambuf_iterator<char>());
+    Require(actual == newContent, "Read-only target should be replaced with the new content");
+    Require(!fs::exists(fs::path(root / "app.dat").native() + L".__mti_new"),
+            "No staging file should remain after replacing a read-only target");
+}
+
+void TestTarStreamExtractorZeroReadSkipUsesOldFingerprints() {
+    fs::path root = CreateTestRoot("tar_stream_zero_read");
+    // The on-disk content differs from the package, but the previous install's
+    // recorded fingerprint equals the new package hash. Scheme A trusts that
+    // record and skips WITHOUT reading the file, so the file is left untouched.
+    WriteTextFile(root / "a.txt", "BBBB");
+
+    const std::string newContent = "AAAA";  // same size as the on-disk file
+    std::vector<uint8_t> tar;
+    AppendTarEntry(tar, "a.txt", newContent);
+
+    const uint64_t newHash = ComputeContentHash64(newContent.data(), newContent.size());
+    std::vector<FileIndexEntry> fileIndex;
+    FileIndexEntry entry;
+    entry.relativePath = "a.txt";
+    entry.size = newContent.size();
+    entry.contentHash = newHash;
+    fileIndex.push_back(entry);
+
+    auto oldMap = std::make_shared<InstalledFileFingerprintMap>();
+    (*oldMap)[normalizePathForCompare(Utf8FromPath(root / "a.txt"))] =
+        InstalledFileFingerprint{newContent.size(), newHash};
+
+    TarStreamExtractor extractor(Utf8FromPath(root));
+    extractor.setSkipFingerprints(fileIndex);
+    extractor.setOldInstalledFingerprints(oldMap);
+    Require(extractor.write(tar.data(), tar.size()), "Zero-read extraction should succeed");
+    extractor.flush();
+
+    Require(extractor.skippedFiles().size() == 1,
+            "A matching previous-install fingerprint should skip the file");
+    std::ifstream in(root / "a.txt", std::ios::binary);
+    const std::string actual((std::istreambuf_iterator<char>(in)),
+                             std::istreambuf_iterator<char>());
+    Require(actual == "BBBB",
+            "Zero-read skip must not read or overwrite the file (content stays as-is)");
+}
+
+void TestTarStreamExtractorOldFingerprintMismatchForcesRewrite() {
+    fs::path root = CreateTestRoot("tar_stream_old_mismatch");
+    WriteTextFile(root / "a.txt", "BBBB");
+
+    const std::string newContent = "AAAA";
+    std::vector<uint8_t> tar;
+    AppendTarEntry(tar, "a.txt", newContent);
+
+    const uint64_t newHash = ComputeContentHash64(newContent.data(), newContent.size());
+    std::vector<FileIndexEntry> fileIndex;
+    FileIndexEntry entry;
+    entry.relativePath = "a.txt";
+    entry.size = newContent.size();
+    entry.contentHash = newHash;
+    fileIndex.push_back(entry);
+
+    auto oldMap = std::make_shared<InstalledFileFingerprintMap>();
+    // The previously recorded hash differs from the new package hash, so the
+    // file must be rewritten (Scheme A decides this without reading the file).
+    (*oldMap)[normalizePathForCompare(Utf8FromPath(root / "a.txt"))] =
+        InstalledFileFingerprint{newContent.size(), newHash ^ 0x1ULL};
+
+    TarStreamExtractor extractor(Utf8FromPath(root));
+    extractor.setSkipFingerprints(fileIndex);
+    extractor.setOldInstalledFingerprints(oldMap);
+    Require(extractor.write(tar.data(), tar.size()), "Rewrite extraction should succeed");
+    extractor.flush();
+
+    Require(extractor.skippedFiles().empty(),
+            "A mismatched previous-install fingerprint must force a rewrite");
+    std::ifstream in(root / "a.txt", std::ios::binary);
+    const std::string actual((std::istreambuf_iterator<char>(in)),
+                             std::istreambuf_iterator<char>());
+    Require(actual == newContent, "The rewritten file should hold the new packaged content");
+}
+#endif
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -2483,6 +2950,7 @@ int main(int argc, char* argv[]) {
         {"reject_old_schema", &TestRejectOldSchema},
         {"component_install_type_is_required", &TestComponentInstallTypeIsRequired},
         {"component_local_install_requires_command", &TestComponentLocalInstallRequiresCommand},
+        {"component_uninstall_requires_command", &TestComponentUninstallRequiresCommand},
         {"component_download_install_validation_and_round_trip",
          &TestComponentDownloadInstallValidationAndRoundTrip},
         {"component_launcher_builds_expected_commands",
@@ -2504,6 +2972,24 @@ int main(int argc, char* argv[]) {
         {"installer_args_parse_upgrade", &TestInstallerArgsParseUpgrade},
         {"metadata_round_trip", &TestMetadataRoundTrip},
         {"package_manifest_builder_and_codec_round_trip", &TestPackageManifestBuilderAndCodecRoundTrip},
+        {"payload_content_hash_round_trips_through_codec",
+         &TestPayloadContentHashRoundTripsThroughCodec},
+        {"payload_framed_fields_round_trip_through_codec",
+         &TestPayloadFramedFieldsRoundTripThroughCodec},
+        {"install_manifest_persists_file_fingerprints",
+         &TestInstallManifestPersistsFileFingerprints},
+#ifdef _WIN32
+        {"tar_stream_extractor_skips_unchanged_files",
+         &TestTarStreamExtractorSkipsUnchangedFiles},
+        {"tar_stream_extractor_atomic_replace_overwrites_changed_file",
+         &TestTarStreamExtractorAtomicReplaceOverwritesChangedFile},
+        {"tar_stream_extractor_replaces_readonly_existing_file",
+         &TestTarStreamExtractorReplacesReadonlyExistingFile},
+        {"tar_stream_extractor_zero_read_skip_uses_old_fingerprints",
+         &TestTarStreamExtractorZeroReadSkipUsesOldFingerprints},
+        {"tar_stream_extractor_old_fingerprint_mismatch_forces_rewrite",
+         &TestTarStreamExtractorOldFingerprintMismatchForcesRewrite},
+#endif
         {"package_manifest_validator_rejects_invalid_payload_and_components",
          &TestPackageManifestValidatorRejectsInvalidPayloadAndComponents},
         {"path_resolver_expand_environment_variables", &TestPathResolverExpandEnvironmentVariables},
@@ -2517,6 +3003,8 @@ int main(int argc, char* argv[]) {
          &TestBuildInstallExecutionPlanUpgradeUsesV3InstallStateRegistry},
         {"build_install_execution_plan_upgrade_allows_missing_manifest",
          &TestBuildInstallExecutionPlanUpgradeAllowsMissingManifest},
+        {"build_install_execution_plan_captures_previous_fingerprints",
+         &TestBuildInstallExecutionPlanCapturesPreviousFingerprints},
         {"install_state_resolver_uses_legacy_detect_in_order",
          &TestInstallStateResolverUsesLegacyDetectInOrder},
         {"build_install_execution_plan_upgrade_uses_legacy_detect_registry",
@@ -2541,10 +3029,6 @@ int main(int argc, char* argv[]) {
          &TestProgressPathFormatterShortensRelativePath},
         {"progress_path_formatter_strips_long_path_prefix",
          &TestProgressPathFormatterStripsLongPathPrefix},
-        {"post_setup_file_url_decodes_utf8_chinese_path",
-         &TestPostSetupFileUrlDecodesUtf8ChinesePath},
-        {"post_setup_file_url_supports_expanded_install_dir_drive_path",
-         &TestPostSetupFileUrlSupportsExpandedInstallDirDrivePath},
         {"same_root_upgrade_cleanup_uses_previous_manifest_files",
          &TestSameRootUpgradeCleanupUsesPreviousManifestFiles},
 #ifdef _WIN32

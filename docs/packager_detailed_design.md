@@ -41,7 +41,11 @@ The packager builds a sectioned `PackageManifest` directly from v3 config and co
 - UI metadata.
 - uninstaller detect and cleanup policy.
 
-Runtime installation writes a separate local v3 `install.manifest.json` snapshot for uninstall.
+Each `fileIndex` entry carries a per-file content fingerprint (`contentHash`, FNV-1a 64) so the installer can skip rewriting unchanged files on overwrite/upgrade. See `docs/INCREMENTAL_INSTALL_DESIGN.md`.
+
+Compression is per-folder. With `package.compression.perFileFrames: true`, each file is compressed into its own independent frame (the folder payload is a concatenation of frames, and each `fileIndex` entry records `frameOffset`/`frameCompressedSize`) so the installer can skip decompressing unchanged files entirely; otherwise the whole folder is a single stream.
+
+Runtime installation writes a separate local v3 `install.manifest.json` snapshot for uninstall, including a `fileFingerprints[]` array used by the next upgrade's zero-read skip decision.
 
 ## Resources
 

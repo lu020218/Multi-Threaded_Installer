@@ -54,7 +54,12 @@ UpgradeCleanupResult runPreviousInstallCleanupWithWatchdog(
     const std::vector<std::string>& replacementTargets = {},
     const UpgradeCleanupProgressCallback& progressCallback = {},
     const std::function<bool()>& cancellationCallback = {},
-    const UpgradeCleanupPolicy& policy = {});
+    const UpgradeCleanupPolicy& policy = {},
+    // Absolute paths of files present in the new package. When non-empty the
+    // cleanup performs a difference-set deletion: files in this set are kept
+    // in place (so the extractor can skip or overwrite them), and whole-subtree
+    // isolation is disabled so unchanged files are not moved away.
+    const std::vector<std::string>& keepFiles = {});
 
 UpgradeCleanupResult runUpgradeExtraPathCleanupWithWatchdog(
     const std::vector<UninstallCleanupRule>& rules,

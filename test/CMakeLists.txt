@@ -44,10 +44,10 @@ add_executable(SchemaRegressionTests
     ../src/installer/thread_pool_manager.cpp
     ../src/installer/installer_concurrency_policy.cpp
     ../src/installer/cleanup_delete_executor.cpp
+    ../src/installer/tar_stream_extractor.cpp
     ../src/installer/upgrade_cleanup.cpp
     ../src/installer/uninstall_manager.cpp
     ../src/gui/progress_path_formatter.cpp
-    ../src/post_setup_agent/post_setup_url_utils.cpp
     ../src/common/types.cpp
     ../src/common/utf8_utils.cpp
     ../src/common/version_utils.cpp
@@ -71,7 +71,7 @@ if(MSVC)
 endif()
 
 if(WIN32)
-    target_link_libraries(SchemaRegressionTests PRIVATE ole32 shell32 dbghelp)
+    target_link_libraries(SchemaRegressionTests PRIVATE ole32 shell32 dbghelp Rstrtmgr)
 endif()
 
 add_test(NAME SchemaRegressionTests COMMAND SchemaRegressionTests)

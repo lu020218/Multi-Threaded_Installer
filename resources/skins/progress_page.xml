@@ -2,7 +2,27 @@
 <Windows>
 <VerticalLayout name="progress_page">
 
-    <Control name="carousel_image" padding="20,10,20,0" width="480" height="160" bkimage="images/carousel1.png" />
+    <HorizontalLayout padding="20,10,20,0" height="160">
+        <!-- 左侧：轮播文字 + 圆点切换按钮 -->
+        <VerticalLayout width="200">
+            <Control height="15"/>
+            <Text name="carousel_text" height="95" font="1" textcolor="#FF333333"
+                  text="高速多线程安装，为您带来极速体验" />
+            <Control/>
+            <HorizontalLayout height="16">
+                <Control/>
+                <Button name="carousel_dot_0" width="16" height="16" bkimage="images/dot_active.png"/>
+                <Control width="8"/>
+                <Button name="carousel_dot_1" width="16" height="16" bkimage="images/dot_inactive.png"/>
+                <Control width="8"/>
+                <Button name="carousel_dot_2" width="16" height="16" bkimage="images/dot_inactive.png"/>
+                <Control/>
+            </HorizontalLayout>
+        </VerticalLayout>
+        <Control width="20"/>
+        <!-- 右侧：轮播图片 -->
+        <Control name="carousel_image" width="260" height="160" bkimage="images/carousel1.png" />
+    </HorizontalLayout>
 
     <VerticalLayout padding="40,40,0,0">
         <Label name="current_folder" text="正在准备安装..." height="30" 

@@ -217,6 +217,8 @@ private:
     void StartCarousel();
     void StopCarousel();
     void TickCarousel();
+    void ShowCarouselItem(int index);
+    void OnCarouselDotClick(int index);
 
 public:
     void SetUninstallMode(bool enabled) { m_uninstallMode = enabled; }

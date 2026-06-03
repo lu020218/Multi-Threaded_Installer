@@ -53,8 +53,20 @@ static const LPCTSTR kCarouselImages[] = {
     _T("images/carousel2.png"),
     _T("images/carousel3.png"),
 };
+static const LPCTSTR kCarouselTexts[] = {
+    _T("高速多线程安装，为您带来极速体验"),
+    _T("智能组件管理，按需选择所需功能"),
+    _T("安全可靠，全程数据完整性校验"),
+};
 static constexpr int kCarouselCount =
     static_cast<int>(sizeof(kCarouselImages) / sizeof(kCarouselImages[0]));
+static const LPCTSTR kCarouselDotNames[] = {
+    _T("carousel_dot_0"),
+    _T("carousel_dot_1"),
+    _T("carousel_dot_2"),
+};
+static const LPCTSTR kCarouselDotActive = _T("images/dot_active.png");
+static const LPCTSTR kCarouselDotInactive = _T("images/dot_inactive.png");
 static std::string ToLowerAsciiCopy(const std::string& text) {
     std::string lowered = text;
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),
@@ -463,6 +475,16 @@ std::vector<std::string> GUIManager::CollectSelectedComponentsFromUi() {
 }
 
 void GUIManager::Notify(TNotifyUI& msg) {
+    if (msg.sType == _T("click") && msg.pSender) {
+        const CDuiString name = msg.pSender->GetName();
+        for (int i = 0; i < kCarouselCount; ++i) {
+            if (name == kCarouselDotNames[i]) {
+                OnCarouselDotClick(i);
+                return;
+            }
+        }
+    }
+
     RouteGuiNotify(
         msg,
         m_uiLinks,
@@ -974,14 +996,32 @@ void GUIManager::StopProgressTimer() {
     m_progressTimerActive = false;
 }
 
+void GUIManager::ShowCarouselItem(int index) {
+    if (index < 0 || index >= kCarouselCount) {
+        return;
+    }
+    m_carouselIndex = index;
+
+    if (auto* pImage = static_cast<CControlUI*>(m_pm.FindControl(_T("carousel_image")))) {
+        pImage->SetBkImage(kCarouselImages[index]);
+        pImage->Invalidate();
+    }
+    if (auto* pText = static_cast<CLabelUI*>(m_pm.FindControl(_T("carousel_text")))) {
+        pText->SetText(kCarouselTexts[index]);
+    }
+    for (int i = 0; i < kCarouselCount; ++i) {
+        if (auto* pDot = static_cast<CControlUI*>(m_pm.FindControl(kCarouselDotNames[i]))) {
+            pDot->SetBkImage(i == index ? kCarouselDotActive : kCarouselDotInactive);
+            pDot->Invalidate();
+        }
+    }
+}
+
 void GUIManager::StartCarousel() {
     if (m_carouselActive || !m_hWnd) {
         return;
     }
-    m_carouselIndex = 0;
-    if (auto* pImage = static_cast<CControlUI*>(m_pm.FindControl(_T("carousel_image")))) {
-        pImage->SetBkImage(kCarouselImages[0]);
-    }
+    ShowCarouselItem(0);
     ::SetTimer(m_hWnd, kCarouselTimerId, kCarouselIntervalMs, nullptr);
     m_carouselActive = true;
 }
@@ -998,10 +1038,17 @@ void GUIManager::TickCarousel() {
     if (!m_carouselActive) {
         return;
     }
-    m_carouselIndex = (m_carouselIndex + 1) % kCarouselCount;
-    if (auto* pImage = static_cast<CControlUI*>(m_pm.FindControl(_T("carousel_image")))) {
-        pImage->SetBkImage(kCarouselImages[m_carouselIndex]);
-        pImage->Invalidate();
+    ShowCarouselItem((m_carouselIndex + 1) % kCarouselCount);
+}
+
+void GUIManager::OnCarouselDotClick(int index) {
+    if (index < 0 || index >= kCarouselCount || index == m_carouselIndex) {
+        return;
+    }
+    ShowCarouselItem(index);
+    // 手动切换后重置 10 秒计时，避免刚点完就被自动切换
+    if (m_carouselActive && m_hWnd) {
+        ::SetTimer(m_hWnd, kCarouselTimerId, kCarouselIntervalMs, nullptr);
     }
 }
 

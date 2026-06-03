@@ -46,6 +46,15 @@ static constexpr int kPageProgress = static_cast<int>(PageType::Progress);
 static constexpr int kPageCompletion = static_cast<int>(PageType::Completion);
 static constexpr UINT_PTR kProgressTimerId = 1001;
 static constexpr UINT kProgressTimerIntervalMs = 33;
+static constexpr UINT_PTR kCarouselTimerId = 1002;
+static constexpr UINT kCarouselIntervalMs = 10000;  // 每 10 秒切换一张
+static const LPCTSTR kCarouselImages[] = {
+    _T("images/carousel1.png"),
+    _T("images/carousel2.png"),
+    _T("images/carousel3.png"),
+};
+static constexpr int kCarouselCount =
+    static_cast<int>(sizeof(kCarouselImages) / sizeof(kCarouselImages[0]));
 static std::string ToLowerAsciiCopy(const std::string& text) {
     std::string lowered = text;
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),
@@ -164,7 +173,9 @@ GUIManager::GUIManager()
         m_progressTarget(0.0f),
         m_progressDisplayed(0.0f),
         m_progressTimerActive(false),
-        m_progressLastTick(0) {
+        m_progressLastTick(0),
+        m_carouselActive(false),
+        m_carouselIndex(0) {
       m_pm.GetDPIObj()->SetScale(static_cast<int>(GetDpiForWindowSafe(nullptr)));
   }
 
@@ -506,6 +517,7 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         if (m_pWorker && m_pWorker->IsRunning()) {
             m_pWorker->RequestCancellation();
         }
+        StopCarousel();
         DestroyWindow(m_hWnd);
         PostQuitMessage(0);
         return 0;
@@ -516,6 +528,10 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
     if (uMsg == WM_TIMER && wParam == kProgressTimerId) {
         TickProgressAnimation();
+        return 0;
+    }
+    if (uMsg == WM_TIMER && wParam == kCarouselTimerId) {
+        TickCarousel();
         return 0;
     }
     if (uMsg == WM_INSTALLATION_PROGRESS) {
@@ -772,6 +788,8 @@ void GUIManager::OnCancelProgressButtonClick() {
         m_pWorker->RequestCancellation();
     }
 
+    StopCarousel();
+
     CButtonUI* pCancelProgressButton = static_cast<CButtonUI*>(
         m_pm.FindControl(_T("cancel_progress_button")));
     if (pCancelProgressButton) {
@@ -906,6 +924,10 @@ void GUIManager::HandleProgressMessage(ProgressMessageData* pData) {
         m_pTabPages->SelectItem(GetProgressPageIndex());
     }
 
+    if (!m_uninstallMode) {
+        StartCarousel();  // 仅安装进度页轮播，卸载页不轮播
+    }
+
     float target = pData->percentage;
     if (target < 0.0f) {
         target = 0.0f;
@@ -952,6 +974,37 @@ void GUIManager::StopProgressTimer() {
     m_progressTimerActive = false;
 }
 
+void GUIManager::StartCarousel() {
+    if (m_carouselActive || !m_hWnd) {
+        return;
+    }
+    m_carouselIndex = 0;
+    if (auto* pImage = static_cast<CControlUI*>(m_pm.FindControl(_T("carousel_image")))) {
+        pImage->SetBkImage(kCarouselImages[0]);
+    }
+    ::SetTimer(m_hWnd, kCarouselTimerId, kCarouselIntervalMs, nullptr);
+    m_carouselActive = true;
+}
+
+void GUIManager::StopCarousel() {
+    if (!m_carouselActive || !m_hWnd) {
+        return;
+    }
+    ::KillTimer(m_hWnd, kCarouselTimerId);
+    m_carouselActive = false;
+}
+
+void GUIManager::TickCarousel() {
+    if (!m_carouselActive) {
+        return;
+    }
+    m_carouselIndex = (m_carouselIndex + 1) % kCarouselCount;
+    if (auto* pImage = static_cast<CControlUI*>(m_pm.FindControl(_T("carousel_image")))) {
+        pImage->SetBkImage(kCarouselImages[m_carouselIndex]);
+        pImage->Invalidate();
+    }
+}
+
 void GUIManager::TickProgressAnimation() {
     if (!m_progressTimerActive) {
         return;
@@ -988,11 +1041,12 @@ void GUIManager::HandleCompletionMessage(CompletionMessageData* pData) {
     }
 
     StopProgressTimer();
-    
+    StopCarousel();
+
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetCompletionPageIndex());
     }
-    
+
     GUIStatusPresenter::ShowInstallCompletion(m_pm, m_config, *pData);
 }
 

@@ -214,6 +214,9 @@ private:
     void StopProgressTimer();
     void TickProgressAnimation();
     void UpdateProgressDisplay(float percentage);
+    void StartCarousel();
+    void StopCarousel();
+    void TickCarousel();
 
 public:
     void SetUninstallMode(bool enabled) { m_uninstallMode = enabled; }
@@ -226,6 +229,8 @@ private:
     uint64_t m_progressLastTick;
     std::wstring m_progressPrefix;
     std::wstring m_progressFolder;
+    bool m_carouselActive;
+    int m_carouselIndex;
 };
 
 } // namespace MultiThreadedInstaller

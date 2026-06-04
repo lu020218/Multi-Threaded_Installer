@@ -118,11 +118,15 @@ void collectResourceFiles(const std::filesystem::path& resourceDir,
         };
 
         std::vector<std::pair<std::string, std::filesystem::path>> imageFiles;
-        for (const auto& entry : std::filesystem::directory_iterator(imagesDir)) {
+        // 递归遍历，保留相对子目录（如 carousel/zh_CN/1.png），以支持按语言分目录的图片
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(imagesDir)) {
             if (!entry.is_regular_file()) {
                 continue;
             }
-            imageFiles.emplace_back(Utf8FromPath(entry.path().filename()), entry.path());
+            std::string relName =
+                Utf8FromPath(std::filesystem::relative(entry.path(), imagesDir));
+            std::replace(relName.begin(), relName.end(), '\\', '/');  // zip 内统一用正斜杠
+            imageFiles.emplace_back(relName, entry.path());
         }
 
         for (const auto& item : imageFiles) {

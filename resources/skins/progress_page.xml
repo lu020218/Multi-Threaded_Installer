@@ -2,27 +2,52 @@
 <Windows>
 <VerticalLayout name="progress_page">
 
-    <HorizontalLayout padding="20,10,20,0" height="160">
-        <!-- 左侧：轮播文字 + 圆点切换按钮 -->
-        <VerticalLayout width="200">
-            <Control height="15"/>
-            <Text name="carousel_text" height="95" font="1" textcolor="#FF333333"
-                  text="高速多线程安装，为您带来极速体验" />
-            <Control/>
-            <HorizontalLayout height="16">
-                <Control/>
-                <Button name="carousel_dot_0" width="16" height="16" bkimage="images/dot_active.png"/>
-                <Control width="8"/>
-                <Button name="carousel_dot_1" width="16" height="16" bkimage="images/dot_inactive.png"/>
-                <Control width="8"/>
-                <Button name="carousel_dot_2" width="16" height="16" bkimage="images/dot_inactive.png"/>
-                <Control/>
+    <VerticalLayout padding="20,10,20,0" height="160">
+        <!-- 轮播区：原生 AnimationTabLayout，切换时左右滑动；每项 = 左文字 + 右图片，一起滑动 -->
+        <AnimationTabLayout name="carousel_tab" height="130">
+            <HorizontalLayout>
+                <VerticalLayout width="200">
+                    <Control height="20"/>
+                    <Text resourcetext="true" text="msg.carousel.text1" font="1" textcolor="#FF333333" height="90"/>
+                </VerticalLayout>
+                <Control width="20"/>
+                <Control name="carousel_img_0" width="260" bkimage="images/carousel/en_US/1.png"/>
             </HorizontalLayout>
-        </VerticalLayout>
-        <Control width="20"/>
-        <!-- 右侧：轮播图片 -->
-        <Control name="carousel_image" width="260" height="160" bkimage="images/carousel1.png" />
-    </HorizontalLayout>
+            <HorizontalLayout>
+                <VerticalLayout width="200">
+                    <Control height="20"/>
+                    <Text resourcetext="true" text="msg.carousel.text2" font="1" textcolor="#FF333333" height="90"/>
+                </VerticalLayout>
+                <Control width="20"/>
+                <Control name="carousel_img_1" width="260" bkimage="images/carousel/en_US/2.png"/>
+            </HorizontalLayout>
+            <HorizontalLayout>
+                <VerticalLayout width="200">
+                    <Control height="20"/>
+                    <Text resourcetext="true" text="msg.carousel.text3" font="1" textcolor="#FF333333" height="90"/>
+                </VerticalLayout>
+                <Control width="20"/>
+                <Control name="carousel_img_2" width="260" bkimage="images/carousel/en_US/3.png"/>
+            </HorizontalLayout>
+        </AnimationTabLayout>
+        <Control height="6"/>
+        <!-- 圆点导航（固定，不随滑动）-->
+        <HorizontalLayout height="16" padding="20,0,0,0">
+            <!-- 用 Option（单选组）实现：选中态原生切换为椭圆图，未选中为圆点，无需代码切图 -->
+            <Option name="carousel_dot_0" group="carousel_dots" selected="true" width="28" height="16"
+                    normalimage="file='images\dot_inactive.png' dest='6,0,22,16'"
+                    selectedimage="file='images\dot_active.png' dest='0,0,28,16'"/>
+            <Control width="8"/>
+            <Option name="carousel_dot_1" group="carousel_dots" width="28" height="16"
+                    normalimage="file='images\dot_inactive.png' dest='6,0,22,16'"
+                    selectedimage="file='images\dot_active.png' dest='0,0,28,16'"/>
+            <Control width="8"/>
+            <Option name="carousel_dot_2" group="carousel_dots" width="28" height="16"
+                    normalimage="file='images\dot_inactive.png' dest='6,0,22,16'"
+                    selectedimage="file='images\dot_active.png' dest='0,0,28,16'"/>
+            <Control/>
+        </HorizontalLayout>
+    </VerticalLayout>
 
     <VerticalLayout padding="40,40,0,0">
         <Label name="current_folder" text="正在准备安装..." height="30" 

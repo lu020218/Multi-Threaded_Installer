@@ -72,6 +72,9 @@
   <Text id="msg.progress.preparing" value="Preparing installation..."/>
   <Text id="msg.progress.installing_prefix" value="Installing: "/>
   <Text id="msg.progress.eta_prefix" value="Estimated time remaining: "/>
+  <Text id="msg.carousel.text1" value="High-speed multi-threaded installation for a blazing-fast experience"/>
+  <Text id="msg.carousel.text2" value="Smart component management - pick only the features you need"/>
+  <Text id="msg.carousel.text3" value="Safe and reliable with full data integrity verification"/>
   <Text id="msg.time.seconds" value=" sec"/>
   <Text id="msg.time.minutes" value=" min "/>
   <Text id="msg.time.hours" value=" hr "/>

@@ -219,6 +219,7 @@ private:
     void TickCarousel();
     void ShowCarouselItem(int index);
     void OnCarouselDotClick(int index);
+    void ApplyCarouselImagesForLanguage();
 
 public:
     void SetUninstallMode(bool enabled) { m_uninstallMode = enabled; }

@@ -72,6 +72,9 @@
   <Text id="msg.progress.preparing" value="正在准备安装..."/>
   <Text id="msg.progress.installing_prefix" value="正在安装: "/>
   <Text id="msg.progress.eta_prefix" value="预计剩余时间: "/>
+  <Text id="msg.carousel.text1" value="高速多线程安装，为您带来极速体验"/>
+  <Text id="msg.carousel.text2" value="智能组件管理，按需选择所需功能"/>
+  <Text id="msg.carousel.text3" value="安全可靠，全程数据完整性校验"/>
   <Text id="msg.time.seconds" value=" 秒"/>
   <Text id="msg.time.minutes" value=" 分 "/>
   <Text id="msg.time.hours" value=" 时 "/>

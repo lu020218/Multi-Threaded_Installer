@@ -48,25 +48,29 @@ static constexpr UINT_PTR kProgressTimerId = 1001;
 static constexpr UINT kProgressTimerIntervalMs = 33;
 static constexpr UINT_PTR kCarouselTimerId = 1002;
 static constexpr UINT kCarouselIntervalMs = 10000;  // 每 10 秒切换一张
-static const LPCTSTR kCarouselImages[] = {
-    _T("images/carousel1.png"),
-    _T("images/carousel2.png"),
-    _T("images/carousel3.png"),
-};
-static const LPCTSTR kCarouselTexts[] = {
-    _T("高速多线程安装，为您带来极速体验"),
-    _T("智能组件管理，按需选择所需功能"),
-    _T("安全可靠，全程数据完整性校验"),
-};
-static constexpr int kCarouselCount =
-    static_cast<int>(sizeof(kCarouselImages) / sizeof(kCarouselImages[0]));
+// 轮播图片与文字由皮肤 progress_page.xml 的 AnimationTabLayout 三个子项承载，
+// 文字走原生 resourcetext 本地化；这里只需切换页与圆点高亮。
+static constexpr int kCarouselCount = 3;
+// 圆点导航用 Option 单选组实现，选中态（椭圆图）由皮肤 normalimage/selectedimage 原生切换，
+// 代码只需把当前页对应的 Option 置为选中。
 static const LPCTSTR kCarouselDotNames[] = {
     _T("carousel_dot_0"),
     _T("carousel_dot_1"),
     _T("carousel_dot_2"),
 };
-static const LPCTSTR kCarouselDotActive = _T("images/dot_active.png");
-static const LPCTSTR kCarouselDotInactive = _T("images/dot_inactive.png");
+// 轮播图片控件（每个轮播项右侧的图），按语言切换 bkimage
+static const LPCTSTR kCarouselImageNames[] = {
+    _T("carousel_img_0"),
+    _T("carousel_img_1"),
+    _T("carousel_img_2"),
+};
+// 已随安装包提供本地化轮播图的语言白名单（新增语言时在此登记并放入对应图片目录）
+static const LPCTSTR kCarouselImageLangs[] = {
+    _T("zh_CN"),
+    _T("en_US"),
+};
+// 当前语言不在白名单时回退到该语言（其图片必须随安装包提供，作为兜底）
+static const LPCTSTR kCarouselImageFallbackLang = _T("en_US");
 static std::string ToLowerAsciiCopy(const std::string& text) {
     std::string lowered = text;
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),
@@ -475,11 +479,17 @@ std::vector<std::string> GUIManager::CollectSelectedComponentsFromUi() {
 }
 
 void GUIManager::Notify(TNotifyUI& msg) {
-    if (msg.sType == _T("click") && msg.pSender) {
+    // 圆点导航是 Option，用户点击会触发 selectchanged。
+    // 注意：组内切换会让"被取消选中"的那个 Option 也发一次 selectchanged，
+    // 因此只处理"变为选中"的那个（IsSelected() 为真），避免误触发。
+    if (msg.sType == _T("selectchanged") && msg.pSender) {
         const CDuiString name = msg.pSender->GetName();
         for (int i = 0; i < kCarouselCount; ++i) {
             if (name == kCarouselDotNames[i]) {
-                OnCarouselDotClick(i);
+                auto* pOpt = static_cast<COptionUI*>(msg.pSender->GetInterface(_T("Option")));
+                if (pOpt && pOpt->IsSelected()) {
+                    OnCarouselDotClick(i);
+                }
                 return;
             }
         }
@@ -924,6 +934,9 @@ void GUIManager::RefreshLocalizedText() {
         currentPath = m_pInstallPathEdit->GetText().GetData();
     }
     UpdateDiskSpaceInfo(currentPath);
+    // 轮播文字由皮肤 resourcetext 声明，ApplyLanguage 的 ReloadText 会自动翻译，无需手动刷新。
+    // 轮播图片含文字，需按语言切换对应图片。
+    ApplyCarouselImagesForLanguage();
 }
 
 void GUIManager::UpdateWindowTitle() {
@@ -996,23 +1009,64 @@ void GUIManager::StopProgressTimer() {
     m_progressTimerActive = false;
 }
 
+// 解析第 index 个轮播图的 bkimage 相对路径（相对资源根，对 zip/磁盘统一）。
+// 资源经 UILIB_ZIP 从 resources.zip 内加载，无法用文件系统探测是否存在，
+// 因此改用语言白名单决定使用哪套图：命中则用该语言，否则回退到兜底语言。
+static std::wstring ResolveCarouselImagePath(const std::wstring& langCode, int index) {
+    std::wstring lang = kCarouselImageFallbackLang;
+    bool matched = false;
+    for (LPCTSTR supported : kCarouselImageLangs) {
+        if (langCode == supported) {
+            lang = langCode;
+            matched = true;
+            break;
+        }
+    }
+    std::wstringstream ss;
+    ss << L"images/carousel/" << lang << L"/" << (index + 1) << L".png";
+    std::wstring path = ss.str();
+
+    logInstallerInfo(std::string("[GUI][Carousel] image[") + std::to_string(index) +
+                     "] requestLang=" + WideToUtf8(langCode) +
+                     (matched ? " (matched)" : " (fallback->" + WideToUtf8(lang) + ")") +
+                     " path=" + WideToUtf8(path));
+
+    return path;
+}
+
+void GUIManager::ApplyCarouselImagesForLanguage() {
+    std::wstring lang = m_config.languageCode;
+    if (lang.empty()) {
+        lang = kCarouselImageFallbackLang;
+    }
+    for (int i = 0; i < kCarouselCount; ++i) {
+        if (auto* pImg = static_cast<CControlUI*>(m_pm.FindControl(kCarouselImageNames[i]))) {
+            std::wstring path = ResolveCarouselImagePath(lang, i);
+            pImg->SetBkImage(path.c_str());
+            pImg->Invalidate();
+        }
+    }
+}
+
 void GUIManager::ShowCarouselItem(int index) {
     if (index < 0 || index >= kCarouselCount) {
         return;
     }
     m_carouselIndex = index;
 
-    if (auto* pImage = static_cast<CControlUI*>(m_pm.FindControl(_T("carousel_image")))) {
-        pImage->SetBkImage(kCarouselImages[index]);
-        pImage->Invalidate();
+    // 切换轮播页（带原生左右滑动动画，文字+图片一起滑动）
+    if (auto* pCtrl = m_pm.FindControl(_T("carousel_tab"))) {
+        if (auto* pTab = static_cast<CAnimationTabLayoutUI*>(
+                pCtrl->GetInterface(_T("AnimationTabLayout")))) {
+            pTab->SelectItem(index);
+        }
     }
-    if (auto* pText = static_cast<CLabelUI*>(m_pm.FindControl(_T("carousel_text")))) {
-        pText->SetText(kCarouselTexts[index]);
-    }
-    for (int i = 0; i < kCarouselCount; ++i) {
-        if (auto* pDot = static_cast<CControlUI*>(m_pm.FindControl(kCarouselDotNames[i]))) {
-            pDot->SetBkImage(i == index ? kCarouselDotActive : kCarouselDotInactive);
-            pDot->Invalidate();
+
+    // 更新圆点导航：把当前页对应的 Option 置为选中（组内自动取消其它，椭圆/圆点由皮肤切换）。
+    // 第二个参数 false 表示不触发 selectchanged 事件，避免与下方点击处理相互递归。
+    if (auto* pCtrl = m_pm.FindControl(kCarouselDotNames[index])) {
+        if (auto* pOpt = static_cast<COptionUI*>(pCtrl->GetInterface(_T("Option")))) {
+            pOpt->Selected(true, false);
         }
     }
 }
@@ -1021,6 +1075,7 @@ void GUIManager::StartCarousel() {
     if (m_carouselActive || !m_hWnd) {
         return;
     }
+    ApplyCarouselImagesForLanguage();  // 进入页面时确保图片与当前语言一致
     ShowCarouselItem(0);
     ::SetTimer(m_hWnd, kCarouselTimerId, kCarouselIntervalMs, nullptr);
     m_carouselActive = true;

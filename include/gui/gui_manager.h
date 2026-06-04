@@ -189,6 +189,7 @@ private:
     void OnShowMoreClick();
     void OnUninstallConfirmClick();
     void CollapseConfigIfExpanded();
+    void ResizeForProgressPage();
     void ApplyLanguageByIndex(int index);
     void ApplyLanguageByCode(const std::wstring& code);
     void ShowLicensePage();

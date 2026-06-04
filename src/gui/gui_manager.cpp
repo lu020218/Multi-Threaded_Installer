@@ -48,6 +48,9 @@ static constexpr UINT_PTR kProgressTimerId = 1001;
 static constexpr UINT kProgressTimerIntervalMs = 33;
 static constexpr UINT_PTR kCarouselTimerId = 1002;
 static constexpr UINT kCarouselIntervalMs = 10000;  // 每 10 秒切换一张
+// 安装进度页期望的客户区尺寸（逻辑像素，运行时按 DPI 缩放）
+static constexpr int kProgressPageClientWidth = 800;
+static constexpr int kProgressPageClientHeight = 502;
 // 轮播图片与文字由皮肤 progress_page.xml 的 AnimationTabLayout 三个子项承载，
 // 文字走原生 resourcetext 本地化；这里只需切换页与圆点高亮。
 static constexpr int kCarouselCount = 3;
@@ -688,6 +691,7 @@ bool GUIManager::StartInstallationWithOptions(const std::wstring& installPath,
 
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetProgressPageIndex());
+        ResizeForProgressPage();  // 安装进度页放大到 800x502
     }
     return true;
 }
@@ -911,6 +915,51 @@ void GUIManager::CollapseConfigIfExpanded() {
         SWP_NOZORDER | SWP_NOACTIVATE);
     m_pm.NeedUpdate();
     m_pm.Invalidate();
+}
+
+void GUIManager::ResizeForProgressPage() {
+    if (!m_hWnd) {
+        return;
+    }
+
+    // 期望客户区尺寸（逻辑像素）按当前 DPI 缩放为物理像素
+    int targetClientW = m_pm.GetDPIObj()->Scale(kProgressPageClientWidth);
+    int targetClientH = m_pm.GetDPIObj()->Scale(kProgressPageClientHeight);
+
+    RECT rcWindow = {};
+    RECT rcClient = {};
+    ::GetWindowRect(m_hWnd, &rcWindow);
+    ::GetClientRect(m_hWnd, &rcClient);
+
+    int curWinW = rcWindow.right - rcWindow.left;
+    int curWinH = rcWindow.bottom - rcWindow.top;
+    // 用实测的非客户区差值换算窗口尺寸，保证客户区严格等于目标（不受边框/阴影影响）
+    int nonClientW = curWinW - (rcClient.right - rcClient.left);
+    int nonClientH = curWinH - (rcClient.bottom - rcClient.top);
+    int targetWinW = targetClientW + nonClientW;
+    int targetWinH = targetClientH + nonClientH;
+
+    // 以原窗口中心为基准放大，保持居中
+    int centerX = rcWindow.left + curWinW / 2;
+    int centerY = rcWindow.top + curWinH / 2;
+    int newLeft = centerX - targetWinW / 2;
+    int newTop = centerY - targetWinH / 2;
+
+    ::SetWindowPos(
+        m_hWnd,
+        NULL,
+        newLeft,
+        newTop,
+        targetWinW,
+        targetWinH,
+        SWP_NOZORDER | SWP_NOACTIVATE);
+
+    m_pm.NeedUpdate();
+    m_pm.Invalidate();
+
+    logInstallerInfo(std::string("[GUI] Resized for progress page: client ") +
+                     std::to_string(targetClientW) + "x" + std::to_string(targetClientH) +
+                     " window " + std::to_string(targetWinW) + "x" + std::to_string(targetWinH));
 }
 
 void GUIManager::OnLicenseCheckboxChanged() {

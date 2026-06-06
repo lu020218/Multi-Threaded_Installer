@@ -1,5 +1,4 @@
 #include "packager/installer_generator.h"
-#include "packager/resource_embedder.h"
 #include "packager/template_loader.h"
 #include "common/utf8_utils.h"
 #include <fstream>
@@ -119,59 +118,10 @@ bool InstallerGenerator::createSelfExtractingExecutable(const std::string& outpu
             return false;
         }
 
-        if (resourceDirectoryPath_.empty()) {
-            lastError_ = "UI resources directory is not configured";
-            std::cerr << "ERROR: " << lastError_ << std::endl;
-            return false;
-        }
-        std::filesystem::path resourceDir = PathFromUtf8(resourceDirectoryPath_);
-        std::filesystem::path uninstallerTemplatePath = GetDefaultUninstallerTemplatePath();
-        std::cout << "Resolved UI resources directory: " << Utf8FromPath(resourceDir) << std::endl;
-        if (!std::filesystem::exists(resourceDir) || !std::filesystem::is_directory(resourceDir)) {
-            lastError_ = "UI resources directory not found: " + Utf8FromPath(resourceDir) +
-                         ". Packaging requires embedded UI resources and external resources are disabled.";
-            std::cerr << "ERROR: " << lastError_ << std::endl;
-            return false;
-        }
+        // GUI 资源（RES_ZIP）与卸载器已在生成前由 EmbedInstallerPeResources 作为原生 PE 资源
+        // 注入到模板文件（installerTemplatePath）；此处加载到的 installerTemplate 已自带这些资源，
+        // 无需再追加 EMSR 资源表。
 
-        std::vector<uint8_t> uninstallerTemplate;
-        std::string uninstallerError;
-        if (!LoadInstallerTemplate(uninstallerTemplatePath, uninstallerTemplate, uninstallerError)) {
-            lastError_ = uninstallerError.empty()
-                             ? "Failed to load uninstaller template executable: " +
-                                   Utf8FromPath(uninstallerTemplatePath)
-                             : uninstallerError;
-            std::cerr << "ERROR: " << lastError_ << std::endl;
-            return false;
-        }
-
-        std::string uninstallerEmbedError;
-        if (!AppendEmbeddedResources(uninstallerTemplate,
-                                     resourceDir,
-                                     {},
-                                     "uninstaller template",
-                                     uninstallerEmbedError)) {
-            lastError_ = uninstallerEmbedError.empty()
-                             ? "Failed to embed UI resources into uninstaller template."
-                             : uninstallerEmbedError;
-            std::cerr << "ERROR: " << lastError_ << std::endl;
-            return false;
-        }
-
-        std::string embedError;
-        if (!AppendEmbeddedResources(installerTemplate,
-                                     resourceDir,
-                                     uninstallerTemplate,
-                                     "installer template",
-                                     embedError)) {
-            lastError_ = embedError.empty()
-                             ? "Failed to embed UI resources from: " + Utf8FromPath(resourceDir) +
-                                   ". Packaging aborted because embedded UI resources are required."
-                             : embedError;
-            std::cerr << "ERROR: " << lastError_ << std::endl;
-            return false;
-        }
-        
 
         std::filesystem::path outputDir = PathFromUtf8(outputPath).parent_path();
         if (!outputDir.empty() && !std::filesystem::exists(outputDir)) {

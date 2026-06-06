@@ -24,14 +24,14 @@ namespace {
 
 } // namespace
 
-ExtendedInstallationMetadata MetadataParser::parseExtendedEmbeddedMetadata() {
+ExtendedInstallationMetadata MetadataParser::parseExtendedEmbeddedMetadata(bool deferFileIndex) {
     std::vector<uint8_t> embeddedData = dataPackagePath_.empty() ? readEmbeddedData() : readExternalMetadata();
     if (embeddedData.empty()) {
         META_LOG();
         return ExtendedInstallationMetadata{};
     }
-    
-    return deserializeExtendedMetadata(embeddedData);
+
+    return deserializeExtendedMetadata(embeddedData, deferFileIndex);
 }
 
 std::vector<uint8_t> MetadataParser::readEmbeddedData() {
@@ -69,10 +69,11 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
     return metadata;
 }
 
-ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const std::vector<uint8_t>& data) {
+ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const std::vector<uint8_t>& data,
+                                                                         bool deferFileIndex) {
     PackageManifest manifest;
     std::string manifestError;
-    if (DeserializePackageManifest(data, manifest, manifestError)) {
+    if (DeserializePackageManifest(data, manifest, manifestError, deferFileIndex)) {
         std::string validationError;
         if (!ValidatePackageManifest(manifest, validationError)) {
             META_LOG();

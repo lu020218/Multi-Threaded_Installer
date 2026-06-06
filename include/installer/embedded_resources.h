@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <string>
 #include <vector>
@@ -13,47 +13,10 @@ class EmbeddedResourceManager {
 public:
     EmbeddedResourceManager();
     ~EmbeddedResourceManager();
-    
-    /**
-     *
-     *
-     */
-    std::string extractResources();
-    
-    /**
-     *
-     */
-    void cleanup();
-    
-    /**
-     *
-     */
-    std::string getResourcePath() const { return m_resourcePath; }
 
+    // 读取嵌入的二进制资源（原生 PE 资源，类型 "BINARY"）。
+    // GUI 资源（RES_ZIP）由此读入内存后直接交给 DuiLib，不再释放到临时磁盘。
     std::vector<uint8_t> getEmbeddedResource(const std::string& name);
-    
-private:
-    std::string m_resourcePath;
-    bool m_extracted;
-    
-    /**
-     *
-     */
-    std::string createTempDirectory();
-    
-    /**
-     *
-     */
-    bool extractFile(const std::string& relativePath, const std::vector<uint8_t>& data);
-    
-    /**
-     *
-     *
-     */
-    /**
-     *
-     */
-    std::vector<uint8_t> readEmbeddedResourceFromFile(const std::string& name);
 };
 
 std::vector<uint8_t> LoadEmbeddedBinaryResource(const std::string& name);

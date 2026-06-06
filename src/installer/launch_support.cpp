@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cwctype>
 #include <filesystem>
 #include <mutex>
@@ -178,6 +179,13 @@ void EnsureInstallerLoggingInitialized() {
     std::call_once(once, []() { initializeInstallerLogging(); });
 }
 
+// 资源诊断默认关闭；设置环境变量 MTINSTALLER_DIAG=1 可开启（排查用）。
+bool IsGuiResourceDiagnosticsEnabled() {
+    wchar_t buf[8] = {};
+    DWORD n = GetEnvironmentVariableW(L"MTINSTALLER_DIAG", buf, 8);
+    return n == 1 && buf[0] == L'1';
+}
+
 void EnablePerMonitorDpiAwareness() {
 #ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 #define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((DPI_AWARENESS_CONTEXT)-4)
@@ -289,8 +297,7 @@ int RunGuiWindow(GUIManager& frame,
                  bool uninstallMode,
                  WindowSize fallbackSize) {
     HWND hwnd = nullptr;
-    WindowSize baseSize = GetWindowSizeFromResources(
-        context.useZip, context.resourcePath, context.skinsPath, uninstallMode, fallbackSize);
+    WindowSize baseSize = GetWindowSizeFromResources(uninstallMode, fallbackSize);
     const UINT startupDpi = GetDpiForWindowSafe(nullptr);
     const float startupScale = static_cast<float>(startupDpi) / 96.0f;
     const int scaledWidth = static_cast<int>(baseSize.width * startupScale);
@@ -317,12 +324,15 @@ int RunGuiWindow(GUIManager& frame,
     frame.ShowWindow(true);
     logInstallerInfo("[GUI] Showed window, entering message loop.");
 
-    // Run heavy zip diagnostics on a background thread so they never block
-    // the UI message loop.
-    std::thread convergeDiagThread([]() {
-        RunDeferredGuiResourceDiagnostics();
-        logInstallerInfo("[GUI][RES] Deferred resource diagnostics completed.");
-    });
+    // 资源诊断会遍历整个 zip（数百条目），首启时与首帧抢 IO/CPU。默认关闭，
+    // 仅当显式设置环境变量 MTINSTALLER_DIAG=1 时才在后台线程运行，用于排查。
+    std::thread convergeDiagThread;
+    if (IsGuiResourceDiagnosticsEnabled()) {
+        convergeDiagThread = std::thread([]() {
+            RunDeferredGuiResourceDiagnostics();
+            logInstallerInfo("[GUI][RES] Deferred resource diagnostics completed.");
+        });
+    }
 
     CPaintManagerUI::MessageLoop();
     if (convergeDiagThread.joinable()) {
@@ -548,8 +558,21 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
 
     EnsureInstallerLoggingInitialized();
 
+    // [Perf] 启动各阶段计时（用于定位欢迎页前的耗时分配）。
+    using PerfClock = std::chrono::steady_clock;
+    auto perfMs = [](PerfClock::time_point a, PerfClock::time_point b) {
+        return std::to_string(
+            std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count());
+    };
+
+    const auto tParseStart = PerfClock::now();
     MetadataParser parser;
-    ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
+    // GUI 启动只需文件夹/标量元数据；跳过 37641 条 fileIndex（安装 worker 会自行全量重解析）。
+    ExtendedInstallationMetadata metadata =
+        parser.parseExtendedEmbeddedMetadata(/*deferFileIndex=*/true);
+    const auto tParseEnd = PerfClock::now();
+    logInstallerInfo("[GUI][Perf] parseExtendedEmbeddedMetadata=" +
+                     perfMs(tParseStart, tParseEnd) + "ms");
     if (!parser.validateMetadata(metadata)) {
         GUIHelpers::ShowErrorDialog(nullptr,
                                     GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L""),
@@ -563,6 +586,7 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     bool upgradeMode = context.args.upgrade;
     bool overwriteMode = false;
 
+    const auto tInstanceStart = PerfClock::now();
     if (upgradeMode) {
         std::string upgradeError;
         bool restoredPreviousOptions = false;
@@ -589,6 +613,9 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
             upgradeInstallDir = installedInstance.installDir;
         }
     }
+    const auto tInstanceEnd = PerfClock::now();
+    logInstallerInfo("[GUI][Perf] resolveInstalledInstance=" +
+                     perfMs(tInstanceStart, tInstanceEnd) + "ms");
 
     InstallConfig config = CreateInstallConfigFromMetadata(metadata);
     config.overwriteMode = overwriteMode;
@@ -611,7 +638,11 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     SetInstallerAppNameEnv(metadata.appName);
 
     GuiResourceContext resources;
+    const auto tZipStart = PerfClock::now();
     PrepareGuiResources(hInstance, resources, true);
+    const auto tZipEnd = PerfClock::now();
+    logInstallerInfo("[GUI][Perf] PrepareGuiResources(RES_ZIP read)=" +
+                     perfMs(tZipStart, tZipEnd) + "ms");
     const GuiResourceValidationResult validation = ValidateInstallGuiResources(resources);
     if (validation != GuiResourceValidationResult::Ok) {
         return 1;

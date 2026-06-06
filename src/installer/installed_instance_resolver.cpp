@@ -1,4 +1,4 @@
-#include "installer/installed_instance_resolver.h"
+﻿#include "installer/installed_instance_resolver.h"
 
 #include "installer/install_manifest_store.h"
 #include "installer/path_resolver.h"
@@ -6,6 +6,7 @@
 #include "common/utf8_utils.h"
 
 #include <filesystem>
+#include <fstream>
 #include <json.hpp>
 #include <algorithm>
 #include <cctype>
@@ -36,12 +37,52 @@ bool ExistingInstallDirectoryLooksValid(const std::string& path) {
            std::filesystem::is_directory(PathFromUtf8(path), ec);
 }
 
-nlohmann::json ReadManifestJsonLocal(const std::string& manifestPath) {
-    nlohmann::json manifest;
-    if (!manifestPath.empty()) {
-        readManifest(manifestPath, manifest);
+// 只为取顶层 appVersion 而读上次安装清单。用 SAX 在读到 appVersion 时立即中止，
+// 避免对后面 37641 条 files[]/fileFingerprints[] 做全量 DOM 解析（原本约 120ms）。
+std::string ReadManifestAppVersionFast(const std::string& manifestPath) {
+    if (manifestPath.empty()) {
+        return {};
     }
-    return manifest;
+    std::ifstream file(PathFromUtf8(manifestPath), std::ios::binary);
+    if (!file) {
+        return {};
+    }
+
+    struct AppVersionSax : public nlohmann::json_sax<nlohmann::json> {
+        int depth = 0;
+        bool expectValue = false;
+        std::string version;
+
+        bool start_object(std::size_t) override { ++depth; expectValue = false; return true; }
+        bool end_object() override { --depth; return true; }
+        bool start_array(std::size_t) override { ++depth; expectValue = false; return true; }
+        bool end_array() override { --depth; return true; }
+        bool key(string_t& val) override {
+            expectValue = (depth == 1 && val == "appVersion");
+            return true;
+        }
+        bool string(string_t& val) override {
+            if (expectValue) {
+                version = val;
+                return false;  // 命中即中止解析
+            }
+            return true;
+        }
+        bool null() override { expectValue = false; return true; }
+        bool boolean(bool) override { expectValue = false; return true; }
+        bool number_integer(number_integer_t) override { expectValue = false; return true; }
+        bool number_unsigned(number_unsigned_t) override { expectValue = false; return true; }
+        bool number_float(number_float_t, const string_t&) override { expectValue = false; return true; }
+        bool binary(binary_t&) override { expectValue = false; return true; }
+        bool parse_error(std::size_t, const std::string&,
+                         const nlohmann::detail::exception&) override {
+            return false;
+        }
+    };
+
+    AppVersionSax sax;
+    nlohmann::json::sax_parse(file, &sax, nlohmann::json::input_format_t::json, false);
+    return sax.version;
 }
 
 struct DetectCandidate {
@@ -209,8 +250,7 @@ bool resolveInstalledInstanceFromInstallState(const ExtendedInstallationMetadata
     instanceInfo.manifestPath = manifestPath;
     instanceInfo.detectSource = detectSource;
     if (!manifestPath.empty()) {
-        nlohmann::json manifest = ReadManifestJsonLocal(manifestPath);
-        instanceInfo.installedVersion = manifest.value("appVersion", "");
+        instanceInfo.installedVersion = ReadManifestAppVersionFast(manifestPath);
     }
     if (error) {
         error->clear();

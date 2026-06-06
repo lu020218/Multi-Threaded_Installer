@@ -5,6 +5,8 @@
 #include "packager/configuration_manager.h"
 #include "packager/icon_updater.h"
 #include "packager/version_info_updater.h"
+#include "packager/pe_resource_embedder.h"
+#include "packager/template_loader.h"
 #include "common/package_manifest_codec.h"
 #include "installer/console_interface.h"
 #include "common/utf8_utils.h"
@@ -454,6 +456,19 @@ int main(int argc, char* argv[]) {
     } else {
         console.showWarning("Failed to apply installer version info: " + versionError);
     }
+
+    // Inject GUI resources (RES_ZIP) and the uninstaller binary as native PE resources.
+    // Must happen on the temp template before generateInstaller appends the data overlay.
+    std::string peResourceError;
+    if (!EmbedInstallerPeResources(tempTemplatePath,
+                                   PathFromUtf8(configPath) / "resources",
+                                   GetDefaultUninstallerTemplatePath(),
+                                   peResourceError)) {
+        console.showError("Failed to embed UI resources as PE resources: " + peResourceError);
+        return 1;
+    }
+    console.showInfo("Embedded UI resources (RES_ZIP + uninstaller) as PE resources");
+
     timings.templatePrepSec = ElapsedSeconds(templateStart, std::chrono::steady_clock::now());
     
     auto installerWriteStart = std::chrono::steady_clock::now();

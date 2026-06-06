@@ -1,5 +1,6 @@
-#include "../../include/gui/gui_helpers.h"
+﻿#include "../../include/gui/gui_helpers.h"
 #include "../../include/gui/message_box_dialog.h"
+#include "installer/gui_resource_loader.h"
 #include "common/utf8_utils.h"
 #include <UIlib.h>
 #include "Utils/unzip.h"
@@ -17,44 +18,13 @@ using namespace DuiLib;
 
 namespace {
 bool CanUseCustomDialog() {
-    if (CPaintManagerUI::GetResourcePath().IsEmpty()) {
+    // 资源经 UILIB_ZIP 常驻内存，直接从 DuiLib 缓存句柄探测皮肤条目是否存在。
+    if (CPaintManagerUI::GetResourceType() != UILIB_ZIP) {
         return false;
     }
-
-    if (CPaintManagerUI::GetResourceType() == UILIB_ZIP) {
-        CDuiString zipName = CPaintManagerUI::GetResourceZip();
-        if (zipName.IsEmpty()) {
-            return false;
-        }
-
-        CDuiString resourcePath = CPaintManagerUI::GetResourcePath();
-        CDuiString zipPathText = resourcePath + zipName;
-        std::filesystem::path zipPath = PathFromTChar(zipPathText.GetData());
-        if (!std::filesystem::exists(zipPath)) {
-            return false;
-        }
-
-        HZIP hz = OpenZip(zipPathText.GetData(), 0);
-        if (hz == NULL) {
-            return false;
-        }
-        ZIPENTRY ze;
-        int index = 0;
-        bool found = (FindZipItem(hz, _T("skins/msgBox.xml"), true, &index, &ze) == 0);
-        if (!found) {
-            found = (FindZipItem(hz, _T("skins\\msgBox.xml"), true, &index, &ze) == 0);
-        }
-        if (!found) {
-            found = (FindZipItem(hz, _T("msgBox.xml"), true, &index, &ze) == 0);
-        }
-        CloseZip(hz);
-        return found;
-    }
-
-    std::filesystem::path skinPath = PathFromTChar(CPaintManagerUI::GetResourcePath().GetData());
-    skinPath /= L"skins";
-    skinPath /= L"msgBox.xml";
-    return std::filesystem::exists(skinPath);
+    return ActiveResourceZipHasEntry("skins/msgBox.xml") ||
+           ActiveResourceZipHasEntry("skins\\msgBox.xml") ||
+           ActiveResourceZipHasEntry("msgBox.xml");
 }
 DialogResult ShowFallbackMessageBox(HWND hParent,
                                     const std::wstring& title,

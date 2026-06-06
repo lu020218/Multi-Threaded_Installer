@@ -1,7 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "installer/embedded_resources.h"
 #include <UIlib.h>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -18,10 +19,8 @@ struct WindowSize {
 
 struct GuiResourceContext {
     EmbeddedResourceManager resourceManager;
-    std::string tempResourcePath;
-    DuiLib::CDuiString resourcePath;
-    DuiLib::CDuiString resourceBasePath;
-    DuiLib::CDuiString skinsPath;
+    std::vector<uint8_t> zipBuffer;        // RES_ZIP 原始字节，常驻内存后交给 DuiLib
+    DuiLib::CDuiString resourcePath;       // 哨兵路径（非空，供相对路径推断逻辑使用）
     bool useZip = false;
 };
 
@@ -30,11 +29,12 @@ enum class GuiResourceValidationResult {
     Abort,
 };
 
-WindowSize GetWindowSizeFromResources(bool useZip,
-                                      const DuiLib::CDuiString& resourcePath,
-                                      const DuiLib::CDuiString& skinsPath,
-                                      bool uninstallMode,
-                                      WindowSize fallback);
+// 资源全部从内存 zip 句柄读取，按 uninstall 模式选择 main 皮肤解析窗口尺寸。
+WindowSize GetWindowSizeFromResources(bool uninstallMode, WindowSize fallback);
+
+// 从当前常驻内存的资源 zip（DuiLib 缓存句柄）读取/探测单个条目。供对话框、许可证等使用。
+std::string ReadActiveResourceZipEntry(const std::string& entryUtf8);
+bool ActiveResourceZipHasEntry(const std::string& entryUtf8);
 
 void PrepareGuiResources(HINSTANCE hInstance,
                          GuiResourceContext& context,

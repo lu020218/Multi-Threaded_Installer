@@ -78,6 +78,118 @@ bool ParseJsonSection(const std::vector<uint8_t>& bytes, json& out, std::string&
     }
 }
 
+// Parse a JSON section into a DOM, but drop the contents of every "fileIndex" array
+// (it becomes an empty array). This skips building DOM nodes for tens of thousands of
+// per-file entries that only the install path needs — saving both parse and allocation
+// cost when the caller (GUI startup) does not require fileIndex.
+bool ParseJsonSectionSkipFileIndex(const std::vector<uint8_t>& bytes, json& out, std::string& error) {
+    // Self-contained SAX -> DOM builder (only the public json_sax<json> interface), so it
+    // is independent of nlohmann's internal DOM-parser template. Containers are completed
+    // bottom-up (moved into the parent on end_*), avoiding any dangling pointers.
+    struct FilterSax : public nlohmann::json_sax<json> {
+        json& root;
+        std::vector<json> stack;        // containers currently being built
+        std::vector<std::string> keys;  // key under which stack[i] goes into its parent
+        std::vector<bool> parentIsObj;  // whether stack[i]'s parent is an object
+        std::string curKey;             // pending key for the top object
+        bool pendingFileIndex = false;  // last key was "fileIndex"
+        int swallowDepth = 0;           // >0: inside a fileIndex array being dropped
+
+        explicit FilterSax(json& r) : root(r) {}
+
+        void emit(json&& v) {
+            if (stack.empty()) {
+                root = std::move(v);
+                return;
+            }
+            json& top = stack.back();
+            if (top.is_object()) {
+                top[curKey] = std::move(v);
+            } else {
+                top.push_back(std::move(v));
+            }
+        }
+
+        bool beginContainer(json&& container) {
+            const bool parentObj = !stack.empty() && stack.back().is_object();
+            keys.push_back(parentObj ? curKey : std::string());
+            parentIsObj.push_back(parentObj);
+            stack.push_back(std::move(container));
+            return true;
+        }
+        bool endContainer() {
+            json done = std::move(stack.back());
+            stack.pop_back();
+            const std::string k = std::move(keys.back());
+            keys.pop_back();
+            const bool parentObj = parentIsObj.back();
+            parentIsObj.pop_back();
+            if (stack.empty()) {
+                root = std::move(done);
+            } else if (parentObj) {
+                stack.back()[k] = std::move(done);
+            } else {
+                stack.back().push_back(std::move(done));
+            }
+            return true;
+        }
+
+        bool null() override { if (swallowDepth) return true; emit(json(nullptr)); return true; }
+        bool boolean(bool v) override { if (swallowDepth) return true; emit(json(v)); return true; }
+        bool number_integer(number_integer_t v) override { if (swallowDepth) return true; emit(json(v)); return true; }
+        bool number_unsigned(number_unsigned_t v) override { if (swallowDepth) return true; emit(json(v)); return true; }
+        bool number_float(number_float_t v, const string_t&) override { if (swallowDepth) return true; emit(json(v)); return true; }
+        bool string(string_t& v) override { if (swallowDepth) return true; emit(json(v)); return true; }
+        bool binary(binary_t& v) override { if (swallowDepth) return true; emit(json(v)); return true; }
+        bool start_object(std::size_t) override {
+            if (swallowDepth) { ++swallowDepth; return true; }
+            pendingFileIndex = false;
+            return beginContainer(json::object());
+        }
+        bool key(string_t& v) override {
+            if (swallowDepth) return true;
+            curKey = v;
+            pendingFileIndex = (v == "fileIndex");
+            return true;
+        }
+        bool end_object() override {
+            if (swallowDepth) { --swallowDepth; return true; }
+            return endContainer();
+        }
+        bool start_array(std::size_t) override {
+            if (swallowDepth) { ++swallowDepth; return true; }
+            if (pendingFileIndex) {
+                pendingFileIndex = false;
+                emit(json::array());  // drop contents: store empty array for "fileIndex"
+                swallowDepth = 1;
+                return true;
+            }
+            return beginContainer(json::array());
+        }
+        bool end_array() override {
+            if (swallowDepth) { --swallowDepth; return true; }
+            return endContainer();
+        }
+        bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
+            return false;
+        }
+    };
+
+    try {
+        FilterSax sax(out);
+        const bool ok = json::sax_parse(bytes.begin(), bytes.end(), &sax,
+                                        json::input_format_t::json, false);
+        if (!ok) {
+            error = "Invalid manifest JSON section (fileIndex-skip).";
+            return false;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        error = std::string("Invalid manifest JSON section: ") + ex.what();
+        return false;
+    }
+}
+
 json RegistryToJson(const RegistryEntry& entry) {
     return json{
         {"path", entry.path},
@@ -944,7 +1056,8 @@ std::vector<uint8_t> SerializePackageManifest(const PackageManifest& manifest) {
 
 bool DeserializePackageManifest(const std::vector<uint8_t>& data,
                                 PackageManifest& manifest,
-                                std::string& error) {
+                                std::string& error,
+                                bool deferFileIndex) {
     manifest = PackageManifest{};
     error.clear();
     size_t offset = 0;
@@ -987,7 +1100,12 @@ bool DeserializePackageManifest(const std::vector<uint8_t>& data,
             return false;
         }
         json parsed;
-        if (!ParseJsonSection(bytes, parsed, error)) {
+        const bool skipFileIndex =
+            deferFileIndex && entry.type == static_cast<uint32_t>(SectionType::PayloadManifest);
+        const bool parsed_ok = skipFileIndex
+                                   ? ParseJsonSectionSkipFileIndex(bytes, parsed, error)
+                                   : ParseJsonSection(bytes, parsed, error);
+        if (!parsed_ok) {
             return false;
         }
         sectionJson[entry.type] = std::move(parsed);

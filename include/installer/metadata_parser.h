@@ -10,12 +10,16 @@ public:
     MetadataParser() = default;
     ~MetadataParser() = default;
     
-    ExtendedInstallationMetadata parseExtendedEmbeddedMetadata();
-    
+    // deferFileIndex=true skips the per-file fileIndex (only folder/scalar metadata is
+    // populated). The GUI uses this on the startup critical path; the install worker
+    // re-parses with deferFileIndex=false to obtain fileIndex.
+    ExtendedInstallationMetadata parseExtendedEmbeddedMetadata(bool deferFileIndex = false);
+
 
     bool validateMetadata(const ExtendedInstallationMetadata& metadata);
-    
-    ExtendedInstallationMetadata deserializeExtendedMetadata(const std::vector<uint8_t>& data);
+
+    ExtendedInstallationMetadata deserializeExtendedMetadata(const std::vector<uint8_t>& data,
+                                                             bool deferFileIndex = false);
 
     void setDataPackagePath(const std::string& dataPackagePath) { dataPackagePath_ = dataPackagePath; }
     const std::string& getDataPackagePath() const { return dataPackagePath_; }

@@ -286,9 +286,8 @@ set(PACKAGER_SOURCES
     src/packager/icon_updater.cpp
     src/packager/version_info_updater.cpp
     src/packager/template_loader.cpp
-    src/packager/resource_embedder.cpp
+    src/packager/pe_resource_embedder.cpp
     src/packager/resource_zip_builder.cpp
-    src/packager/embedded_resource_table.cpp
     src/packager/config_value_reader.cpp
     src/packager/config_parse_collections.cpp
     src/packager/configuration_loader.cpp

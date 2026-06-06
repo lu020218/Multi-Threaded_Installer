@@ -1,4 +1,4 @@
-#include "installer/gui_resource_loader.h"
+﻿#include "installer/gui_resource_loader.h"
 
 #include "common/installer_logger.h"
 #include "gui/gui_helpers.h"
@@ -22,33 +22,31 @@ using namespace DuiLib;
 namespace {
 
 struct GuiResourceDiagnosticContextSnapshot {
-    std::string tempResourcePath;
-    std::wstring resourcePath;
     bool useZip = false;
     bool valid = false;
 };
 
 GuiResourceDiagnosticContextSnapshot g_activeDiagnosticsContext;
 
-std::string ReadFileToString(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        return {};
-    }
-    return std::string((std::istreambuf_iterator<char>(file)),
-                       std::istreambuf_iterator<char>());
+// 哨兵资源路径：资源全部来自内存 zip，没有真实磁盘目录，但许多相对路径推断逻辑
+// 仅要求 GetResourcePath() 非空且 tail≠"skins"，此值满足这些条件。
+const TCHAR* const kInMemoryResourcePath = _T("memzip\\");
+
+// 资源经 SetResourceZip(buf,len) 常驻内存，DuiLib 持有一个缓存的 HZIP 句柄。
+// 所有读取都走这个句柄，不再打开任何磁盘 zip（句柄归 DuiLib 所有，切勿 CloseZip）。
+HZIP ActiveResourceZip() {
+    return reinterpret_cast<HZIP>(CPaintManagerUI::GetResourceZipHandle());
 }
 
-std::vector<std::string> EnumerateZipEntriesUtf8(const CDuiString& zipPath) {
+std::vector<std::string> EnumerateZipEntriesUtf8() {
     std::vector<std::string> entries;
-    HZIP hz = OpenZip(zipPath.GetData(), 0);
+    HZIP hz = ActiveResourceZip();
     if (hz == NULL) {
         return entries;
     }
 
     ZIPENTRY ze;
     if (GetZipItem(hz, -1, &ze) != 0) {
-        CloseZip(hz);
         return entries;
     }
 
@@ -62,27 +60,23 @@ std::vector<std::string> EnumerateZipEntriesUtf8(const CDuiString& zipPath) {
         entries.push_back(WideToUtf8(TCharToWide(item.name)));
     }
 
-    CloseZip(hz);
     return entries;
 }
 
-std::string ReadZipEntryToString(const CDuiString& zipPath, const CDuiString& entry) {
-    HZIP hz = OpenZip(zipPath.GetData(), 0);
+std::string ReadZipEntryToString(const CDuiString& entry) {
+    HZIP hz = ActiveResourceZip();
     if (hz == NULL) {
         return {};
     }
     ZIPENTRY ze;
     int index = 0;
     if (FindZipItem(hz, entry.GetData(), true, &index, &ze) != 0) {
-        CloseZip(hz);
         return {};
     }
     std::string buffer(static_cast<size_t>(ze.unc_size), '\0');
     if (UnzipItem(hz, index, buffer.data(), ze.unc_size) != 0) {
-        CloseZip(hz);
         return {};
     }
-    CloseZip(hz);
     return buffer;
 }
 
@@ -256,8 +250,7 @@ bool IsXmlEntry(const std::string& entry) {
            lowered.compare(lowered.size() - 4, 4, ".xml") == 0;
 }
 
-std::vector<std::string> CollectReferencedImageEntries(const CDuiString& zipPath,
-                                                       const std::vector<std::string>& entries,
+std::vector<std::string> CollectReferencedImageEntries(const std::vector<std::string>& entries,
                                                        const std::vector<std::string>* xmlEntriesFilter) {
     static const std::regex imageRefPattern(
         R"(((?:\.\./)?images[\\/][^"'<>|]+?\.(?:png|jpg|jpeg|bmp|gif|webp)))",
@@ -286,7 +279,7 @@ std::vector<std::string> CollectReferencedImageEntries(const CDuiString& zipPath
         }
 
         CDuiString entryPath(Utf8ToWide(entry).c_str());
-        const std::string content = ReadZipEntryToString(zipPath, entryPath);
+        const std::string content = ReadZipEntryToString(entryPath);
         if (content.empty()) {
             continue;
         }
@@ -306,30 +299,26 @@ std::vector<std::string> CollectReferencedImageEntries(const CDuiString& zipPath
 }
 
 void UpdateActiveDiagnosticsContext(const GuiResourceContext& context) {
-    g_activeDiagnosticsContext.tempResourcePath = context.tempResourcePath;
-    g_activeDiagnosticsContext.resourcePath = TCharToWide(context.resourcePath.GetData());
     g_activeDiagnosticsContext.useZip = context.useZip;
     g_activeDiagnosticsContext.valid = true;
 }
 
-void LogZipResourceDiagnostics(const CDuiString& zipPath,
-                               unsigned int dpi,
+void LogZipResourceDiagnostics(unsigned int dpi,
                                const char* stage,
                                const std::vector<std::string>* xmlEntriesFilter) {
     const unsigned int scalePercent = DpiToScalePercent(dpi);
-    const std::vector<std::string> entries = EnumerateZipEntriesUtf8(zipPath);
+    const std::vector<std::string> entries = EnumerateZipEntriesUtf8();
     if (entries.empty()) {
         logInstallerWarning(std::string("[GUI][DPI] stage=") + (stage ? stage : "unknown") +
                             " dpi=" + std::to_string(dpi) +
                             " scale=" + std::to_string(scalePercent) +
-                            "% zip_entries=0 zip_path=" +
-                            WideToUtf8(TCharToWide(zipPath.GetData())));
+                            "% zip_entries=0 (in-memory zip)");
         return;
     }
 
     std::unordered_set<std::string> entrySet(entries.begin(), entries.end());
     const std::vector<std::string> referencedImages =
-        CollectReferencedImageEntries(zipPath, entries, xmlEntriesFilter);
+        CollectReferencedImageEntries(entries, xmlEntriesFilter);
     std::vector<std::string> baseImages;
     std::vector<std::string> expectedMissing;
     std::vector<std::string> legacyFallbacks;
@@ -391,7 +380,7 @@ void LogZipResourceDiagnostics(const CDuiString& zipPath,
     logInstallerInfo(std::string("[GUI][DPI] stage=") + (stage ? stage : "unknown") +
                      " dpi=" + std::to_string(dpi) +
                      " scale=" + std::to_string(scalePercent) +
-                     "% zip_path=" + WideToUtf8(TCharToWide(zipPath.GetData())) +
+                     "% zip=in-memory" +
                      " xml_scope=" +
                      (xmlEntriesFilter && !xmlEntriesFilter->empty()
                           ? JoinSampleList(*xmlEntriesFilter, 6)
@@ -425,91 +414,47 @@ void LogZipResourceDiagnostics(const CDuiString& zipPath,
 
 } // namespace
 
-WindowSize GetWindowSizeFromResources(bool useZip,
-                                      const CDuiString& resourcePath,
-                                      const CDuiString& skinsPath,
-                                      bool uninstallMode,
-                                      WindowSize fallback) {
-    const wchar_t* zipFileName = L"resources.zip";
+WindowSize GetWindowSizeFromResources(bool uninstallMode, WindowSize fallback) {
     const wchar_t* mainFile = uninstallMode ? L"uninstall_main.xml" : L"main.xml";
+    std::vector<CDuiString> candidates;
+    candidates.emplace_back(CDuiString(_T("skins\\")) + mainFile);
+    candidates.emplace_back(CDuiString(_T("skins/")) + mainFile);
+    candidates.emplace_back(CDuiString(mainFile));
 
-    if (useZip) {
-        CDuiString zipPath = resourcePath + zipFileName;
-        std::vector<CDuiString> candidates;
-        candidates.emplace_back(CDuiString(_T("skins\\")) + mainFile);
-        candidates.emplace_back(CDuiString(_T("skins/")) + mainFile);
-        candidates.emplace_back(CDuiString(mainFile));
-
-        for (const auto& entry : candidates) {
-            std::string content = ReadZipEntryToString(zipPath, entry);
-            if (!content.empty()) {
-                return ParseWindowSizeFromXml(content, fallback);
-            }
+    for (const auto& entry : candidates) {
+        std::string content = ReadZipEntryToString(entry);
+        if (!content.empty()) {
+            return ParseWindowSizeFromXml(content, fallback);
         }
-        return fallback;
     }
-
-    std::filesystem::path filePath = PathFromTChar(skinsPath.GetData());
-    filePath /= mainFile;
-    std::string content = ReadFileToString(filePath);
-    if (content.empty()) {
-        return fallback;
-    }
-    return ParseWindowSizeFromXml(content, fallback);
+    return fallback;
 }
 
 void PrepareGuiResources(HINSTANCE hInstance,
                          GuiResourceContext& context,
                          bool verboseLogs) {
-    context.tempResourcePath = context.resourceManager.extractResources();
     CPaintManagerUI::SetInstance(hInstance);
 
-    if (!context.tempResourcePath.empty()) {
-#if defined(UNICODE) || defined(_UNICODE)
-        std::wstring wpath = Utf8ToWide(context.tempResourcePath);
-        if (!wpath.empty()) {
-            context.resourceBasePath = wpath.c_str();
-        }
-#else
-        context.resourceBasePath = context.tempResourcePath.c_str();
-#endif
-        context.resourcePath = context.resourceBasePath;
-        if (!context.resourcePath.IsEmpty()) {
-            TCHAR lastChar = context.resourcePath.GetAt(context.resourcePath.GetLength() - 1);
-            if (lastChar != _T('\\') && lastChar != _T('/')) {
-                context.resourcePath += _T("\\");
-            }
-        }
-        context.skinsPath = context.resourcePath + _T("skins\\");
-        if (verboseLogs) {
-            logInstallerInfo(std::string("[GUI][RES] Using extracted resources from: ") +
-                             context.tempResourcePath);
-        }
-    }
+    // 直接读取嵌入的 RES_ZIP 到内存，不再释放到临时磁盘。
+    context.zipBuffer = context.resourceManager.getEmbeddedResource("RES_ZIP");
+    context.useZip = !context.zipBuffer.empty();
+    context.resourcePath = kInMemoryResourcePath;  // 哨兵：非空且 tail≠skins
 
-    context.useZip = false;
-    if (!context.tempResourcePath.empty()) {
-        std::filesystem::path zipPath = PathFromUtf8(context.tempResourcePath) / "resources.zip";
-        context.useZip = std::filesystem::exists(zipPath);
+    if (verboseLogs) {
+        logInstallerInfo(std::string("[GUI][RES] Loaded in-memory resources.zip bytes=") +
+                         std::to_string(context.zipBuffer.size()));
     }
 }
 
 GuiResourceValidationResult ValidateInstallGuiResources(const GuiResourceContext& context) {
-    if (!context.tempResourcePath.empty() && context.useZip && !context.resourcePath.IsEmpty()) {
+    if (context.useZip && !context.zipBuffer.empty()) {
         return GuiResourceValidationResult::Ok;
     }
 
     CDuiString instancePath = CPaintManagerUI::GetInstancePath();
     logInstallerError(std::string("[GUI][RES] Instance path: ") +
                       WideToUtf8(TCharToWide(instancePath.GetData())));
-    logInstallerError(std::string("[GUI][RES] Resource path: ") +
-                      WideToUtf8(TCharToWide(context.resourcePath.GetData())));
-    logInstallerError(std::string("[GUI][RES] Skin path: ") +
-                      WideToUtf8(TCharToWide(context.skinsPath.GetData())));
-    logInstallerError(std::string("[GUI][RES] Embedded resource temp path present: ") +
-                      (!context.tempResourcePath.empty() ? "YES" : "NO"));
-    logInstallerError(std::string("[GUI][RES] Embedded resource zip present: ") +
-                      (context.useZip ? "YES" : "NO"));
+    logInstallerError("[GUI][RES] Embedded resource zip (RES_ZIP) present: NO");
 
     std::wstring resourceMissingSummary =
         GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.summary", L"");
@@ -517,12 +462,9 @@ GuiResourceValidationResult ValidateInstallGuiResources(const GuiResourceContext
         GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.debug", L"");
     std::wstring instanceLabel =
         GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.instance_path", L"");
-    std::wstring resourceLabel =
-        GUIHelpers::GetLocalizedText(L"msg.dialog.resources_missing.resource_path", L"");
     std::wstring errorMessage =
         resourceMissingSummary + L"\n\n" + debugHeader + L"\n" + instanceLabel + L": " +
-        TCharToWide(instancePath.GetData()) + L"\n" + resourceLabel + L": " +
-        TCharToWide(context.resourceBasePath.GetData());
+        TCharToWide(instancePath.GetData());
 
     GUIHelpers::ShowWarningDialog(
         nullptr,
@@ -534,18 +476,21 @@ GuiResourceValidationResult ValidateInstallGuiResources(const GuiResourceContext
 
 void ApplyGuiResources(const GuiResourceContext& context, bool verboseLogs) {
     UpdateActiveDiagnosticsContext(context);
-    if (!context.useZip || context.resourcePath.IsEmpty()) {
+    if (!context.useZip || context.zipBuffer.empty()) {
         logInstallerWarning("[GUI][RES] Resource zip enabled: false");
         logInstallerWarning("[GUI][DPI] Resource zip disabled, diagnostics skipped.");
         return;
     }
 
+    // 哨兵资源路径（非空，供 GetLanguageFilePath 等相对路径逻辑使用）。
     CPaintManagerUI::SetResourcePath(context.resourcePath);
-    CPaintManagerUI::SetResourceZip(_T("resources.zip"), true);
+    // 内存加载 zip：DuiLib 会自行拷贝缓冲区并常驻一个 HZIP 句柄。
+    CPaintManagerUI::SetResourceZip(const_cast<uint8_t*>(context.zipBuffer.data()),
+                                    static_cast<unsigned int>(context.zipBuffer.size()));
     CPaintManagerUI::SetResourceType(UILIB_ZIP);
     if (verboseLogs) {
-        logInstallerInfo(std::string("[GUI][RES] Set resource zip to: ") +
-                         WideToUtf8(TCharToWide((context.resourcePath + _T("resources.zip")).GetData())));
+        logInstallerInfo(std::string("[GUI][RES] Set in-memory resource zip, bytes=") +
+                         std::to_string(context.zipBuffer.size()));
     }
     logInstallerInfo("[GUI][RES] Resource zip enabled: true");
 }
@@ -554,71 +499,56 @@ void LogGuiResourceDiagnostics(const GuiResourceContext& context,
                                unsigned int dpi,
                                const char* stage) {
     UpdateActiveDiagnosticsContext(context);
-    if (!context.useZip || context.resourcePath.IsEmpty()) {
+    if (!context.useZip) {
         logInstallerWarning(std::string("[GUI][DPI] stage=") + (stage ? stage : "unknown") +
-                            " dpi=" + std::to_string(dpi) +
-                            " use_zip=false resource_path=" +
-                            WideToUtf8(TCharToWide(context.resourcePath.GetData())));
+                            " dpi=" + std::to_string(dpi) + " use_zip=false");
         return;
     }
-
-    CDuiString zipPath = context.resourcePath + _T("resources.zip");
-    LogZipResourceDiagnostics(zipPath, dpi, stage, nullptr);
+    LogZipResourceDiagnostics(dpi, stage, nullptr);
 }
 
 void LogActiveGuiResourceDiagnostics(unsigned int dpi, const char* stage) {
-    if (!g_activeDiagnosticsContext.valid) {
+    if (!g_activeDiagnosticsContext.valid || !g_activeDiagnosticsContext.useZip) {
         logInstallerWarning(std::string("[GUI][DPI] stage=") + (stage ? stage : "unknown") +
-                            " dpi=" + std::to_string(dpi) +
-                            " no active GUI resource context");
+                            " dpi=" + std::to_string(dpi) + " no active in-memory zip");
         return;
     }
-
-    if (!g_activeDiagnosticsContext.useZip || g_activeDiagnosticsContext.resourcePath.empty()) {
-        logInstallerWarning(std::string("[GUI][DPI] stage=") + (stage ? stage : "unknown") +
-                            " dpi=" + std::to_string(dpi) +
-                            " use_zip=false resource_path=" +
-                            WideToUtf8(g_activeDiagnosticsContext.resourcePath));
-        return;
-    }
-
-    CDuiString resourcePath(g_activeDiagnosticsContext.resourcePath.c_str());
-    CDuiString zipPath = resourcePath + _T("resources.zip");
-    LogZipResourceDiagnostics(zipPath, dpi, stage, nullptr);
+    LogZipResourceDiagnostics(dpi, stage, nullptr);
 }
 
 void LogActiveGuiResourceDiagnosticsForXmlEntries(unsigned int dpi,
                                                  const char* stage,
                                                  const std::vector<std::string>& xmlEntries) {
-    if (!g_activeDiagnosticsContext.valid) {
+    if (!g_activeDiagnosticsContext.valid || !g_activeDiagnosticsContext.useZip) {
         logInstallerWarning(std::string("[GUI][DPI] stage=") + (stage ? stage : "unknown") +
-                            " dpi=" + std::to_string(dpi) +
-                            " no active GUI resource context");
+                            " dpi=" + std::to_string(dpi) + " no active in-memory zip");
         return;
     }
-
-    if (!g_activeDiagnosticsContext.useZip || g_activeDiagnosticsContext.resourcePath.empty()) {
-        logInstallerWarning(std::string("[GUI][DPI] stage=") + (stage ? stage : "unknown") +
-                            " dpi=" + std::to_string(dpi) +
-                            " use_zip=false resource_path=" +
-                            WideToUtf8(g_activeDiagnosticsContext.resourcePath));
-        return;
-    }
-
-    CDuiString resourcePath(g_activeDiagnosticsContext.resourcePath.c_str());
-    CDuiString zipPath = resourcePath + _T("resources.zip");
-    LogZipResourceDiagnostics(zipPath, dpi, stage, &xmlEntries);
+    LogZipResourceDiagnostics(dpi, stage, &xmlEntries);
 }
 
 void RunDeferredGuiResourceDiagnostics() {
-    if (!g_activeDiagnosticsContext.valid || !g_activeDiagnosticsContext.useZip ||
-        g_activeDiagnosticsContext.resourcePath.empty()) {
+    if (!g_activeDiagnosticsContext.valid || !g_activeDiagnosticsContext.useZip) {
         return;
     }
+    LogZipResourceDiagnostics(96, "DeferredApplyGuiResources", nullptr);
+}
 
-    CDuiString resourcePath(g_activeDiagnosticsContext.resourcePath.c_str());
-    CDuiString zipPath = resourcePath + _T("resources.zip");
-    LogZipResourceDiagnostics(zipPath, 96, "DeferredApplyGuiResources", nullptr);
+// 供其它模块（自定义对话框、许可证加载等）从内存 zip 句柄读取条目。
+std::string ReadActiveResourceZipEntry(const std::string& entryUtf8) {
+    CDuiString entry(Utf8ToWide(entryUtf8).c_str());
+    return ReadZipEntryToString(entry);
+}
+
+bool ActiveResourceZipHasEntry(const std::string& entryUtf8) {
+    HZIP hz = ActiveResourceZip();
+    if (hz == NULL) {
+        return false;
+    }
+    CDuiString entry(Utf8ToWide(entryUtf8).c_str());
+    ZIPENTRY ze;
+    int index = 0;
+    return FindZipItem(hz, entry.GetData(), true, &index, &ze) == 0;
 }
 
 } // namespace MultiThreadedInstaller

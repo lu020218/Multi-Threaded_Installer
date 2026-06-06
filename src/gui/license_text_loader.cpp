@@ -1,13 +1,10 @@
-#include "../../include/gui/license_text_loader.h"
+﻿#include "../../include/gui/license_text_loader.h"
 
 #include "../../include/gui/gui_helpers.h"
+#include "installer/gui_resource_loader.h"
 #include "common/utf8_utils.h"
 
-#include "Utils/unzip.h"
-
 #include <UIlib.h>
-#include <filesystem>
-#include <fstream>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -39,72 +36,16 @@ std::vector<std::string> BuildLicenseCandidates(const std::wstring& languageCode
     return candidates;
 }
 
-bool ReadZipTextFile(const CDuiString& zipPath,
-                     const std::string& relativePath,
-                     std::wstring& text) {
-    HZIP hz = OpenZip(zipPath.GetData(), 0);
-    if (hz == NULL) {
-        return false;
-    }
-
-    bool found = false;
-    ZIPENTRY ze;
-    int index = 0;
-    #ifdef UNICODE
-    CDuiString zipItem(Utf8ToWide(relativePath).c_str());
-    #else
-    CDuiString zipItem(relativePath.c_str());
-    #endif
-    if (FindZipItem(hz, zipItem.GetData(), true, &index, &ze) == 0) {
-        std::vector<char> buffer(static_cast<size_t>(ze.unc_size));
-        if (UnzipItem(hz, index, buffer.data(), ze.unc_size) == 0) {
-            std::string utf8(buffer.begin(), buffer.end());
-            text = Utf8ToWide(utf8);
-            found = true;
-        }
-    }
-
-    CloseZip(hz);
-    return found;
-}
-
-bool ReadDirectoryTextFile(const std::filesystem::path& basePath,
-                           const std::string& relativePath,
-                           std::wstring& text) {
-    std::filesystem::path fullPath = basePath / PathFromUtf8(relativePath);
-    std::ifstream file(fullPath, std::ios::binary);
-    if (!file.is_open()) {
-        return false;
-    }
-
-    std::string utf8((std::istreambuf_iterator<char>(file)),
-                     std::istreambuf_iterator<char>());
-    text = Utf8ToWide(utf8);
-    return true;
-}
-
 } // namespace
 
 std::wstring LoadLocalizedLicenseText(const std::wstring& languageCode) {
     const std::vector<std::string> candidates = BuildLicenseCandidates(languageCode);
 
-    if (CPaintManagerUI::GetResourceType() == UILIB_ZIP &&
-        !CPaintManagerUI::GetResourceZip().IsEmpty()) {
-        const CDuiString zipPath =
-            CPaintManagerUI::GetResourcePath() + CPaintManagerUI::GetResourceZip();
-        for (const auto& candidate : candidates) {
-            std::wstring text;
-            if (ReadZipTextFile(zipPath, candidate, text)) {
-                return text;
-            }
-        }
-    }
-
-    const std::filesystem::path resourceBase = PathFromTChar(CPaintManagerUI::GetResourcePath().GetData());
+    // 许可证文本从常驻内存的资源 zip 句柄读取。
     for (const auto& candidate : candidates) {
-        std::wstring text;
-        if (ReadDirectoryTextFile(resourceBase, candidate, text)) {
-            return text;
+        const std::string utf8 = ReadActiveResourceZipEntry(candidate);
+        if (!utf8.empty()) {
+            return Utf8ToWide(utf8);
         }
     }
 

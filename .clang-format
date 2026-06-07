@@ -1,0 +1,35 @@
+# 固化项目现有 C++ 风格（不为重排历史，仅约束新代码/手动 format 时一致）。
+# 用法：clang-format -i <file>，或编辑器保存时格式化。
+Language: Cpp
+BasedOnStyle: LLVM
+
+# 缩进：4 空格，不用 Tab。
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+
+# 行宽：与现有约 100 列一致。
+ColumnLimit: 100
+
+# 大括号：附着在同一行（K&R 风格，项目现状）。
+BreakBeforeBraces: Attach
+
+# 命名空间不额外缩进，结尾保留 `// namespace` 注释（项目现状）。
+NamespaceIndentation: None
+FixNamespaceComments: true
+
+# 指针/引用左对齐：`Type* p` / `const T& r`（项目现状）。
+PointerAlignment: Left
+DerivePointerAlignment: false
+
+# 其它与现状对齐的细节。
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+SpaceBeforeParens: ControlStatements
+SortIncludes: false
+IndentCaseLabels: true
+Cpp11BracedListStyle: true
+ReflowComments: false

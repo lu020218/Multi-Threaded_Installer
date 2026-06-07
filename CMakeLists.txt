@@ -4,6 +4,12 @@ project(MultiThreadedInstaller VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# 源码与注释含中文（UTF-8）。强制 MSVC 以 UTF-8 读取源文件，避免多字节字符的
+# 尾字节（如 0x5C）吃掉换行导致的诡异解析错误。
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 option(VERIFY_THIRD_PARTY_HASHES "Validate prebuilt third-party library hashes" ON)
 option(ENABLE_ZSTD "Enable ZSTD compression support for packager" ON)
 option(ZSTD_FORCE_THIRD_PARTY_BINARY "Force using third_party zstd prebuilt binary on MSVC toolchains" OFF)
@@ -289,117 +295,120 @@ set(PACKAGER_SOURCES
     src/packager/pe_resource_embedder.cpp
     src/packager/resource_zip_builder.cpp
     src/packager/config_value_reader.cpp
-    src/packager/config_parse_collections.cpp
     src/packager/configuration_loader.cpp
     src/packager/configuration_validator.cpp
     src/packager/configuration_manager.cpp
     src/packager/main.cpp
-    src/installer/console_interface.cpp
+    src/installer/app/console_interface.cpp
 )
 
 # Source files for installer
 set(INSTALLER_SOURCES
-    src/installer/metadata_parser.cpp
-    src/installer/package_manifest_validator.cpp
-    src/installer/installer_task_manager.cpp
-    src/installer/thread_pool_manager.cpp
-    src/installer/decompression_engine.cpp
-    src/installer/folder_payload_reader.cpp
-    src/installer/folder_install_executor.cpp
-    src/installer/tar_stream_extractor.cpp
-    src/installer/file_system_operator.cpp
-    src/installer/component_launcher.cpp
-    src/installer/console_interface.cpp
-    src/installer/path_resolver.cpp
-    src/installer/installer_helpers.cpp
-    src/installer/file_io_utils.cpp
-    src/installer/shortcut_startup_utils.cpp
-    src/installer/registry_utils.cpp
-    src/installer/install_state_utils.cpp
-    src/installer/install_state_store.cpp
-    src/installer/install_progress_reporter.cpp
-    src/installer/install_plan_builder.cpp
-    src/installer/install_precheck.cpp
-    src/installer/install_cleanup_executor.cpp
-    src/installer/installer_concurrency_policy.cpp
-    src/installer/cleanup_delete_executor.cpp
-    src/installer/install_execution.cpp
-    src/installer/install_finalize.cpp
-    src/installer/install_service.cpp
-    src/installer/install_manifest_store.cpp
-    src/installer/installed_instance_resolver.cpp
-    src/installer/self_delete_scheduler.cpp
-    src/installer/upgrade_cleanup.cpp
-    src/installer/uninstall_manager.cpp
-    src/installer/gui_resource_loader.cpp
-    src/installer/launch_support.cpp
-    src/installer/installer_main.cpp
+    src/installer/payload/metadata_parser.cpp
+    src/installer/payload/package_manifest_validator.cpp
+    src/installer/pipeline/installer_task_manager.cpp
+    src/installer/pipeline/thread_pool_manager.cpp
+    src/installer/payload/decompression_engine.cpp
+    src/installer/payload/folder_payload_reader.cpp
+    src/installer/payload/folder_install_executor.cpp
+    src/installer/payload/tar_stream_extractor.cpp
+    src/installer/platform/file_system_operator.cpp
+    src/installer/hooks/component_launcher.cpp
+    src/installer/hooks/hook_runner.cpp
+    src/installer/migration/migration.cpp
+    src/installer/app/console_interface.cpp
+    src/installer/platform/path_resolver.cpp
+    src/installer/platform/installer_helpers.cpp
+    src/installer/platform/file_io_utils.cpp
+    src/installer/platform/shortcut_startup_utils.cpp
+    src/installer/state/registry_utils.cpp
+    src/installer/state/install_state_utils.cpp
+    src/installer/state/install_state_store.cpp
+    src/installer/pipeline/install_progress_reporter.cpp
+    src/installer/pipeline/install_plan_builder.cpp
+    src/installer/pipeline/install_precheck.cpp
+    src/installer/pipeline/install_cleanup_executor.cpp
+    src/installer/pipeline/installer_concurrency_policy.cpp
+    src/installer/uninstall/cleanup_delete_executor.cpp
+    src/installer/pipeline/install_execution.cpp
+    src/installer/pipeline/install_finalize.cpp
+    src/installer/pipeline/install_service.cpp
+    src/installer/state/install_manifest_store.cpp
+    src/installer/state/installed_instance_resolver.cpp
+    src/installer/uninstall/self_delete_scheduler.cpp
+    src/installer/uninstall/upgrade_cleanup.cpp
+    src/installer/uninstall/uninstall_manager.cpp
+    src/installer/platform/gui_resource_loader.cpp
+    src/installer/app/launch_support.cpp
+    src/installer/app/installer_main.cpp
     src/common/installer_parallel_install.cpp
 )
 
 set(UNINSTALLER_SOURCES
-    src/installer/metadata_parser.cpp
-    src/installer/package_manifest_validator.cpp
-    src/installer/installer_task_manager.cpp
-    src/installer/thread_pool_manager.cpp
-    src/installer/decompression_engine.cpp
-    src/installer/folder_payload_reader.cpp
-    src/installer/folder_install_executor.cpp
-    src/installer/tar_stream_extractor.cpp
-    src/installer/file_system_operator.cpp
-    src/installer/component_launcher.cpp
-    src/installer/console_interface.cpp
-    src/installer/path_resolver.cpp
-    src/installer/installer_helpers.cpp
-    src/installer/file_io_utils.cpp
-    src/installer/shortcut_startup_utils.cpp
-    src/installer/registry_utils.cpp
-    src/installer/install_state_utils.cpp
-    src/installer/install_state_store.cpp
-    src/installer/install_progress_reporter.cpp
-    src/installer/install_plan_builder.cpp
-    src/installer/install_precheck.cpp
-    src/installer/install_cleanup_executor.cpp
-    src/installer/installer_concurrency_policy.cpp
-    src/installer/cleanup_delete_executor.cpp
-    src/installer/install_execution.cpp
-    src/installer/install_finalize.cpp
-    src/installer/install_service.cpp
-    src/installer/install_manifest_store.cpp
-    src/installer/installed_instance_resolver.cpp
-    src/installer/self_delete_scheduler.cpp
-    src/installer/upgrade_cleanup.cpp
-    src/installer/uninstall_manager.cpp
-    src/installer/gui_resource_loader.cpp
-    src/installer/launch_support.cpp
-    src/installer/uninstaller_main.cpp
+    src/installer/payload/metadata_parser.cpp
+    src/installer/payload/package_manifest_validator.cpp
+    src/installer/pipeline/installer_task_manager.cpp
+    src/installer/pipeline/thread_pool_manager.cpp
+    src/installer/payload/decompression_engine.cpp
+    src/installer/payload/folder_payload_reader.cpp
+    src/installer/payload/folder_install_executor.cpp
+    src/installer/payload/tar_stream_extractor.cpp
+    src/installer/platform/file_system_operator.cpp
+    src/installer/hooks/component_launcher.cpp
+    src/installer/hooks/hook_runner.cpp
+    src/installer/migration/migration.cpp
+    src/installer/app/console_interface.cpp
+    src/installer/platform/path_resolver.cpp
+    src/installer/platform/installer_helpers.cpp
+    src/installer/platform/file_io_utils.cpp
+    src/installer/platform/shortcut_startup_utils.cpp
+    src/installer/state/registry_utils.cpp
+    src/installer/state/install_state_utils.cpp
+    src/installer/state/install_state_store.cpp
+    src/installer/pipeline/install_progress_reporter.cpp
+    src/installer/pipeline/install_plan_builder.cpp
+    src/installer/pipeline/install_precheck.cpp
+    src/installer/pipeline/install_cleanup_executor.cpp
+    src/installer/pipeline/installer_concurrency_policy.cpp
+    src/installer/uninstall/cleanup_delete_executor.cpp
+    src/installer/pipeline/install_execution.cpp
+    src/installer/pipeline/install_finalize.cpp
+    src/installer/pipeline/install_service.cpp
+    src/installer/state/install_manifest_store.cpp
+    src/installer/state/installed_instance_resolver.cpp
+    src/installer/uninstall/self_delete_scheduler.cpp
+    src/installer/uninstall/upgrade_cleanup.cpp
+    src/installer/uninstall/uninstall_manager.cpp
+    src/installer/platform/gui_resource_loader.cpp
+    src/installer/app/launch_support.cpp
+    src/installer/app/uninstaller_main.cpp
     src/common/installer_parallel_install.cpp
 )
 
 set(GUI_SOURCES
-    src/gui/gui_manager.cpp
-    src/gui/gui_runtime_utils.cpp
-    src/gui/gui_text_presenter.cpp
-    src/gui/gui_status_presenter.cpp
-    src/gui/progress_path_formatter.cpp
-    src/gui/gui_diagnostics.cpp
-    src/gui/gui_event_router.cpp
-    src/gui/gui_startup_initializer.cpp
-    src/gui/gui_component_binding.cpp
-    src/gui/gui_interaction_helpers.cpp
-    src/gui/gui_install_flow_utils.cpp
-    src/gui/gui_install_actions.cpp
-    src/gui/page_controller.cpp
-    src/gui/installation_worker.cpp
-    src/gui/uninstall_worker.cpp
-    src/gui/welcome_page_controller.cpp
-    src/gui/progress_page_controller.cpp
-    src/gui/completion_page_controller.cpp
-    src/gui/license_dialog.cpp
-    src/gui/license_text_loader.cpp
-    src/gui/message_box_dialog.cpp
-    src/gui/gui_helpers.cpp
-    src/installer/embedded_resources.cpp
+    src/gui/core/gui_manager.cpp
+    src/gui/core/gui_runtime_utils.cpp
+    src/gui/presenters/gui_text_presenter.cpp
+    src/gui/presenters/gui_status_presenter.cpp
+    src/gui/presenters/progress_path_formatter.cpp
+    src/gui/presenters/gui_diagnostics.cpp
+    src/gui/core/gui_event_router.cpp
+    src/gui/core/gui_startup_initializer.cpp
+    src/gui/install/gui_component_binding.cpp
+    src/gui/core/gui_interaction_helpers.cpp
+    src/gui/install/gui_install_flow_utils.cpp
+    src/gui/install/gui_install_actions.cpp
+    src/gui/pages/page_controller.cpp
+    src/gui/workers/installation_worker.cpp
+    src/gui/workers/uninstall_worker.cpp
+    src/gui/pages/welcome_page_controller.cpp
+    src/gui/pages/progress_page_controller.cpp
+    src/gui/pages/completion_page_controller.cpp
+    src/gui/dialogs/license_dialog.cpp
+    src/gui/dialogs/license_text_loader.cpp
+    src/gui/dialogs/message_box_dialog.cpp
+    src/gui/core/gui_helpers.cpp
+    src/installer/platform/embedded_resources.cpp
 )
 list(APPEND INSTALLER_SOURCES ${GUI_SOURCES})
 list(APPEND UNINSTALLER_SOURCES ${GUI_SOURCES})

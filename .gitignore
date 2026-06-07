@@ -47,3 +47,6 @@ build/ZERO_CHECK.vcxproj.filters
 /third_party/spdlog
 /test-work
 /build/test
+/build
+
+/cmake-build-debug

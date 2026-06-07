@@ -49,12 +49,6 @@ public:
      *
      *
      */
-    void applyFolderTargets(std::vector<FolderInfo>& folders);
-    
-    /**
-     *
-     *
-     */
     std::string getLastError() const { return lastError_; }
     
 private:

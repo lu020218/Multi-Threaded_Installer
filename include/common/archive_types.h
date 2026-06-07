@@ -2,6 +2,7 @@
 
 #include "common/config_types.h"
 
+#include <functional>
 #include <memory>
 #include <unordered_map>
 
@@ -94,62 +95,38 @@ struct InstallationMetadata {
     InstallationMetadata() : version(1), folderCount(0), totalPayloadCompressedSize(0) {}
 };
 
+// 一个内嵌的 pre/post 钩子脚本，随安装器一同打包，运行期临时释放后执行。
+struct HookScript {
+    bool present = false;
+    std::string scriptName;          // 仅日志用，如 pre_install.bat
+    std::vector<uint8_t> content;    // 打包期读入内嵌的脚本字节
+    std::string args;                // 本次构建特有参数
+    uint8_t onFailure = 0;           // 0 = abort（中止回滚），1 = continue（记日志继续）
+    uint32_t timeoutSec = 300;       // 超时上限（秒）
+};
+
+// 构建期 → 运行期唯一的桥，收窄为：身份 + 载荷 + 钩子。
+// 其余安装行为默认值、清理规则、跨版本兼容等全部写死/实现在引擎内。
 struct ExtendedInstallationMetadata : public InstallationMetadata {
-    std::string appName;
-    std::string appId;
-    std::string appDirectoryName;
+    // 身份（其余版本资源字段在打包期已写入 exe PE 资源，运行期无需携带）。
+    std::string appProductName;
     std::string appPublisher;
-    std::string desktopShortcutDefaultName;
-    std::unordered_map<std::string, std::string> desktopShortcutLocalizedNames;
     std::string appVersion;
-    std::string installDefaultDir;
-    std::string appWebsite;
-    bool installAutoStartup;
-    bool installDesktopIcon;
-    bool installAutoCleanOldInstall;
-    bool installRequireAdmin;
-    uint16_t installMinWindowsMajor;
-    uint16_t installMinWindowsMinor;
-    uint32_t installMinWindowsBuild;
-    uint64_t installSparseFileThresholdBytes;
-    bool installUseMutex;
-    std::string installMutexName;
-    InstallInfoConfig installInfo;
-    InstallStateConfig installState;
-    SystemUninstallEntryConfig systemUninstallEntry;
-    InstallerCleanupConfig installerCleanup;
-    UninstallerCleanupConfigV3 uninstallerCleanup;
-    std::vector<InstallerRegistryWriteGroup> installerRegistryWrite;
-    std::vector<std::string> uninstallerKillBeforeUninstall;
+    std::string appDefaultDir;
+
+    // 载荷。
     std::vector<ExtendedFolderMapping> extendedPayloadMappings;
-    std::vector<RegistryEntry> lifecycleInstallRegistry;
-    std::vector<std::string> installKillProcesses;
-    std::vector<ComponentConfig> layoutComponents;
-    UiComponentSelectionConfig uiComponentSelection;
-    std::vector<UiLinkBinding> uiLinkBindings;
-    UninstallCleanupConfig lifecycleUninstallCleanup;
-    UpgradeCleanupConfig lifecycleUpgradeCleanup;
-    std::string installStateCleanupMode;
+
+    // 钩子。
+    HookScript preInstall;
+    HookScript postInstall;
 
     ExtendedInstallationMetadata()
         : InstallationMetadata(),
-          appName("MyApplication"),
-          appId(""),
-          appDirectoryName(""),
+          appProductName("MyApplication"),
           appPublisher(""),
-          desktopShortcutDefaultName(""),
           appVersion("1.0"),
-          installDefaultDir("%ProgramFiles%"),
-          appWebsite(""),
-          installAutoStartup(false),
-          installDesktopIcon(false),
-          installAutoCleanOldInstall(false),
-          installRequireAdmin(false),
-          installMinWindowsMajor(0),
-          installMinWindowsMinor(0),
-          installMinWindowsBuild(0),
-          installUseMutex(true),
-          installSparseFileThresholdBytes(4 * 1024 * 1024) {}
+          appDefaultDir("%ProgramFiles%") {}
 };
 
 struct DecompressionTask {
@@ -179,7 +156,8 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;
-    constexpr uint32_t VERSION = 23;
+    // 24 = 重构后的精简 manifest（identity + payload + hooks）。安装器拒绝读 < 24 的旧包。
+    constexpr uint32_t VERSION = 24;
 
     constexpr int DEFAULT_LZMA_LEVEL = 9;
     constexpr int DEFAULT_ZSTD_LEVEL = 3;

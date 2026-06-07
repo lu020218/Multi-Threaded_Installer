@@ -1,12 +1,12 @@
 #include "common/installer_parallel_install.h"
 
 #include "common/installer_logger.h"
-#include "installer/folder_install_executor.h"
-#include "installer/folder_payload_reader.h"
-#include "installer/installer_concurrency_policy.h"
-#include "installer/installer_helpers.h"
-#include "installer/path_resolver.h"
-#include "installer/thread_pool_manager.h"
+#include "installer/payload/folder_install_executor.h"
+#include "installer/payload/folder_payload_reader.h"
+#include "installer/pipeline/installer_concurrency_policy.h"
+#include "installer/platform/installer_helpers.h"
+#include "installer/platform/path_resolver.h"
+#include "installer/pipeline/thread_pool_manager.h"
 
 #include <algorithm>
 #include <atomic>

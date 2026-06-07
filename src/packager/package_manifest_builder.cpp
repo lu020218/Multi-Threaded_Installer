@@ -2,90 +2,75 @@
 
 #include "common/utf8_utils.h"
 
+#include <chrono>
+#include <ctime>
 #include <filesystem>
-#include <unordered_map>
+#include <fstream>
+
+namespace fs = std::filesystem;
 
 namespace MultiThreadedInstaller {
 namespace {
 
-PackageComponentAction BuildInstallAction(const ComponentConfig& component) {
-    PackageComponentAction action;
-    action.command = component.source.local.installer;
-    action.args = component.source.local.args;
-    action.workingDirectory = component.source.local.base;
-    action.wait = component.source.local.wait;
-    action.timeoutSec = component.source.local.timeoutSec;
-    return action;
-}
-
-PackageComponentAction BuildUninstallAction(const ComponentConfig& component) {
-    PackageComponentAction action;
-    action.command = component.uninstall.command;
-    action.args = component.uninstall.args;
-    action.workingDirectory = component.uninstall.workingDirectory;
-    action.wait = component.uninstall.wait;
-    action.timeoutSec = component.uninstall.timeoutSec;
-    return action;
-}
-
-PackageComponentDefinition BuildComponentDefinition(const ComponentConfig& component) {
-    PackageComponentDefinition definition;
-    definition.id = component.id;
-    definition.name = component.name;
-    definition.description = component.description;
-    definition.required = component.required;
-    definition.defaultSelected = component.defaultSelected;
-    definition.sizeHintMB = component.sizeHintMB;
-    definition.dependsOn = component.dependsOn;
-    definition.payloadRefs = component.folders;
-    definition.installAction = BuildInstallAction(component);
-    definition.uninstallAction = BuildUninstallAction(component);
-    return definition;
-}
-
 std::string FolderNameFromPath(const std::string& path) {
     return Utf8FromPath(PathFromUtf8(path).filename());
+}
+
+std::string CurrentYear() {
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &now);
+#else
+    localtime_r(&now, &tm);
+#endif
+    return std::to_string(1900 + tm.tm_year);
+}
+
+std::string ResolveCopyright(const AppConfig& app) {
+    if (!app.copyright.empty()) {
+        return app.copyright;
+    }
+    return "Copyright (c) " + CurrentYear() + " " + app.publisher;
+}
+
+// 读取 hook 脚本字节并内嵌进 manifest。
+PackageHook BuildHook(const HookConfig& cfg, const std::string& configDirectory) {
+    PackageHook hook;
+    if (!cfg.present) {
+        return hook;
+    }
+    fs::path scriptPath = PathFromUtf8(cfg.path);
+    if (!scriptPath.is_absolute()) {
+        scriptPath = PathFromUtf8(configDirectory) / scriptPath;
+    }
+    std::ifstream in(scriptPath, std::ios::binary);
+    if (!in) {
+        // 校验阶段已确认脚本存在；此处保持 present=false 视作未配置。
+        return hook;
+    }
+    hook.present = true;
+    hook.scriptName = Utf8FromPath(scriptPath.filename());
+    hook.content.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    hook.args = cfg.args;
+    hook.onFailure = cfg.onFailure;
+    hook.timeoutSec = cfg.timeoutSec;
+    return hook;
 }
 
 } // namespace
 
 PackageManifest PackageManifestBuilder::build(const std::vector<CompressionResult>& results,
                                               const std::vector<FolderInfo>& folderInfos,
-                                              const PackagerConfiguration& config) const {
+                                              const PackagerConfiguration& config,
+                                              const std::string& configDirectory) const {
     PackageManifest manifest;
 
-    manifest.identity.appName = config.app.name;
-    manifest.identity.appId = config.app.id;
-    manifest.identity.appDirectoryName = config.installer.directoryName;
-    manifest.identity.appVersion = config.app.version;
-    manifest.identity.appWebsite = config.app.website;
-    manifest.identity.appPublisher = config.app.publisher;
-
-    manifest.install.defaultDir = config.installer.defaultDir;
-    manifest.install.autoStartup = config.installer.defaults.autoStartup;
-    manifest.install.desktopIcon = config.installer.defaults.desktopShortcut;
-    manifest.install.autoCleanOldInstall = config.install.autoCleanOldInstall;
-    manifest.install.requireAdmin = config.installer.requireAdmin;
-    manifest.install.minWindowsMajor = config.installer.minWindows.major;
-    manifest.install.minWindowsMinor = config.installer.minWindows.minor;
-    manifest.install.minWindowsBuild = config.installer.minWindows.build;
-    manifest.install.sparseFileThresholdBytes = config.installer.largeFileThresholdBytes;
-    manifest.install.useMutex = !config.installer.mutex.empty();
-    manifest.install.mutexName = config.installer.mutex;
-    manifest.install.killProcesses = config.installer.killBeforeInstall;
-    manifest.install.installState.registries = config.installer.installState.registries;
-    manifest.install.installState.files = config.installer.installState.files;
-    manifest.install.installState.detect = config.installer.installState.detect;
-    manifest.install.systemUninstallEntry.scope = config.installer.systemUninstallEntry.scope;
-    manifest.install.systemUninstallEntry.displayName = config.installer.systemUninstallEntry.displayName;
-    manifest.install.systemUninstallEntry.publisher = config.installer.systemUninstallEntry.publisher;
-    manifest.install.cleanup = config.installer.cleanup;
-    manifest.install.registryWrite = config.installer.registry.write;
-
-    std::unordered_map<std::string, PayloadConfig> payloadById;
-    for (const auto& payload : config.installer.payload) {
-        payloadById[payload.id] = payload;
-    }
+    manifest.identity.productName = config.app.productName;
+    manifest.identity.publisher = config.app.publisher;
+    manifest.identity.version = config.app.version;
+    manifest.identity.defaultDir = config.app.defaultDir;
+    manifest.identity.copyright = ResolveCopyright(config.app);
 
     uint64_t offset = 0;
     const size_t count = std::min(results.size(), folderInfos.size());
@@ -93,14 +78,13 @@ PackageManifest PackageManifestBuilder::build(const std::vector<CompressionResul
     for (size_t i = 0; i < count; ++i) {
         const auto& info = folderInfos[i];
         const auto& result = results[i];
-        auto payloadIt = payloadById.find(info.id);
 
         PackagePayloadFolder folder;
         folder.folderId = info.id;
         folder.folderName = FolderNameFromPath(info.sourcePath);
-        folder.source = payloadIt == payloadById.end() ? info.sourcePath : payloadIt->second.source;
-        folder.target = payloadIt == payloadById.end() ? info.targetPath : payloadIt->second.target;
-        folder.required = payloadIt != payloadById.end() && payloadIt->second.required;
+        folder.source = info.sourcePath;
+        folder.target = info.targetPath;
+        folder.required = true;
         folder.offset = offset;
         folder.compressedSize = static_cast<uint64_t>(result.compressedSize);
         folder.originalSize = static_cast<uint64_t>(result.originalSize);
@@ -113,19 +97,8 @@ PackageManifest PackageManifestBuilder::build(const std::vector<CompressionResul
         manifest.payload.folders.push_back(std::move(folder));
     }
 
-    manifest.components.components = config.installer.components;
-    for (const auto& component : config.installer.components) {
-        manifest.components.definitions.push_back(BuildComponentDefinition(component));
-    }
-
-    manifest.ui.desktopShortcutDefaultName = config.installer.ui.desktopShortcut.defaultName.empty()
-        ? config.app.name
-        : config.installer.ui.desktopShortcut.defaultName;
-    manifest.ui.desktopShortcutLocalizedNames = config.installer.ui.desktopShortcut.i18n;
-    manifest.ui.componentSelection = config.installer.ui.componentSelection;
-    manifest.ui.links = config.installer.ui.links;
-
-    manifest.lifecycle.uninstaller = config.uninstaller;
+    manifest.hooks.preInstall = BuildHook(config.hooks.preInstall, configDirectory);
+    manifest.hooks.postInstall = BuildHook(config.hooks.postInstall, configDirectory);
     return manifest;
 }
 

@@ -4,44 +4,14 @@
 
 namespace MultiThreadedInstaller {
 
+// 本次构建的身份。其余版本资源字段（FileVersion/ProductVersion/CompanyName...）
+// 由引擎从 version/publisher 在打包期派生并写入 exe PE 资源，不进 manifest。
 struct PackageIdentity {
-    std::string appName;
-    std::string appId;
-    std::string appDirectoryName;
-    std::string appVersion;
-    std::string appWebsite;
-    std::string appPublisher;
-};
-
-struct PackageInstallStateManifest {
-    std::vector<InstallStateRegistryStoreConfig> registries;
-    std::vector<InstallStateFileStoreConfig> files;
-    InstalledInstanceDetectConfig detect;
-};
-
-struct PackageSystemUninstallEntryManifest {
-    UninstallEntryScope scope = UninstallEntryScope::ANY;
-    std::string displayName;
+    std::string productName;
     std::string publisher;
-};
-
-struct PackageInstallPolicy {
+    std::string version;
     std::string defaultDir;
-    bool autoStartup = false;
-    bool desktopIcon = false;
-    bool autoCleanOldInstall = false;
-    bool requireAdmin = false;
-    uint16_t minWindowsMajor = 0;
-    uint16_t minWindowsMinor = 0;
-    uint32_t minWindowsBuild = 0;
-    uint64_t sparseFileThresholdBytes = 4 * 1024 * 1024;
-    bool useMutex = true;
-    std::string mutexName;
-    PackageInstallStateManifest installState;
-    PackageSystemUninstallEntryManifest systemUninstallEntry;
-    InstallerCleanupConfig cleanup;
-    std::vector<InstallerRegistryWriteGroup> registryWrite;
-    std::vector<std::string> killProcesses;
+    std::string copyright;   // 可空；缺省时由 publisher + 构建年份派生
 };
 
 struct PackagePayloadFolder {
@@ -64,53 +34,26 @@ struct PackagePayloadManifest {
     std::vector<PackagePayloadFolder> folders;
 };
 
-struct PackageComponentAction {
-    std::string command;
+// 一个 pre/post 钩子，脚本内容在打包期内嵌。
+struct PackageHook {
+    bool present = false;
+    std::string scriptName;
+    std::vector<uint8_t> content;
     std::string args;
-    std::string workingDirectory;
-    bool wait = true;
-    uint32_t timeoutSec = 900;
+    HookOnFailure onFailure = HookOnFailure::ABORT;
+    uint32_t timeoutSec = 300;
 };
 
-struct PackageComponentDefinition {
-    std::string id;
-    std::string name;
-    std::string description;
-    bool required = false;
-    bool defaultSelected = true;
-    uint32_t sizeHintMB = 0;
-    std::vector<std::string> dependsOn;
-    std::vector<std::string> payloadRefs;
-    PackageComponentAction installAction;
-    PackageComponentAction uninstallAction;
-};
-
-struct PackageComponentManifest {
-    std::vector<ComponentConfig> components;
-    std::vector<PackageComponentDefinition> definitions;
-};
-
-struct PackageUiManifest {
-    std::string desktopShortcutDefaultName;
-    std::unordered_map<std::string, std::string> desktopShortcutLocalizedNames;
-    UiComponentSelectionConfig componentSelection;
-    std::vector<UiLinkBinding> links;
-};
-
-struct PackageLifecyclePolicy {
-    UninstallCleanupConfig uninstallCleanup;
-    UpgradeCleanupConfig upgradeCleanup;
-    UninstallerConfig uninstaller;
+struct PackageHooks {
+    PackageHook preInstall;
+    PackageHook postInstall;
 };
 
 struct PackageManifest {
     uint32_t version = Constants::VERSION;
     PackageIdentity identity;
-    PackageInstallPolicy install;
     PackagePayloadManifest payload;
-    PackageComponentManifest components;
-    PackageUiManifest ui;
-    PackageLifecyclePolicy lifecycle;
+    PackageHooks hooks;
 };
 
 PackageManifest PackageManifestFromExtendedMetadata(const ExtendedInstallationMetadata& metadata);

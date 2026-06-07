@@ -1,0 +1,360 @@
+#include "installer/pipeline/install_finalize.h"
+
+#include "common/installer_logger.h"
+#include "common/utf8_utils.h"
+#include "installer/platform/embedded_resources.h"
+#include "installer/state/install_state_utils.h"
+#include "installer/state/install_state_store.h"
+#include "installer/platform/installer_helpers.h"
+#include "installer/state/registry_utils.h"
+
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <unordered_set>
+
+namespace MultiThreadedInstaller {
+
+namespace {
+
+std::vector<std::string> CollectFilesRecursive(const std::vector<std::string>& roots) {
+    std::vector<std::string> files;
+    auto isInstallerTransientFile = [](const std::filesystem::path& path) {
+        const std::wstring filename = path.filename().wstring();
+        return filename.size() >= 10 &&
+               (filename.find(L".__mti_old") != std::wstring::npos ||
+                filename.find(L".__mti_new") != std::wstring::npos ||
+                filename.find(L".__mti_reboot_new") != std::wstring::npos);
+    };
+    auto isPendingCleanupDirectory = [](const std::filesystem::path& path) {
+        const std::string name = Utf8FromPath(path.filename());
+        return name.rfind(".mti_delete_pending_", 0) == 0;
+    };
+    for (const auto& rootPath : roots) {
+        if (rootPath.empty()) {
+            continue;
+        }
+        std::filesystem::path root = PathFromUtf8(rootPath);
+        if (!std::filesystem::exists(root)) {
+            continue;
+        }
+        std::error_code iterEc;
+        for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, iterEc), end;
+             !iterEc && it != end;
+             it.increment(iterEc)) {
+            const auto& entry = *it;
+            if (entry.is_directory() && isPendingCleanupDirectory(entry.path())) {
+                it.disable_recursion_pending();
+                continue;
+            }
+            if (entry.is_regular_file() && !isInstallerTransientFile(entry.path())) {
+                files.push_back(Utf8FromPath(entry.path()));
+            }
+        }
+    }
+    std::sort(files.begin(), files.end());
+    files.erase(std::unique(files.begin(), files.end()), files.end());
+    return files;
+}
+
+void AppendNamedCleanupEntry(std::vector<NamedCleanupEntry>& entries, const std::string& name) {
+    if (name.empty()) {
+        return;
+    }
+    std::string lowered = name;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    auto it = std::find_if(entries.begin(), entries.end(), [&](const NamedCleanupEntry& entry) {
+        std::string candidate = entry.name;
+        std::transform(candidate.begin(), candidate.end(), candidate.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return candidate == lowered;
+    });
+    if (it == entries.end()) {
+        NamedCleanupEntry entry;
+        entry.name = name;
+        entries.push_back(std::move(entry));
+    }
+}
+
+// 系统卸载入口写死（需求 §5）：displayName=产品名、publisher=publisher、scope=machine。
+void WriteConfiguredSystemUninstallEntries(const ExtendedInstallationMetadata& metadata,
+                                           const InstallExecutionPlan& plan,
+                                           const std::string& desktopShortcutDisplayName,
+                                           const InstallServiceResult& result,
+                                           UninstallCleanupConfig& manifestCleanup,
+                                           InstallProgressReporter& reporter) {
+#ifdef _WIN32
+    (void)plan;
+    (void)desktopShortcutDisplayName;
+    if (result.uninstallPath.empty()) {
+        return;
+    }
+    const std::string uninstallKeyName = metadata.appProductName;
+    const std::string uninstallDisplayName = metadata.appProductName;
+
+    const bool wroteAny = writeUninstallRegistryEntry(uninstallKeyName,
+                                                      uninstallDisplayName,
+                                                      metadata.appVersion,
+                                                      result.installRootPath,
+                                                      result.uninstallPath,
+                                                      /*perMachine=*/true,
+                                                      metadata.appPublisher);
+    if (wroteAny) {
+        UninstallEntryCleanup entry;
+        entry.name = uninstallDisplayName;
+        entry.scope = UninstallEntryScope::LOCAL_MACHINE;
+        manifestCleanup.uninstallEntries.push_back(std::move(entry));
+    } else {
+        reporter.EmitMessage(InstallServiceEventType::Warning,
+                             "Failed to write uninstall registry entry");
+    }
+#else
+    (void)metadata;
+    (void)plan;
+    (void)desktopShortcutDisplayName;
+    (void)result;
+    (void)manifestCleanup;
+    (void)reporter;
+#endif
+}
+
+InstallStateContext BuildInstallStateContext(const ExtendedInstallationMetadata& metadata,
+                                             const InstallExecutionPlan& plan,
+                                             const InstallServiceOptions& options,
+                                             const std::string& installDir,
+                                             const std::string& state) {
+    InstallStateContext context;
+    context.installDir = installDir;
+    context.version = metadata.appVersion;
+    context.appName = metadata.appProductName;
+    context.appId = plan.effectiveAppId.empty() ? metadata.appProductName : plan.effectiveAppId;
+    context.installSource = getCurrentExecutablePath();
+    context.state = state;
+    context.userName = GetCurrentUserNameForInstallState();
+    if (context.installDir.empty()) {
+        context.installDir = options.installPath;
+    }
+    return context;
+}
+
+// Resolves the per-file content fingerprints of the newly installed payload to
+// absolute target paths so they can be recorded in install.manifest.json. The
+// next upgrade uses these for the zero-read skip decision (Scheme A).
+InstalledFileFingerprintMap BuildInstalledFileFingerprints(const ExtendedInstallationMetadata& metadata,
+                                                           const InstallExecutionPlan& plan,
+                                                           InstallerPathResolver& pathResolver) {
+    InstalledFileFingerprintMap fingerprints;
+    std::unordered_set<std::string> selected(plan.selectedEmbeddedFolders.begin(),
+                                             plan.selectedEmbeddedFolders.end());
+    for (const auto& mapping : metadata.extendedPayloadMappings) {
+        if (selected.find(mapping.folderId) == selected.end() || mapping.fileIndex.empty()) {
+            continue;
+        }
+        std::string target = mapping.target.empty() ? mapping.targetPath : mapping.target;
+        const std::string token = "%InstallDir%";
+        size_t pos = 0;
+        while ((pos = target.find(token, pos)) != std::string::npos) {
+            target.replace(pos, token.size(), plan.pathDecision.resolvedInstallRoot);
+            pos += plan.pathDecision.resolvedInstallRoot.size();
+        }
+        target = pathResolver.expandEnvironmentVariables(target);
+        if (target.empty()) {
+            continue;
+        }
+        for (const auto& file : mapping.fileIndex) {
+            if (file.relativePath.empty() || file.contentHash == 0) {
+                continue;
+            }
+            const std::filesystem::path candidate =
+                PathFromUtf8(target) / PathFromUtf8(file.relativePath);
+            const std::string key = normalizePathForCompare(Utf8FromPath(candidate));
+            if (key.empty()) {
+                continue;
+            }
+            InstalledFileFingerprint fingerprint;
+            fingerprint.size = file.size;
+            fingerprint.contentHash = file.contentHash;
+            fingerprints[key] = fingerprint;
+        }
+    }
+    return fingerprints;
+}
+
+} // namespace
+
+bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
+                                const InstallExecutionPlan& plan,
+                                const InstallServiceOptions& options,
+                                const std::vector<RegistryEntry>& effectiveRegistry,
+                                const std::vector<std::string>& effectiveKillProcesses,
+                                bool effectiveAutoStartup,
+                                bool effectiveDesktopIcons,
+                                const std::vector<ComponentExecutionRecord>& componentActions,
+                                InstallerPathResolver& pathResolver,
+                                InstallProgressReporter& reporter,
+                                InstallServiceResult& result) {
+    reporter.EmitStatus(InstallServiceStatus::Finalizing,
+                        InstallServicePhase::Finalizing,
+                        0.0f,
+                        "Finalizing installation...");
+
+    logInstallerInfo(std::string("[InstallFlow][Finalize] start installRootPath=") +
+                     result.installRootPath +
+                     " registryEntries=" + std::to_string(effectiveRegistry.size()) +
+                     " componentActions=" + std::to_string(componentActions.size()));
+
+    auto advanceFinalize = [&](float progress, const std::string& detail) {
+        reporter.EmitProgress("finalize", detail, progress);
+    };
+
+    if (options.applyRegistryBeforeFinalize && !effectiveRegistry.empty()) {
+        std::string prePath = options.preRegistryInstallPath.empty()
+                                  ? options.installPath
+                                  : options.preRegistryInstallPath;
+        applyRegistryEntries(effectiveRegistry, prePath, metadata.appVersion, metadata.appProductName);
+    }
+    advanceFinalize(0.15f, "Applying registry entries");
+
+    if ((effectiveAutoStartup || effectiveDesktopIcons) && result.installRootPath.empty()) {
+        reporter.EmitMessage(InstallServiceEventType::Warning,
+                             "Install root not detected; installAutoStartup/installDesktopIcon skipped");
+    }
+
+    const std::string languageCode = ResolveLanguageCode(options.languageCode);
+    const std::string desktopShortcutDisplayName =
+        ResolveDesktopShortcutDisplayName(metadata, languageCode);
+    UninstallCleanupConfig manifestCleanup;
+
+    if (!result.installRootPath.empty()) {
+        if (!plan.legacyDesktopShortcutCandidates.empty()) {
+            for (const auto& shortcutName : plan.legacyDesktopShortcutCandidates) {
+                if (deleteDesktopShortcut(shortcutName)) {
+                    reporter.EmitMessage(InstallServiceEventType::Info,
+                                         "Removed legacy desktop shortcut: " + shortcutName);
+                }
+                if (deleteStartMenuShortcut(shortcutName)) {
+                    reporter.EmitMessage(InstallServiceEventType::Info,
+                                         "Removed legacy start menu shortcut: " + shortcutName);
+                }
+            }
+        }
+
+        std::filesystem::path exePath =
+            findPrimaryExecutable(PathFromUtf8(result.installRootPath), metadata.appProductName);
+        if ((effectiveAutoStartup || effectiveDesktopIcons) && exePath.empty()) {
+            reporter.EmitMessage(InstallServiceEventType::Warning,
+                                 "No executable found for installAutoStartup/installDesktopIcon");
+        } else {
+            if (effectiveAutoStartup) {
+                if (setAutoStartup(metadata.appProductName, exePath)) {
+                    reporter.EmitMessage(InstallServiceEventType::Info, "installAutoStartup enabled");
+                    AppendNamedCleanupEntry(manifestCleanup.startup, metadata.appProductName);
+                } else {
+                    reporter.EmitMessage(InstallServiceEventType::Warning,
+                                         "Failed to enable installAutoStartup");
+                }
+            }
+            if (effectiveDesktopIcons) {
+                if (createDesktopShortcut(desktopShortcutDisplayName, exePath)) {
+                    reporter.EmitMessage(InstallServiceEventType::Info, "Desktop icon created");
+                    AppendNamedCleanupEntry(manifestCleanup.shortcuts, desktopShortcutDisplayName);
+                } else {
+                    reporter.EmitMessage(InstallServiceEventType::Warning,
+                                         "Failed to create desktop icon");
+                }
+                if (createStartMenuShortcut(desktopShortcutDisplayName, exePath, metadata.appProductName)) {
+                    reporter.EmitMessage(InstallServiceEventType::Info, "Start menu shortcut created");
+                    AppendNamedCleanupEntry(manifestCleanup.shortcuts, desktopShortcutDisplayName);
+                } else {
+                    reporter.EmitMessage(InstallServiceEventType::Warning,
+                                         "Failed to create start menu shortcut");
+                }
+            }
+        }
+    }
+    advanceFinalize(0.35f, "Creating startup and shortcut entries");
+
+    if (result.installedFiles.empty()) {
+        result.installedFiles = CollectFilesRecursive(result.installedRoots);
+    } else {
+        std::sort(result.installedFiles.begin(), result.installedFiles.end());
+        result.installedFiles.erase(std::unique(result.installedFiles.begin(), result.installedFiles.end()),
+                                    result.installedFiles.end());
+    }
+
+    if (!result.installRootPath.empty()) {
+        std::filesystem::path target = PathFromUtf8(result.installRootPath) / "uninstall.exe";
+        const std::string targetUtf8 = Utf8FromPath(target);
+        if (ExtractEmbeddedBinaryResourceToFile("UNINSTALLER_EXE", targetUtf8)) {
+            result.uninstallPath = targetUtf8;
+        } else {
+            reporter.EmitMessage(InstallServiceEventType::Warning,
+                                 "Failed to extract embedded uninstaller.exe");
+        }
+    }
+    advanceFinalize(0.50f, "Preparing uninstall entry point");
+
+    if (!result.uninstallPath.empty()) {
+        result.installedFiles.erase(
+            std::remove(result.installedFiles.begin(), result.installedFiles.end(), result.uninstallPath),
+            result.installedFiles.end());
+    }
+
+    WriteConfiguredSystemUninstallEntries(metadata,
+                                          plan,
+                                          desktopShortcutDisplayName,
+                                          result,
+                                          manifestCleanup,
+                                          reporter);
+    advanceFinalize(0.62f, "Writing uninstall registry");
+
+    if (!result.installRootPath.empty()) {
+        std::filesystem::path localPath = PathFromUtf8(result.installRootPath) / "install.manifest.json";
+        const InstalledFileFingerprintMap fileFingerprints =
+            BuildInstalledFileFingerprints(metadata, plan, pathResolver);
+        if (!writeManifest(Utf8FromPath(localPath),
+                           plan.effectiveAppId,
+                           metadata.appProductName,
+                           metadata.appVersion,
+                           result.installRootPath,
+                           result.installedRoots,
+                           manifestCleanup,
+                           result.installedFiles,
+                           effectiveKillProcesses,
+                           effectiveAutoStartup,
+                           effectiveDesktopIcons,
+                           desktopShortcutDisplayName,
+                           result.uninstallPath,
+                           languageCode,
+                           componentActions,
+                           options.selectedComponentIds,
+                           options.installAllComponents,
+                           metadata.appPublisher,
+                           fileFingerprints)) {
+            reporter.EmitMessage(InstallServiceEventType::Warning,
+                                 "Failed to write local install manifest");
+        }
+    }
+    advanceFinalize(0.75f, "Writing install manifest");
+
+    if (options.applyRegistryAfterInstall && !effectiveRegistry.empty()) {
+        applyRegistryEntries(effectiveRegistry,
+                             result.installRootPath,
+                             metadata.appVersion,
+                             metadata.appProductName);
+    }
+
+    advanceFinalize(0.90f, "Registry finalization complete");
+
+    ApplyInstallState(BuildInstallStateContext(metadata,
+                                               plan,
+                                               options,
+                                               result.installRootPath,
+                                               "installed"),
+                      pathResolver);
+    advanceFinalize(1.0f, "Finalization complete");
+    return true;
+}
+
+} // namespace MultiThreadedInstaller

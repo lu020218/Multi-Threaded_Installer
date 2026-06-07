@@ -32,33 +32,6 @@ std::vector<FolderInfo> FolderScanner::scanInputDirectory(const std::string& inp
     return folders;
 }
 
-std::vector<FolderInfo> FolderScanner::scanConfiguredPayloads(
-    const std::string& inputPath,
-    const std::vector<PayloadConfig>& payloads) {
-    std::vector<FolderInfo> folders;
-
-    if (!isDirectory(inputPath)) {
-        std::cerr << "Error: Input path is not a directory: " << inputPath << std::endl;
-        return folders;
-    }
-
-    for (const auto& payload : payloads) {
-        std::filesystem::path sourcePath = PathFromUtf8(payload.source);
-        if (!sourcePath.is_absolute()) {
-            sourcePath = PathFromUtf8(inputPath) / sourcePath;
-        }
-
-        FolderInfo folderInfo;
-        folderInfo.id = payload.id;
-        folderInfo.sourcePath = Utf8FromPath(sourcePath);
-        folderInfo.targetPath = payload.target;
-        scanSingleFolder(folderInfo.sourcePath, folderInfo);
-        folders.push_back(std::move(folderInfo));
-    }
-
-    return folders;
-}
-
 bool FolderScanner::validateFolderStructure(const std::vector<FolderInfo>& folders) {
     if (folders.empty()) {
         std::cerr << "Error: No folders found to package" << std::endl;

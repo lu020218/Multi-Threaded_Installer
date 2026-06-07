@@ -117,4 +117,27 @@ int compareSemanticVersion(const std::string& lhs, const std::string& rhs) {
     return 0;
 }
 
+std::string toNumericVersion(const std::string& version) {
+    std::string core = TrimAsciiCopy(version);
+    // 去掉 -prerelease 与 +buildmetadata 后缀。
+    const size_t cut = core.find_first_of("-+");
+    if (cut != std::string::npos) {
+        core = core.substr(0, cut);
+    }
+
+    std::vector<std::string> parts = SplitVersion(core);
+    std::string out;
+    for (size_t i = 0; i < 4; ++i) {
+        std::string part = i < parts.size() ? TrimAsciiCopy(parts[i]) : std::string();
+        if (!IsDigitsOnly(part)) {
+            part = "0";
+        }
+        if (i > 0) {
+            out += '.';
+        }
+        out += part;
+    }
+    return out;
+}
+
 } // namespace MultiThreadedInstaller

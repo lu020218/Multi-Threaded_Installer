@@ -1,0 +1,240 @@
+#pragma once
+
+#include <UIlib.h>
+#include <string>
+#include <memory>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+#include <unordered_map>
+#include "common/archive_types.h"
+#include "installer/uninstall/uninstall_manager.h"
+
+// Use DuiLib namespace
+
+namespace MultiThreadedInstaller {
+
+// Forward declarations
+class PageController;
+class InstallationWorker;
+class UninstallWorker;
+
+
+struct InstallConfig {
+    std::wstring applicationName;
+    std::wstring appId;
+    std::wstring directoryName;
+    std::wstring version;
+    std::wstring defaultInstallPath;
+    std::wstring registryPath;
+    std::wstring registryKey;
+    bool autoStartup;
+    bool desktopIcons;
+    bool overwriteMode;
+    std::wstring logoResourceId;
+    std::wstring licenseText;
+    std::wstring webPageUrl;
+    std::wstring executableName;
+    std::wstring languageCode;
+    uint64_t requiredDiskSpace;
+    
+    InstallConfig()
+        : applicationName(L"Application"),
+          appId(L""),
+          directoryName(L""),
+          version(L"1.0.0"),
+          defaultInstallPath(L"C:\\Program Files\\MyApp"),
+          registryPath(L""),
+          registryKey(L""),
+          autoStartup(false),
+          desktopIcons(false),
+          overwriteMode(false),
+          logoResourceId(L"logo.png"),
+          webPageUrl(L"https://example.com"),
+          executableName(L"app.exe"),
+          languageCode(L""),
+          requiredDiskSpace(100 * 1024 * 1024) {} // 100 MB default
+};
+
+
+#define WM_INSTALLATION_PROGRESS (WM_USER + 1)
+#define WM_INSTALLATION_COMPLETE (WM_USER + 2)
+#define WM_UNINSTALL_COMPLETE (WM_USER + 3)
+#define WM_UNINSTALL_PROGRESS (WM_USER + 4)
+
+
+constexpr size_t kProgressItemTextMax = 1024;
+
+struct ProgressMessageData {
+    wchar_t progressPrefix[64];
+    wchar_t currentFolder[kProgressItemTextMax];
+    float percentage;
+    
+    ProgressMessageData() : percentage(0.0f) {
+        progressPrefix[0] = L'\0';
+        currentFolder[0] = L'\0';
+    }
+};
+
+
+struct CompletionMessageData {
+    bool success;
+    bool rebootRequired;
+    wchar_t errorMessage[512];
+    
+    CompletionMessageData() : success(false), rebootRequired(false) {
+        errorMessage[0] = L'\0';
+    }
+};
+
+/**
+ *
+ *
+ */
+class GUIManager : public DuiLib::WindowImplBase {
+public:
+    GUIManager();
+    virtual ~GUIManager();
+    
+
+    void SetInstallConfig(const InstallConfig& config);
+    void SetInstallMetadata(const ExtendedInstallationMetadata& metadata);
+    void SetUninstallContext(const UninstallContext& context);
+    void SetUninstallManifestPath(const std::string& manifestPath);
+    void SetAutoStartInstallRequest(const std::wstring& installPath,
+                                    bool autoRun,
+                                    bool desktopIcons,
+                                    const std::wstring& languageCode,
+                                    const std::vector<std::string>& selectedComponents,
+                                    bool installAllComponents,
+                                    bool upgradeMode = false);
+    void PrepareInitialDpi(unsigned int dpi);
+    
+
+    const InstallConfig& GetInstallConfig() const { return m_config; }
+    
+protected:
+
+    virtual DuiLib::CDuiString GetSkinFolder();
+    virtual DuiLib::CDuiString GetSkinFile();
+    virtual LPCTSTR GetWindowClassName() const;
+    
+
+    virtual void Notify(DuiLib::TNotifyUI& msg);
+    virtual void InitWindow();
+    virtual LRESULT HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
+    
+private:
+
+    DuiLib::CTabLayoutUI* m_pTabPages;
+    DuiLib::CEditUI* m_pInstallPathEdit;
+    DuiLib::CCheckBoxUI* m_pLicenseCheckbox;
+    DuiLib::CButtonUI* m_pInstallButton;
+    DuiLib::CLabelUI* m_pDiskSpaceLabel;
+    DuiLib::CContainerUI* m_pConfigBottom;
+    DuiLib::CContainerUI* m_pMoreInfo;
+    
+
+    std::unique_ptr<PageController> m_pPageController;
+
+
+    std::unique_ptr<InstallationWorker> m_pWorker;
+    std::unique_ptr<UninstallWorker> m_pUninstallWorker;
+    bool m_uninstallMode;
+    bool m_overwriteMode;
+    
+
+    InstallConfig m_config;
+    int m_baseClientHeight;
+    int m_baseClientWidth;
+    int m_expandedClientHeight;
+    int m_baseWindowWidth;
+    ExtendedInstallationMetadata m_installMetadata;
+    bool m_installMetadataLoaded;
+    std::unordered_map<std::string, std::wstring> m_uiLinks;
+    UninstallContext m_uninstallContext;
+    std::string m_uninstallManifestPath;
+    bool m_autoStartInstall;
+    std::wstring m_autoStartInstallPath;
+    bool m_autoStartAutoRun;
+    bool m_autoStartDesktopIcons;
+    std::wstring m_autoStartLanguageCode;
+    std::vector<std::string> m_autoStartSelectedComponents;
+    bool m_autoStartInstallAllComponents;
+    bool m_autoStartUpgradeMode;
+    
+
+    void InitControls();
+    bool EnsureInstallMetadataLoaded();
+    void InitializeComponentSelectionUi();
+    std::vector<std::string> CollectSelectedComponentsFromUi();
+    
+
+    void OnInstallButtonClick();
+    bool StartInstallationWithOptions(const std::wstring& installPath,
+                                      bool autoRun,
+                                      bool desktopIcons,
+                                      const std::wstring& languageCode,
+                                      const std::vector<std::string>& selectedComponents,
+                                      bool installAllComponents,
+                                      bool upgradeMode);
+    void OnCancelButtonClick();
+    void OnBrowseButtonClick();
+    void OnLicenseLinkClick();
+    void OnLicenseAgreeClick();
+    void OnLicenseDisagreeClick();
+    void OnFinishButtonClick();
+    void OnCancelProgressButtonClick();
+    void OnShowMoreClick();
+    void OnUninstallConfirmClick();
+    void CollapseConfigIfExpanded();
+    void ResizeForProgressPage();
+    void ApplyLanguageByIndex(int index);
+    void ApplyLanguageByCode(const std::wstring& code);
+    void ShowLicensePage();
+    void RefreshLicenseText();
+    int GetWelcomePageIndex() const;
+    int GetProgressPageIndex() const;
+    int GetCompletionPageIndex() const;
+    
+
+    void OnLicenseCheckboxChanged();
+    
+
+    void UpdateInstallButtonState();
+    void UpdateDiskSpaceInfo(const std::wstring& path);
+    
+
+    void HandleProgressMessage(ProgressMessageData* pData);
+    void HandleCompletionMessage(CompletionMessageData* pData);
+    void HandleUninstallCompletionMessage(CompletionMessageData* pData);
+    void RefreshLocalizedText();
+    void UpdateWindowTitle();
+    void StartProgressTimer();
+    void StopProgressTimer();
+    void TickProgressAnimation();
+    void UpdateProgressDisplay(float percentage);
+    void StartCarousel();
+    void StopCarousel();
+    void TickCarousel();
+    void ShowCarouselItem(int index);
+    void OnCarouselDotClick(int index);
+    void ApplyCarouselImagesForLanguage();
+
+public:
+    void SetUninstallMode(bool enabled) { m_uninstallMode = enabled; }
+    void SetOverwriteMode(bool enabled) { m_overwriteMode = enabled; }
+
+private:
+    float m_progressTarget;
+    float m_progressDisplayed;
+    bool m_progressTimerActive;
+    uint64_t m_progressLastTick;
+    std::wstring m_progressPrefix;
+    std::wstring m_progressFolder;
+    bool m_carouselActive;
+    int m_carouselIndex;
+};
+
+} // namespace MultiThreadedInstaller
+

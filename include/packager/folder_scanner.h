@@ -14,9 +14,6 @@ public:
 
     std::vector<FolderInfo> scanInputDirectory(const std::string& inputPath);
 
-    std::vector<FolderInfo> scanConfiguredPayloads(const std::string& inputPath,
-                                                   const std::vector<PayloadConfig>& payloads);
-    
 
     bool validateFolderStructure(const std::vector<FolderInfo>& folders);
     

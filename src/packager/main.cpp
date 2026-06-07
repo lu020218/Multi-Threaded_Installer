@@ -8,7 +8,9 @@
 #include "packager/pe_resource_embedder.h"
 #include "packager/template_loader.h"
 #include "common/package_manifest_codec.h"
-#include "installer/console_interface.h"
+#include "common/engine_defaults.h"
+#include "common/version_utils.h"
+#include "installer/app/console_interface.h"
 #include "common/utf8_utils.h"
 #include <iostream>
 #include <filesystem>
@@ -19,6 +21,8 @@
 #include <mutex>
 #include <vector>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -40,6 +44,8 @@ const char* CompressionAlgorithmName(CompressionAlgorithm algorithm) {
             return "XZ/LZMA2";
         case CompressionAlgorithm::ZSTD:
             return "ZSTD";
+        case CompressionAlgorithm::NONE:
+            return "None";
         default:
             return "Unknown";
     }
@@ -210,28 +216,48 @@ int main(int argc, char* argv[]) {
 
     console.showInfo("Using configuration file: " + configManager.getConfigFilePath());
     
-    console.showInfo("Application name: " + config.app.name);
-    console.showInfo("Default install directory: " + config.installer.defaultDir);
+    console.showInfo("Application name: " + config.app.productName);
+    console.showInfo("Default install directory: " + config.app.defaultDir);
 
     CompressionAlgorithm effectiveAlgorithm = config.package.compression.algorithm;
     console.showInfo(std::string("Compression algorithm: ") + CompressionAlgorithmName(effectiveAlgorithm));
-    
 
+
+    // 扫描 --input 顶层子目录作为待打包内容。落点：默认 %InstallDir%\<目录名>；
+    // 若 package.layout 为该目录名声明了 target，则用声明值（支持 %InstallDir% 与
+    // 环境变量，如 %AppData%/%ProgramData%），实现"不同目录装到不同路径"。
     FolderScanner scanner;
     auto scanStart = std::chrono::steady_clock::now();
-    auto folders = scanner.scanConfiguredPayloads(inputPath, config.installer.payload);
-    
+    auto folders = scanner.scanInputDirectory(inputPath);
+
+    std::unordered_map<std::string, std::string> layoutTargets;
+    for (const auto& entry : config.package.layout) {
+        layoutTargets[entry.source] = entry.target;
+    }
+    std::unordered_set<std::string> scannedSources;
+    for (auto& folder : folders) {
+        scannedSources.insert(folder.id);
+        auto it = layoutTargets.find(folder.id);
+        if (it != layoutTargets.end()) {
+            folder.targetPath = it->second;
+        } else {
+            folder.targetPath = "%InstallDir%\\" + folder.targetPath;
+        }
+    }
+    for (const auto& entry : config.package.layout) {
+        if (scannedSources.find(entry.source) == scannedSources.end()) {
+            console.showWarning("package.layout references source folder not found under --input: " + entry.source);
+        }
+    }
+
     if (!scanner.validateFolderStructure(folders)) {
         console.showError("Invalid folder structure");
         return 1;
     }
     timings.scanSec = ElapsedSeconds(scanStart, std::chrono::steady_clock::now());
-    
-    console.showInfo("Found " + std::to_string(folders.size()) + " folders to package");
-    
 
-    configManager.applyFolderTargets(folders);
-    
+    console.showInfo("Found " + std::to_string(folders.size()) + " folders to package");
+
 
     for (const auto& folder : folders) {
         if (!folder.targetPath.empty()) {
@@ -240,10 +266,8 @@ int main(int argc, char* argv[]) {
     }
     
 
-    const bool perFileFrames = config.package.compression.perFileFrames;
-    if (perFileFrames) {
-        console.showInfo("Per-file framed compression enabled (incremental-friendly).");
-    }
+    // 增量优化策略归引擎写死；当前关闭按文件分帧。
+    const bool perFileFrames = false;
 
     CompressionModule compressor;
     compressor.setPerFileFrames(perFileFrames);
@@ -264,8 +288,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    int configuredThreadCount = config.package.compression.threads;
-    size_t compressionThreadBudget = ResolveCompressionThreadBudget(configuredThreadCount);
+    // 压缩线程数写死为自动（按 CPU）。
+    size_t compressionThreadBudget = ResolveCompressionThreadBudget(0);
     size_t folderWorkerCount = std::min(compressionThreadBudget, folders.size());
     int perCompressorThreadCount = static_cast<int>(compressionThreadBudget);
     if (folderWorkerCount > 1) {
@@ -380,7 +404,7 @@ int main(int argc, char* argv[]) {
 
     auto metadataStart = std::chrono::steady_clock::now();
     PackageManifestBuilder manifestBuilder;
-    PackageManifest manifest = manifestBuilder.build(compressionResults, folders, config);
+    PackageManifest manifest = manifestBuilder.build(compressionResults, folders, config, configPath);
     auto serializedMetadata = SerializePackageManifest(manifest);
     timings.metadataSec = ElapsedSeconds(metadataStart, std::chrono::steady_clock::now());
     
@@ -414,15 +438,15 @@ int main(int argc, char* argv[]) {
 
     std::string manifestError;
     if (!UpdateInstallerExecutionLevel(Utf8FromPath(tempTemplatePath),
-                                       config.installer.requireAdmin,
+                                       EngineDefaults::kRequireAdmin,
                                        manifestError)) {
         console.showError("Failed to apply installer execution level: " + manifestError);
         return 1;
     }
     console.showInfo(std::string("Applied installer execution level: ") +
-                     (config.installer.requireAdmin ? "requireAdministrator" : "asInvoker"));
+                     (EngineDefaults::kRequireAdmin ? "requireAdministrator" : "asInvoker"));
 
-    const std::string icon = config.app.icon.empty() ? config.app.product.iconPath : config.app.icon;
+    const std::string icon = config.app.icon;
     if (!icon.empty()) {
         fs::path iconPath = PathFromUtf8(icon);
         if (!iconPath.is_absolute()) {
@@ -436,18 +460,15 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // 版本资源：从 version/publisher 派生（需求 §5）。
+    // FileVersion/ProductVersion 取 version 去预发布后缀的纯数字四段式。
     VersionInfoData versionInfo;
-    versionInfo.productName =
-        config.app.product.productName.empty() ? config.app.name : config.app.product.productName;
-    versionInfo.fileDescription = config.app.product.fileDescription.empty()
-        ? (config.app.name + " Installer")
-        : config.app.product.fileDescription;
-    versionInfo.companyName = config.app.product.companyName;
-    versionInfo.copyright = config.app.product.copyright;
-    versionInfo.fileVersion =
-        config.app.product.fileVersion.empty() ? config.app.version : config.app.product.fileVersion;
-    versionInfo.productVersion =
-        config.app.product.productVersion.empty() ? config.app.version : config.app.product.productVersion;
+    versionInfo.productName = config.app.productName;
+    versionInfo.fileDescription = config.app.productName + " Installer";
+    versionInfo.companyName = config.app.publisher;  // CompanyName 复用 publisher
+    versionInfo.copyright = manifest.identity.copyright;
+    versionInfo.fileVersion = toNumericVersion(config.app.version);
+    versionInfo.productVersion = toNumericVersion(config.app.version);
     versionInfo.originalFilename = Utf8FromPath(PathFromUtf8(outputPath).filename());
 
     std::string versionError;

@@ -1,35 +1,43 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
-#include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace MultiThreadedInstaller {
 
+// ---------------------------------------------------------------------------
+// Refactored configuration model (值/逻辑归位).
+//
+// YAML 只声明三块：app（本次构建身份）、package（压缩参数）、hooks（pre/post bat）。
+// 其余稳定机制、默认值、跨版本兼容迁移全部写死/实现在引擎 C++ 中，不在此暴露。
+// 详见 docs/new_version/重构方案.md。
+// ---------------------------------------------------------------------------
+
+// 压缩算法。none 表示原样打包（不压缩）。
 enum class CompressionAlgorithm {
     LZMA2_XZ,
-    ZSTD
+    ZSTD,
+    NONE
 };
 
-enum class InstallStateMode {
-    REGISTRY
-};
-
+// Windows 注册表值类型——这是注册表原语，供引擎写注册表时使用，不来自 YAML。
 enum class RegistryValueType {
     STRING,
     DWORD,
     EXPAND_STRING
 };
 
-enum class ComponentSourceType : uint8_t {
-    EMBEDDED = 0,
-    LOCAL = 1,
-    DOWNLOAD = 2
+// 系统卸载入口所在 hive——引擎写/清卸载入口时使用的原语，不来自 YAML。
+enum class UninstallEntryScope : uint8_t {
+    CURRENT_USER = 0,
+    LOCAL_MACHINE = 1,
+    WOW6432 = 2,
+    ANY = 3,
+    BOTH = 4
 };
 
+// 打包期扫描到的一个待打包目录。
 struct FolderInfo {
     std::string id;
     std::string sourcePath;
@@ -43,490 +51,71 @@ struct FolderInfo {
         : sourcePath(source), targetPath(target), totalSize(0) {}
 };
 
-struct RegistryEntry {
-    std::string path;
-    std::string key;
-    std::string value;
-    RegistryValueType type;
-
-    RegistryEntry()
-        : type(RegistryValueType::STRING) {}
-};
-
-struct RegistryLookupEntry {
-    std::string path;
-    std::string key;
-};
-
-enum class UninstallEntryScope : uint8_t {
-    CURRENT_USER = 0,
-    LOCAL_MACHINE = 1,
-    WOW6432 = 2,
-    ANY = 3,
-    BOTH = 4
-};
-
-struct UninstallEntryCleanup {
-    std::string name;
-    UninstallEntryScope scope;
-
-    UninstallEntryCleanup()
-        : scope(UninstallEntryScope::ANY) {}
-};
-
-struct SystemUninstallEntryCleanupItem {
-    std::string displayName;
-    UninstallEntryScope scope;
-
-    SystemUninstallEntryCleanupItem()
-        : scope(UninstallEntryScope::ANY) {}
-};
-
-struct NamedCleanupEntry {
-    std::string name;
-};
-
-struct InstallInfoValueConfig {
-    std::string key;
-    std::string value;
-    RegistryValueType type;
-
-    InstallInfoValueConfig()
-        : type(RegistryValueType::STRING) {}
-};
-
-struct InstallInfoConfig {
-    InstallStateMode mode;
-    std::string path;
-    std::unordered_map<std::string, InstallInfoValueConfig> values;
-
-    InstallInfoConfig()
-        : mode(InstallStateMode::REGISTRY) {}
-};
-
-struct LocalInstallerConfig {
-    std::string base;
-    std::string installer;
-    std::string args;
-    bool wait;
-    uint32_t timeoutSec;
-    bool showWindow;
-    bool showWindowConfigured;
-
-    LocalInstallerConfig()
-        : wait(true), timeoutSec(900), showWindow(false), showWindowConfigured(false) {}
-};
-
-struct DownloadInstallerConfig {
-    std::string url;
-    std::string sha256;
-    std::string saveAs;
-    std::string args;
-    bool wait;
-    uint32_t timeoutSec;
-    bool showWindow;
-    bool showWindowConfigured;
-
-    DownloadInstallerConfig()
-        : wait(true), timeoutSec(900), showWindow(false), showWindowConfigured(false) {}
-};
-
-struct ComponentSourceConfig {
-    ComponentSourceType type;
-    LocalInstallerConfig local;
-    DownloadInstallerConfig download;
-
-    ComponentSourceConfig()
-        : type(ComponentSourceType::EMBEDDED) {}
-};
-
-struct ComponentUninstallConfig {
-    std::string command;
-    std::string args;
-    std::string workingDirectory;
-    bool wait;
-    uint32_t timeoutSec;
-
-    ComponentUninstallConfig()
-        : wait(true), timeoutSec(900) {}
-};
-
-struct ComponentConfig {
-    std::string id;
-    std::string name;
-    std::string description;
-    bool required;
-    bool defaultSelected;
-    uint32_t sizeHintMB;
-    std::vector<std::string> dependsOn;
-    std::vector<std::string> folders;
-    ComponentSourceConfig source;
-    ComponentUninstallConfig uninstall;
-
-    ComponentConfig()
-        : required(false),
-          defaultSelected(true),
-          sizeHintMB(0) {}
-};
-
-struct UiComponentBindingPage {
-    std::string skin;
-    std::vector<std::string> controls;
-};
-
-struct UiLinkBinding {
-    std::string control;
-    std::string url;
-};
-
-struct UninstallCleanupRule {
-    std::string path;
-    bool recursive;
-    bool onlyIfEmpty;
-
-    UninstallCleanupRule() : recursive(true), onlyIfEmpty(false) {}
-};
-
-struct CleanupRegistryConfig {
-    std::vector<RegistryEntry> legacyKeys;
-};
-
-struct UpgradeCleanupConfig {
-    std::vector<RegistryLookupEntry> installRoots;
-    CleanupRegistryConfig registry;
-    std::vector<UninstallEntryCleanup> uninstallEntries;
-    std::vector<NamedCleanupEntry> shortcuts;
-    std::vector<NamedCleanupEntry> startup;
-    std::vector<UninstallCleanupRule> extraPaths;
-};
-
-struct UninstallCleanupConfig {
-    std::vector<NamedCleanupEntry> processes;
-    CleanupRegistryConfig registry;
-    std::vector<UninstallEntryCleanup> uninstallEntries;
-    std::vector<NamedCleanupEntry> shortcuts;
-    std::vector<NamedCleanupEntry> startup;
-    std::vector<UninstallCleanupRule> paths;
-};
-
-struct UiComponentSelectionConfig {
-    std::string mode;
-    std::string strategy;
-    std::string tokenPrefix;
-    std::vector<UiComponentBindingPage> pages;
-
-    UiComponentSelectionConfig()
-        : mode("dedicatedPage"),
-          strategy("xml_userdata"),
-          tokenPrefix("component:") {}
-};
-
-struct AppProductInfo {
-    std::string iconPath;
-    std::string productName;
-    std::string fileVersion;
-    std::string productVersion;
-    std::string companyName;
-    std::string fileDescription;
-    std::string copyright;
-};
-
+// ── app —— 本次构建的身份与取值 ──────────────────────────────────────────
 struct AppConfig {
-    std::string name;
-    std::string id;
-    std::string version;
-    std::string directoryName;
-    std::string website;
-    std::string publisher;
-    std::string icon;
-    AppProductInfo versionInfo;
-    AppProductInfo product;
+    std::string productName;   // 用户可见产品名
+    std::string publisher;     // 发布者/公司名（同时用作版本资源 CompanyName）
+    std::string version;       // 版本号，每次发版必改（可含 -beta 等预发布后缀）
+    std::string defaultDir;    // GUI 默认安装目录，支持 %ProgramFiles% 等环境变量
+    std::string icon;          // 安装器 exe 图标，路径相对 --config 目录解析
+    std::string copyright;     // 可空；缺省时引擎用 publisher + 构建年份生成
 
     AppConfig()
-        : name("MyApplication"),
-          version("1.0") {}
+        : defaultDir("%ProgramFiles%") {}
 };
 
+// ── package —— 打包基础参数 ──────────────────────────────────────────────
 struct PackageCompressionConfig {
     CompressionAlgorithm algorithm;
-    int level;
-    int threads;
-    // When true, each file is compressed into its own independent frame so the
-    // installer can skip decompressing unchanged files entirely (P2). Trades a
-    // small compression-ratio loss for skippable per-file decode.
-    bool perFileFrames;
+    int level;   // 压缩级别；-1 表示用算法默认
 
     PackageCompressionConfig()
         : algorithm(CompressionAlgorithm::LZMA2_XZ),
-          level(-1),
-          threads(0),
-          perFileFrames(false) {}
+          level(-1) {}
+};
+
+// 逐文件夹落点声明（可选）。source = --input 顶层子目录名；target = 安装目标，
+// 支持 %InstallDir% 与环境变量（%AppData% / %LocalAppData% / %ProgramData% 等）。
+// 未声明的文件夹默认落到 %InstallDir%\<source>。
+struct LayoutFolderTarget {
+    std::string source;
+    std::string target;
 };
 
 struct PackageConfig {
     PackageCompressionConfig compression;
+    std::vector<LayoutFolderTarget> layout;
 };
 
-struct MinWindowsConfig {
-    uint16_t major;
-    uint16_t minor;
-    uint32_t build;
-
-    MinWindowsConfig() : major(0), minor(0), build(0) {}
+// ── hooks —— 安装前/后脚本 ───────────────────────────────────────────────
+enum class HookOnFailure {
+    ABORT,     // 中止安装并回滚
+    CONTINUE   // 记录日志后继续
 };
 
-struct PackagerInstallConfig {
-    std::string defaultDir;
-    bool requireAdmin;
-    bool autoCleanOldInstall;
-    bool autoStartup;
-    bool desktopIcon;
-    MinWindowsConfig minWindows;
-    uint64_t sparseFileThresholdBytes;
-    std::vector<std::string> killProcesses;
-    bool useMutex;
-    std::string mutexName;
-    InstallInfoConfig installInfo;
+struct HookConfig {
+    std::string path;        // 脚本路径，相对 --config 目录解析
+    std::string args;        // 本次构建特有的额外参数，可为空
+    HookOnFailure onFailure; // 失败处理
+    uint32_t timeoutSec;     // 超时上限（秒）
+    bool present;            // 该 hook 是否在 YAML 中配置
 
-    PackagerInstallConfig()
-        : defaultDir("%ProgramFiles%"),
-          requireAdmin(false),
-          autoCleanOldInstall(false),
-          autoStartup(false),
-          desktopIcon(false),
-          sparseFileThresholdBytes(4 * 1024 * 1024),
-          useMutex(true) {}
+    HookConfig()
+        : onFailure(HookOnFailure::ABORT),
+          timeoutSec(300),
+          present(false) {}
 };
 
-struct UiDesktopShortcutConfig {
-    std::string defaultName;
-    std::unordered_map<std::string, std::string> i18n;
+struct HooksConfig {
+    HookConfig preInstall;
+    HookConfig postInstall;
 };
 
-struct UiConfig {
-    std::string defaultLanguage;
-    UiDesktopShortcutConfig desktopShortcut;
-    std::vector<UiLinkBinding> links;
-    UiComponentSelectionConfig componentSelection;
-};
-
-struct LayoutFolderConfig {
-    std::string id;
-    std::string source;
-    std::string target;
-};
-
-struct LayoutConfig {
-    std::vector<LayoutFolderConfig> folders;
-    std::vector<ComponentConfig> components;
-};
-
-struct InstallStateValueConfig {
-    std::string key;
-    std::string name;
-    std::string value;
-    RegistryValueType type;
-
-    InstallStateValueConfig()
-        : type(RegistryValueType::STRING) {}
-};
-
-struct InstallStateRegistryStoreConfig {
-    std::string id;
-    std::string path;
-    std::unordered_map<std::string, InstallStateValueConfig> values;
-};
-
-struct InstallStateFileStoreConfig {
-    std::string id;
-    std::string path;
-    std::string format;
-    std::unordered_map<std::string, InstallStateValueConfig> values;
-
-    InstallStateFileStoreConfig()
-        : format("json") {}
-};
-
-struct InstalledInstanceDetectPrimaryConfig {
-    std::string registry;
-    std::string value;
-};
-
-struct InstalledInstanceDetectInstallStateConfig {
-    std::string id;
-    std::string path;
-    std::string installDirValue;
-};
-
-struct InstalledInstanceDetectConfig {
-    InstalledInstanceDetectPrimaryConfig primary;
-    std::vector<InstalledInstanceDetectInstallStateConfig> legacy;
-};
-
-struct InstallStateConfig {
-    std::vector<InstallStateRegistryStoreConfig> registries;
-    std::vector<InstallStateFileStoreConfig> files;
-    InstalledInstanceDetectConfig detect;
-};
-
-struct InstallerDefaultsConfig {
-    bool autoStartup;
-    bool desktopShortcut;
-
-    InstallerDefaultsConfig()
-        : autoStartup(false),
-          desktopShortcut(false) {}
-};
-
-struct SystemUninstallEntryConfig {
-    UninstallEntryScope scope;
-    std::string displayName;
-    std::string publisher;
-
-    SystemUninstallEntryConfig()
-        : scope(UninstallEntryScope::ANY) {}
-};
-
-struct SystemUninstallEntryCleanupConfig {
-    UninstallEntryScope scope;
-    std::string displayName;
-    std::vector<SystemUninstallEntryCleanupItem> legacyEntries;
-
-    SystemUninstallEntryCleanupConfig()
-        : scope(UninstallEntryScope::ANY) {}
-};
-
-struct CleanupLegacyNamesConfig {
-    std::vector<std::string> desktopShortcutNames;
-    std::vector<std::string> startupNames;
-};
-
-struct RegistryCleanupConfig {
-    std::vector<std::string> deleteKeys;
-    std::vector<RegistryEntry> deleteValues;
-};
-
-struct InstallerCleanupConfig {
-    SystemUninstallEntryCleanupConfig systemUninstallEntry;
-    CleanupLegacyNamesConfig legacy;
-    RegistryCleanupConfig registry;
-    std::vector<UninstallCleanupRule> paths;
-};
-
-struct PayloadConfig {
-    std::string id;
-    std::string source;
-    std::string target;
-    bool required;
-
-    PayloadConfig()
-        : required(false) {}
-};
-
-struct InstallerRegistryWriteGroup {
-    std::string path;
-    std::unordered_map<std::string, InstallStateValueConfig> values;
-};
-
-struct InstallerRegistryConfig {
-    std::vector<InstallerRegistryWriteGroup> write;
-};
-
-struct InstallerConfig {
-    bool requireAdmin;
-    std::string defaultDir;
-    std::string directoryName;
-    MinWindowsConfig minWindows;
-    uint64_t largeFileThresholdBytes;
-    std::string mutex;
-    std::vector<std::string> killBeforeInstall;
-    InstallerDefaultsConfig defaults;
-    InstallStateConfig installState;
-    SystemUninstallEntryConfig systemUninstallEntry;
-    InstallerCleanupConfig cleanup;
-    UiConfig ui;
-    std::vector<PayloadConfig> payload;
-    std::vector<ComponentConfig> components;
-    InstallerRegistryConfig registry;
-
-    InstallerConfig()
-        : requireAdmin(false),
-          defaultDir("%ProgramFiles%"),
-          largeFileThresholdBytes(4 * 1024 * 1024) {}
-};
-
-struct UninstallerLegacyCleanupConfig {
-    std::vector<std::string> desktopShortcutNames;
-    std::vector<std::string> startupNames;
-};
-
-struct UninstallerRegistryCleanupConfig {
-    std::vector<std::string> deleteKeys;
-    std::vector<RegistryEntry> deleteValues;
-};
-
-struct UninstallerCleanupConfigV3 {
-    std::string installedFiles;
-    std::string missingManifestFallback;
-    std::string installState;
-    std::string autoStartup;
-    std::string desktopShortcut;
-    SystemUninstallEntryCleanupConfig systemUninstallEntry;
-    CleanupLegacyNamesConfig legacy;
-    RegistryCleanupConfig registry;
-    std::vector<UninstallCleanupRule> paths;
-
-    UninstallerCleanupConfigV3()
-        : installedFiles("manifest"),
-          missingManifestFallback("safeDirectoryFallback"),
-          installState("delete"),
-          autoStartup("auto"),
-          desktopShortcut("auto") {}
-};
-
-struct UninstallerUiConfig {
-    std::string defaultLanguage;
-    std::string title;
-    std::string confirmMessage;
-};
-
-struct UninstallerConfig {
-    bool requireAdmin;
-    std::vector<std::string> killBeforeUninstall;
-    UninstallerCleanupConfigV3 cleanup;
-    UninstallerUiConfig ui;
-
-    UninstallerConfig()
-        : requireAdmin(false) {}
-};
-
-struct LifecycleRegistryConfig {
-    std::vector<RegistryEntry> onInstall;
-};
-
-struct LifecycleCleanupConfig {
-    UpgradeCleanupConfig onUpgrade;
-    UninstallCleanupConfig onUninstall;
-};
-
-struct LifecycleConfig {
-    LifecycleRegistryConfig registry;
-    LifecycleCleanupConfig cleanup;
-};
-
+// 根配置：仅三块。
 struct PackagerConfiguration {
-    uint32_t schemaVersion;
     AppConfig app;
     PackageConfig package;
-    InstallerConfig installer;
-    UninstallerConfig uninstaller;
-    PackagerInstallConfig install;
-    UiConfig ui;
-    LayoutConfig layout;
-    LifecycleConfig lifecycle;
-
-    PackagerConfiguration()
-        : schemaVersion(3) {}
+    HooksConfig hooks;
 };
 
 } // namespace MultiThreadedInstaller

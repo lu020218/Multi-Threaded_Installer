@@ -18,6 +18,9 @@
 
 namespace MultiThreadedInstaller {
 
+// 本头提供 tar 流式解包：作为 StreamSink 接收解压器还原出的 tar 字节，边解析边把各文件
+// 写到目标目录；并支持"已存在且未变的文件跳过重写"的增量优化（方案 A 零读 / 方案 B 读盘比对）。
+
 // Returns true when the file already present at fullPath matches the given
 // fingerprint and can be skipped. Uses the previous-install fingerprints for a
 // zero-read decision (Scheme A) when the path is recorded there, otherwise

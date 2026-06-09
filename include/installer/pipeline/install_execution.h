@@ -15,6 +15,7 @@ namespace MultiThreadedInstaller {
 class MetadataParser;
 class InstallerPathResolver;
 
+/// 组件安装计时（历史组件机制遗留；单产品单载荷下不产生，保留以兼容字段）。
 struct ComponentInstallTiming {
     std::string id;
     std::string name;
@@ -26,25 +27,28 @@ struct ComponentInstallTiming {
     std::string error;
 };
 
+/// 解压执行阶段的产出（供 finalize 与上层 result 消费）。
 struct InstallExecutionOutput {
-    bool success = false;
-    bool cancelled = false;
-    bool rebootRequired = false;
-    std::string installRootPath;
-    std::vector<std::string> installedRoots;
-    std::vector<std::string> installedFiles;
-    std::vector<std::string> pendingReplaceFiles;
-    std::vector<std::string> errors;
-    ParallelInstallSummary timing;
-    std::vector<ComponentInstallTiming> componentTimings;
-    std::vector<ComponentExecutionRecord> componentActions;
-    std::vector<RegistryEntry> effectiveRegistry;
-    std::vector<std::string> effectiveKillProcesses;
-    bool effectiveAutoStartup = false;
-    bool effectiveDesktopIcons = false;
-    std::vector<std::string> failedOptionalComponentMessages;
+    bool success = false;                          ///< 是否成功。
+    bool cancelled = false;                        ///< 是否被取消。
+    bool rebootRequired = false;                   ///< 是否有锁定文件待重启替换。
+    std::string installRootPath;                   ///< 实际安装根。
+    std::vector<std::string> installedRoots;       ///< 各 folder 目标根。
+    std::vector<std::string> installedFiles;       ///< 已写入文件绝对路径。
+    std::vector<std::string> pendingReplaceFiles;  ///< 待重启替换的锁定文件。
+    std::vector<std::string> errors;               ///< 失败信息。
+    ParallelInstallSummary timing;                 ///< 计时汇总。
+    std::vector<ComponentInstallTiming> componentTimings;  ///< 组件计时（遗留，通常空）。
+    std::vector<ComponentExecutionRecord> componentActions;///< 组件卸载动作（遗留，通常空）。
+    std::vector<RegistryEntry> effectiveRegistry;          ///< 透传给 finalize 的注册表写入。
+    std::vector<std::string> effectiveKillProcesses;       ///< 透传给 finalize 的待杀进程名。
+    bool effectiveAutoStartup = false;                     ///< 透传给 finalize：是否开机自启。
+    bool effectiveDesktopIcons = false;                    ///< 透传给 finalize：是否建快捷方式。
+    std::vector<std::string> failedOptionalComponentMessages;  ///< 可选组件失败信息（遗留）。
 };
 
+/// 解压执行阶段：把（全部）payload 解压落地到安装目录，填充 InstallExecutionOutput。
+/// 单产品单载荷下不再有组件执行；原"额外动作"由 hooks 承担（在 install_service 层调度）。
 bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                              MetadataParser& parser,
                              const InstallExecutionPlan& plan,

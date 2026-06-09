@@ -4,30 +4,32 @@
 
 namespace MultiThreadedInstaller {
 
+/// 目录载荷压缩器：把目录打成 tar 后用 XZ/ZSTD 压成单个载荷流（或按文件分帧）。
 class FolderPayloadCompressor {
 public:
     FolderPayloadCompressor();
     ~FolderPayloadCompressor() = default;
 
-    bool setCompressionAlgorithm(CompressionAlgorithm algorithm);
-    bool setCompressionLevel(int level);
-    bool setThreadCount(int threadCount);
-    void setPerFileFrames(bool enabled) { perFileFrames_ = enabled; }
+    bool setCompressionAlgorithm(CompressionAlgorithm algorithm);  ///< 设置算法。
+    bool setCompressionLevel(int level);                           ///< 设置级别。
+    bool setThreadCount(int threadCount);                          ///< 设置线程数。
+    void setPerFileFrames(bool enabled) { perFileFrames_ = enabled; }  ///< 是否按文件分帧。
 
+    /// 压缩一个目录，返回压缩结果（含 fileIndex）。
     CompressionResult compressFolder(const FolderInfo& folder) const;
 
 private:
-    CompressionAlgorithm currentAlgorithm;
-    int compressionLevel;
-    int threadCount;
-    bool perFileFrames_ = false;
+    CompressionAlgorithm currentAlgorithm;  ///< 算法。
+    int compressionLevel;                   ///< 级别。
+    int threadCount;                        ///< 线程数。
+    bool perFileFrames_ = false;            ///< 是否分帧。
 
-    CompressionResult compressWithXzLzma2(const FolderInfo& folder) const;
-    CompressionResult compressWithZstd(const FolderInfo& folder) const;
-    // Per-file framed payload: each file compressed into its own independent
-    // frame so the installer can skip decompressing unchanged files (P2).
+    CompressionResult compressWithXzLzma2(const FolderInfo& folder) const;  ///< 整流 XZ/LZMA2 压缩。
+    CompressionResult compressWithZstd(const FolderInfo& folder) const;     ///< 整流 ZSTD 压缩。
+    /// 按文件分帧压缩：每个文件独立成帧，使安装器可跳过未变文件的解压（P2 增量优化）。
     CompressionResult compressFolderFramed(const FolderInfo& folder) const;
-    uint32_t calculateChecksum(const std::vector<uint8_t>& data) const;
+    uint32_t calculateChecksum(const std::vector<uint8_t>& data) const;  ///< 计算校验和。
+    /// 把目录内文件打成 tar 字节流，同时产出 fileIndex（各文件偏移/大小/哈希）。
     std::vector<uint8_t> createTarData(const FolderInfo& folder,
                                        std::vector<FileIndexEntry>& fileIndex) const;
 };

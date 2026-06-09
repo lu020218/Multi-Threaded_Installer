@@ -12,11 +12,15 @@
 
 namespace MultiThreadedInstaller {
 
+/// liblzma 的运行时动态加载器：在构造时尝试加载 liblzma 并解析所需函数指针，
+/// 之后通过本类的函数指针成员调用 XZ/LZMA2 压缩/解压。多线程压缩/解压能力按
+/// 运行时探测（见 supportsMultiThreaded*），缺失时回退单线程。
 class LzmaLoader {
 public:
     LzmaLoader();
     ~LzmaLoader();
-    
+
+    /// liblzma 是否成功加载（失败时上层应回退或报错）。
     bool isLoaded() const { return loaded; }
     
     // LZMA function pointers
@@ -56,29 +60,30 @@ public:
     lzma_end_func lzma_end_ptr;
     lzma_version_number_func lzma_version_number_ptr;
     
-    // Capability flags
-    bool supportsMultiThreadedCompression() const { return lzma_stream_encoder_mt_ptr != nullptr; }
-    bool supportsMultiThreadedDecompression() const { return lzma_stream_decoder_mt_ptr != nullptr; }
-    
-    // Get LZMA version
+    // 能力探测：对应函数指针非空即支持。
+    bool supportsMultiThreadedCompression() const { return lzma_stream_encoder_mt_ptr != nullptr; }   ///< 是否支持多线程压缩。
+    bool supportsMultiThreadedDecompression() const { return lzma_stream_decoder_mt_ptr != nullptr; }  ///< 是否支持多线程解压。
+
+    /// liblzma 版本号（major.minor.patch）。
     struct Version {
         uint32_t major;
         uint32_t minor;
         uint32_t patch;
     };
     Version getVersion() const;
-    
+
 private:
-    bool loaded;
-    
+    bool loaded;  ///< 加载是否成功。
+
 #ifdef _WIN32
-    HMODULE hModule;
+    HMODULE hModule;  ///< liblzma 动态库句柄（Windows）。
 #else
-    void* handle;
+    void* handle;     ///< liblzma 动态库句柄（dlopen）。
 #endif
-    
-    bool loadLibrary();
-    void unloadLibrary();
+
+    bool loadLibrary();    ///< 加载动态库并解析全部函数指针。
+    void unloadLibrary();  ///< 卸载动态库。
+    /// 解析单个导出函数到 func；失败返回 false。
     template<typename T>
     bool loadFunction(T& func, const char* name);
 };

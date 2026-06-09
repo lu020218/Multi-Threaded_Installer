@@ -10,21 +10,23 @@
 
 namespace MultiThreadedInstaller {
 
+/// 组件卸载动作记录（历史组件机制遗留；单产品单载荷下通常为空，保留以兼容旧 manifest）。
 struct ComponentExecutionRecord {
-    std::string componentId;
-    std::string sourceType;
-    std::string uninstallCommand;
-    std::string workingDirectory;
-    bool wait = true;
-    uint32_t timeoutSec = 900;
+    std::string componentId;       ///< 组件 id。
+    std::string sourceType;        ///< 来源类型（local/download）。
+    std::string uninstallCommand;  ///< 卸载命令行。
+    std::string workingDirectory;  ///< 工作目录。
+    bool wait = true;              ///< 是否等待退出。
+    uint32_t timeoutSec = 900;     ///< 超时上限（秒）。
 };
 
+/// 从上次安装 manifest 读出的、升级时需沿用的用户选项。
 struct PreviousInstallOptions {
-    bool autoStartup = false;
-    bool desktopIcon = false;
-    bool installAllComponents = false;
-    std::string languageCode;
-    std::vector<std::string> selectedComponentIds;
+    bool autoStartup = false;                       ///< 上次的开机自启选择。
+    bool desktopIcon = false;                       ///< 上次的桌面快捷方式选择。
+    bool installAllComponents = false;              ///< 历史组件全装标志。
+    std::string languageCode;                       ///< 上次的界面语言。
+    std::vector<std::string> selectedComponentIds;  ///< 历史组件选择。
 };
 
 // 写运行时安装清单 install.manifest.json：记录已装文件 + 运行时卸载账本
@@ -49,13 +51,14 @@ bool writeManifest(const std::string& manifestPath,
                    bool installAllComponents = false,
                    const std::string& appPublisher = {},
                    const InstalledFileFingerprintMap& fileFingerprints = {});
+/// 读取 install.manifest.json 为 JSON 对象。成功返回 true。
 bool readManifest(const std::string& manifestPath, nlohmann::json& outManifest);
+/// 从上次安装 manifest 读出 PreviousInstallOptions（升级时沿用）。缺字段时返回 false + error。
 bool loadPreviousInstallOptions(const std::string& manifestPath,
                                 PreviousInstallOptions& options,
                                 std::string& error);
-// Loads per-file fingerprints recorded by a previous install (if present),
-// keyed by normalizePathForCompare(absolute path). Returns false when the
-// manifest is unreadable or carries no fingerprints.
+/// 读取上次安装记录的逐文件指纹（若有），键为 normalizePathForCompare(绝对路径)。
+/// 用于升级时"零读跳过"未变文件（方案A）。manifest 不可读或无指纹时返回 false。
 bool loadPreviousInstallFileFingerprints(const std::string& manifestPath,
                                          InstalledFileFingerprintMap& out);
 

@@ -6,12 +6,14 @@
 
 namespace MultiThreadedInstaller {
 
+/// 打包配置校验器：检查 app/package/hooks 各字段合法、icon/hook 脚本存在、输入目录有内容。
 class ConfigurationValidator {
 public:
+    /// 校验结果：是否通过 + 错误/警告列表。
     struct ValidationResult {
-        bool isValid;
-        std::vector<std::string> errors;
-        std::vector<std::string> warnings;
+        bool isValid;                        ///< 是否通过（有 error 则为 false）。
+        std::vector<std::string> errors;     ///< 致命错误（阻止打包）。
+        std::vector<std::string> warnings;   ///< 警告（不阻止）。
 
         ValidationResult() : isValid(true) {}
     };

@@ -20,7 +20,6 @@ class InstallerPathResolver;
 /// @param effectiveKillProcesses 卸载时需结束的进程名（由产品名派生）。
 /// @param effectiveAutoStartup   是否设开机自启（已合并 options 覆盖/EngineDefaults）。
 /// @param effectiveDesktopIcons  是否建桌面/开始菜单快捷方式。
-/// @param componentActions       组件卸载动作记录（遗留，通常为空）。
 /// @param result                 入参带解压结果，出参补全 uninstallPath/installedFiles 等。
 /// @return 成功返回 true。
 bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
@@ -30,7 +29,6 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                                 const std::vector<std::string>& effectiveKillProcesses,
                                 bool effectiveAutoStartup,
                                 bool effectiveDesktopIcons,
-                                const std::vector<ComponentExecutionRecord>& componentActions,
                                 InstallerPathResolver& pathResolver,
                                 InstallProgressReporter& reporter,
                                 InstallServiceResult& result);

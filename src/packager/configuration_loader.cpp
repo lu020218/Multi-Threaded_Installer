@@ -147,12 +147,13 @@ bool ParseOnFailureValue(const std::string& raw, HookOnFailure& out, std::string
     return false;
 }
 
-bool ParseHook(const json& hooks, const char* key, HookConfig& out, std::string& lastError) {
-    json hook;
-    if (!GetOptionalObject(hooks, key, hook)) {
-        return true;  // hook 可选
+// 解析单个 hook 对象（path/args/onFailure/timeoutSec）。path 支持 .bat/.cmd/.ps1。
+bool ParseHookEntry(const json& hook, const std::string& label, HookConfig& out,
+                    std::string& lastError) {
+    if (!hook.is_object()) {
+        lastError = "Invalid '" + label + "': expected a mapping with at least 'path'";
+        return false;
     }
-    const std::string label = std::string("hooks.") + key;
     if (!GetRequiredString(hook, "path", out.path, lastError)) {
         lastError = "Missing required field '" + label + ".path'";
         return false;
@@ -179,13 +180,42 @@ bool ParseHook(const json& hooks, const char* key, HookConfig& out, std::string&
     return true;
 }
 
+// 解析一个 hook 列表：hooks.<key> 可写成数组（多个脚本，按序执行），
+// 也兼容单个对象（按单元素列表处理）。整段缺省即无脚本。
+bool ParseHookList(const json& hooks, const char* key, std::vector<HookConfig>& out,
+                   std::string& lastError) {
+    if (!hooks.contains(key) || hooks[key].is_null()) {
+        return true;  // 该 hook 点可选
+    }
+    const std::string label = std::string("hooks.") + key;
+    const json& node = hooks[key];
+    if (node.is_array()) {
+        out.reserve(node.size());
+        for (size_t i = 0; i < node.size(); ++i) {
+            HookConfig entry;
+            if (!ParseHookEntry(node[i], label + "[" + std::to_string(i) + "]", entry, lastError)) {
+                return false;
+            }
+            out.push_back(std::move(entry));
+        }
+        return true;
+    }
+    // 兼容单对象写法。
+    HookConfig entry;
+    if (!ParseHookEntry(node, label, entry, lastError)) {
+        return false;
+    }
+    out.push_back(std::move(entry));
+    return true;
+}
+
 bool ParseHooksConfig(const json& root, HooksConfig& out, std::string& lastError) {
     json hooks;
     if (!GetOptionalObject(root, "hooks", hooks)) {
         return true;  // hooks 整块可选
     }
-    return ParseHook(hooks, "preInstall", out.preInstall, lastError) &&
-           ParseHook(hooks, "postInstall", out.postInstall, lastError);
+    return ParseHookList(hooks, "preInstall", out.preInstall, lastError) &&
+           ParseHookList(hooks, "postInstall", out.postInstall, lastError);
 }
 
 } // namespace

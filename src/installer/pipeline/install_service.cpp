@@ -1,6 +1,7 @@
 #include "installer/pipeline/install_service.h"
 
 #include "common/installer_logger.h"
+#include "installer/hooks/component_launcher.h"
 #include "installer/hooks/hook_runner.h"
 #include "installer/pipeline/install_cleanup_executor.h"
 #include "installer/pipeline/install_execution.h"
@@ -48,7 +49,6 @@ struct InstallFlowTiming {
     uint64_t executeMs = 0;
     uint64_t finalizeMs = 0;
     ParallelInstallSummary payload;
-    std::vector<ComponentInstallTiming> components;
 };
 
 InstallStateContext BuildServiceInstallStateContext(const ExtendedInstallationMetadata& metadata,
@@ -117,8 +117,7 @@ void RollbackInstalledArtifacts(const ExtendedInstallationMetadata& metadata,
     deleteSystemUninstallEntryByDisplayName(metadata.appProductName, UninstallEntryScope::ANY);
 
     // 4) 删 install-state（HKLM\Software\<product> + install-state.json）。
-    CleanupInstallState("delete",
-                        BuildServiceInstallStateContext(metadata, plan, options, "uninstalled"),
+    CleanupInstallState(BuildServiceInstallStateContext(metadata, plan, options, "uninstalled"),
                         pathResolver);
 
     logInstallerInfo("[Rollback] postInstall abort rollback completed.");
@@ -164,25 +163,6 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             << "s decompress=" << flowTiming.payload.decompressSec
             << "s write=" << flowTiming.payload.writeSec
             << "s folders=" << flowTiming.payload.folderTimings.size() << "\n";
-        if (flowTiming.components.empty()) {
-            oss << "  components: none";
-        } else {
-            oss << "  components:";
-            for (const auto& component : flowTiming.components) {
-                oss << "\n    - id=" << component.id
-                    << " name=" << std::quoted(component.name)
-                    << " type=" << component.type
-                    << " success=" << (component.success ? "true" : "false")
-                    << " total=" << component.totalMs << "ms";
-                if (component.type == "download") {
-                    oss << " download=" << component.downloadMs
-                        << "ms install=" << component.installMs << "ms";
-                }
-                if (!component.success && !component.error.empty()) {
-                    oss << " error=" << std::quoted(component.error);
-                }
-            }
-        }
         logInstallerInfo(oss.str());
     };
 
@@ -245,7 +225,6 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         logInstallerInfo(std::string("[InstallFlow][Plan] requestedPath=") + options.installPath +
                          " installPathExplicit=" +
                          (options.installPathExplicit ? "true" : "false") +
-                         " selectedComponents=" + std::to_string(options.selectedComponentIds.size()) +
                          " hasPreviousInstall=" + (plan.hasPreviousInstall ? "true" : "false"));
         logInstallerInfo(std::string("[InstallFlow][Path] mode=") +
                          InstallTargetModeName(plan.pathDecision.mode) +
@@ -305,8 +284,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                                ? options.installPath
                                                : plan.pathDecision.resolvedInstallRoot;
 
-        // preInstall hook：在解压前执行（需求 §4 时序）。失败按 onFailure=abort 中止回滚。
-        if (RunHook(metadata.preInstall, hookInstallDir, metadata.appVersion) ==
+        // preInstall hooks：在解压前按声明顺序依次执行（需求 §4 时序）；
+        // 任一脚本以 onFailure=abort 失败则中止安装。
+        if (RunHooks(metadata.preInstall, hookInstallDir, metadata.appVersion) ==
             HookOutcome::FailedAbort) {
             markFailed("preInstall hook failed; installation aborted.", false, true);
             return finishResult();
@@ -324,7 +304,6 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             flowTiming.executeMs = ElapsedMs(executeStart);
             result.timing = executionOutput.timing;
             flowTiming.payload = executionOutput.timing;
-            flowTiming.components = executionOutput.componentTimings;
             result.installRootPath = executionOutput.installRootPath;
             result.installedRoots = std::move(executionOutput.installedRoots);
             result.cancelled = executionOutput.cancelled;
@@ -336,13 +315,36 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
 
         result.timing = executionOutput.timing;
         flowTiming.payload = executionOutput.timing;
-        flowTiming.components = executionOutput.componentTimings;
         result.installRootPath = executionOutput.installRootPath;
         result.installedRoots = std::move(executionOutput.installedRoots);
         result.installedFiles = std::move(executionOutput.installedFiles);
         result.cancelled = executionOutput.cancelled;
         result.rebootRequired = executionOutput.rebootRequired;
         result.pendingReplaceFiles = std::move(executionOutput.pendingReplaceFiles);
+
+        // ───────────────────────────────────────────────────────────────────
+        // [组件安装挂钩点] 主载荷已解压完成、安装目录文件就绪，finalize（写注册表/快捷方式/
+        // 卸载入口）尚未开始。此处适合运行随产品一起安装的「组件安装程序」
+        // （如 VC++ 运行库、驱动、第三方 redist 等 exe 安装包或 bat/cmd/ps1/msi 脚本）。
+        //
+        // 用法：用 installer/hooks/component_launcher.h 提供的 RunComponentInstaller，
+        // 它支持 exe/bat/cmd/ps1/msi，按退出码判定成功，可设超时与隐藏窗口。
+        // 组件安装程序通常随载荷解压到安装目录下（result.installRootPath）。
+        //
+        // 在下方按业务需要补充：决定装哪些组件、各自的参数/超时、失败是中止还是继续。
+        // 示例（后续替换为真实业务逻辑）：
+        //
+        //   ComponentInstallRequest req;
+        //   req.executablePath = PathFromUtf8(result.installRootPath) / "redist" / "vc_redist.x64.exe";
+        //   req.args = "/install /quiet /norestart";
+        //   req.timeoutSec = 600;
+        //   req.successExitCode = 0;            // 个别安装器用 3010 表示“需重启”，可另行判定
+        //   ComponentInstallResult cr = RunComponentInstaller(req);
+        //   if (!cr.success) {
+        //       // 中止：markFailed(cr.message, false, true); return finishResult();
+        //       // 或继续：reporter.EmitMessage(InstallServiceEventType::Warning, cr.message);
+        //   }
+        // ───────────────────────────────────────────────────────────────────
 
         auto finalizeStart = std::chrono::steady_clock::now();
         if (!ExecuteInstallFinalization(metadata,
@@ -352,7 +354,6 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                         executionOutput.effectiveKillProcesses,
                                         executionOutput.effectiveAutoStartup,
                                         executionOutput.effectiveDesktopIcons,
-                                        executionOutput.componentActions,
                                         pathResolver,
                                         reporter,
                                         result)) {
@@ -363,10 +364,10 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         flowTiming.finalizeMs = ElapsedMs(finalizeStart);
         coreInstallInfoApplied = false;
 
-        // postInstall hook：在 finalize 后执行（需求 §4 时序）。
+        // postInstall hooks：在 finalize 后按声明顺序依次执行（需求 §4 时序）。
         const std::string postHookInstallDir =
             result.installRootPath.empty() ? hookInstallDir : result.installRootPath;
-        if (RunHook(metadata.postInstall, postHookInstallDir, metadata.appVersion) ==
+        if (RunHooks(metadata.postInstall, postHookInstallDir, metadata.appVersion) ==
             HookOutcome::FailedAbort) {
             RollbackInstalledArtifacts(metadata, plan, options, result, pathResolver, reporter);
             markFailed("postInstall hook failed; installation rolled back.", false, true);
@@ -374,24 +375,6 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         }
 
         releaseResources();
-
-        if (!executionOutput.failedOptionalComponentMessages.empty()) {
-            result.success = false;
-            result.errors.insert(result.errors.end(),
-                                 executionOutput.failedOptionalComponentMessages.begin(),
-                                 executionOutput.failedOptionalComponentMessages.end());
-            reporter.EmitMessage(InstallServiceEventType::Error,
-                                 "Installation completed with component failures.");
-            reporter.EmitStatus(InstallServiceStatus::Failed,
-                                InstallServicePhase::Finalizing,
-                                1.0f,
-                                "Installation completed with component failures.");
-            logInstallerWarning(std::string("[InstallFlow][Done] success=false cancelled=") +
-                                (result.cancelled ? "true" : "false") +
-                                " errors=" + std::to_string(result.errors.size()) +
-                                " installRootPath=" + result.installRootPath);
-            return finishResult();
-        }
 
         if (result.rebootRequired) {
             result.success = false;

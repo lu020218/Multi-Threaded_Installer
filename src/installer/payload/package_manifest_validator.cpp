@@ -88,9 +88,15 @@ bool ValidatePackageManifest(const PackageManifest& manifest, std::string& error
         return false;
     }
 
-    if (!ValidateHook(manifest.hooks.preInstall, error) ||
-        !ValidateHook(manifest.hooks.postInstall, error)) {
-        return false;
+    for (const auto& hook : manifest.hooks.preInstall) {
+        if (!ValidateHook(hook, error)) {
+            return false;
+        }
+    }
+    for (const auto& hook : manifest.hooks.postInstall) {
+        if (!ValidateHook(hook, error)) {
+            return false;
+        }
     }
 
     return true;

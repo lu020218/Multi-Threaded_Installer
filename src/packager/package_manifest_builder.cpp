@@ -97,8 +97,19 @@ PackageManifest PackageManifestBuilder::build(const std::vector<CompressionResul
         manifest.payload.folders.push_back(std::move(folder));
     }
 
-    manifest.hooks.preInstall = BuildHook(config.hooks.preInstall, configDirectory);
-    manifest.hooks.postInstall = BuildHook(config.hooks.postInstall, configDirectory);
+    // preInstall / postInstall 各支持多个脚本，按声明顺序内嵌（脚本字节随包携带）。
+    auto buildHookList = [&](const std::vector<HookConfig>& configs,
+                             std::vector<PackageHook>& out) {
+        out.reserve(configs.size());
+        for (const auto& cfg : configs) {
+            PackageHook hook = BuildHook(cfg, configDirectory);
+            if (hook.present) {
+                out.push_back(std::move(hook));
+            }
+        }
+    };
+    buildHookList(config.hooks.preInstall, manifest.hooks.preInstall);
+    buildHookList(config.hooks.postInstall, manifest.hooks.postInstall);
     return manifest;
 }
 

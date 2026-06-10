@@ -1099,6 +1099,8 @@ bool cleanupPreviousInstallForUpgrade(
     return true;
 }
 
+// [旧版本-清理:文件] 删除旧版本安装文件的实际执行：读旧 manifest 的 files[]（缺失则安全
+// 回退为目录内容清理），多线程删除 + 收尾删空目录，必要时移除旧安装根目录。
 UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) {
     CleanupExecutionState state;
     state.task = task;
@@ -1472,6 +1474,8 @@ UpgradeCleanupResult runUpgradeExtraPathCleanupWithWatchdog(
     return RunTaskWithWatchdog(std::move(task), progressCallback, cancellationCallback);
 }
 
+// [旧版本-清理:系统痕迹] 旧版本系统痕迹（注册表/开机自启/快捷方式/系统卸载入口/残留路径）
+// 的清理总入口：算出 fromVersion→toVersion，交给迁移表 migration::RunPending 按版本收尾。
 bool cleanupUpgradeSystemArtifacts(
     const std::string& manifestPath,
     const std::string& previousInstallDir,

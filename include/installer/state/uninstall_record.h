@@ -49,15 +49,13 @@ struct UninstallCleanupRule {
     bool onlyIfEmpty = false;
 };
 
-// 运行时卸载清单：install_finalize 记录、写入 install-state，卸载时读取执行。
+// 运行时卸载账本：install_finalize 记录、写入 install.manifest.json，卸载时读取并撤销。
+// 注册表与系统卸载入口的清理已由引擎按产品名写死处理，故不再记录注册表/路径名单。
 struct UninstallCleanupConfig {
-    std::vector<NamedCleanupEntry> processes;
-    std::vector<RegistryEntry> registryValues;   // 要删除的注册表值
-    std::vector<std::string> registryKeys;        // 要删除的注册表键
-    std::vector<UninstallEntryCleanup> uninstallEntries;
-    std::vector<NamedCleanupEntry> shortcuts;
-    std::vector<NamedCleanupEntry> startup;
-    std::vector<UninstallCleanupRule> paths;
+    std::vector<NamedCleanupEntry> processes;             // 卸载前需结束的进程
+    std::vector<UninstallEntryCleanup> uninstallEntries;  // 要删除的系统卸载入口
+    std::vector<NamedCleanupEntry> shortcuts;             // 要删除的快捷方式
+    std::vector<NamedCleanupEntry> startup;               // 要删除的开机自启项
 };
 
 } // namespace MultiThreadedInstaller

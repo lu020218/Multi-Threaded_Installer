@@ -25,13 +25,11 @@ public:
     InstallationWorker(HWND hNotifyWindow);
     ~InstallationWorker();
 
-    /// 在后台线程启动安装。组件参数为历史遗留（单产品单载荷下忽略）。
+    /// 在后台线程启动安装。
     void StartInstallation(const std::wstring& installPath,
                            bool autoRun,
                            bool desktopIcons,
                            const std::wstring& languageCode,
-                           const std::vector<std::string>& selectedComponents,
-                           bool installAllComponents = false,
                            bool upgradeMode = false);
 
     /// 请求取消（worker 在安全点检查并中止）。
@@ -48,10 +46,8 @@ private:
     std::atomic<bool> m_cancellationRequested;  ///< 是否已请求取消。
     bool m_autoRun;                ///< 完成后是否自动运行。
     bool m_desktopIcons;           ///< 是否建桌面快捷方式。
-    bool m_installAllComponents;   ///< 组件全装（遗留）。
     bool m_upgradeMode;            ///< 升级模式。
     std::wstring m_languageCode;   ///< 界面语言。
-    std::vector<std::string> m_selectedComponents;  ///< 选定组件（遗留）。
     std::atomic<uint64_t> m_totalBytes;          ///< 总字节数（进度计算）。
     std::atomic<uint64_t> m_completedBytes;      ///< 已完成字节数。
     std::atomic<uint64_t> m_currentFolderBytes;  ///< 当前 folder 字节数。

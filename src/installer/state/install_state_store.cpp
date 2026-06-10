@@ -20,17 +20,6 @@ namespace {
 
 using json = nlohmann::json;
 
-std::string NormalizeCleanupMode(const std::string& mode) {
-    std::string normalized = mode;
-    for (char& ch : normalized) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    if (normalized.empty()) {
-        return "delete";
-    }
-    return normalized;
-}
-
 // 写一个值到产品注册表键 HKLM\Software\<product>。
 void WriteProductRegistryValue(const std::string& registryPath,
                                const std::string& key,
@@ -88,7 +77,9 @@ bool ApplyInstallState(const InstallStateContext& context, InstallerPathResolver
         return false;
     }
 
-    // 注册表：HKLM\Software\<product>，写死的状态字段。
+    // [安装收尾-注册表写入] 产品状态注册表：写引擎写死的 HKLM\Software\<product> 下
+    // Version/InstallDir/InstallSource/InstallState/InstalledBy 字段。这是覆盖/升级探测
+    // 与卸载发现安装目录的权威来源（见 [旧版本-发现安装路径]）。
     const std::string registryPath = EngineDefaults::RegistryPath(context.appName);
     WriteProductRegistryValue(registryPath, "Version", context.version);
     WriteProductRegistryValue(registryPath, "InstallDir", context.installDir);
@@ -109,23 +100,11 @@ bool ApplyInstallState(const InstallStateContext& context, InstallerPathResolver
     return WriteInstallStateFile(filePath, root);
 }
 
-bool CleanupInstallState(const std::string& mode,
-                         const InstallStateContext& context,
-                         InstallerPathResolver& resolver) {
+bool CleanupInstallState(const InstallStateContext& context, InstallerPathResolver& resolver) {
     if (context.appName.empty()) {
         return true;
     }
-    const std::string normalizedMode = NormalizeCleanupMode(mode);
-    if (normalizedMode == "keep") {
-        return true;
-    }
-    if (normalizedMode == "markuninstalled" || normalizedMode == "mark_uninstalled") {
-        InstallStateContext uninstalledContext = context;
-        uninstalledContext.state = "uninstalled";
-        return ApplyInstallState(uninstalledContext, resolver);
-    }
-
-    // delete：删产品注册表键与 install-state.json。
+    // 删产品注册表键与 install-state.json。
     deleteRegistryPath(EngineDefaults::RegistryPath(context.appName));
     const std::string filePath =
         resolver.expandEnvironmentVariables(EngineDefaults::InstallStateFilePath(context.appName));

@@ -105,9 +105,15 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         }
     }
 
-    // hooks
-    ValidateHook(config.hooks.preInstall, "hooks.preInstall", configDirectory, result);
-    ValidateHook(config.hooks.postInstall, "hooks.postInstall", configDirectory, result);
+    // hooks：每个钩子点可有多个脚本，逐个校验路径存在。
+    for (size_t i = 0; i < config.hooks.preInstall.size(); ++i) {
+        ValidateHook(config.hooks.preInstall[i],
+                     "hooks.preInstall[" + std::to_string(i) + "]", configDirectory, result);
+    }
+    for (size_t i = 0; i < config.hooks.postInstall.size(); ++i) {
+        ValidateHook(config.hooks.postInstall[i],
+                     "hooks.postInstall[" + std::to_string(i) + "]", configDirectory, result);
+    }
 
     // input
     const fs::path inputDir = PathFromUtf8(inputDirectory);

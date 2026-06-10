@@ -21,10 +21,8 @@ struct InstallStateContext {
 // 写产品注册表 + install-state.json（落点由引擎按产品名拼，不来自 YAML）。
 bool ApplyInstallState(const InstallStateContext& context, InstallerPathResolver& resolver);
 
-// 卸载/失败时清理安装状态。mode: "delete"（默认删除）/ "keep" / "markUninstalled"。
-bool CleanupInstallState(const std::string& mode,
-                         const InstallStateContext& context,
-                         InstallerPathResolver& resolver);
+// 卸载/失败时清理安装状态：删产品注册表键 HKLM\Software\<product> 与 install-state.json。
+bool CleanupInstallState(const InstallStateContext& context, InstallerPathResolver& resolver);
 
 std::string GetCurrentUserNameForInstallState();
 

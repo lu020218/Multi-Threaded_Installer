@@ -117,9 +117,9 @@ struct ExtendedInstallationMetadata : public InstallationMetadata {
     // 载荷。
     std::vector<ExtendedFolderMapping> extendedPayloadMappings;
 
-    // 钩子。
-    HookScript preInstall;
-    HookScript postInstall;
+    // 钩子：每个钩子点可挂多个脚本，按顺序依次执行（支持 bat/cmd/ps1）。
+    std::vector<HookScript> preInstall;
+    std::vector<HookScript> postInstall;
 
     ExtendedInstallationMetadata()
         : InstallationMetadata(),

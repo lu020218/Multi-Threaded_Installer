@@ -10,23 +10,11 @@
 
 namespace MultiThreadedInstaller {
 
-/// 组件卸载动作记录（历史组件机制遗留；单产品单载荷下通常为空，保留以兼容旧 manifest）。
-struct ComponentExecutionRecord {
-    std::string componentId;       ///< 组件 id。
-    std::string sourceType;        ///< 来源类型（local/download）。
-    std::string uninstallCommand;  ///< 卸载命令行。
-    std::string workingDirectory;  ///< 工作目录。
-    bool wait = true;              ///< 是否等待退出。
-    uint32_t timeoutSec = 900;     ///< 超时上限（秒）。
-};
-
 /// 从上次安装 manifest 读出的、升级时需沿用的用户选项。
 struct PreviousInstallOptions {
-    bool autoStartup = false;                       ///< 上次的开机自启选择。
-    bool desktopIcon = false;                       ///< 上次的桌面快捷方式选择。
-    bool installAllComponents = false;              ///< 历史组件全装标志。
-    std::string languageCode;                       ///< 上次的界面语言。
-    std::vector<std::string> selectedComponentIds;  ///< 历史组件选择。
+    bool autoStartup = false;     ///< 上次的开机自启选择。
+    bool desktopIcon = false;     ///< 上次的桌面快捷方式选择。
+    std::string languageCode;     ///< 上次的界面语言。
 };
 
 // 写运行时安装清单 install.manifest.json：记录已装文件 + 运行时卸载账本
@@ -46,9 +34,6 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& desktopShortcutDisplayName,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
-                   const std::vector<ComponentExecutionRecord>& componentActions = {},
-                   const std::vector<std::string>& selectedComponentIds = {},
-                   bool installAllComponents = false,
                    const std::string& appPublisher = {},
                    const InstalledFileFingerprintMap& fileFingerprints = {});
 /// 读取 install.manifest.json 为 JSON 对象。成功返回 true。

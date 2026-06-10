@@ -33,6 +33,8 @@ std::filesystem::path findPrimaryExecutable(const std::filesystem::path& install
     return std::filesystem::path();
 }
 
+// [安装收尾-开机自启] 实现：在 HKCU\Software\Microsoft\Windows\CurrentVersion\Run 下
+// 写一个名为 appName、值为带引号 exe 路径的字符串值，实现当前用户开机自启动。
 bool setAutoStartup(const std::string& appName, const std::filesystem::path& exePath) {
 #ifdef _WIN32
     HKEY key = nullptr;
@@ -73,7 +75,8 @@ namespace {
 
 bool CreateShellLink(const std::wstring& linkPath,
                      const std::filesystem::path& exePath,
-                     const std::string& description) {
+                     const std::string& description,
+                     const std::filesystem::path& iconPath = {}) {
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     bool coInit = (hr == S_OK || hr == S_FALSE);
     if (!coInit && hr != RPC_E_CHANGED_MODE) { return false; }
@@ -90,6 +93,13 @@ bool CreateShellLink(const std::wstring& linkPath,
     std::wstring workingDir = exePath.parent_path().wstring();
     if (!workingDir.empty()) { link->SetWorkingDirectory(workingDir.c_str()); }
     link->SetDescription(Utf8ToWide(description).c_str());
+
+    // [安装收尾-快捷方式图标] 支持手动指定图标：当 iconPath 非空且文件存在时，显式把
+    // 快捷方式图标设为该文件（如安装目录下的 app.ico）；否则回退为目标 exe 自带图标。
+    std::error_code iconEc;
+    if (!iconPath.empty() && std::filesystem::exists(iconPath, iconEc)) {
+        link->SetIconLocation(iconPath.wstring().c_str(), 0);
+    }
 
     IPersistFile* persist = nullptr;
     hr = link->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&persist));
@@ -109,16 +119,20 @@ bool CreateShellLink(const std::wstring& linkPath,
 } // namespace
 #endif
 
-bool createDesktopShortcut(const std::string& appName, const std::filesystem::path& exePath) {
+// [安装收尾-桌面快捷方式] 实现：在桌面目录创建 <appName>.lnk，指向主 exe。
+// iconPath 非空时（如安装目录下的 app.ico）作为快捷方式图标手动指定，否则用 exe 自带图标。
+bool createDesktopShortcut(const std::string& appName,
+                           const std::filesystem::path& exePath,
+                           const std::filesystem::path& iconPath) {
 #ifdef _WIN32
     PWSTR desktopPath = nullptr;
     HRESULT hr = SHGetKnownFolderPath(FOLDERID_Desktop, KF_FLAG_CREATE, nullptr, &desktopPath);
     if (FAILED(hr) || !desktopPath) { return false; }
     std::wstring linkPath = std::wstring(desktopPath) + L"\\" + Utf8ToWide(appName) + L".lnk";
     CoTaskMemFree(desktopPath);
-    return CreateShellLink(linkPath, exePath, appName);
+    return CreateShellLink(linkPath, exePath, appName, iconPath);
 #else
-    (void)appName; (void)exePath; return false;
+    (void)appName; (void)exePath; (void)iconPath; return false;
 #endif
 }
 
@@ -135,6 +149,7 @@ bool deleteDesktopShortcut(const std::string& appName) {
 #endif
 }
 
+// [安装收尾-开始菜单快捷方式] 实现：在开始菜单 Programs 下建 <appName> 目录及同名 .lnk。
 bool createStartMenuShortcut(const std::string& appName,
                              const std::filesystem::path& exePath,
                              const std::string& uninstallDisplayName) {

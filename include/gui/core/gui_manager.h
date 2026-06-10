@@ -105,8 +105,6 @@ public:
                                     bool autoRun,
                                     bool desktopIcons,
                                     const std::wstring& languageCode,
-                                    const std::vector<std::string>& selectedComponents,
-                                    bool installAllComponents,
                                     bool upgradeMode = false);
     void PrepareInitialDpi(unsigned int dpi);
     
@@ -156,24 +154,16 @@ private:
     bool m_autoStartAutoRun;              ///< 自动安装：开机自启。
     bool m_autoStartDesktopIcons;         ///< 自动安装：桌面快捷方式。
     std::wstring m_autoStartLanguageCode; ///< 自动安装：语言。
-    std::vector<std::string> m_autoStartSelectedComponents;
-    bool m_autoStartInstallAllComponents;
     bool m_autoStartUpgradeMode;
-    
 
     void InitControls();
     bool EnsureInstallMetadataLoaded();
-    void InitializeComponentSelectionUi();
-    std::vector<std::string> CollectSelectedComponentsFromUi();
-    
 
     void OnInstallButtonClick();
     bool StartInstallationWithOptions(const std::wstring& installPath,
                                       bool autoRun,
                                       bool desktopIcons,
                                       const std::wstring& languageCode,
-                                      const std::vector<std::string>& selectedComponents,
-                                      bool installAllComponents,
                                       bool upgradeMode);
     void OnCancelButtonClick();
     void OnBrowseButtonClick();

@@ -54,8 +54,14 @@ PackageManifest PackageManifestFromExtendedMetadata(const ExtendedInstallationMe
         manifest.payload.folders.push_back(std::move(folder));
     }
 
-    manifest.hooks.preInstall = HookFromScript(metadata.preInstall);
-    manifest.hooks.postInstall = HookFromScript(metadata.postInstall);
+    manifest.hooks.preInstall.reserve(metadata.preInstall.size());
+    for (const auto& script : metadata.preInstall) {
+        manifest.hooks.preInstall.push_back(HookFromScript(script));
+    }
+    manifest.hooks.postInstall.reserve(metadata.postInstall.size());
+    for (const auto& script : metadata.postInstall) {
+        manifest.hooks.postInstall.push_back(HookFromScript(script));
+    }
     return manifest;
 }
 
@@ -99,8 +105,14 @@ ExtendedInstallationMetadata PackageManifestToExtendedMetadata(const PackageMani
         metadata.payloadMappings.push_back(std::move(base));
     }
 
-    metadata.preInstall = ScriptFromHook(manifest.hooks.preInstall);
-    metadata.postInstall = ScriptFromHook(manifest.hooks.postInstall);
+    metadata.preInstall.reserve(manifest.hooks.preInstall.size());
+    for (const auto& hook : manifest.hooks.preInstall) {
+        metadata.preInstall.push_back(ScriptFromHook(hook));
+    }
+    metadata.postInstall.reserve(manifest.hooks.postInstall.size());
+    for (const auto& hook : manifest.hooks.postInstall) {
+        metadata.postInstall.push_back(ScriptFromHook(hook));
+    }
     return metadata;
 }
 

@@ -28,12 +28,6 @@ struct InstallPathDecision {
     std::string cleanupTargetInstallRoot;   ///< 旧安装清理的目标根。
 };
 
-// 单产品单载荷后保留的极简占位：引擎始终安装全部 payload，无组件选择。
-struct ComponentSelectionPlan {
-    bool hasComponents = false;             ///< 恒为 false（无组件机制）。
-    std::vector<std::string> embeddedFolders;  ///< 恒为空。
-};
-
 /// 安装执行计划：BuildInstallExecutionPlan 产出，贯穿预检/清理/解压/收尾各阶段。
 struct InstallExecutionPlan {
     std::string effectiveAppId;            ///< 生效的应用标识（=产品名）。
@@ -45,7 +39,6 @@ struct InstallExecutionPlan {
     std::shared_ptr<const InstalledFileFingerprintMap> previousInstalledFingerprints;
     InstallPathDecision pathDecision;      ///< 路径决策。
     std::vector<std::string> legacyDesktopShortcutCandidates;  ///< 待清理的旧桌面快捷方式名。
-    ComponentSelectionPlan componentPlan;  ///< 组件计划占位（始终全装）。
     std::vector<RegistryEntry> effectiveRegistry;       ///< 生效的额外注册表写入（通常为空）。
     std::vector<std::string> effectiveKillProcesses;    ///< 由产品名派生的待杀进程名。
     bool effectiveAutoStartup = false;     ///< 生效的开机自启（合并 options 覆盖/EngineDefaults）。

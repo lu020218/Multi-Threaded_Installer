@@ -86,28 +86,6 @@ static std::vector<NamedCleanupEntry> GetManifestNamedEntries(const json& node) 
     return entries;
 }
 
-static std::vector<RegistryEntry> GetManifestRegistryEntries(const json& node) {
-    std::vector<RegistryEntry> entries;
-    if (!node.is_array()) {
-        return entries;
-    }
-    for (const auto& item : node) {
-        if (!item.is_object()) {
-            continue;
-        }
-        RegistryEntry entry;
-        entry.path = item.value("path", "");
-        entry.key = item.value("key", "");
-        entry.value = item.value("value", "");
-        entry.type = static_cast<RegistryValueType>(
-            item.value("type", static_cast<int>(RegistryValueType::STRING)));
-        if (!entry.path.empty()) {
-            entries.push_back(std::move(entry));
-        }
-    }
-    return entries;
-}
-
 static std::vector<UninstallEntryCleanup> GetManifestUninstallEntries(const json& node) {
     std::vector<UninstallEntryCleanup> entries;
     if (!node.is_array()) {
@@ -128,25 +106,6 @@ static std::vector<UninstallEntryCleanup> GetManifestUninstallEntries(const json
     return entries;
 }
 
-static std::vector<UninstallCleanupRule> GetManifestCleanupRules(const json& node) {
-    std::vector<UninstallCleanupRule> rules;
-    if (!node.is_array()) {
-        return rules;
-    }
-    for (const auto& item : node) {
-        if (!item.is_object()) {
-            continue;
-        }
-        UninstallCleanupRule rule;
-        rule.path = item.value("path", "");
-        rule.recursive = item.value("recursive", true);
-        rule.onlyIfEmpty = item.value("onlyIfEmpty", false);
-        if (!rule.path.empty()) {
-            rules.push_back(std::move(rule));
-        }
-    }
-    return rules;
-}
 
 // 读取运行时卸载账本：manifest 顶层 "cleanup" 对象 + "killProcesses"（重构后的精简 schema）。
 static UninstallCleanupConfig GetManifestUninstallCleanup(const json& manifest) {
@@ -177,40 +136,18 @@ static UninstallCleanupConfig GetManifestUninstallCleanup(const json& manifest) 
         if (node.contains("uninstallEntries")) {
             cleanup.uninstallEntries = GetManifestUninstallEntries(node["uninstallEntries"]);
         }
-        if (node.contains("paths")) {
-            cleanup.paths = GetManifestCleanupRules(node["paths"]);
-        }
-        if (node.contains("registryKeys") && node["registryKeys"].is_array()) {
-            for (const auto& item : node["registryKeys"]) {
-                if (item.is_string() && !item.get<std::string>().empty()) {
-                    cleanup.registryKeys.push_back(item.get<std::string>());
-                }
-            }
-        }
-        if (node.contains("registryValues")) {
-            cleanup.registryValues = GetManifestRegistryEntries(node["registryValues"]);
-        }
     }
     return cleanup;
 }
 
-// 状态清理模式写死为删除（引擎按产品名清理 HKLM\Software\<product> + install-state.json）。
-static std::string GetManifestInstallStateCleanupMode(const json&) {
-    return "delete";
-}
-
 // 精简后的 manifest 至少要有 installDir 与 files[]，据此判定可走清单驱动卸载。
-static bool ManifestHasV3Snapshot(const json& manifest) {
-    return manifest.contains("installDir") &&
-           manifest.contains("files") && manifest["files"].is_array();
-}
-
-static bool ValidateV3UninstallSnapshot(const json& manifest, std::string& error) {
-    if (!ManifestHasV3Snapshot(manifest)) {
-        error = "Uninstall manifest is incomplete (missing installDir/files).";
-        return false;
+static bool ValidateUninstallManifest(const json& manifest, std::string& error) {
+    if (manifest.contains("installDir") &&
+        manifest.contains("files") && manifest["files"].is_array()) {
+        return true;
     }
-    return true;
+    error = "Uninstall manifest is incomplete (missing installDir/files).";
+    return false;
 }
 
 static InstallStateContext BuildUninstallInstallStateContext(const std::string& installDir,
@@ -227,21 +164,6 @@ static InstallStateContext BuildUninstallInstallStateContext(const std::string& 
     context.state = state;
     context.userName = GetCurrentUserNameForInstallState();
     return context;
-}
-
-static std::string ExpandInstallDirTokenLocal(const std::string& text,
-                                              const std::string& installDir) {
-    if (text.empty()) {
-        return text;
-    }
-    const std::string token = "%InstallDir%";
-    std::string expanded = text;
-    size_t position = 0;
-    while ((position = expanded.find(token, position)) != std::string::npos) {
-        expanded.replace(position, token.size(), installDir);
-        position += installDir.size();
-    }
-    return expanded;
 }
 
 static bool IsPathUnderOrEqualLocal(const std::filesystem::path& candidate,
@@ -262,13 +184,6 @@ static bool IsPathUnderOrEqualLocal(const std::filesystem::path& candidate,
     }
     const char sep = normalizedCandidate[normalizedRoot.size()];
     return sep == '\\' || sep == '/';
-}
-
-static std::string ExpandCleanupRulePath(const UninstallCleanupRule& rule,
-                                         const std::string& installDir,
-                                         InstallerPathResolver& resolver) {
-    std::string expanded = ExpandInstallDirTokenLocal(rule.path, installDir);
-    return resolver.expandEnvironmentVariables(expanded);
 }
 
 static std::string ReadEnvironmentPathLocal(const char* name) {
@@ -426,100 +341,6 @@ static bool DeleteUninstallEntryByScope(const UninstallEntryCleanup& entry) {
 }
 #endif
 
-#ifdef _WIN32
-static bool executeShellCommandWithTimeout(const std::string& command,
-                                           const std::string& workingDirectory,
-                                           bool wait,
-                                           uint32_t timeoutSec,
-                                           const std::function<bool()>& cancellationCallback,
-                                           DWORD& exitCode,
-                                           std::string& error) {
-    if (command.empty()) {
-        error = "Component uninstall command is empty.";
-        return false;
-    }
-
-    std::wstring commandLine = L"cmd.exe /c ";
-    commandLine += Utf8ToWide(command);
-    std::vector<wchar_t> commandBuffer(commandLine.begin(), commandLine.end());
-    commandBuffer.push_back(L'\0');
-
-    std::wstring workDirW = Utf8ToWide(workingDirectory);
-    STARTUPINFOW si{};
-    PROCESS_INFORMATION pi{};
-    si.cb = sizeof(si);
-
-    BOOL ok = CreateProcessW(nullptr,
-                             commandBuffer.data(),
-                             nullptr,
-                             nullptr,
-                             FALSE,
-                             CREATE_NO_WINDOW,
-                             nullptr,
-                             workDirW.empty() ? nullptr : workDirW.c_str(),
-                             &si,
-                             &pi);
-    if (!ok) {
-        error = "Failed to start component uninstall command.";
-        return false;
-    }
-
-    CloseHandle(pi.hThread);
-    pi.hThread = nullptr;
-
-    if (!wait) {
-        exitCode = 0;
-        CloseHandle(pi.hProcess);
-        return true;
-    }
-
-    const uint64_t timeoutMs = timeoutSec == 0
-                                   ? std::numeric_limits<uint64_t>::max()
-                                   : static_cast<uint64_t>(timeoutSec) * 1000ULL;
-    uint64_t elapsedMs = 0;
-    while (true) {
-        if (cancellationCallback && cancellationCallback()) {
-            TerminateProcess(pi.hProcess, 1);
-            CloseHandle(pi.hProcess);
-            error = "Component uninstall cancelled.";
-            return false;
-        }
-
-        DWORD slice = 200;
-        if (timeoutMs != std::numeric_limits<uint64_t>::max()) {
-            if (elapsedMs >= timeoutMs) {
-                TerminateProcess(pi.hProcess, 1);
-                CloseHandle(pi.hProcess);
-                error = "Component uninstall timed out.";
-                return false;
-            }
-            uint64_t remaining = timeoutMs - elapsedMs;
-            if (remaining < slice) {
-                slice = static_cast<DWORD>(remaining);
-            }
-        }
-
-        DWORD waitResult = WaitForSingleObject(pi.hProcess, slice);
-        if (waitResult == WAIT_OBJECT_0) {
-            break;
-        }
-        if (waitResult != WAIT_TIMEOUT) {
-            CloseHandle(pi.hProcess);
-            error = "Failed while waiting for component uninstall command.";
-            return false;
-        }
-        elapsedMs += slice;
-    }
-
-    if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
-        CloseHandle(pi.hProcess);
-        error = "Failed to read component uninstall exit code.";
-        return false;
-    }
-    CloseHandle(pi.hProcess);
-    return true;
-}
-#endif
 
 struct UninstallCleanupPolicy {
     uint32_t itemStaleTimeoutMs = 30000;
@@ -1462,12 +1283,7 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
         return false;
     }
     std::string snapshotError;
-    const bool hasV3Snapshot = ManifestHasV3Snapshot(manifest);
-    if (!hasV3Snapshot) {
-        console.showError("Uninstall manifest does not contain v3 uninstall snapshot.");
-        return false;
-    }
-    if (!ValidateV3UninstallSnapshot(manifest, snapshotError)) {
+    if (!ValidateUninstallManifest(manifest, snapshotError)) {
         console.showError(snapshotError);
         return false;
     }
@@ -1479,15 +1295,7 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
     bool removedUninstall = false;
     std::string uninstallPath = manifest.value("uninstallPath", "");
     std::vector<std::string> installKillProcesses;
-    if (hasV3Snapshot &&
-        manifest["uninstaller"].contains("killBeforeUninstall") &&
-        manifest["uninstaller"]["killBeforeUninstall"].is_array()) {
-        for (const auto& item : manifest["uninstaller"]["killBeforeUninstall"]) {
-            if (item.is_string()) {
-                installKillProcesses.push_back(item.get<std::string>());
-            }
-        }
-    } else if (manifest.contains("killProcesses")) {
+    if (manifest.contains("killProcesses")) {
         const auto& kill = manifest["killProcesses"];
         if (kill.is_array()) {
             for (const auto& item : kill) {
@@ -1500,53 +1308,12 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
         }
     }
 
-    const std::string installStateCleanupMode = GetManifestInstallStateCleanupMode(manifest);
     UninstallCleanupConfig uninstallCleanup = GetManifestUninstallCleanup(manifest);
 
-    std::vector<ComponentExecutionRecord> componentActions;
-    const json* componentActionNode = nullptr;
-    if (hasV3Snapshot &&
-        manifest["uninstaller"].contains("components") &&
-        manifest["uninstaller"]["components"].is_object() &&
-        manifest["uninstaller"]["components"].contains("actions") &&
-        manifest["uninstaller"]["components"]["actions"].is_array()) {
-        componentActionNode = &manifest["uninstaller"]["components"]["actions"];
-    } else if (manifest.contains("componentActions") && manifest["componentActions"].is_array()) {
-        componentActionNode = &manifest["componentActions"];
-    }
-    if (componentActionNode) {
-        for (const auto& item : *componentActionNode) {
-            if (!item.is_object()) {
-                continue;
-            }
-            ComponentExecutionRecord record;
-            record.componentId = item.value("componentId", "");
-            record.sourceType = item.value("sourceType", "");
-            record.uninstallCommand = item.value("uninstallCommand", "");
-            record.workingDirectory = item.value("workingDirectory", "");
-            record.wait = item.value("wait", true);
-            record.timeoutSec = item.value("timeoutSec", static_cast<uint32_t>(900));
-            if (!record.uninstallCommand.empty()) {
-                componentActions.push_back(std::move(record));
-            }
-        }
-    }
-
-    std::vector<RegistryEntry> manifestRegistryEntries;
 
     std::vector<std::string> files;
-    const json* filesNode = nullptr;
-    if (hasV3Snapshot &&
-        manifest["installer"].contains("payload") &&
-        manifest["installer"]["payload"].is_object() &&
-        manifest["installer"]["payload"].contains("files") &&
-        manifest["installer"]["payload"]["files"].is_array()) {
-        filesNode = &manifest["installer"]["payload"]["files"];
-    } else if (manifest.contains("files") && manifest["files"].is_array()) {
-        filesNode = &manifest["files"];
-    }
-    if (filesNode) {
-        for (const auto& item : *filesNode) {
+    if (manifest.contains("files") && manifest["files"].is_array()) {
+        for (const auto& item : manifest["files"]) {
             if (item.is_string()) {
                 files.push_back(item.get<std::string>());
             }
@@ -1555,13 +1322,7 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
     console.showInfo("Manifest files: " + std::to_string(files.size()));
     std::vector<std::string> cleanupRoots;
     const json* rootsNode = nullptr;
-    if (hasV3Snapshot &&
-        manifest["installer"].contains("payload") &&
-        manifest["installer"]["payload"].is_object() &&
-        manifest["installer"]["payload"].contains("roots") &&
-        manifest["installer"]["payload"]["roots"].is_array()) {
-        rootsNode = &manifest["installer"]["payload"]["roots"];
-    } else if (manifest.contains("cleanupRoots") && manifest["cleanupRoots"].is_array()) {
+    if (manifest.contains("cleanupRoots") && manifest["cleanupRoots"].is_array()) {
         rootsNode = &manifest["cleanupRoots"];
     }
     if (rootsNode) {
@@ -1624,9 +1385,6 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
     }
     addWorkUnits(uninstallCleanup.startup.size());
     addWorkUnits(uninstallCleanup.shortcuts.size());
-    addWorkUnits(componentActions.size());
-    addWorkUnits(manifestRegistryEntries.size());
-    addWorkUnits(uninstallCleanup.registryKeys.size() + uninstallCleanup.registryValues.size());
 #ifdef _WIN32
     if (!uninstallCleanup.uninstallEntries.empty()) {
         addWorkUnits(1);
@@ -1640,7 +1398,6 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
     if (!manifestPath.empty()) {
         addWorkUnits(1);
     }
-    addWorkUnits(uninstallCleanup.paths.size());
 
     emitProgress("Preparing old installation cleanup");
 
@@ -1689,42 +1446,6 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
                       resolver);
     completeWorkUnit("Marking uninstalling state");
 
-    for (const auto& action : componentActions) {
-        if (isCancelled()) {
-            console.showWarning("Uninstall cancelled while running component uninstall actions");
-            return false;
-        }
-
-        std::string label = action.componentId.empty() ? action.sourceType : action.componentId;
-        if (label.empty()) {
-            label = "component";
-        }
-
-#ifdef _WIN32
-        DWORD exitCode = 0;
-        std::string commandError;
-        bool ok = executeShellCommandWithTimeout(action.uninstallCommand,
-                                                 action.workingDirectory,
-                                                 action.wait,
-                                                 action.timeoutSec,
-                                                 cancellationCallback,
-                                                 exitCode,
-                                                 commandError);
-        if (!ok) {
-            console.showWarning("Component uninstall command failed (" + label + "): " + commandError);
-        } else if (action.wait && exitCode != 0) {
-            console.showWarning("Component uninstall command returned non-zero exit code (" + label +
-                                "): " + std::to_string(exitCode));
-        } else {
-            console.showInfo("Component uninstall command completed: " + label);
-        }
-#else
-        console.showWarning("Component uninstall actions are supported on Windows only. skipped: " + label);
-#endif
-
-        completeWorkUnit("Replaying component uninstall action: " + label);
-    }
-
     for (const auto& startup : uninstallCleanup.startup) {
         if (startup.name.empty()) {
             continue;
@@ -1740,48 +1461,6 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
         deleteDesktopShortcut(shortcut.name);
         deleteStartMenuShortcut(shortcut.name);
         completeWorkUnit("Removing desktop shortcut: " + shortcut.name);
-    }
-
-    for (const auto& entry : manifestRegistryEntries) {
-        if (isCancelled()) {
-            console.showWarning("Uninstall cancelled while removing registry values");
-            return false;
-        }
-        if (!deleteRegistryValue(entry)) {
-            console.showWarning("Failed to remove registry value: " +
-                                (entry.key.empty() ? entry.path : (entry.path + "\\" + entry.key)));
-        }
-        std::string keyName = entry.key.empty() ? entry.path : (entry.path + "\\" + entry.key);
-        completeWorkUnit("Removing registry value: " + keyName);
-    }
-
-    for (const auto& path : uninstallCleanup.registryKeys) {
-        if (isCancelled()) {
-            console.showWarning("Uninstall cancelled while removing registry keys");
-            return false;
-        }
-        if (!deleteRegistryPath(path)) {
-            console.showWarning("Failed to remove registry path: " + path);
-        }
-        completeWorkUnit("Removing registry key: " + path);
-    }
-
-    for (const auto& entry : uninstallCleanup.registryValues) {
-        if (isCancelled()) {
-            console.showWarning("Uninstall cancelled while removing registry values");
-            return false;
-        }
-        if (entry.key.empty()) {
-            if (!deleteRegistryPath(entry.path)) {
-                console.showWarning("Failed to remove registry path: " + entry.path);
-            }
-        } else {
-            if (!deleteRegistryValue(entry)) {
-                console.showWarning("Failed to remove registry value: " + entry.path + "\\" + entry.key);
-            }
-        }
-        std::string keyName = entry.key.empty() ? entry.path : (entry.path + "\\" + entry.key);
-        completeWorkUnit("Removing registry value: " + keyName);
     }
 
 #ifdef _WIN32
@@ -1805,12 +1484,6 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
     cleanupTask.currentExePath = currentExe;
     cleanupTask.files = files;
     cleanupTask.cleanupRoots = cleanupRoots;
-    cleanupTask.cleanupPaths.reserve(uninstallCleanup.paths.size());
-    for (const auto& rule : uninstallCleanup.paths) {
-        UninstallCleanupRule expanded = rule;
-        expanded.path = ExpandCleanupRulePath(rule, installDir, resolver);
-        cleanupTask.cleanupPaths.push_back(std::move(expanded));
-    }
     UninstallCleanupResult cleanupResult =
         RunUninstallCleanupWithWatchdog(cleanupTask, progressCallback, cancellationCallback);
     if (!cleanupResult.success && isCancelled()) {
@@ -1829,8 +1502,7 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
     }
     completeWorkUnit("Cleaning installed files");
 
-    CleanupInstallState(installStateCleanupMode,
-                        BuildUninstallInstallStateContext(installDir,
+    CleanupInstallState(BuildUninstallInstallStateContext(installDir,
                                                           manifest.value("appVersion", ""),
                                                           displayName,
                                                           appId,

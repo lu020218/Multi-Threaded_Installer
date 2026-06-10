@@ -299,9 +299,17 @@ std::vector<uint8_t> SerializePackageManifest(const PackageManifest& manifest) {
         {"copyright", manifest.identity.copyright},
     });
     AddSection(sections, SectionType::PayloadManifest, PayloadToJson(manifest.payload));
+    json preInstallHooks = json::array();
+    for (const auto& hook : manifest.hooks.preInstall) {
+        preInstallHooks.push_back(HookToJson(hook));
+    }
+    json postInstallHooks = json::array();
+    for (const auto& hook : manifest.hooks.postInstall) {
+        postInstallHooks.push_back(HookToJson(hook));
+    }
     AddSection(sections, SectionType::Hooks, {
-        {"preInstall", HookToJson(manifest.hooks.preInstall)},
-        {"postInstall", HookToJson(manifest.hooks.postInstall)},
+        {"preInstall", std::move(preInstallHooks)},
+        {"postInstall", std::move(postInstallHooks)},
     });
 
     PackageManifestHeader header;
@@ -417,8 +425,20 @@ bool DeserializePackageManifest(const std::vector<uint8_t>& data,
 
     manifest.payload = PayloadFromJson(payload);
 
-    manifest.hooks.preInstall = HookFromJson(hooks.value("preInstall", json::object()));
-    manifest.hooks.postInstall = HookFromJson(hooks.value("postInstall", json::object()));
+    // preInstall / postInstall 为脚本数组（按顺序执行）。向后兼容单对象写法：
+    // 若该字段是对象而非数组，按单元素列表解析。
+    auto parseHookList = [](const json& node, std::vector<PackageHook>& out) {
+        if (node.is_array()) {
+            out.reserve(node.size());
+            for (const auto& item : node) {
+                out.push_back(HookFromJson(item));
+            }
+        } else if (node.is_object()) {
+            out.push_back(HookFromJson(node));
+        }
+    };
+    parseHookList(hooks.value("preInstall", json::array()), manifest.hooks.preInstall);
+    parseHookList(hooks.value("postInstall", json::array()), manifest.hooks.postInstall);
     return true;
 }
 

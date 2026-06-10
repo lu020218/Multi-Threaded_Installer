@@ -39,7 +39,11 @@ std::filesystem::path findPrimaryExecutable(const std::filesystem::path& install
                                             const std::string& appName);  ///< 找主可执行文件。
 bool setAutoStartup(const std::string& appName, const std::filesystem::path& exePath);  ///< 设开机自启。
 bool removeAutoStartup(const std::string& appName);                                     ///< 移除开机自启。
-bool createDesktopShortcut(const std::string& appName, const std::filesystem::path& exePath);  ///< 建桌面快捷方式。
+/// 建桌面快捷方式。@param iconPath 可选，手动指定图标（如安装目录下的 app.ico），留空用 exe 自带图标。
+/// 注意：默认参数仅在 shortcut_startup_utils.h 声明，避免与本历史重复声明冲突。
+bool createDesktopShortcut(const std::string& appName,
+                           const std::filesystem::path& exePath,
+                           const std::filesystem::path& iconPath);
 bool deleteDesktopShortcut(const std::string& appName);                                 ///< 删桌面快捷方式。
 bool createStartMenuShortcut(const std::string& appName,
                              const std::filesystem::path& exePath,
@@ -78,11 +82,6 @@ bool findEmbeddedDataLocator(std::ifstream& file,
 
 /// 取当前可执行文件完整路径（UTF-8）。
 std::string getCurrentExecutablePath();
-/// 历史遗留：appId 为空时回退 applicationName（重构后落点统一用产品名，已基本不用）。
-std::string resolveEffectiveAppId(const std::string& appId, const std::string& applicationName);
-/// 历史遗留：directoryName 为空时回退 applicationName。
-std::string resolveEffectiveDirectoryName(const std::string& directoryName,
-                                          const std::string& applicationName);
 /// 若 basePath 末段不是 expectedLeaf，则补上该末段。
 std::string appendPathLeafIfMissing(const std::string& basePath, const std::string& expectedLeaf);
 /// 由安装器 exe 路径推断同目录的 install.manifest.json 路径。

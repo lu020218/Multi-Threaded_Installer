@@ -394,7 +394,6 @@ set(GUI_SOURCES
     src/gui/presenters/gui_diagnostics.cpp
     src/gui/core/gui_event_router.cpp
     src/gui/core/gui_startup_initializer.cpp
-    src/gui/install/gui_component_binding.cpp
     src/gui/core/gui_interaction_helpers.cpp
     src/gui/install/gui_install_flow_utils.cpp
     src/gui/install/gui_install_actions.cpp

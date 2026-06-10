@@ -93,7 +93,8 @@ struct DetectCandidate {
 };
 
 std::vector<DetectCandidate> BuildDetectCandidates(const ExtendedInstallationMetadata& metadata) {
-    // 探测改读引擎写死的 HKLM\Software\<product> 的 InstallDir（需求 §5）。
+    // [旧版本-发现安装路径] 构造探测候选：读引擎写死的 HKLM\Software\<product>\InstallDir
+    // 作为唯一来源，用来发现机器上已存在的旧版本安装目录（需求 §5）。
     std::vector<DetectCandidate> candidates;
     if (!metadata.appProductName.empty()) {
         candidates.push_back({"installState",
@@ -137,6 +138,8 @@ bool resolveInstallInfoFromRegistry(const std::string& registryPath,
     return true;
 }
 
+// [旧版本-发现安装路径] 核心实现：从 installState 注册表读出旧 InstallDir，校验目录存在，
+// 再在该目录下定位 install.manifest.json（卸载/升级清理要消费的旧版本快照）。
 bool resolveInstallDirFromInstallStateStore(const ExtendedInstallationMetadata& metadata,
                                             InstallerPathResolver& resolver,
                                             std::string& installDir,
@@ -195,6 +198,8 @@ bool resolveInstallDirFromInstallStateStore(const ExtendedInstallationMetadata& 
     return false;
 }
 
+// [旧版本-发现安装路径] 对外封装：发现旧安装目录 + 旧 manifest 路径 + 旧版本号，
+// 打包成 InstalledInstanceInfo 供安装计划/卸载判定覆盖安装与升级目标。
 bool resolveInstalledInstanceFromInstallState(const ExtendedInstallationMetadata& metadata,
                                               InstallerPathResolver& resolver,
                                               InstalledInstanceInfo& instanceInfo,

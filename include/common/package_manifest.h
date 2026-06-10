@@ -46,10 +46,10 @@ struct PackageHook {
     uint32_t timeoutSec = 300;           ///< 超时上限（秒），到点 kill 按失败处理。
 };
 
-/// 安装前/后两个固定钩子点。
+/// 安装前/后两个固定钩子点；每个钩子点可挂多个脚本，按声明顺序依次执行。
 struct PackageHooks {
-    PackageHook preInstall;   ///< 解压前执行。
-    PackageHook postInstall;  ///< finalize 后执行。
+    std::vector<PackageHook> preInstall;   ///< 解压前依次执行。
+    std::vector<PackageHook> postInstall;  ///< finalize 后依次执行。
 };
 
 /// 构建期 → 运行期的唯一桥（精简后）：身份 + 载荷 + 钩子 + manifest 版本号。

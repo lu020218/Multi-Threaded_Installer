@@ -164,25 +164,7 @@ CliSupport::InstallerArgs CliSupport::parseInstallerArgs(int argc, char* argv[])
         return value;
     };
 
-    auto appendComponents = [&](const std::string& csv) {
-        size_t start = 0;
-        while (start <= csv.size()) {
-            size_t end = csv.find(',', start);
-            if (end == std::string::npos) {
-                end = csv.size();
-            }
-            std::string item = trim(csv.substr(start, end - start));
-            if (!item.empty()) {
-                args.selectedComponents.push_back(item);
-            }
-            if (end == csv.size()) {
-                break;
-            }
-            start = end + 1;
-        }
-    };
-
-    auto parseBoolValue = [](const std::string& value, bool& parsed) -> bool {
+    auto parseBoolValue =[](const std::string& value, bool& parsed) -> bool {
         std::string lowered = value;
         std::transform(lowered.begin(), lowered.end(), lowered.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -206,17 +188,6 @@ CliSupport::InstallerArgs CliSupport::parseInstallerArgs(int argc, char* argv[])
             args.upgrade = true;
         } else if (arg == "-s" || arg == "--silent") {
             args.silent = true;
-        } else if (arg == "--components" && i + 1 < argc) {
-            std::string value = trim(argv[++i]);
-            std::string lowered = value;
-            std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (lowered == "all" || lowered == "*") {
-                args.installAllComponents = true;
-                args.selectedComponents.clear();
-            } else {
-                appendComponents(value);
-            }
         } else if (arg == "--auto-startup" && i + 1 < argc) {
             bool parsed = false;
             if (parseBoolValue(trim(argv[++i]), parsed)) {
@@ -262,7 +233,6 @@ void CliSupport::showInstallerHelp() {
     std::cout << "  -d, --destination <directory>  Default installation directory" << std::endl;
     std::cout << "  -s, --silent                   Silent installation mode" << std::endl;
     std::cout << "  --upgrade                      Upgrade mode; requires existing install info" << std::endl;
-    std::cout << "  --components <id1,id2,...|all> Select optional components or all" << std::endl;
     std::cout << "  --auto-startup <true|false>    Enable or disable auto startup" << std::endl;
     std::cout << "  --desktop-icon <true|false>    Enable or disable desktop icon" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
@@ -270,8 +240,6 @@ void CliSupport::showInstallerHelp() {
     std::cout << "Examples:" << std::endl;
     std::cout << "  installer -d C:\\Program Files\\MyApp" << std::endl;
     std::cout << "  installer -s -d C:\\Program Files\\MyApp" << std::endl;
-    std::cout << "  installer -s --components main_app,chrome_plugin" << std::endl;
-    std::cout << "  installer -s --components all" << std::endl;
     std::cout << "  installer --upgrade" << std::endl;
     std::cout << "  installer --upgrade --silent" << std::endl;
     std::cout << "  installer -s --auto-startup true --desktop-icon false" << std::endl;

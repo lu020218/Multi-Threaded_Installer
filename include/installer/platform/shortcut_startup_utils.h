@@ -15,7 +15,10 @@ bool setAutoStartup(const std::string& appName, const std::filesystem::path& exe
 /// 移除开机自启项。
 bool removeAutoStartup(const std::string& appName);
 /// 在桌面创建指向 exePath 的快捷方式。
-bool createDesktopShortcut(const std::string& appName, const std::filesystem::path& exePath);
+/// @param iconPath 可选，手动指定快捷方式图标（如安装目录下的 app.ico）；留空则用 exe 自带图标。
+bool createDesktopShortcut(const std::string& appName,
+                           const std::filesystem::path& exePath,
+                           const std::filesystem::path& iconPath = {});
 /// 删除桌面快捷方式。
 bool deleteDesktopShortcut(const std::string& appName);
 /// 在开始菜单创建快捷方式。@param uninstallDisplayName 可选，用于关联卸载显示名。

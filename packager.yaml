@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # Multi-Threaded Installer 打包配置（值/逻辑归位后的精简 schema）
 #
-# 划分原则（详见 docs/new_version/重构方案.md）：
+# 划分原则（详见 docs/USER_GUIDE.md）：
 #   YAML  = 声明“本次构建是什么 + 怎么打包 + 跑哪两个 bat”，改它不需要重编引擎。
 #   引擎  = 所有稳定机制（安装行为默认值、清理、注册表、系统卸载入口…）
 #           + 跨版本兼容迁移（C++ 迁移表，跟版本走，改它要重编）。
@@ -42,22 +42,28 @@ package:
   #   - { source: app,     target: "%InstallDir%" }
   #   - { source: plugins, target: "%ProgramData%\\SampleDesktopApp\\plugins" }
 
-# ── 安装前/后脚本（契约见 docs/new_version/hook-script-contract.md）──
+# ── 安装前/后脚本（契约见 docs/USER_GUIDE.md §7 安装脚本契约）──
 #
 # 引擎写死的契约（不可在此覆盖）：
 #   · 退出码 0 = 成功，非 0 / 超时 = 失败 → 走该脚本的 onFailure；
 #   · 注入环境变量 INSTALL_DIR、VERSION；脚本继承安装器管理员权限（勿再 elevate）；
 #   · 仅做本次构建特有、与版本演进无关的收尾动作；跨版本兼容走引擎迁移。
-# 不需要 hook 时整段删除即可。
+#
+# preInstall / postInstall 均为「脚本列表」，按声明顺序依次执行，可配置多个；
+# 脚本类型按扩展名识别，支持 .bat / .cmd / .ps1。不需要 hook 时整段删除即可。
 hooks:
   preInstall:
-    path: scripts/pre_install.bat
-    args: ""
-    onFailure: abort                   # abort（中止并回滚） | continue（记日志继续）
-    timeoutSec: 300
+    - path: scripts/pre_install.bat
+      args: ""
+      onFailure: abort                 # abort（中止并回滚） | continue（记日志继续）
+      timeoutSec: 300
+    - path: scripts/pre_install.ps1    # 同一钩子点可再挂 ps1/其他脚本，按顺序执行
+      args: ""
+      onFailure: continue
+      timeoutSec: 120
 
   postInstall:
-    path: scripts/post_install.bat
-    args: ""
-    onFailure: continue
-    timeoutSec: 600
+    - path: scripts/post_install.bat
+      args: ""
+      onFailure: continue
+      timeoutSec: 600

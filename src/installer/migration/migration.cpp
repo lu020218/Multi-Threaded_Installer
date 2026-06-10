@@ -21,6 +21,7 @@ namespace {
 
 // ── 迁移可复用的收尾原语 ───────────────────────────────────────────────────
 
+// [旧版本-清理:系统卸载入口] 按 DisplayName 删除「程序和功能」里的旧版本卸载入口。
 void cleanupLegacyUninstallEntries(MigrationContext& ctx,
                                    const std::vector<std::string>& displayNames) {
     (void)ctx;
@@ -34,6 +35,7 @@ void cleanupLegacyUninstallEntries(MigrationContext& ctx,
     }
 }
 
+// [旧版本-清理:注册表] 删除旧版本残留的注册表键（如改名前的 HKCU/HKLM\Software\<旧名>）。
 void deleteLegacyRegistry(MigrationContext& ctx, const std::vector<std::string>& keyPaths) {
     (void)ctx;
     for (const auto& path : keyPaths) {
@@ -46,6 +48,7 @@ void deleteLegacyRegistry(MigrationContext& ctx, const std::vector<std::string>&
     }
 }
 
+// [旧版本-清理:快捷方式] 删除旧版本的桌面 + 开始菜单快捷方式。
 void removeLegacyShortcuts(MigrationContext& ctx, const std::vector<std::string>& names) {
     (void)ctx;
     for (const auto& name : names) {
@@ -58,6 +61,7 @@ void removeLegacyShortcuts(MigrationContext& ctx, const std::vector<std::string>
     }
 }
 
+// [旧版本-清理:开机自启] 删除旧版本注册的开机自启动项。
 void removeLegacyStartup(MigrationContext& ctx, const std::vector<std::string>& names) {
     (void)ctx;
     for (const auto& name : names) {
@@ -70,6 +74,7 @@ void removeLegacyStartup(MigrationContext& ctx, const std::vector<std::string>& 
     }
 }
 
+// [旧版本-清理:残留路径] 删除旧版本在 %LocalAppData%/%AppData% 等处的残留数据目录。
 void removeLegacyPaths(MigrationContext& ctx, const std::vector<std::string>& paths) {
     (void)ctx;
 #ifdef _WIN32
@@ -103,6 +108,8 @@ void removeLegacyPaths(MigrationContext& ctx, const std::vector<std::string>& pa
 // ── 首批迁移：承接现 packager.yaml 的 SampleDesktopAppLegacy/1/2 名单 ───────
 //
 // 程序改名但路径未变 → 仅收尾旧名字残留（需求 §6.3 典型场景），不动任何当前路径。
+// [旧版本-清理:汇总] 一个迁移节点把上述各类清理（系统卸载入口/注册表/快捷方式/开机自启/
+// 残留路径）按本次版本的需要组合起来；新增旧版本收尾时新增迁移节点即可。
 bool migrate_7_0_0(MigrationContext& ctx) {
     cleanupLegacyUninstallEntries(ctx, {"SampleDesktopAppLegacy",
                                         "SampleDesktopAppLegacy1",

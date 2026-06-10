@@ -77,7 +77,8 @@ void AppendNamedCleanupEntry(std::vector<NamedCleanupEntry>& entries, const std:
     }
 }
 
-// 系统卸载入口写死（需求 §5）：displayName=产品名、publisher=publisher、scope=machine。
+// [安装收尾-系统卸载入口] 实现：系统卸载入口写死（需求 §5）：displayName=产品名、
+// publisher=publisher、scope=machine（perMachine=true），写入「程序和功能」列表。
 void WriteConfiguredSystemUninstallEntries(const ExtendedInstallationMetadata& metadata,
                                            const InstallExecutionPlan& plan,
                                            const std::string& desktopShortcutDisplayName,
@@ -190,7 +191,6 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                                 const std::vector<std::string>& effectiveKillProcesses,
                                 bool effectiveAutoStartup,
                                 bool effectiveDesktopIcons,
-                                const std::vector<ComponentExecutionRecord>& componentActions,
                                 InstallerPathResolver& pathResolver,
                                 InstallProgressReporter& reporter,
                                 InstallServiceResult& result) {
@@ -201,13 +201,14 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
 
     logInstallerInfo(std::string("[InstallFlow][Finalize] start installRootPath=") +
                      result.installRootPath +
-                     " registryEntries=" + std::to_string(effectiveRegistry.size()) +
-                     " componentActions=" + std::to_string(componentActions.size()));
+                     " registryEntries=" + std::to_string(effectiveRegistry.size()));
 
     auto advanceFinalize = [&](float progress, const std::string& detail) {
         reporter.EmitProgress("finalize", detail, progress);
     };
 
+    // [安装收尾-注册表写入] 写通用注册表名单 effectiveRegistry（解压前阶段）。
+    // 重构后该名单已为空（YAML registry 名单删除），保留挂钩点以兼容个别需要预写的场景。
     if (options.applyRegistryBeforeFinalize && !effectiveRegistry.empty()) {
         std::string prePath = options.preRegistryInstallPath.empty()
                                   ? options.installPath
@@ -246,6 +247,8 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
             reporter.EmitMessage(InstallServiceEventType::Warning,
                                  "No executable found for installAutoStartup/installDesktopIcon");
         } else {
+            // [安装收尾-开机自启] 设置开机自启动（写 HKCU\...\Run\<产品名> = 主 exe），
+            // 并把该项记入 manifest 的 startup 清理账本，卸载时据此移除。
             if (effectiveAutoStartup) {
                 if (setAutoStartup(metadata.appProductName, exePath)) {
                     reporter.EmitMessage(InstallServiceEventType::Info, "installAutoStartup enabled");
@@ -256,13 +259,19 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                 }
             }
             if (effectiveDesktopIcons) {
-                if (createDesktopShortcut(desktopShortcutDisplayName, exePath)) {
+                // [安装收尾-快捷方式图标] 手动指定桌面快捷方式图标为安装目录下的 app.ico；
+                // 该文件存在时用它作图标，否则 createDesktopShortcut 回退到 exe 自带图标。
+                const std::filesystem::path desktopShortcutIcon =
+                    PathFromUtf8(result.installRootPath) / "app.ico";
+                // [安装收尾-桌面快捷方式] 在桌面创建指向主 exe 的快捷方式，并记入 shortcuts 清理账本。
+                if (createDesktopShortcut(desktopShortcutDisplayName, exePath, desktopShortcutIcon)) {
                     reporter.EmitMessage(InstallServiceEventType::Info, "Desktop icon created");
                     AppendNamedCleanupEntry(manifestCleanup.shortcuts, desktopShortcutDisplayName);
                 } else {
                     reporter.EmitMessage(InstallServiceEventType::Warning,
                                          "Failed to create desktop icon");
                 }
+                // [安装收尾-开始菜单快捷方式] 在开始菜单创建同名快捷方式。
                 if (createStartMenuShortcut(desktopShortcutDisplayName, exePath, metadata.appProductName)) {
                     reporter.EmitMessage(InstallServiceEventType::Info, "Start menu shortcut created");
                     AppendNamedCleanupEntry(manifestCleanup.shortcuts, desktopShortcutDisplayName);
@@ -301,6 +310,8 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
             result.installedFiles.end());
     }
 
+    // [安装收尾-系统卸载入口] 写「程序和功能」卸载入口（HKLM\...\Uninstall\<产品名>），
+    // 并把该入口记入 manifest 的 uninstallEntries 清理账本。
     WriteConfiguredSystemUninstallEntries(metadata,
                                           plan,
                                           desktopShortcutDisplayName,
@@ -327,9 +338,6 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                            desktopShortcutDisplayName,
                            result.uninstallPath,
                            languageCode,
-                           componentActions,
-                           options.selectedComponentIds,
-                           options.installAllComponents,
                            metadata.appPublisher,
                            fileFingerprints)) {
             reporter.EmitMessage(InstallServiceEventType::Warning,
@@ -338,6 +346,7 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
     }
     advanceFinalize(0.75f, "Writing install manifest");
 
+    // [安装收尾-注册表写入] 写通用注册表名单 effectiveRegistry（解压后阶段，名单当前为空）。
     if (options.applyRegistryAfterInstall && !effectiveRegistry.empty()) {
         applyRegistryEntries(effectiveRegistry,
                              result.installRootPath,
@@ -347,6 +356,8 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
 
     advanceFinalize(0.90f, "Registry finalization complete");
 
+    // [安装收尾-注册表写入] 写产品注册表 HKLM\Software\<产品名> 的 Version/InstallDir/InstallState，
+    // 这是引擎写死的安装状态落点，供后续覆盖/升级探测与卸载发现安装目录使用。
     ApplyInstallState(BuildInstallStateContext(metadata,
                                                plan,
                                                options,

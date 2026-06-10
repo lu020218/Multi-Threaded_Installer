@@ -461,6 +461,8 @@ bool writeRegistryValue(const RegistryEntry& entry, const std::string& value, Re
 }
 
 
+// [安装收尾-注册表写入] 实现：把一批 RegistryEntry 展开占位符（%InstallDir%/版本/产品名）后
+// 逐条写入注册表。重构后通用名单为空，主要由产品状态注册表与卸载入口走各自专用函数。
 void applyRegistryEntries(const std::vector<RegistryEntry>& entries,
                           const std::string& installDir,
                           const std::string& configVersion,
@@ -572,6 +574,9 @@ bool readRegistryStringValue(const std::string& path, const std::string& key, st
 }
 
 
+// [安装收尾-系统卸载入口] 实现：在 HKLM/HKCU 的 ...\Uninstall\<appName> 下写
+// DisplayName/DisplayVersion/Publisher/InstallLocation/UninstallString 等值，
+// 即「程序和功能」里看到的那条卸载入口。perMachine 决定写 HKLM 还是 HKCU。
 bool writeUninstallRegistryEntry(const std::string& appName,
                                  const std::string& displayName,
                                  const std::string& version,

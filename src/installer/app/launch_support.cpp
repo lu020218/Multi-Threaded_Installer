@@ -470,8 +470,6 @@ bool ApplyPreviousOptionsForUpgrade(const ExtendedInstallationMetadata& metadata
     options.overrideDesktopIcons = true;
     options.desktopIconsEnabled = previous.desktopIcon;
     options.languageCode = previous.languageCode;
-    options.selectedComponentIds = previous.selectedComponentIds;
-    options.installAllComponents = previous.installAllComponents;
     if (restoredPreviousOptions) {
         *restoredPreviousOptions = true;
     }
@@ -529,8 +527,6 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
 
         options.installPath = installPath;
         options.installPathExplicit = true;
-        options.selectedComponentIds = context.args.selectedComponents;
-        options.installAllComponents = context.args.installAllComponents;
         options.overrideAutoStartup = context.args.autoStartupSpecified;
         options.autoStartupEnabled = context.args.autoStartupEnabled;
         options.overrideDesktopIcons = context.args.desktopIconSpecified;
@@ -624,9 +620,7 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
         config.defaultInstallPath = Utf8ToWide(upgradeInstallDir);
     }
     bool restoredPreviousOptions = upgradeOptions.overrideAutoStartup || upgradeOptions.overrideDesktopIcons ||
-                                   !upgradeOptions.languageCode.empty() ||
-                                   !upgradeOptions.selectedComponentIds.empty() ||
-                                   upgradeOptions.installAllComponents;
+                                   !upgradeOptions.languageCode.empty();
     if (upgradeMode && restoredPreviousOptions) {
         config.autoStartup = upgradeOptions.autoStartupEnabled;
         config.desktopIcons = upgradeOptions.desktopIconsEnabled;
@@ -669,9 +663,6 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
                                           autoStartAutoRun,
                                           autoStartDesktopIcons,
                                           autoStartLanguage,
-                                          restoredPreviousOptions ? upgradeOptions.selectedComponentIds
-                                                                  : std::vector<std::string>{},
-                                          restoredPreviousOptions && upgradeOptions.installAllComponents,
                                           true);
     }
 

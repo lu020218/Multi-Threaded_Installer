@@ -48,8 +48,16 @@ std::filesystem::path ReleaseHookScript(const HookScript& hook) {
         }
     }
     fileName += Utf8ToWide(stem);
-    if (fileName.size() < 4 ||
-        _wcsicmp(fileName.c_str() + fileName.size() - 4, L".bat") != 0) {
+    // 保留脚本原扩展名（.bat/.cmd/.ps1），以便按类型选择正确的启动方式
+    //（BuildComponentLaunchCommand 会据扩展名用 cmd / powershell 运行）；
+    // 无法识别的扩展名一律按 .bat 释放。
+    auto endsWithIgnoreCase = [](const std::wstring& s, const wchar_t* suffix) {
+        const size_t n = wcslen(suffix);
+        return s.size() >= n && _wcsicmp(s.c_str() + s.size() - n, suffix) == 0;
+    };
+    if (!endsWithIgnoreCase(fileName, L".bat") &&
+        !endsWithIgnoreCase(fileName, L".cmd") &&
+        !endsWithIgnoreCase(fileName, L".ps1")) {
         fileName += L".bat";
     }
 
@@ -69,34 +77,142 @@ std::filesystem::path ReleaseHookScript(const HookScript& hook) {
     return scriptPath;
 }
 
-// 在当前进程环境基础上注入 INSTALL_DIR/VERSION，构造子进程环境块。
+// 环境变量集合（大小写不敏感地按名查找/设置，保留首个出现的名字大小写）。
+struct EnvVarList {
+    std::vector<std::pair<std::wstring, std::wstring>> items;
+
+    std::wstring* find(const std::wstring& name) {
+        for (auto& kv : items) {
+            if (_wcsicmp(kv.first.c_str(), name.c_str()) == 0) {
+                return &kv.second;
+            }
+        }
+        return nullptr;
+    }
+    bool has(const std::wstring& name) { return find(name) != nullptr; }
+    void setIfMissing(const std::wstring& name, const std::wstring& value) {
+        if (!has(name)) {
+            items.emplace_back(name, value);
+        }
+    }
+    void set(const std::wstring& name, const std::wstring& value) {
+        if (auto* existing = find(name)) {
+            *existing = value;
+        } else {
+            items.emplace_back(name, value);
+        }
+    }
+};
+
+bool PathContainsDir(const std::wstring& pathValue, const std::wstring& dir) {
+    // 按 ';' 拆分后做大小写不敏感比较，避免子串误判。
+    size_t start = 0;
+    while (start <= pathValue.size()) {
+        size_t end = pathValue.find(L';', start);
+        if (end == std::wstring::npos) {
+            end = pathValue.size();
+        }
+        std::wstring segment = pathValue.substr(start, end - start);
+        while (!segment.empty() && (segment.back() == L'\\' || segment.back() == L' ')) {
+            segment.pop_back();
+        }
+        std::wstring normalizedDir = dir;
+        while (!normalizedDir.empty() && normalizedDir.back() == L'\\') {
+            normalizedDir.pop_back();
+        }
+        if (!segment.empty() && _wcsicmp(segment.c_str(), normalizedDir.c_str()) == 0) {
+            return true;
+        }
+        if (end == pathValue.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
+// 在当前进程环境基础上注入 INSTALL_DIR/VERSION，并加固 PowerShell/系统所需的关键变量，
+// 构造子进程环境块。解决部分用户机器环境损坏（缺 SystemRoot/PATH/PSModulePath）导致
+// ps1（乃至 cmd）起不来或找不到模块/cmdlet 的问题。
 std::vector<wchar_t> BuildEnvironmentBlock(const std::string& installDir,
                                            const std::string& version) {
-    std::vector<wchar_t> block;
+    EnvVarList env;
     LPWCH existing = GetEnvironmentStringsW();
     if (existing) {
         for (LPWCH cursor = existing; *cursor != L'\0';) {
             std::wstring entry(cursor);
             cursor += entry.size() + 1;
+            const size_t eq = entry.find(L'=');
+            if (eq == std::wstring::npos || eq == 0) {
+                continue;  // 跳过形如 "=C:=..." 的驱动器当前目录条目与畸形项
+            }
+            const std::wstring name = entry.substr(0, eq);
+            const std::wstring value = entry.substr(eq + 1);
             // 跳过将由我们注入的同名变量，避免重复定义。
-            if (_wcsnicmp(entry.c_str(), L"INSTALL_DIR=", 12) == 0 ||
-                _wcsnicmp(entry.c_str(), L"VERSION=", 8) == 0) {
+            if (_wcsicmp(name.c_str(), L"INSTALL_DIR") == 0 ||
+                _wcsicmp(name.c_str(), L"VERSION") == 0) {
                 continue;
             }
-            block.insert(block.end(), entry.begin(), entry.end());
-            block.push_back(L'\0');
+            env.items.emplace_back(name, value);
         }
         FreeEnvironmentStringsW(existing);
     }
 
-    auto appendVar = [&](const std::wstring& name, const std::wstring& value) {
-        std::wstring entry = name + L"=" + value;
+    // ── 加固关键环境变量（仅在缺失/不完整时补齐，不覆盖用户已有的有效值）──
+    // SystemRoot / windir：很多系统组件与 PowerShell 都依赖它定位自身。
+    std::wstring systemRoot;
+    if (auto* sr = env.find(L"SystemRoot")) {
+        systemRoot = *sr;
+    } else if (auto* wd = env.find(L"windir")) {
+        systemRoot = *wd;
+    } else {
+        wchar_t buffer[MAX_PATH] = {};
+        const UINT n = GetWindowsDirectoryW(buffer, MAX_PATH);
+        if (n > 0 && n < MAX_PATH) {
+            systemRoot = buffer;
+        }
+    }
+    if (!systemRoot.empty()) {
+        env.setIfMissing(L"SystemRoot", systemRoot);
+        env.setIfMissing(L"windir", systemRoot);
+
+        const std::wstring system32 = systemRoot + L"\\System32";
+        const std::wstring psHome = system32 + L"\\WindowsPowerShell\\v1.0";
+
+        // PATH：保证含 System32 与 WindowsPowerShell\v1.0（缺则补在前面）。
+        std::wstring* pathValue = env.find(L"Path");
+        if (!pathValue) {
+            env.set(L"Path", system32 + L";" + psHome);
+        } else {
+            std::wstring prefix;
+            if (!PathContainsDir(*pathValue, psHome)) {
+                prefix = psHome + L";" + prefix;
+            }
+            if (!PathContainsDir(*pathValue, system32)) {
+                prefix = system32 + L";" + prefix;
+            }
+            if (!prefix.empty()) {
+                *pathValue = prefix + *pathValue;
+            }
+        }
+
+        // PSModulePath：缺失则给默认模块路径，否则 powershell 找不到内置模块。
+        env.setIfMissing(L"PSModulePath", psHome + L"\\Modules");
+    }
+    // PATHEXT：缺失时给常见默认，含 .PS1。
+    env.setIfMissing(L"PATHEXT", L".COM;.EXE;.BAT;.CMD;.VBS;.JS;.WSF;.WSH;.MSC;.PS1");
+
+    // 注入引擎已知值。
+    env.set(L"INSTALL_DIR", Utf8ToWide(installDir));
+    env.set(L"VERSION", Utf8ToWide(version));
+
+    // ── 拼装环境块（NAME=VALUE\0 ... \0）──
+    std::vector<wchar_t> block;
+    for (const auto& kv : env.items) {
+        const std::wstring entry = kv.first + L"=" + kv.second;
         block.insert(block.end(), entry.begin(), entry.end());
         block.push_back(L'\0');
-    };
-    appendVar(L"INSTALL_DIR", Utf8ToWide(installDir));
-    appendVar(L"VERSION", Utf8ToWide(version));
-
+    }
     block.push_back(L'\0');  // 双 NUL 结束
     return block;
 }
@@ -203,6 +319,33 @@ HookOutcome RunHook(const HookScript& hook,
     logInstallerError("[Hook] Hooks are supported on Windows only.");
     return FailOutcome(hook);
 #endif
+}
+
+HookOutcome RunHooks(const std::vector<HookScript>& hooks,
+                     const std::string& installDir,
+                     const std::string& version) {
+    if (hooks.empty()) {
+        return HookOutcome::NotPresent;
+    }
+
+    bool sawContinueFailure = false;
+    for (size_t i = 0; i < hooks.size(); ++i) {
+        const HookOutcome outcome = RunHook(hooks[i], installDir, version);
+        switch (outcome) {
+            case HookOutcome::FailedAbort:
+                // abort 失败立即停止，后续脚本不再执行，交由调用方中止/回滚。
+                logInstallerError("[Hook] Aborting remaining hooks at index " +
+                                  std::to_string(i) + " due to abort-failure.");
+                return HookOutcome::FailedAbort;
+            case HookOutcome::FailedContinue:
+                sawContinueFailure = true;  // 记录后继续后续脚本
+                break;
+            case HookOutcome::Success:
+            case HookOutcome::NotPresent:
+                break;
+        }
+    }
+    return sawContinueFailure ? HookOutcome::FailedContinue : HookOutcome::Success;
 }
 
 } // namespace MultiThreadedInstaller

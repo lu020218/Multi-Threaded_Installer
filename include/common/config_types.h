@@ -11,7 +11,7 @@ namespace MultiThreadedInstaller {
 //
 // YAML 只声明三块：app（本次构建身份）、package（压缩参数）、hooks（pre/post bat）。
 // 其余稳定机制、默认值、跨版本兼容迁移全部写死/实现在引擎 C++ 中，不在此暴露。
-// 详见 docs/new_version/重构方案.md。
+// 详见 docs/USER_GUIDE.md。
 // ---------------------------------------------------------------------------
 
 // 压缩算法。none 表示原样打包（不压缩）。
@@ -106,9 +106,10 @@ struct HookConfig {
           present(false) {}
 };
 
+// preInstall / postInstall 均支持配置多个脚本，按声明顺序依次执行。
 struct HooksConfig {
-    HookConfig preInstall;
-    HookConfig postInstall;
+    std::vector<HookConfig> preInstall;
+    std::vector<HookConfig> postInstall;
 };
 
 // 根配置：仅三块。

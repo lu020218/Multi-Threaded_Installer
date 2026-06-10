@@ -80,15 +80,6 @@ json UninstallEntryScopeToJson(UninstallEntryScope scope) {
     return static_cast<int>(scope);
 }
 
-json RegistryEntryToManifestJson(const RegistryEntry& entry) {
-    return {
-        {"path", EnsureUtf8(entry.path)},
-        {"key", EnsureUtf8(entry.key)},
-        {"value", EnsureUtf8(entry.value)},
-        {"type", static_cast<int>(entry.type)}
-    };
-}
-
 json NamedEntriesToManifestJson(const std::vector<NamedCleanupEntry>& entries) {
     json out = json::array();
     for (const auto& entry : entries) {
@@ -112,38 +103,6 @@ json UninstallEntriesToManifestJson(const std::vector<UninstallEntryCleanup>& en
     return out;
 }
 
-json CleanupRulesToManifestJson(const std::vector<UninstallCleanupRule>& rules) {
-    json out = json::array();
-    for (const auto& rule : rules) {
-        if (!rule.path.empty()) {
-            out.push_back({
-                {"path", EnsureUtf8(rule.path)},
-                {"recursive", rule.recursive},
-                {"onlyIfEmpty", rule.onlyIfEmpty}
-            });
-        }
-    }
-    return out;
-}
-
-json ComponentActionsToManifestJson(const std::vector<ComponentExecutionRecord>& actions) {
-    json out = json::array();
-    for (const auto& action : actions) {
-        if (action.uninstallCommand.empty()) {
-            continue;
-        }
-        out.push_back({
-            {"componentId", EnsureUtf8(action.componentId)},
-            {"sourceType", EnsureUtf8(action.sourceType)},
-            {"uninstallCommand", EnsureUtf8(action.uninstallCommand)},
-            {"workingDirectory", EnsureUtf8(action.workingDirectory)},
-            {"wait", action.wait},
-            {"timeoutSec", action.timeoutSec}
-        });
-    }
-    return out;
-}
-
 }  // namespace
 
 bool writeManifest(const std::string& manifestPath,
@@ -160,9 +119,6 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& desktopShortcutDisplayName,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
-                   const std::vector<ComponentExecutionRecord>& componentActions,
-                   const std::vector<std::string>& selectedComponentIds,
-                   bool installAllComponents,
                    const std::string& appPublisher,
                    const InstalledFileFingerprintMap& fileFingerprints) {
     if (manifestPath.empty()) {
@@ -210,26 +166,16 @@ bool writeManifest(const std::string& manifestPath,
 
         root["autoStartup"] = autoStartup;
         root["desktopIcon"] = desktopIcons;
-        root["installAllComponents"] = installAllComponents;
-        root["selectedComponentIds"] = EnsureUtf8List(selectedComponentIds);
         root["desktopShortcutDisplayName"] = EnsureUtf8(desktopShortcutDisplayName);
         root["language"] = EnsureUtf8(languageCode);
         root["killProcesses"] = EnsureUtf8List(killProcesses);
-        root["componentActions"] = ComponentActionsToManifestJson(componentActions);
 
-        // 运行时卸载账本：卸载主流程按此撤销已写入的快捷方式/启动项/系统卸载入口/注册表/路径。
+        // 运行时卸载账本：卸载主流程按此撤销已写入的快捷方式/启动项/系统卸载入口。
         json cleanup;
         cleanup["shortcuts"] = NamedEntriesToManifestJson(actualCleanupSnapshot.shortcuts);
         cleanup["startup"] = NamedEntriesToManifestJson(actualCleanupSnapshot.startup);
         cleanup["processes"] = NamedEntriesToManifestJson(actualCleanupSnapshot.processes);
         cleanup["uninstallEntries"] = UninstallEntriesToManifestJson(actualCleanupSnapshot.uninstallEntries);
-        cleanup["paths"] = CleanupRulesToManifestJson(actualCleanupSnapshot.paths);
-        cleanup["registryKeys"] = EnsureUtf8List(actualCleanupSnapshot.registryKeys);
-        json registryValues = json::array();
-        for (const auto& entry : actualCleanupSnapshot.registryValues) {
-            registryValues.push_back(RegistryEntryToManifestJson(entry));
-        }
-        cleanup["registryValues"] = std::move(registryValues);
         root["cleanup"] = std::move(cleanup);
 
         std::filesystem::path path = PathFromUtf8(manifestPath);
@@ -290,16 +236,7 @@ bool loadPreviousInstallOptions(const std::string& manifestPath,
 
     options.autoStartup = manifest.value("autoStartup", false);
     options.desktopIcon = manifest.value("desktopIcon", false);
-    options.installAllComponents = manifest.value("installAllComponents", false);
     options.languageCode = manifest.value("language", "");
-    options.selectedComponentIds.clear();
-    if (manifest.contains("selectedComponentIds") && manifest["selectedComponentIds"].is_array()) {
-        for (const auto& item : manifest["selectedComponentIds"]) {
-            if (item.is_string()) {
-                options.selectedComponentIds.push_back(item.get<std::string>());
-            }
-        }
-    }
     return true;
 }
 

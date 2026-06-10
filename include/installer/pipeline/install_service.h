@@ -64,8 +64,6 @@ struct InstallServiceOptions {
     std::string installPath;             ///< 安装根路径。
     bool installPathExplicit = false;    ///< installPath 是否为用户显式指定。
     std::vector<std::pair<std::string, std::string>> folderMappings;  ///< 逐 folder 目标覆盖（folderId→target），通常为空。
-    std::vector<std::string> selectedComponentIds;  ///< 历史组件选择（单产品单载荷下已不用，保留兼容）。
-    bool installAllComponents = false;   ///< 历史组件全装标志（同上）。
     bool upgradeMode = false;            ///< 升级模式（沿用旧安装目录 + 触发迁移）。
     int threadCount = 0;                 ///< 解压线程数；0 = 按 CPU 自动。
     std::string languageCode;            ///< 界面/快捷方式语言。

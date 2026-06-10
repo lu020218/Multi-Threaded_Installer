@@ -139,6 +139,8 @@ std::string ResolveDesktopShortcutDisplayName(const ExtendedInstallationMetadata
     return metadata.appProductName;
 }
 
+// [旧版本-发现安装路径] 升级模式入口：必须先发现机器上已存在的旧安装目录与旧 manifest，
+// 否则升级无目标可言 → 发现失败即升级失败。
 bool ResolveUpgradeInstallFromInstallStateDetect(const ExtendedInstallationMetadata& metadata,
                                                  InstallerPathResolver& pathResolver,
                                                  std::string& installDir,
@@ -179,6 +181,8 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
         plan.hasPreviousInstall = true;
         plan.pathDecision = ResolveUpgradePathDecision(plan.previousInstallDir);
     } else {
+        // [旧版本-发现安装路径] 非升级（普通/覆盖安装）：探测是否已存在旧版本；命中则记录
+        // 旧目录与旧 manifest，用于后续覆盖安装的旧版本清理。
         plan.hasPreviousInstall = resolveInstalledInstanceFromInstallState(metadata,
                                                                           pathResolver,
                                                                           installedInstance,
@@ -208,9 +212,7 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
         }
     }
 
-    // 单产品单载荷：无组件选择，始终安装全部 payload。
-    plan.componentPlan = ComponentSelectionPlan{};
-
+    // 单产品单载荷：无组件选择，始终安装全部 payload（见下方 selectedEmbeddedFolders）。
     // 注册表写入由引擎在 finalize 阶段统一处理（产品注册表 + 系统卸载入口），
     // 不再有 YAML 驱动的通用 registry 名单（需求 §4.6）。
     plan.effectiveRegistry.clear();

@@ -43,8 +43,6 @@ public:
     /// 安装器/卸载器命令行参数。
     struct InstallerArgs {
         std::string defaultDestination;                 ///< -d/--destination 安装目录。
-        std::vector<std::string> selectedComponents;    ///< 选定组件（历史遗留）。
-        bool installAllComponents = false;              ///< 全装组件（历史遗留）。
         bool upgrade = false;                           ///< --upgrade 升级模式。
         bool silent = false;                            ///< -s/--silent 静默模式。
         bool autoStartupSpecified = false;              ///< 是否显式指定开机自启。

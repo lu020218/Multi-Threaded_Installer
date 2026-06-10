@@ -69,6 +69,7 @@ lifecycle:
 ```
 
 See:
-- [examples/packager.yaml](/e:/Work/GitHub/Multi-Threaded_Installer-master/examples/packager.yaml)
-- [docs/USER_GUIDE.md](/e:/Work/GitHub/Multi-Threaded_Installer-master/docs/USER_GUIDE.md)
-- [docs/packager_detailed_design.md](/e:/Work/GitHub/Multi-Threaded_Installer-master/docs/packager_detailed_design.md)
+- [packager.yaml](packager.yaml) — 仓库根的配置示例
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md)
+- [docs/打包器流程图.md](docs/打包器流程图.md)
+- [docs/安装器流程图.md](docs/安装器流程图.md)

@@ -2,7 +2,6 @@
 #include "gui/pages/page_controller.h"
 #include "gui/core/gui_helpers.h"
 #include "gui/install/gui_install_actions.h"
-#include "gui/install/gui_component_binding.h"
 #include "gui/presenters/gui_diagnostics.h"
 #include "gui/core/gui_event_router.h"
 #include "gui/install/gui_install_flow_utils.h"
@@ -186,7 +185,6 @@ GUIManager::GUIManager()
         m_autoStartInstall(false),
         m_autoStartAutoRun(false),
         m_autoStartDesktopIcons(false),
-        m_autoStartInstallAllComponents(false),
         m_autoStartUpgradeMode(false),
         m_uninstallMode(false),
         m_progressTarget(0.0f),
@@ -232,16 +230,12 @@ void GUIManager::SetAutoStartInstallRequest(const std::wstring& installPath,
                                             bool autoRun,
                                             bool desktopIcons,
                                             const std::wstring& languageCode,
-                                            const std::vector<std::string>& selectedComponents,
-                                            bool installAllComponents,
                                             bool upgradeMode) {
     m_autoStartInstall = true;
     m_autoStartInstallPath = installPath;
     m_autoStartAutoRun = autoRun;
     m_autoStartDesktopIcons = desktopIcons;
     m_autoStartLanguageCode = languageCode;
-    m_autoStartSelectedComponents = selectedComponents;
-    m_autoStartInstallAllComponents = installAllComponents;
     m_autoStartUpgradeMode = upgradeMode;
 }
 
@@ -304,13 +298,6 @@ void GUIManager::InitWindow() {
         m_pInstallPathEdit->SetFocus();
     }
 
-    if (!m_uninstallMode) {
-        logInstallerInfo("[GUI] Initializing component selection UI.");
-        InitializeComponentSelectionUi();
-        logInstallerInfo("[GUI] Component selection UI initialized.");
-    }
-    
-
     if (m_baseClientHeight == 0 || m_baseClientWidth == 0 || m_baseWindowWidth == 0) {
         RECT rcClient;
         ::GetClientRect(m_hWnd, &rcClient);
@@ -331,8 +318,6 @@ void GUIManager::InitWindow() {
                                      m_autoStartAutoRun,
                                      m_autoStartDesktopIcons,
                                      m_autoStartLanguageCode,
-                                     m_autoStartSelectedComponents,
-                                     m_autoStartInstallAllComponents,
                                      m_autoStartUpgradeMode);
     }
 }
@@ -425,39 +410,6 @@ bool GUIManager::EnsureInstallMetadataLoaded() {
         logInstallerError("[GUI] Failed to load install metadata: unknown error.");
         return false;
     }
-}
-
-void GUIManager::InitializeComponentSelectionUi() {
-    if (!EnsureInstallMetadataLoaded() || !m_pTabPages) {
-        return;
-    }
-
-    std::vector<std::string> warnings;
-    InitializeComponentBindingsUI(m_pTabPages, m_installMetadata, warnings);
-
-    for (const auto& warning : warnings) {
-        if (!warning.empty()) {
-            logInstallerWarning(std::string("[GUI] ") + warning);
-        }
-    }
-}
-
-std::vector<std::string> GUIManager::CollectSelectedComponentsFromUi() {
-    std::vector<std::string> selected;
-    if (!EnsureInstallMetadataLoaded() || !m_pTabPages) {
-        return selected;
-    }
-
-    std::vector<std::string> warnings;
-    selected = CollectSelectedComponentIdsFromUI(m_pTabPages, m_installMetadata, warnings);
-
-    for (const auto& warning : warnings) {
-        if (!warning.empty()) {
-            logInstallerWarning(std::string("[GUI] ") + warning);
-        }
-    }
-
-    return selected;
 }
 
 void GUIManager::Notify(TNotifyUI& msg) {
@@ -615,13 +567,10 @@ void GUIManager::OnInstallButtonClick() {
         return;
     }
 
-    std::vector<std::string> selectedComponents = CollectSelectedComponentsFromUi();
     StartInstallationWithOptions(request.installPath,
                                  request.autoRun,
                                  request.desktopIcons,
                                  request.languageCode,
-                                 selectedComponents,
-                                 false,
                                  false);
 }
 
@@ -629,8 +578,6 @@ bool GUIManager::StartInstallationWithOptions(const std::wstring& installPath,
                                               bool autoRun,
                                               bool desktopIcons,
                                               const std::wstring& languageCode,
-                                              const std::vector<std::string>& selectedComponents,
-                                              bool installAllComponents,
                                               bool upgradeMode) {
     StopProgressTimer();
     m_progressTarget = 0.0f;
@@ -664,8 +611,6 @@ bool GUIManager::StartInstallationWithOptions(const std::wstring& installPath,
                                  autoRun,
                                  desktopIcons,
                                  languageCode,
-                                 selectedComponents,
-                                 installAllComponents,
                                  upgradeMode);
 
     if (m_pTabPages) {

@@ -149,23 +149,6 @@ std::wstring buildRelaunchArguments() {
 
 } // namespace
 
-std::string resolveEffectiveAppId(const std::string& appId, const std::string& applicationName) {
-    std::string trimmedAppId = trimAscii(appId);
-    if (!trimmedAppId.empty()) {
-        return trimmedAppId;
-    }
-    return trimAscii(applicationName);
-}
-
-std::string resolveEffectiveDirectoryName(const std::string& directoryName,
-                                          const std::string& applicationName) {
-    std::string trimmedDirectoryName = trimAscii(directoryName);
-    if (!trimmedDirectoryName.empty()) {
-        return trimmedDirectoryName;
-    }
-    return trimAscii(applicationName);
-}
-
 std::string appendPathLeafIfMissing(const std::string& basePath, const std::string& expectedLeaf) {
     const std::string trimmedLeaf = trimAscii(expectedLeaf);
     if (basePath.empty() || trimmedLeaf.empty()) {

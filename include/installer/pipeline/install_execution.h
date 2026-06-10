@@ -15,18 +15,6 @@ namespace MultiThreadedInstaller {
 class MetadataParser;
 class InstallerPathResolver;
 
-/// 组件安装计时（历史组件机制遗留；单产品单载荷下不产生，保留以兼容字段）。
-struct ComponentInstallTiming {
-    std::string id;
-    std::string name;
-    std::string type;
-    bool success = false;
-    uint64_t totalMs = 0;
-    uint64_t downloadMs = 0;
-    uint64_t installMs = 0;
-    std::string error;
-};
-
 /// 解压执行阶段的产出（供 finalize 与上层 result 消费）。
 struct InstallExecutionOutput {
     bool success = false;                          ///< 是否成功。
@@ -38,13 +26,10 @@ struct InstallExecutionOutput {
     std::vector<std::string> pendingReplaceFiles;  ///< 待重启替换的锁定文件。
     std::vector<std::string> errors;               ///< 失败信息。
     ParallelInstallSummary timing;                 ///< 计时汇总。
-    std::vector<ComponentInstallTiming> componentTimings;  ///< 组件计时（遗留，通常空）。
-    std::vector<ComponentExecutionRecord> componentActions;///< 组件卸载动作（遗留，通常空）。
     std::vector<RegistryEntry> effectiveRegistry;          ///< 透传给 finalize 的注册表写入。
     std::vector<std::string> effectiveKillProcesses;       ///< 透传给 finalize 的待杀进程名。
     bool effectiveAutoStartup = false;                     ///< 透传给 finalize：是否开机自启。
     bool effectiveDesktopIcons = false;                    ///< 透传给 finalize：是否建快捷方式。
-    std::vector<std::string> failedOptionalComponentMessages;  ///< 可选组件失败信息（遗留）。
 };
 
 /// 解压执行阶段：把（全部）payload 解压落地到安装目录，填充 InstallExecutionOutput。

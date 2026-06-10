@@ -116,6 +116,8 @@ std::vector<std::string> ResolveSelectedPayloadFileTargets(const ExtendedInstall
 
 } // namespace
 
+// [旧版本-清理] 总入口：发现存在旧版本（plan.hasPreviousInstall）时，先删旧文件，
+// 再清理旧版本的系统痕迹（注册表/开机自启/快捷方式/系统卸载入口，经迁移表）。
 bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
                            const InstallExecutionPlan& plan,
                            const InstallServiceOptions& options,
@@ -164,7 +166,8 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
     }
 
     UpgradeCleanupResult previousCleanup;
-    // 缺失清单时的回退策略写死为安全目录清理（需求 §5：清理行为按固定默认处理）。
+    // [旧版本-清理:文件] 按旧 manifest 的 files[] 删除旧版本文件（带 keepFiles 差异集跳过、
+    // 看门狗超时保护）；缺失清单时的回退策略写死为安全目录清理（需求 §5）。
     if (!previousManifestReadable) {
         previousCleanup = runPreviousInstallCleanupWithWatchdog(
             plan.previousManifest,
@@ -207,6 +210,8 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
                          " skipped=" + std::to_string(previousCleanup.skippedCount));
     }
 
+    // [旧版本-清理:系统痕迹] 旧版本的注册表/开机自启/快捷方式/系统卸载入口/残留路径，
+    // 统一交给迁移表（cleanupUpgradeSystemArtifacts → migration::RunPending）按版本收尾。
     if (!cleanupUpgradeSystemArtifacts(plan.previousManifest,
                                       plan.previousInstallDir,
                                       metadata,

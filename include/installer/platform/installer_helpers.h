@@ -96,8 +96,6 @@ std::string getCurrentExecutablePath();
 std::string appendPathLeafIfMissing(const std::string& basePath, const std::string& expectedLeaf);
 /// 由安装器 exe 路径推断同目录的 install.manifest.json 路径。
 std::string getLocalManifestPath(const std::string& exePath);
-/// 释放/拷贝出卸载器存根到目标路径。
-bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath);
 
 // ── 权限/提权 ──────────────────────────────────────────────────────────
 /// 当前进程是否以管理员权限运行。

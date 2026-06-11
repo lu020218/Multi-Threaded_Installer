@@ -43,15 +43,6 @@ struct UpgradeCleanupResult {
     std::string message;          ///< 结果说明。
 };
 
-/// 升级时清理上次安装（按上次 manifest 删旧文件；清单缺失时回退安全目录清理）。同步版。
-bool cleanupPreviousInstallForUpgrade(
-    const std::string& manifestPath,
-    const std::string& previousInstallDir,
-    const std::string& newInstallDir,
-    CliSupport& console,
-    const UpgradeCleanupProgressCallback& progressCallback = {},
-    const std::function<bool()>& cancellationCallback = {});
-
 /// 带看门狗的旧安装清理：在独立线程执行并由看门狗监控超时/心跳，避免锁定文件拖死流程。
 /// @param keepFiles 新包中也存在的文件绝对路径集合；非空时做差集清理——集合内文件保留原位
 ///        （供解压器跳过或覆盖），且关闭整子树隔离，避免未变文件被移走。

@@ -12,8 +12,6 @@ namespace MultiThreadedInstaller {
 // 注册表读写原语。路径形如 "HKEY_LOCAL_MACHINE\\Software\\..." 或简写 "HKLM\\..."/"HKCU\\..."。
 // 全部为 best-effort：失败返回 false 并由调用方记日志，不抛异常。
 
-/// 删除一个注册表值（按 entry.path + entry.key）。
-bool deleteRegistryValue(const RegistryEntry& entry);
 /// 递归删除一个注册表键（整棵子树）。
 bool deleteRegistryPath(const std::string& path);
 /// 写一个注册表值（类型由 type 决定：STRING/DWORD/EXPAND_STRING）。
@@ -41,9 +39,5 @@ bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine);
 /// 按 DisplayName 删除系统卸载入口（用于清理改名前的旧入口）。scope 决定 hive/视图范围。
 bool deleteSystemUninstallEntryByDisplayName(const std::string& displayName,
                                              UninstallEntryScope scope);
-/// 删除 InstallLocation 或 UninstallString 指向本安装目录/卸载器的所有卸载入口（兜底清理）。
-bool deleteMatchingUninstallRegistryEntries(const std::string& installDir,
-                                            const std::string& uninstallExePath,
-                                            bool perMachine);
 
 } // namespace MultiThreadedInstaller

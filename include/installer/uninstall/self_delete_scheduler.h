@@ -12,7 +12,5 @@ bool scheduleSelfDelete();
 /// 立即启动一个分离的清理助手：等本进程退出后删除 cleanupRoots、manifest 及 uninstall.exe 自身。
 bool scheduleSelfDeleteImmediate(const std::vector<std::string>& cleanupRoots,
                                  const std::string& manifestPath);
-/// 用 cmd 递归删除 root 下的空目录（收尾清理）。
-bool cleanupEmptyDirectoriesCmd(const std::string& root);
 
 } // namespace MultiThreadedInstaller

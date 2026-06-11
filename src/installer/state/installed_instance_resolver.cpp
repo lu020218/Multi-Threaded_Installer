@@ -17,15 +17,6 @@ namespace MultiThreadedInstaller {
 
 namespace {
 
-bool ExistingInstallDirectoryLooksValid(const std::string& path) {
-    if (path.empty()) {
-        return false;
-    }
-    std::error_code ec;
-    return std::filesystem::exists(PathFromUtf8(path), ec) &&
-           std::filesystem::is_directory(PathFromUtf8(path), ec);
-}
-
 // 只为取顶层 appVersion 而读上次安装清单。用 SAX 在读到 appVersion 时立即中止，
 // 避免对后面 37641 条 files[]/fileFingerprints[] 做全量 DOM 解析（原本约 120ms）。
 std::string ReadManifestAppVersionFast(const std::string& manifestPath) {
@@ -93,38 +84,6 @@ std::vector<DetectCandidate> BuildDetectCandidates(const ExtendedInstallationMet
 }
 
 }  // namespace
-
-bool resolveInstalledInstanceFromInstallRoots(const ExtendedInstallationMetadata& metadata,
-                                              InstalledInstanceInfo& instanceInfo) {
-    instanceInfo = InstalledInstanceInfo{};
-    (void)metadata;
-    return false;
-}
-
-bool resolveInstallInfoFromRegistry(const std::string& registryPath,
-                                    const std::string& registryKey,
-                                    std::string& manifestPath,
-                                    std::string& installDir) {
-    manifestPath.clear();
-    installDir.clear();
-    if (registryPath.empty() || registryKey.empty()) {
-        return false;
-    }
-
-    std::string candidateInstallDir;
-    if (!readRegistryStringValue(registryPath, registryKey, candidateInstallDir) ||
-        !ExistingInstallDirectoryLooksValid(candidateInstallDir)) {
-        return false;
-    }
-
-    installDir = candidateInstallDir;
-    std::filesystem::path localManifest = PathFromUtf8(candidateInstallDir) / "install.manifest.json";
-    if (std::filesystem::exists(localManifest)) {
-        manifestPath = Utf8FromPath(localManifest);
-    }
-
-    return true;
-}
 
 // [旧版本-发现安装路径] 核心实现：从 installState 注册表读出旧 InstallDir，校验目录存在，
 // 再在该目录下定位 install.manifest.json（卸载/升级清理要消费的旧版本快照）。

@@ -107,48 +107,4 @@ bool openFileForWrite(const std::filesystem::path& path, std::fstream& stream) {
     return static_cast<bool>(stream);
 }
 
-bool createUninstallStub(const std::string& sourcePath, const std::string& targetPath) {
-    std::ifstream in(toLongPath(PathFromUtf8(sourcePath)), std::ios::binary);
-    if (!in) {
-        return false;
-    }
-
-    in.seekg(0, std::ios::end);
-    uint64_t fileSize = static_cast<uint64_t>(in.tellg());
-    uint64_t trailerEnd = 0;
-    EmbeddedDataLocatorRecord locator{};
-    if (!findEmbeddedDataLocator(in, fileSize, trailerEnd, locator) ||
-        locator.metadataOffset == 0) {
-        return false;
-    }
-
-    if (locator.metadataOffset >= trailerEnd) {
-        return false;
-    }
-
-    std::ofstream out(toLongPath(PathFromUtf8(targetPath)),
-                      std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return false;
-    }
-
-    in.seekg(0, std::ios::beg);
-    const size_t bufSize = 1024 * 1024;
-    std::vector<char> buffer(bufSize);
-    uint64_t remaining = locator.metadataOffset;
-    while (remaining > 0) {
-        size_t chunk = remaining > bufSize ? bufSize : static_cast<size_t>(remaining);
-        in.read(buffer.data(), static_cast<std::streamsize>(chunk));
-        if (!in) {
-            return false;
-        }
-        out.write(buffer.data(), static_cast<std::streamsize>(chunk));
-        if (!out) {
-            return false;
-        }
-        remaining -= chunk;
-    }
-    return true;
-}
-
 }  // namespace MultiThreadedInstaller

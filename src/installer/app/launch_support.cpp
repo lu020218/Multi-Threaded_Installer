@@ -1,5 +1,6 @@
 ﻿#include "installer/app/launch_support.h"
 
+#include "installer/app/single_instance.h"
 #include "common/engine_defaults.h"
 #include "common/installer_exit_codes.h"
 #include "common/installer_logger.h"
@@ -296,7 +297,8 @@ int RunGuiWindow(GUIManager& frame,
                  const std::wstring& title,
                  const GuiResourceContext& context,
                  bool uninstallMode,
-                 WindowSize fallbackSize) {
+                 WindowSize fallbackSize,
+                 const std::string& instanceKey) {
     HWND hwnd = nullptr;
     WindowSize baseSize = GetWindowSizeFromResources(uninstallMode, fallbackSize);
     const UINT startupDpi = GetDpiForWindowSafe(nullptr);
@@ -325,6 +327,11 @@ int RunGuiWindow(GUIManager& frame,
     frame.ShowWindow(true);
     logInstallerInfo("[GUI] Showed window, entering message loop.");
 
+    // 单例：发布本 GUI 窗口句柄，供后续启动的同类实例查找并置顶。
+    if (!instanceKey.empty()) {
+        PublishGuiInstanceWindow(instanceKey, hwnd);
+    }
+
     // 资源诊断会遍历整个 zip（数百条目），首启时与首帧抢 IO/CPU。默认关闭，
     // 仅当显式设置环境变量 MTINSTALLER_DIAG=1 时才在后台线程运行，用于排查。
     std::thread convergeDiagThread;
@@ -340,6 +347,9 @@ int RunGuiWindow(GUIManager& frame,
         convergeDiagThread.join();
     }
     logInstallerInfo("[GUI] Message loop exited.");
+    if (!instanceKey.empty()) {
+        ClearGuiInstanceWindow();  // 窗口关闭后撤下已发布的句柄。
+    }
     CPaintManagerUI::SetResourceZip(_T(""), true);
     return 0;
 }
@@ -489,6 +499,16 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
     SetInstallerAppNameEnv(metadata.appProductName);
     EnsureInstallerLoggingInitialized();
 
+    // 单例：已有安装器实例在运行时，本静默进程直接退出（如已有 GUI 实例则先置顶其窗口）。
+    // 静默模式无 UI，不弹提示；用专用退出码让调用方区分“被跳过”而非“安装成功”。
+    SingleInstanceGuard instanceGuard(metadata.appProductName + "|installer");
+    if (!instanceGuard.acquired()) {
+        instanceGuard.activateExistingWindow();
+        console.showError("Another installer instance is already running; this run was skipped.");
+        logInstallerInfo("[SingleInstance] Installer already running; this silent instance exits.");
+        return INSTALLER_EXIT_ALREADY_RUNNING;
+    }
+
     InstallServiceOptions options;
     std::string installPath;
     if (context.args.upgrade) {
@@ -575,6 +595,22 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
                                     GUIHelpers::GetLocalizedText(L"msg.dialog.title.error", L""),
                                     GUIHelpers::GetLocalizedText(L"msg.error.metadata_invalid", L""));
         return 1;
+    }
+
+    // 单例：已有安装器实例在运行时本进程退出。若已有实例为 GUI 则置顶其窗口；
+    // 若已有实例为静默安装（无窗口可置顶），则弹提示框告知用户后退出。
+    const std::string instanceKey = metadata.appProductName + "|installer";
+    SingleInstanceGuard instanceGuard(instanceKey);
+    if (!instanceGuard.acquired()) {
+        if (!instanceGuard.activateExistingWindow()) {
+            GUIHelpers::ShowWarningDialog(
+                nullptr,
+                GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L"提示"),
+                GUIHelpers::GetLocalizedText(L"msg.error.already_running",
+                                             L"已有一个安装正在进行，请稍候。"));
+        }
+        logInstallerInfo("[SingleInstance] Installer already running; this GUI instance exits.");
+        return INSTALLER_EXIT_ALREADY_RUNNING;
     }
 
     InstallerPathResolver pathResolver;
@@ -667,7 +703,7 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     }
 
     const std::wstring title = config.applicationName.empty() ? L"Installer" : config.applicationName;
-    return RunGuiWindow(*frame, title, resources, false, WindowSize{800, 600});
+    return RunGuiWindow(*frame, title, resources, false, WindowSize{800, 600}, instanceKey);
 }
 
 int RunSilentUninstallMode(const LaunchContext& context) {
@@ -699,6 +735,17 @@ int RunSilentUninstallMode(const LaunchContext& context) {
         }
         console.showError("Please run the uninstaller as Administrator.");
         return INSTALLER_EXIT_ADMIN_REQUIRED;
+    }
+
+    // 单例：放在提权 relaunch 之后，确保只有最终（已提权）实例持有互斥量，避免父子进程互相误判。
+    const std::string uninstallProduct =
+        metadataPtr ? metadataPtr->appProductName : uninstallContext.appName;
+    SingleInstanceGuard instanceGuard(uninstallProduct + "|uninstaller");
+    if (!instanceGuard.acquired()) {
+        instanceGuard.activateExistingWindow();
+        console.showError("Another uninstaller instance is already running; this run was skipped.");
+        logInstallerInfo("[SingleInstance] Uninstaller already running; this silent instance exits.");
+        return INSTALLER_EXIT_ALREADY_RUNNING;
     }
 
     const bool ok = ExecuteUninstallFromContext(uninstallContext, metadataPtr, resolver, console);
@@ -745,6 +792,22 @@ int RunGuiUninstallMode(HINSTANCE hInstance, const LaunchContext& context) {
         return 1;
     }
 
+    // 单例：放在提权 relaunch 之后。已有卸载器实例在运行时退出（如为 GUI 则先置顶其窗口）。
+    const std::string uninstallInstanceKey =
+        (metadataPtr ? metadataPtr->appProductName : uninstallContext.appName) + "|uninstaller";
+    SingleInstanceGuard instanceGuard(uninstallInstanceKey);
+    if (!instanceGuard.acquired()) {
+        if (!instanceGuard.activateExistingWindow()) {
+            GUIHelpers::ShowWarningDialog(
+                nullptr,
+                GUIHelpers::GetLocalizedText(L"msg.dialog.title.prompt", L"提示"),
+                GUIHelpers::GetLocalizedText(L"msg.error.already_running",
+                                             L"已有一个卸载正在进行，请稍候。"));
+        }
+        logInstallerInfo("[SingleInstance] Uninstaller already running; this GUI instance exits.");
+        return INSTALLER_EXIT_ALREADY_RUNNING;
+    }
+
     GuiResourceContext resources;
     PrepareGuiResources(hInstance, resources, false);
     const GuiResourceValidationResult validation = ValidateInstallGuiResources(resources);
@@ -773,7 +836,8 @@ int RunGuiUninstallMode(HINSTANCE hInstance, const LaunchContext& context) {
                         uninstallConfig.applicationName.empty() ? L"Uninstaller" : uninstallConfig.applicationName,
                         resources,
                         true,
-                        WindowSize{560, 350});
+                        WindowSize{560, 350},
+                        uninstallInstanceKey);
 }
 
 } // namespace

@@ -340,6 +340,7 @@ set(INSTALLER_SOURCES
     src/installer/uninstall/uninstall_manager.cpp
     src/installer/platform/gui_resource_loader.cpp
     src/installer/app/launch_support.cpp
+    src/installer/app/single_instance.cpp
     src/installer/app/installer_main.cpp
     src/common/installer_parallel_install.cpp
 )
@@ -381,6 +382,7 @@ set(UNINSTALLER_SOURCES
     src/installer/uninstall/uninstall_manager.cpp
     src/installer/platform/gui_resource_loader.cpp
     src/installer/app/launch_support.cpp
+    src/installer/app/single_instance.cpp
     src/installer/app/uninstaller_main.cpp
     src/common/installer_parallel_install.cpp
 )

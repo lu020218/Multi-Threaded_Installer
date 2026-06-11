@@ -17,10 +17,6 @@ struct InstalledInstanceInfo {
     std::string detectSource;      ///< 检出来源（用于日志/诊断）。
 };
 
-/// 预留接口：从安装根推断已装实例（当前实现恒返回 false）。
-bool resolveInstalledInstanceFromInstallRoots(const ExtendedInstallationMetadata& metadata,
-                                              InstalledInstanceInfo& instanceInfo);
-
 /// 主探测入口：读引擎写死的产品注册表（HKLM\Software\<product>）定位已装实例并读版本。
 /// @return 检出返回 true 并填充 instanceInfo；未检出返回 false，error（若提供）含原因。
 bool resolveInstalledInstanceFromInstallState(const ExtendedInstallationMetadata& metadata,
@@ -35,11 +31,5 @@ bool resolveInstallDirFromInstallStateStore(const ExtendedInstallationMetadata& 
                                             std::string& manifestPath,
                                             std::string& detectSource,
                                             std::string& error);
-
-/// 从指定注册表路径/键读出 installDir，并探测其下的 install.manifest.json。
-bool resolveInstallInfoFromRegistry(const std::string& registryPath,
-                                    const std::string& registryKey,
-                                    std::string& manifestPath,
-                                    std::string& installDir);
 
 } // namespace MultiThreadedInstaller

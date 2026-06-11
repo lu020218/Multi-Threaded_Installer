@@ -77,6 +77,27 @@ void AppendNamedCleanupEntry(std::vector<NamedCleanupEntry>& entries, const std:
     }
 }
 
+// [安装收尾-注册表写入] 需要写入的「附加注册表项」在此用代码写死（取代旧的 YAML registry 名单）。
+// 返回的每一项都会在 finalize 阶段写入注册表；entry.value 支持占位符 %InstallDir% / 版本 / 产品名
+//（由 applyRegistryEntries → expandRegistryValue 展开）。
+// 说明：产品状态注册表（HKLM\Software\<product> 的 Version/InstallDir/InstallState 等）已由
+// ApplyInstallState 写死处理、系统卸载入口由 WriteConfiguredSystemUninstallEntries 处理，二者
+// 不需在此重复；此处仅放“本产品额外需要写死的注册表项”。
+std::vector<RegistryEntry> BuildPostInstallRegistryEntries(const ExtendedInstallationMetadata& metadata) {
+    std::vector<RegistryEntry> entries;
+    (void)metadata;
+
+    // 在此按需写死注册表项（示例，取消注释并按业务修改）：
+    //   RegistryEntry e;
+    //   e.path  = "HKLM\\Software\\" + metadata.appProductName;  // 注册表键路径
+    //   e.key   = "DataDir";                                     // 值名
+    //   e.value = "%InstallDir%";                                // 值（支持 %InstallDir% 等占位符）
+    //   e.type  = RegistryValueType::EXPAND_STRING;              // STRING / DWORD / EXPAND_STRING
+    //   entries.push_back(std::move(e));
+
+    return entries;
+}
+
 // [安装收尾-系统卸载入口] 实现：系统卸载入口写死（需求 §5）：displayName=产品名、
 // publisher=publisher、scope=machine（perMachine=true），写入「程序和功能」列表。
 void WriteConfiguredSystemUninstallEntries(const ExtendedInstallationMetadata& metadata,
@@ -187,13 +208,15 @@ InstalledFileFingerprintMap BuildInstalledFileFingerprints(const ExtendedInstall
 bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                                 const InstallExecutionPlan& plan,
                                 const InstallServiceOptions& options,
-                                const std::vector<RegistryEntry>& effectiveRegistry,
-                                const std::vector<std::string>& effectiveKillProcesses,
-                                bool effectiveAutoStartup,
-                                bool effectiveDesktopIcons,
                                 InstallerPathResolver& pathResolver,
                                 InstallProgressReporter& reporter,
                                 InstallServiceResult& result) {
+    // 注册表写入项在代码里写死（取代旧 YAML registry 名单）；其余生效配置直接读 plan。
+    const std::vector<RegistryEntry> effectiveRegistry = BuildPostInstallRegistryEntries(metadata);
+    const std::vector<std::string>& effectiveKillProcesses = plan.effectiveKillProcesses;
+    const bool effectiveAutoStartup = plan.effectiveAutoStartup;
+    const bool effectiveDesktopIcons = plan.effectiveDesktopIcons;
+
     reporter.EmitStatus(InstallServiceStatus::Finalizing,
                         InstallServicePhase::Finalizing,
                         0.0f,

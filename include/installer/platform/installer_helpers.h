@@ -56,6 +56,16 @@ std::string normalizePathForCompare(const std::string& path);
 /// 判断一条消息文本是否表示"用户取消"。
 bool isCancellationText(const std::string& message);
 
+// ── 路径/环境通用判断（卸载与升级清理共用，统一在此提供，避免各处重复实现）──
+/// candidate 是否等于或位于 root 之下（按归一化路径比较）。
+bool IsPathUnderOrEqual(const std::filesystem::path& candidate, const std::filesystem::path& root);
+/// 两个路径归一化后是否相等。
+bool SameNormalizedPath(const std::filesystem::path& left, const std::filesystem::path& right);
+/// 读取指定环境变量的值（不存在/为空返回空串）。
+std::string ReadEnvironmentPath(const char* name);
+/// 路径是否为重解析点（符号链接/目录联接），清理时据此跳过避免误删/穿越。
+bool IsReparsePointPath(const std::filesystem::path& path);
+
 // ── 安装器自身（PE 内嵌数据）──────────────────────────────────────────
 /// 从文件指定 offset 读 size 字节到 out。
 bool readFileBytesAt(std::ifstream& file, uint64_t offset, void* out, size_t size);

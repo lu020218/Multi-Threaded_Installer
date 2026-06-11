@@ -89,26 +89,6 @@ std::string NormalizePath(const std::filesystem::path& path) {
     return normalizePathForCompare(Utf8FromPath(path.lexically_normal()));
 }
 
-bool IsPathUnderOrEqual(const std::filesystem::path& candidate,
-                        const std::filesystem::path& root) {
-    const std::string normalizedCandidate = NormalizePath(candidate);
-    const std::string normalizedRoot = NormalizePath(root);
-    if (normalizedCandidate.empty() || normalizedRoot.empty()) {
-        return false;
-    }
-    if (normalizedCandidate == normalizedRoot) {
-        return true;
-    }
-    if (normalizedCandidate.size() <= normalizedRoot.size()) {
-        return false;
-    }
-    if (normalizedCandidate.compare(0, normalizedRoot.size(), normalizedRoot) != 0) {
-        return false;
-    }
-    const char sep = normalizedCandidate[normalizedRoot.size()];
-    return sep == '\\' || sep == '/';
-}
-
 std::vector<std::string> CollectManifestFiles(const json& manifest) {
     std::vector<std::string> files;
     if (!manifest.contains("files") || !manifest["files"].is_array()) {
@@ -157,33 +137,6 @@ bool IsSafeCleanupPath(const std::filesystem::path& path) {
         return false;
     }
     return true;
-}
-
-std::string ReadEnvironmentPath(const char* name) {
-    if (!name || name[0] == '\0') {
-        return {};
-    }
-#ifdef _WIN32
-    DWORD required = GetEnvironmentVariableA(name, nullptr, 0);
-    if (required == 0) {
-        return {};
-    }
-    std::string value(required, '\0');
-    DWORD written = GetEnvironmentVariableA(name, value.data(), required);
-    if (written == 0 || written >= required) {
-        return {};
-    }
-    value.resize(written);
-    return value;
-#else
-    const char* value = std::getenv(name);
-    return value ? std::string(value) : std::string();
-#endif
-}
-
-bool SameNormalizedPath(const std::filesystem::path& left, const std::filesystem::path& right) {
-    return normalizePathForCompare(Utf8FromPath(left.lexically_normal())) ==
-           normalizePathForCompare(Utf8FromPath(right.lexically_normal()));
 }
 
 bool IsMtiPendingDirectoryName(const std::filesystem::path& path) {
@@ -255,17 +208,6 @@ bool IsProtectedFullCleanupRoot(const std::filesystem::path& path) {
     }
 
     return false;
-}
-
-bool IsReparsePointPath(const std::filesystem::path& path) {
-#ifdef _WIN32
-    const DWORD attrs = GetFileAttributesW(toLongPath(path).c_str());
-    return attrs != INVALID_FILE_ATTRIBUTES &&
-           (attrs & FILE_ATTRIBUTE_REPARSE_POINT) == FILE_ATTRIBUTE_REPARSE_POINT;
-#else
-    std::error_code ec;
-    return std::filesystem::is_symlink(std::filesystem::symlink_status(path, ec));
-#endif
 }
 
 uint64_t NowMs() {

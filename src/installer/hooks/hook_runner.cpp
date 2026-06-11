@@ -217,6 +217,51 @@ std::vector<wchar_t> BuildEnvironmentBlock(const std::string& installDir,
     return block;
 }
 
+// 计算脚本日志路径：与安装器日志放在同一目录，文件名 = 脚本名去扩展名 + ".log"
+//（如 pre_install.bat → pre_install.log）。安装器日志路径不可用时回退到临时目录。
+std::filesystem::path ResolveScriptLogPath(const std::string& scriptName) {
+    std::filesystem::path dir;
+    const std::string installerLog = getInstallerLogPath();
+    if (!installerLog.empty()) {
+        dir = PathFromUtf8(installerLog).parent_path();
+    }
+    if (dir.empty()) {
+        wchar_t temp[MAX_PATH] = {};
+        const DWORD n = GetTempPathW(MAX_PATH, temp);
+        if (n > 0 && n <= MAX_PATH) {
+            dir = std::filesystem::path(temp);
+        }
+    }
+    std::string sanitized = scriptName.empty() ? "hook" : scriptName;
+    for (char& c : sanitized) {
+        if (c == '\\' || c == '/' || c == ':') {
+            c = '_';
+        }
+    }
+    std::wstring stem = PathFromUtf8(sanitized).stem().wstring();
+    if (stem.empty()) {
+        stem = L"hook";
+    }
+    return dir / (stem + L".log");
+}
+
+// 创建（覆盖）脚本日志文件并返回“可被子进程继承”的写句柄；失败返回空句柄。
+// 句柄设为可继承，配合 CreateProcess(bInheritHandles=TRUE) 让脚本把 stdout/stderr 写入该文件。
+UniqueHandle CreateInheritableLogFile(const std::filesystem::path& path) {
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    sa.lpSecurityDescriptor = nullptr;
+    HANDLE handle = CreateFileW(path.c_str(),
+                                GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                &sa,
+                                CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL,
+                                nullptr);
+    return UniqueHandle(handle);  // INVALID_HANDLE_VALUE 由 UniqueHandle 视为空
+}
+
 #endif // _WIN32
 
 } // namespace
@@ -264,17 +309,35 @@ HookOutcome RunHook(const HookScript& hook,
         }
     }
 
+    // 把脚本的标准输出/标准错误重定向到与安装器日志同目录、以脚本名命名的日志文件
+    //（如 pre_install.bat → pre_install.log）。需要把文件句柄设为可继承，并让
+    // CreateProcess 以 bInheritHandles=TRUE 启动，子进程（cmd/powershell）才会写入该文件。
+    const std::filesystem::path scriptLogPath = ResolveScriptLogPath(hookName);
+    UniqueHandle scriptLog = CreateInheritableLogFile(scriptLogPath);
+
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(startupInfo);
     startupInfo.dwFlags = STARTF_USESHOWWINDOW;
     startupInfo.wShowWindow = SW_HIDE;
+    BOOL inheritHandles = FALSE;
+    if (scriptLog) {
+        startupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        startupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        startupInfo.hStdOutput = scriptLog.get();
+        startupInfo.hStdError = scriptLog.get();
+        inheritHandles = TRUE;
+        logInstallerInfo("[Hook] Script output redirected to: " + Utf8FromPath(scriptLogPath));
+    } else {
+        logInstallerWarning("[Hook] Failed to create script log file: " +
+                            Utf8FromPath(scriptLogPath) + "; script output will not be captured.");
+    }
     PROCESS_INFORMATION processInfo{};
 
     BOOL started = CreateProcessW(nullptr,
                                   commandLineBuffer.data(),
                                   nullptr,
                                   nullptr,
-                                  FALSE,
+                                  inheritHandles,
                                   CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                                   environment.data(),
                                   workingDirectory.empty() ? nullptr : workingDirectory.c_str(),

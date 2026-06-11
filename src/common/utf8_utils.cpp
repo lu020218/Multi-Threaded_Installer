@@ -7,10 +7,23 @@
 #include <Windows.h>
 #endif
 
+#include <cctype>
 #include <codecvt>
 #include <locale>
 
 namespace MultiThreadedInstaller {
+
+std::string TrimAsciiCopy(const std::string& value) {
+    size_t start = 0;
+    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])) != 0) {
+        ++start;
+    }
+    size_t end = value.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+        --end;
+    }
+    return value.substr(start, end - start);
+}
 
 std::wstring MultiByteToWide(const char* text, int length, unsigned int codePage, unsigned long flags) {
     if (!text || length == 0) {

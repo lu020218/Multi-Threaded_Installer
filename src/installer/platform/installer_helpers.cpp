@@ -186,6 +186,65 @@ std::string normalizePathForCompare(const std::string& path) {
     return normalized;
 }
 
+bool IsPathUnderOrEqual(const std::filesystem::path& candidate, const std::filesystem::path& root) {
+    const std::string normalizedCandidate =
+        normalizePathForCompare(Utf8FromPath(candidate.lexically_normal()));
+    const std::string normalizedRoot =
+        normalizePathForCompare(Utf8FromPath(root.lexically_normal()));
+    if (normalizedCandidate.empty() || normalizedRoot.empty()) {
+        return false;
+    }
+    if (normalizedCandidate == normalizedRoot) {
+        return true;
+    }
+    if (normalizedCandidate.size() <= normalizedRoot.size()) {
+        return false;
+    }
+    if (normalizedCandidate.compare(0, normalizedRoot.size(), normalizedRoot) != 0) {
+        return false;
+    }
+    const char sep = normalizedCandidate[normalizedRoot.size()];
+    return sep == '\\' || sep == '/';
+}
+
+bool SameNormalizedPath(const std::filesystem::path& left, const std::filesystem::path& right) {
+    return normalizePathForCompare(Utf8FromPath(left.lexically_normal())) ==
+           normalizePathForCompare(Utf8FromPath(right.lexically_normal()));
+}
+
+std::string ReadEnvironmentPath(const char* name) {
+    if (!name || name[0] == '\0') {
+        return {};
+    }
+#ifdef _WIN32
+    DWORD required = GetEnvironmentVariableA(name, nullptr, 0);
+    if (required == 0) {
+        return {};
+    }
+    std::string value(required, '\0');
+    DWORD written = GetEnvironmentVariableA(name, value.data(), required);
+    if (written == 0 || written >= required) {
+        return {};
+    }
+    value.resize(written);
+    return value;
+#else
+    const char* value = std::getenv(name);
+    return value ? std::string(value) : std::string();
+#endif
+}
+
+bool IsReparsePointPath(const std::filesystem::path& path) {
+#ifdef _WIN32
+    const DWORD attrs = GetFileAttributesW(toLongPath(path).c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES &&
+           (attrs & FILE_ATTRIBUTE_REPARSE_POINT) == FILE_ATTRIBUTE_REPARSE_POINT;
+#else
+    std::error_code ec;
+    return std::filesystem::is_symlink(std::filesystem::symlink_status(path, ec));
+#endif
+}
+
 bool isCancellationText(const std::string& message) {
     std::string lowered = message;
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),

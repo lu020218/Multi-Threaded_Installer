@@ -125,34 +125,6 @@ bool PostOwnedGuiMessage(HWND hwnd, UINT message, T* payload, const char* tag) {
     return true;
 }
 
-static const char* GetInstallPageSkinByIndex(int index) {
-    switch (index) {
-        case kPageWelcome:
-            return "skins/welcome_page.xml";
-        case kPageLicense:
-            return "skins/license_page.xml";
-        case kPageProgress:
-            return "skins/progress_page.xml";
-        case kPageCompletion:
-            return "skins/completion_page.xml";
-        default:
-            return nullptr;
-    }
-}
-
-static const char* GetUninstallPageSkinByIndex(int index) {
-    switch (index) {
-        case 0:
-            return "skins/uninstall_confirm_page.xml";
-        case 1:
-            return "skins/uninstall_progress_page.xml";
-        case 2:
-            return "skins/uninstall_completion_page.xml";
-        default:
-            return nullptr;
-    }
-}
-
 int GUIManager::GetWelcomePageIndex() const {
     return m_uninstallMode ? 0 : kPageWelcome;
 }

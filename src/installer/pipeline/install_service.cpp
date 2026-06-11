@@ -350,10 +350,6 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         if (!ExecuteInstallFinalization(metadata,
                                         plan,
                                         options,
-                                        executionOutput.effectiveRegistry,
-                                        executionOutput.effectiveKillProcesses,
-                                        executionOutput.effectiveAutoStartup,
-                                        executionOutput.effectiveDesktopIcons,
                                         pathResolver,
                                         reporter,
                                         result)) {

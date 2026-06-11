@@ -1,5 +1,7 @@
 #include "common/version_utils.h"
 
+#include "common/utf8_utils.h"
+
 #include <algorithm>
 #include <cctype>
 #include <string_view>
@@ -8,18 +10,6 @@
 namespace MultiThreadedInstaller {
 
 namespace {
-
-std::string TrimAsciiCopy(const std::string& value) {
-    size_t start = 0;
-    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])) != 0) {
-        ++start;
-    }
-    size_t end = value.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
-        --end;
-    }
-    return value.substr(start, end - start);
-}
 
 std::vector<std::string> SplitVersion(const std::string& value) {
     std::vector<std::string> parts;

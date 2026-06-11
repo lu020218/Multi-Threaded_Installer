@@ -16,8 +16,10 @@ class MetadataParser;
 class InstallerPathResolver;
 
 /// 解压执行阶段的产出（供 finalize 与上层 result 消费）。
+/// 注：成功与否由 ExecuteInstallExecution 的 bool 返回值表达，不再单列 success 字段；
+/// finalize 所需的 killProcesses/autoStartup/desktopIcon 等直接读 InstallExecutionPlan，
+/// 注册表写入项由 finalize 内写死（不再透传），故此结构体只保留解压真实产出 + 计时。
 struct InstallExecutionOutput {
-    bool success = false;                          ///< 是否成功。
     bool cancelled = false;                        ///< 是否被取消。
     bool rebootRequired = false;                   ///< 是否有锁定文件待重启替换。
     std::string installRootPath;                   ///< 实际安装根。
@@ -26,10 +28,6 @@ struct InstallExecutionOutput {
     std::vector<std::string> pendingReplaceFiles;  ///< 待重启替换的锁定文件。
     std::vector<std::string> errors;               ///< 失败信息。
     ParallelInstallSummary timing;                 ///< 计时汇总。
-    std::vector<RegistryEntry> effectiveRegistry;          ///< 透传给 finalize 的注册表写入。
-    std::vector<std::string> effectiveKillProcesses;       ///< 透传给 finalize 的待杀进程名。
-    bool effectiveAutoStartup = false;                     ///< 透传给 finalize：是否开机自启。
-    bool effectiveDesktopIcons = false;                    ///< 透传给 finalize：是否建快捷方式。
 };
 
 /// 解压执行阶段：把（全部）payload 解压落地到安装目录，填充 InstallExecutionOutput。

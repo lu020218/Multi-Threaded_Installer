@@ -35,7 +35,6 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
                              InstallProgressReporter& reporter,
                              InstallExecutionOutput& output) {
     output = InstallExecutionOutput{};
-    output.success = false;
 
     reporter.EmitStatus(InstallServiceStatus::Installing,
                         InstallServicePhase::Installing,
@@ -150,12 +149,7 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
 
     reporter.EmitProgress("", "File installation completed", 1.0f);
 
-    output.effectiveRegistry = plan.effectiveRegistry;
-    output.effectiveAutoStartup = plan.effectiveAutoStartup;
-    output.effectiveDesktopIcons = plan.effectiveDesktopIcons;
-    output.effectiveKillProcesses = plan.effectiveKillProcesses;
-
-    output.success = true;
+    // 成功与否仅由返回值表达；finalize 所需的 effective* 直接读 plan，注册表项 finalize 内写死。
     return true;
 }
 

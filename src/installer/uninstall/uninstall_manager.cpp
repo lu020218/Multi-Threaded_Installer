@@ -166,51 +166,6 @@ static InstallStateContext BuildUninstallInstallStateContext(const std::string& 
     return context;
 }
 
-static bool IsPathUnderOrEqualLocal(const std::filesystem::path& candidate,
-                                    const std::filesystem::path& root) {
-    const std::string normalizedCandidate = normalizePathForCompare(Utf8FromPath(candidate.lexically_normal()));
-    const std::string normalizedRoot = normalizePathForCompare(Utf8FromPath(root.lexically_normal()));
-    if (normalizedCandidate.empty() || normalizedRoot.empty()) {
-        return false;
-    }
-    if (normalizedCandidate == normalizedRoot) {
-        return true;
-    }
-    if (normalizedCandidate.size() <= normalizedRoot.size()) {
-        return false;
-    }
-    if (normalizedCandidate.compare(0, normalizedRoot.size(), normalizedRoot) != 0) {
-        return false;
-    }
-    const char sep = normalizedCandidate[normalizedRoot.size()];
-    return sep == '\\' || sep == '/';
-}
-
-static std::string ReadEnvironmentPathLocal(const char* name) {
-#ifdef _WIN32
-    DWORD required = GetEnvironmentVariableA(name, nullptr, 0);
-    if (required == 0) {
-        return {};
-    }
-    std::string value(required, '\0');
-    DWORD written = GetEnvironmentVariableA(name, value.data(), required);
-    if (written == 0 || written >= required) {
-        return {};
-    }
-    value.resize(written);
-    return value;
-#else
-    const char* value = std::getenv(name);
-    return value ? std::string(value) : std::string();
-#endif
-}
-
-static bool SameNormalizedPathLocal(const std::filesystem::path& left,
-                                    const std::filesystem::path& right) {
-    return normalizePathForCompare(Utf8FromPath(left.lexically_normal())) ==
-           normalizePathForCompare(Utf8FromPath(right.lexically_normal()));
-}
-
 static bool IsDangerousFallbackRoot(const std::filesystem::path& path) {
     if (path.empty() || !path.is_absolute()) {
         return true;
@@ -222,29 +177,29 @@ static bool IsDangerousFallbackRoot(const std::filesystem::path& path) {
     }
 
     const std::vector<std::string> protectedExact = {
-        ReadEnvironmentPathLocal("ProgramFiles"),
-        ReadEnvironmentPathLocal("ProgramFiles(x86)"),
-        ReadEnvironmentPathLocal("ProgramW6432"),
-        ReadEnvironmentPathLocal("ProgramData"),
-        ReadEnvironmentPathLocal("USERPROFILE"),
+        ReadEnvironmentPath("ProgramFiles"),
+        ReadEnvironmentPath("ProgramFiles(x86)"),
+        ReadEnvironmentPath("ProgramW6432"),
+        ReadEnvironmentPath("ProgramData"),
+        ReadEnvironmentPath("USERPROFILE"),
     };
     for (const auto& root : protectedExact) {
-        if (!root.empty() && SameNormalizedPathLocal(normalized, PathFromUtf8(root))) {
+        if (!root.empty() && SameNormalizedPath(normalized, PathFromUtf8(root))) {
             return true;
         }
     }
 
     const std::vector<std::string> protectedSubtrees = {
-        ReadEnvironmentPathLocal("SystemRoot"),
-        ReadEnvironmentPathLocal("WINDIR"),
+        ReadEnvironmentPath("SystemRoot"),
+        ReadEnvironmentPath("WINDIR"),
     };
     for (const auto& root : protectedSubtrees) {
-        if (!root.empty() && IsPathUnderOrEqualLocal(normalized, PathFromUtf8(root).lexically_normal())) {
+        if (!root.empty() && IsPathUnderOrEqual(normalized, PathFromUtf8(root).lexically_normal())) {
             return true;
         }
     }
 
-    const std::string userProfile = ReadEnvironmentPathLocal("USERPROFILE");
+    const std::string userProfile = ReadEnvironmentPath("USERPROFILE");
     if (!userProfile.empty()) {
         const std::vector<std::string> userFolders = {
             userProfile + "\\Desktop",
@@ -252,24 +207,13 @@ static bool IsDangerousFallbackRoot(const std::filesystem::path& path) {
             userProfile + "\\Downloads",
         };
         for (const auto& folder : userFolders) {
-            if (SameNormalizedPathLocal(normalized, PathFromUtf8(folder))) {
+            if (SameNormalizedPath(normalized, PathFromUtf8(folder))) {
                 return true;
             }
         }
     }
 
     return false;
-}
-
-static bool IsReparsePointPathLocal(const std::filesystem::path& path) {
-#ifdef _WIN32
-    DWORD attrs = GetFileAttributesW(toLongPath(path).c_str());
-    return attrs != INVALID_FILE_ATTRIBUTES &&
-           (attrs & FILE_ATTRIBUTE_REPARSE_POINT) == FILE_ATTRIBUTE_REPARSE_POINT;
-#else
-    std::error_code ec;
-    return std::filesystem::is_symlink(std::filesystem::symlink_status(path, ec));
-#endif
 }
 
 static bool TryLoadManifestIntoContext(const std::string& manifestPath,
@@ -536,7 +480,7 @@ void DeleteUninstallSinglePath(UninstallCleanupExecutionState& state,
         MarkUninstallSkipped(state);
         return;
     }
-    if (IsReparsePointPathLocal(path)) {
+    if (IsReparsePointPath(path)) {
         ++state.result.skippedCount;
         ++state.processedSinceHeartbeat;
         logInstallerWarning("[Uninstall][Cleanup] skipped reparse point path=" + Utf8FromPath(path));
@@ -575,7 +519,7 @@ void DeleteUninstallDirectoryIfEmptyByRemove(UninstallCleanupExecutionState& sta
         MarkUninstallSkipped(state);
         return;
     }
-    if (IsReparsePointPathLocal(path)) {
+    if (IsReparsePointPath(path)) {
         ++state.result.skippedCount;
         ++state.processedSinceHeartbeat;
         logInstallerWarning("[Uninstall][Cleanup] skipped reparse point path=" + Utf8FromPath(path));
@@ -616,7 +560,7 @@ void DeleteUninstallDirectorySegmented(UninstallCleanupExecutionState& state,
         MarkUninstallSkipped(state);
         return;
     }
-    if (IsReparsePointPathLocal(root)) {
+    if (IsReparsePointPath(root)) {
         MarkUninstallSkipped(state);
         return;
     }
@@ -680,7 +624,7 @@ void DeleteUninstallDirectorySegmented(UninstallCleanupExecutionState& state,
          !iterEc && it != end;
          it.increment(iterEc)) {
         const auto path = it->path();
-        if (IsReparsePointPathLocal(path)) {
+        if (IsReparsePointPath(path)) {
             it.disable_recursion_pending();
             {
                 std::lock_guard<std::mutex> lock(state.mutex);
@@ -749,12 +693,12 @@ std::vector<std::filesystem::path> CollectUninstallAffectedParentDirs(
     const auto normalizedRoot = root.lexically_normal();
     for (const auto& file : files) {
         std::filesystem::path dir = file.lexically_normal().parent_path();
-        while (!dir.empty() && IsPathUnderOrEqualLocal(dir, normalizedRoot)) {
+        while (!dir.empty() && IsPathUnderOrEqual(dir, normalizedRoot)) {
             const std::string key = normalizePathForCompare(Utf8FromPath(dir.lexically_normal()));
             if (!key.empty() && seen.insert(key).second) {
                 dirs.push_back(dir);
             }
-            if (SameNormalizedPathLocal(dir, normalizedRoot)) {
+            if (SameNormalizedPath(dir, normalizedRoot)) {
                 break;
             }
             dir = dir.parent_path();
@@ -780,7 +724,7 @@ void DeleteUninstallAffectedEmptyDirs(UninstallCleanupExecutionState& state,
             DeleteUninstallDirectoryIfEmptyByRemove(state, dir, "delete_affected_empty_dir");
         }
         const bool currentExeInsideRoot =
-            !currentExePath.empty() && IsPathUnderOrEqualLocal(currentExe, root);
+            !currentExePath.empty() && IsPathUnderOrEqual(currentExe, root);
         if (!currentExeInsideRoot) {
             DeleteUninstallDirectoryIfEmptyByRemove(state, root, "delete_cleanup_root");
         }
@@ -820,7 +764,7 @@ std::vector<std::filesystem::path> IsolateInstallRootChildDirectories(
          !ec && it != end;
          it.increment(ec)) {
         std::error_code typeEc;
-        if (!it->is_directory(typeEc) || IsReparsePointPathLocal(it->path())) {
+        if (!it->is_directory(typeEc) || IsReparsePointPath(it->path())) {
             continue;
         }
         if (IsMtiPendingDirectoryNameLocal(it->path())) {
@@ -850,7 +794,7 @@ std::vector<std::filesystem::path> IsolateInstallRootChildDirectories(
 bool IsPathUnderAnyRootLocal(const std::filesystem::path& path,
                              const std::vector<std::filesystem::path>& roots) {
     for (const auto& root : roots) {
-        if (IsPathUnderOrEqualLocal(path, root)) {
+        if (IsPathUnderOrEqual(path, root)) {
             return true;
         }
     }
@@ -943,7 +887,7 @@ UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& t
     if (!installRoot.empty()) {
         const bool currentExeInsideRoot =
             !task.currentExePath.empty() &&
-            IsPathUnderOrEqualLocal(PathFromUtf8(task.currentExePath).lexically_normal(), installRoot);
+            IsPathUnderOrEqual(PathFromUtf8(task.currentExePath).lexically_normal(), installRoot);
         if (!currentExeInsideRoot) {
             DeleteUninstallDirectoryIfEmptyByRemove(state, installRoot, "delete_install_root");
         }

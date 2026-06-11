@@ -29,6 +29,9 @@ std::string WideToMultiByte(const wchar_t* text, int length, unsigned int codePa
 /// 本地 ANSI 代码页（CP_ACP）→ UTF-8。用于把系统返回的本地编码字符串归一到 UTF-8。
 std::string AcpToUtf8(const std::string& text);
 
+/// 去除字符串首尾的 ASCII 空白（空格/制表/换行等），返回拷贝。多处通用，统一在此提供。
+std::string TrimAsciiCopy(const std::string& value);
+
 /// 由 UTF-8 字符串构造文件系统路径（正确处理中文路径）。
 std::filesystem::path PathFromUtf8(const std::string& text);
 /// 把路径转回 UTF-8 字符串。

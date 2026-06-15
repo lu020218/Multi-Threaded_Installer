@@ -22,6 +22,7 @@ public:
     bool setCompressionLevel(int level);   ///< 设置压缩级别；-1 用算法默认。
     bool setThreadCount(int threadCount);  ///< 设置压缩线程数；0 按 CPU 自动。
     void setPerFileFrames(bool enabled);   ///< 是否按文件分帧（支持运行期逐文件跳过解压）。
+    void setBlockSizeBytes(uint64_t bytes);///< XZ 多线程分块大小(字节)；0=自动(对齐解码并行度)。
 
 private:
     CompressionAlgorithm currentAlgorithm;     ///< 当前算法。

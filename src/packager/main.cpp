@@ -301,6 +301,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // XZ 多线程分块大小：yaml 配 MiB；0/缺省=自动(按 tar 大小对齐解码并行度,块更大、压缩比更高)。
+    const uint64_t compressionBlockSizeBytes =
+        config.package.compression.blockSizeMiB > 0
+            ? static_cast<uint64_t>(config.package.compression.blockSizeMiB) * 1024ull * 1024ull
+            : 0ull;
+    compressor.setBlockSizeBytes(compressionBlockSizeBytes);
+
     std::vector<CompressionResult> compressionResults(folders.size());
     std::vector<double> folderCompressionSec(folders.size(), 0.0);
 
@@ -313,6 +320,7 @@ int main(int argc, char* argv[]) {
             !instance.setCompressionLevel(effectiveCompressionLevel)) {
             return false;
         }
+        instance.setBlockSizeBytes(compressionBlockSizeBytes);
         return instance.setThreadCount(perCompressorThreadCount);
     };
 

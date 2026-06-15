@@ -103,6 +103,20 @@ json UninstallEntriesToManifestJson(const std::vector<UninstallEntryCleanup>& en
     return out;
 }
 
+// 自定义注册表项卸载账本：只记位置(path/key)，删除不需要值/类型。
+json RegistryEntriesToManifestJson(const std::vector<RegistryEntry>& entries) {
+    json out = json::array();
+    for (const auto& entry : entries) {
+        if (!entry.path.empty() && !entry.key.empty()) {
+            out.push_back({
+                {"path", EnsureUtf8(entry.path)},
+                {"key", EnsureUtf8(entry.key)}
+            });
+        }
+    }
+    return out;
+}
+
 }  // namespace
 
 bool writeManifest(const std::string& manifestPath,
@@ -176,6 +190,7 @@ bool writeManifest(const std::string& manifestPath,
         cleanup["startup"] = NamedEntriesToManifestJson(actualCleanupSnapshot.startup);
         cleanup["processes"] = NamedEntriesToManifestJson(actualCleanupSnapshot.processes);
         cleanup["uninstallEntries"] = UninstallEntriesToManifestJson(actualCleanupSnapshot.uninstallEntries);
+        cleanup["registry"] = RegistryEntriesToManifestJson(actualCleanupSnapshot.registryEntries);
         root["cleanup"] = std::move(cleanup);
 
         std::filesystem::path path = PathFromUtf8(manifestPath);

@@ -4,12 +4,20 @@
 #include <json.hpp>
 #include <unordered_map>
 
+#ifdef ZSTD_FOUND
+#include <zstd.h>
+#endif
+
 namespace MultiThreadedInstaller {
 namespace {
 
 using json = nlohmann::json;
 
 constexpr uint32_t kPackageManifestMagic = 0x32464D50; // PMF2
+// 压缩元数据包裹的魔数（须与 kPackageManifestMagic 不同）：
+// 布局 = [kCompressedMetaMagic(4)] [uncompressedSize(8)] [zstd 压缩字节...]。
+// 反序列化时若检测到该魔数则先整体解压再按 PMF2 解析；否则按未压缩 PMF2 直接解析（向后兼容）。
+constexpr uint32_t kCompressedMetaMagic = 0x315A4D43; // "CMZ1"
 constexpr uint32_t kSectionVersion = 1;
 
 enum class SectionType : uint32_t {
@@ -191,14 +199,19 @@ json PayloadToJson(const PackagePayloadManifest& payload) {
     for (const auto& folder : payload.folders) {
         json files = json::array();
         for (const auto& file : folder.fileIndex) {
-            files.push_back({
+            // 运行期非分帧模式只用到 relativePath/size/contentHash；offset 与 frame* 仅分帧时
+            // 解压需要，故只在 framed 时写出，避免给每个文件平白多塞几十字节未压缩 JSON。
+            json entry = {
                 {"relativePath", file.relativePath},
-                {"offset", file.offset},
                 {"size", file.size},
                 {"contentHash", file.contentHash},
-                {"frameOffset", file.frameOffset},
-                {"frameCompressedSize", file.frameCompressedSize},
-            });
+            };
+            if (folder.framed) {
+                entry["offset"] = file.offset;
+                entry["frameOffset"] = file.frameOffset;
+                entry["frameCompressedSize"] = file.frameCompressedSize;
+            }
+            files.push_back(std::move(entry));
         }
         folders.push_back({
             {"folderId", folder.folderId},
@@ -287,6 +300,64 @@ void AddSection(std::vector<std::pair<SectionType, std::vector<uint8_t>>>& secti
     sections.emplace_back(type, DumpJson(value));
 }
 
+// 把序列化好的 PMF2 字节整体压缩（zstd 一次性），加包裹头返回；体积无收益或无 zstd 时原样返回。
+// 仅减小内嵌体积，运行期解压一次（zstd 解压极快），不影响载荷解压与安装流程。
+std::vector<uint8_t> MaybeCompressMetaBlob(const std::vector<uint8_t>& raw) {
+#ifdef ZSTD_FOUND
+    if (raw.size() < 4096) {
+        return raw;  // 太小不值得压缩（包裹头反而增重）
+    }
+    const size_t bound = ZSTD_compressBound(raw.size());
+    std::vector<uint8_t> compressed(bound);
+    const size_t produced =
+        ZSTD_compress(compressed.data(), bound, raw.data(), raw.size(), 19);
+    if (ZSTD_isError(produced) || produced + 12 >= raw.size()) {
+        return raw;  // 压缩失败或没压下去 → 用原始
+    }
+    std::vector<uint8_t> out;
+    out.reserve(12 + produced);
+    AppendPod(out, kCompressedMetaMagic);
+    AppendPod(out, static_cast<uint64_t>(raw.size()));
+    out.insert(out.end(), compressed.begin(), compressed.begin() + produced);
+    return out;
+#else
+    return raw;
+#endif
+}
+
+// 若 input 带压缩包裹头则解压到 out 返回 true；否则不处理返回 false（调用方按未压缩处理）。
+bool TryDecompressMetaBlob(const std::vector<uint8_t>& input,
+                           std::vector<uint8_t>& out,
+                           std::string& error) {
+    if (input.size() < 4) {
+        return false;
+    }
+    uint32_t magic = 0;
+    std::memcpy(&magic, input.data(), sizeof(magic));
+    if (magic != kCompressedMetaMagic) {
+        return false;
+    }
+#ifdef ZSTD_FOUND
+    if (input.size() < 12) {
+        error = "Compressed metadata header is truncated.";
+        return false;
+    }
+    uint64_t rawSize = 0;
+    std::memcpy(&rawSize, input.data() + 4, sizeof(rawSize));
+    out.resize(static_cast<size_t>(rawSize));
+    const size_t produced = ZSTD_decompress(out.data(), out.size(),
+                                            input.data() + 12, input.size() - 12);
+    if (ZSTD_isError(produced) || produced != rawSize) {
+        error = "Failed to decompress package metadata.";
+        return false;
+    }
+    return true;
+#else
+    error = "Package metadata is compressed but ZSTD support is unavailable.";
+    return false;
+#endif
+}
+
 } // namespace
 
 std::vector<uint8_t> SerializePackageManifest(const PackageManifest& manifest) {
@@ -337,15 +408,32 @@ std::vector<uint8_t> SerializePackageManifest(const PackageManifest& manifest) {
     }
     std::memcpy(out.data() + directoryStart, directory.data(),
                 directory.size() * sizeof(PackageManifestSectionEntry));
-    return out;
+    // 内嵌前整体压缩（zstd），显著减小元数据（尤其逐文件 fileIndex）的未压缩占用。
+    return MaybeCompressMetaBlob(out);
 }
 
-bool DeserializePackageManifest(const std::vector<uint8_t>& data,
+bool DeserializePackageManifest(const std::vector<uint8_t>& input,
                                 PackageManifest& manifest,
                                 std::string& error,
                                 bool deferFileIndex) {
     manifest = PackageManifest{};
     error.clear();
+
+    // 自动检测压缩包裹头：带头则整体解压一次再按 PMF2 解析；否则按未压缩 PMF2 处理。
+    std::vector<uint8_t> decompressed;
+    const std::vector<uint8_t>* effective = &input;
+    if (input.size() >= sizeof(uint32_t)) {
+        uint32_t magic = 0;
+        std::memcpy(&magic, input.data(), sizeof(magic));
+        if (magic == kCompressedMetaMagic) {
+            if (!TryDecompressMetaBlob(input, decompressed, error)) {
+                return false;
+            }
+            effective = &decompressed;
+        }
+    }
+    const std::vector<uint8_t>& data = *effective;
+
     size_t offset = 0;
     PackageManifestHeader header;
     if (!ReadPod(data, offset, header)) {

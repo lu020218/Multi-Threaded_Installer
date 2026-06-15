@@ -88,6 +88,8 @@ std::vector<RegistryEntry> BuildPostInstallRegistryEntries(const ExtendedInstall
     (void)metadata;
 
     // 在此按需写死注册表项（示例，取消注释并按业务修改）：
+    // 注意：在此写入的每一项都会被记入卸载账本(manifest cleanup.registry)，卸载时按 path+key
+    //       对称删除，不会残留。
     //   RegistryEntry e;
     //   e.path  = "HKLM\\Software\\" + metadata.appProductName;  // 注册表键路径
     //   e.key   = "DataDir";                                     // 值名
@@ -249,6 +251,17 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
     const std::string desktopShortcutDisplayName =
         ResolveDesktopShortcutDisplayName(metadata, languageCode);
     UninstallCleanupConfig manifestCleanup;
+    // [安装收尾-注册表写入] 把写入的自定义注册表项(path+key)记入卸载账本，使卸载能对称删除，
+    // 避免 BuildPostInstallRegistryEntries 写的注册表残留。只记位置(path/key)，删除不需要值。
+    for (const auto& entry : effectiveRegistry) {
+        if (entry.path.empty() || entry.key.empty()) {
+            continue;
+        }
+        RegistryEntry record;
+        record.path = entry.path;
+        record.key = entry.key;
+        manifestCleanup.registryEntries.push_back(std::move(record));
+    }
 
     if (!result.installRootPath.empty()) {
         if (!plan.legacyDesktopShortcutCandidates.empty()) {

@@ -12,6 +12,8 @@ namespace MultiThreadedInstaller {
 // 注册表读写原语。路径形如 "HKEY_LOCAL_MACHINE\\Software\\..." 或简写 "HKLM\\..."/"HKCU\\..."。
 // 全部为 best-effort：失败返回 false 并由调用方记日志，不抛异常。
 
+/// 删除一个注册表值（按 entry.path + entry.key）。用于卸载时清理安装期写入的自定义注册表项。
+bool deleteRegistryValue(const RegistryEntry& entry);
 /// 递归删除一个注册表键（整棵子树）。
 bool deleteRegistryPath(const std::string& path);
 /// 写一个注册表值（类型由 type 决定：STRING/DWORD/EXPAND_STRING）。

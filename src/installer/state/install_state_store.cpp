@@ -109,7 +109,16 @@ bool CleanupInstallState(const InstallStateContext& context, InstallerPathResolv
     const std::string filePath =
         resolver.expandEnvironmentVariables(EngineDefaults::InstallStateFilePath(context.appName));
     std::error_code ec;
-    std::filesystem::remove(PathFromUtf8(filePath), ec);
+    const std::filesystem::path statePath = PathFromUtf8(filePath);
+    std::filesystem::remove(statePath, ec);
+    // 删空的产品数据目录（install-state.json 的父目录 %ProgramData%\<product>）。仅当目录为空时
+    // 删除——避免误删 hook/组件/应用写入该目录的其它数据；非空则保留。
+    const std::filesystem::path parentDir = statePath.parent_path();
+    std::error_code dirEc;
+    if (!parentDir.empty() && std::filesystem::is_directory(parentDir, dirEc) &&
+        std::filesystem::is_empty(parentDir, dirEc)) {
+        std::filesystem::remove(parentDir, dirEc);
+    }
     return true;
 }
 

@@ -50,12 +50,14 @@ struct UninstallCleanupRule {
 };
 
 // 运行时卸载账本：install_finalize 记录、写入 install.manifest.json，卸载时读取并撤销。
-// 注册表与系统卸载入口的清理已由引擎按产品名写死处理，故不再记录注册表/路径名单。
+// 产品状态注册表/系统卸载入口由引擎按产品名写死处理；这里额外记录安装期写入的「自定义注册表项」
+// （来自 BuildPostInstallRegistryEntries），以便卸载时对称删除，避免残留。
 struct UninstallCleanupConfig {
     std::vector<NamedCleanupEntry> processes;             // 卸载前需结束的进程
     std::vector<UninstallEntryCleanup> uninstallEntries;  // 要删除的系统卸载入口
     std::vector<NamedCleanupEntry> shortcuts;             // 要删除的快捷方式
     std::vector<NamedCleanupEntry> startup;               // 要删除的开机自启项
+    std::vector<RegistryEntry> registryEntries;           // 安装期写入的自定义注册表值，卸载按 path+key 删除
 };
 
 } // namespace MultiThreadedInstaller

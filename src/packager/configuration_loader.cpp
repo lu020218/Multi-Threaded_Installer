@@ -108,6 +108,16 @@ bool ParsePackageConfig(const json& root, PackageConfig& out, std::string& lastE
         !GetOptionalInt(compression, "level", out.compression.level, lastError)) {
         return false;
     }
+    // package.compression.blockSize（可选，单位 MiB）：XZ 多线程分块大小；0/缺省=自动(对齐解码并行度)。
+    if (compression.contains("blockSize")) {
+        if (!GetOptionalInt(compression, "blockSize", out.compression.blockSizeMiB, lastError)) {
+            return false;
+        }
+        if (out.compression.blockSizeMiB < 0) {
+            lastError = "Invalid field 'package.compression.blockSize': must be >= 0 (MiB; 0=auto)";
+            return false;
+        }
+    }
 
     // package.layout（可选）：逐文件夹落点声明。
     if (section.contains("layout")) {

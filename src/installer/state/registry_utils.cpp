@@ -244,6 +244,64 @@ std::string sanitizeRegistryKeyName(const std::string& name) {
     return result;
 }
 
+bool deleteRegistryValue(const RegistryEntry& entry) {
+#ifdef _WIN32
+    if (entry.path.empty() || entry.key.empty()) {
+        return false;
+    }
+
+    std::string path = entry.path;
+    std::string pathUpper = path;
+    uppercaseAsciiInPlace(pathUpper);
+
+    HKEY root = nullptr;
+    std::string subkey;
+    const std::string hkcu = "HKEY_CURRENT_USER\\";
+    const std::string hklm = "HKEY_LOCAL_MACHINE\\";
+    const std::string hkcuShort = "HKCU\\";
+    const std::string hklmShort = "HKLM\\";
+
+    if (pathUpper.rfind(hkcu, 0) == 0) {
+        root = HKEY_CURRENT_USER;
+        subkey = path.substr(hkcu.size());
+    } else if (pathUpper.rfind(hklm, 0) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        subkey = path.substr(hklm.size());
+    } else if (pathUpper.rfind(hkcuShort, 0) == 0) {
+        root = HKEY_CURRENT_USER;
+        subkey = path.substr(hkcuShort.size());
+    } else if (pathUpper.rfind(hklmShort, 0) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        subkey = path.substr(hklmShort.size());
+    } else {
+        return false;
+    }
+
+    subkey = normalizeRegistrySubkey(subkey);
+    if (subkey.empty()) {
+        return false;
+    }
+
+    std::wstring subkeyW = Utf8ToWide(subkey);
+    std::wstring keyW = Utf8ToWide(entry.key);
+    if (subkeyW.empty() || keyW.empty()) {
+        return false;
+    }
+
+    UniqueHKey key;
+    LONG status = RegOpenKeyExW(root, subkeyW.c_str(), 0, KEY_SET_VALUE, key.receive());
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+
+    status = RegDeleteValueW(key.get(), keyW.c_str());
+    return status == ERROR_SUCCESS;
+#else
+    (void)entry;
+    return false;
+#endif
+}
+
 bool deleteRegistryPath(const std::string& path) {
 #ifdef _WIN32
     if (path.empty()) {

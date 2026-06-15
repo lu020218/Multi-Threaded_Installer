@@ -41,6 +41,31 @@ unsigned int ResolveCompressionThreads(int configuredThreadCount) {
     return hwThreads == 0 ? 1u : hwThreads;
 }
 
+// 解析 XZ 多线程分块大小。显式配置(>0)优先；否则自动:
+//   目标约 kTargetParallelBlocks 块(与安装器解码线程上限 min(4,…) 对齐)——块尽量大以减少
+//   字典重置、提升压缩比;同时夹在 [64MiB, 256MiB]:下限保证块≥字典(比率)、避免碎块,
+//   上限避免块过大撑爆解码 memlimit_threading(512–768MiB)反而退化解码并行。
+//   小载荷(< 下限×目标)自然落到单块,压缩比最佳(此时本就不会启用多线程解压)。
+uint64_t ResolveXzBlockSize(uint64_t configuredBytes, uint64_t tarSize) {
+    if (configuredBytes > 0) {
+        return configuredBytes;
+    }
+    if (tarSize == 0) {
+        return 0;  // 交给 liblzma 自行决定
+    }
+    constexpr uint64_t kTargetParallelBlocks = 4;
+    constexpr uint64_t kAutoBlockFloor = 64ull * 1024 * 1024;
+    constexpr uint64_t kAutoBlockCap = 256ull * 1024 * 1024;
+    uint64_t blockSize = (tarSize + kTargetParallelBlocks - 1) / kTargetParallelBlocks;
+    if (blockSize < kAutoBlockFloor) {
+        blockSize = kAutoBlockFloor;
+    }
+    if (blockSize > kAutoBlockCap) {
+        blockSize = kAutoBlockCap;
+    }
+    return blockSize;
+}
+
 const std::array<uint32_t, 256>& GetCrc32Table() {
     static const std::array<uint32_t, 256> table = [] {
         std::array<uint32_t, 256> values{};
@@ -288,10 +313,15 @@ CompressionResult FolderPayloadCompressor::compressWithXzLzma2(const FolderInfo&
 
 #ifdef LibLZMA_FOUND
     const unsigned int resolvedThreads = ResolveCompressionThreads(threadCount);
+    // 解析分块大小：显式配置优先；否则自动按 tar 大小对齐“解码并行块数”(kTargetParallelBlocks)，
+    // 让块尽量大(更少 dict 重置、压缩比更高)同时仍够喂满多线程解压。小载荷退化为单块(最佳比率)。
+    const uint64_t effectiveBlockSize = ResolveXzBlockSize(blockSizeBytes_, result.originalSize);
     std::cout << "[Packager][Payload] folder=" << folder.sourcePath
               << " algorithm=XZ/LZMA2"
               << " level=" << compressionLevel
               << " threads=" << resolvedThreads
+              << " blockSize=" << effectiveBlockSize
+              << " (" << (blockSizeBytes_ > 0 ? "configured" : "auto") << ")"
               << " originalSize=" << result.originalSize
               << std::endl;
 
@@ -304,6 +334,7 @@ CompressionResult FolderPayloadCompressor::compressWithXzLzma2(const FolderInfo&
         options.threads = resolvedThreads;
         options.preset = static_cast<uint32_t>(compressionLevel);
         options.check = LZMA_CHECK_SHA256;
+        options.block_size = effectiveBlockSize;  // 0 时由 liblzma 自行决定
         ret = lzma_stream_encoder_mt(&stream, &options);
     } else {
         ret = lzma_easy_encoder(&stream, compressionLevel, LZMA_CHECK_SHA256);

@@ -28,7 +28,12 @@ app:
 
 # ── 打包基础参数 ─────────────────────────────────────────────────────
 package:
-  compression: { algorithm: xz, level: 9 }
+  # compression：algorithm = xz（LZMA2，压缩率高）| zstd（速度快）；level = 压缩级别。
+  # blockSize（可选，单位 MiB，仅 xz 生效）：多线程把载荷切成独立块压缩，块越大压缩比越好、
+  #   解压并行度越低。0/缺省 = 自动（按载荷大小取约 4 块、夹在 64–256MiB，兼顾压缩比与多线程
+  #   解压，与安装器解码线程上限对齐）。想要更小体积调大（如 512，趋近单流、解压转串行）；
+  #   想要更快解压调小（如 64）。
+  compression: { algorithm: xz, level: 9 }   # 例：{ algorithm: xz, level: 9, blockSize: 256 }
   layout:
     - { source: app,     target: "%InstallDir%" }
     - { source: plugins, target: "%ProgramData%\\SampleDesktopApp\\plugins" }

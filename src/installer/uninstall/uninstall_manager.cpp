@@ -136,6 +136,19 @@ static UninstallCleanupConfig GetManifestUninstallCleanup(const json& manifest) 
         if (node.contains("uninstallEntries")) {
             cleanup.uninstallEntries = GetManifestUninstallEntries(node["uninstallEntries"]);
         }
+        if (node.contains("registry") && node["registry"].is_array()) {
+            for (const auto& item : node["registry"]) {
+                if (!item.is_object()) {
+                    continue;
+                }
+                RegistryEntry entry;
+                entry.path = item.value("path", "");
+                entry.key = item.value("key", "");
+                if (!entry.path.empty() && !entry.key.empty()) {
+                    cleanup.registryEntries.push_back(std::move(entry));
+                }
+            }
+        }
     }
     return cleanup;
 }
@@ -1334,6 +1347,9 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
         addWorkUnits(1);
     }
 #endif
+    if (!uninstallCleanup.registryEntries.empty()) {
+        addWorkUnits(1);
+    }
     if (!uninstallPath.empty()) {
         addWorkUnits(1);
     }
@@ -1419,6 +1435,16 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
         completeWorkUnit("Removing uninstall registry entry");
     }
 #endif
+
+    // 删除安装期写入的自定义注册表项（与 BuildPostInstallRegistryEntries 对称），避免残留。
+    if (!uninstallCleanup.registryEntries.empty()) {
+        for (const auto& entry : uninstallCleanup.registryEntries) {
+            if (!deleteRegistryValue(entry)) {
+                console.showWarning("Failed to remove registry value: " + entry.path + " \\ " + entry.key);
+            }
+        }
+        completeWorkUnit("Removing custom registry values");
+    }
 
     std::string currentExe = getCurrentExecutablePath();
     UninstallCleanupTask cleanupTask;

@@ -139,4 +139,8 @@ void CompressionModule::setPerFileFrames(bool enabled) {
     payloadCompressor->setPerFileFrames(enabled);
 }
 
+void CompressionModule::setBlockSizeBytes(uint64_t bytes) {
+    payloadCompressor->setBlockSizeBytes(bytes);
+}
+
 } // namespace MultiThreadedInstaller

@@ -91,7 +91,9 @@ app:
   # copyright: "Copyright (c) 2026 SampleCompany"  # 可选，缺省时引擎用 publisher + 构建年份生成
 
 package:
-  compression: { algorithm: xz, level: 9 }         # algorithm: xz | zstd
+  compression: { algorithm: xz, level: 9 }         # algorithm: xz | zstd；可选 blockSize: <MiB>
+  # blockSize（可选, MiB）：XZ 多线程分块大小。0/缺省=自动(按载荷大小对齐解码并行度,块更大、
+  #   压缩比更高,同时仍可多线程解压)。调大→压缩比更好/解压并行更少；调小→反之。仅影响 xz。
   layout:                                          # 可选，逐文件夹落点
     - { source: app,     target: "%InstallDir%" }
     - { source: plugins, target: "%ProgramData%\\SampleDesktopApp\\plugins" }
@@ -127,6 +129,7 @@ hooks:                                             # 可选，整段删除即不
 
 - `compression.algorithm`：`xz`（LZMA2，压缩率高）或 `zstd`（速度快）。
 - `compression.level`：压缩级别。
+- `compression.blockSize`：**可选**，单位 MiB，仅对 xz 生效。XZ 多线程把载荷切成独立块压缩，块越大压缩比越好但解压并行度越低。`0`/缺省=**自动**：按载荷大小目标约 4 块并夹在 64–256 MiB，兼顾压缩比与多线程解压（与安装器解码线程上限对齐）。需要更小体积可调大（如 `512`，趋近单流、解压串行）；需要更快解压可调小。
 - `layout`：**可选**。逐文件夹落点声明。
   - `source` = `--input` 下的顶层子目录名；
   - `target` = 安装目标，支持 `%InstallDir%` 以及环境变量（`%ProgramData%` / `%AppData%` / `%LocalAppData%` 等）；

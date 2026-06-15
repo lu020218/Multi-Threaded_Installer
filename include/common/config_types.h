@@ -67,11 +67,13 @@ struct AppConfig {
 // ── package —— 打包基础参数 ──────────────────────────────────────────────
 struct PackageCompressionConfig {
     CompressionAlgorithm algorithm;
-    int level;   // 压缩级别；-1 表示用算法默认
+    int level;          // 压缩级别；-1 表示用算法默认
+    int blockSizeMiB;   // XZ 多线程分块大小(MiB)；0=自动(对齐解码并行度,块更大、压缩比更高)
 
     PackageCompressionConfig()
         : algorithm(CompressionAlgorithm::LZMA2_XZ),
-          level(-1) {}
+          level(-1),
+          blockSizeMiB(0) {}
 };
 
 // 逐文件夹落点声明（可选）。source = --input 顶层子目录名；target = 安装目标，

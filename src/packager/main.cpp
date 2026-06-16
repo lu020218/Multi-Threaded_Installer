@@ -455,6 +455,8 @@ int main(int argc, char* argv[]) {
                      (EngineDefaults::kRequireAdmin ? "requireAdministrator" : "asInvoker"));
 
     const std::string icon = config.app.icon;
+    fs::path resolvedIconPath;             // 成功应用到安装器后记下，稍后同样应用到卸载器
+    bool hasIconForUninstaller = false;
     if (!icon.empty()) {
         fs::path iconPath = PathFromUtf8(icon);
         if (!iconPath.is_absolute()) {
@@ -463,6 +465,8 @@ int main(int argc, char* argv[]) {
         std::string iconError;
         if (UpdateInstallerIcon(Utf8FromPath(tempTemplatePath), Utf8FromPath(iconPath), iconError)) {
             console.showInfo("Applied installer icon: " + Utf8FromPath(iconPath));
+            resolvedIconPath = iconPath;
+            hasIconForUninstaller = true;
         } else {
             console.showWarning("Failed to apply installer icon: " + iconError);
         }
@@ -486,12 +490,43 @@ int main(int argc, char* argv[]) {
         console.showWarning("Failed to apply installer version info: " + versionError);
     }
 
+    // 卸载器图标：卸载器模板本身不带图标，打包流程默认也只给安装器贴图标。
+    // 这里在嵌入卸载器字节前，复制一份模板并对其应用与安装器相同的图标，
+    // 使释放到磁盘的 uninstall.exe 也带图标。（安装期注入 RES_ZIP 用的是
+    // BeginUpdateResource(FALSE)，会保留这里写入的图标资源。）
+    fs::path uninstallerTemplatePath = GetDefaultUninstallerTemplatePath();
+    fs::path tempUninstallerPath;
+    bool usesTempUninstaller = false;
+    if (hasIconForUninstaller) {
+        tempUninstallerPath = tempTemplatePath;
+        tempUninstallerPath += ".uninstaller.exe";   // 独立后缀，避免与安装器临时模板撞名
+        std::error_code uninstCopyErr;
+        fs::copy_file(uninstallerTemplatePath, tempUninstallerPath,
+                      fs::copy_options::overwrite_existing, uninstCopyErr);
+        if (uninstCopyErr) {
+            console.showWarning("Failed to copy uninstaller template for icon: " +
+                                uninstCopyErr.message());
+        } else {
+            std::string uninstIconError;
+            if (UpdateInstallerIcon(Utf8FromPath(tempUninstallerPath),
+                                    Utf8FromPath(resolvedIconPath), uninstIconError)) {
+                uninstallerTemplatePath = tempUninstallerPath;
+                usesTempUninstaller = true;
+                console.showInfo("Applied uninstaller icon: " + Utf8FromPath(resolvedIconPath));
+            } else {
+                console.showWarning("Failed to apply uninstaller icon: " + uninstIconError);
+                std::error_code rmErr;
+                fs::remove(tempUninstallerPath, rmErr);
+            }
+        }
+    }
+
     // Inject GUI resources (RES_ZIP) and the uninstaller binary as native PE resources.
     // Must happen on the temp template before generateInstaller appends the data overlay.
     std::string peResourceError;
     if (!EmbedInstallerPeResources(tempTemplatePath,
                                    PathFromUtf8(configPath) / "resources",
-                                   GetDefaultUninstallerTemplatePath(),
+                                   uninstallerTemplatePath,
                                    peResourceError)) {
         console.showError("Failed to embed UI resources as PE resources: " + peResourceError);
         return 1;
@@ -517,6 +552,14 @@ int main(int argc, char* argv[]) {
         fs::remove(tempTemplatePath, removeError);
         if (removeError) {
             console.showWarning("Failed to remove temporary template: " + removeError.message());
+        }
+        if (usesTempUninstaller) {
+            std::error_code removeUninstErr;
+            fs::remove(tempUninstallerPath, removeUninstErr);
+            if (removeUninstErr) {
+                console.showWarning("Failed to remove temporary uninstaller template: " +
+                                    removeUninstErr.message());
+            }
         }
         timings.cleanupSec += ElapsedSeconds(cleanupStart, std::chrono::steady_clock::now());
     }

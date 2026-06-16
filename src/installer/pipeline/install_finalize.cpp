@@ -333,6 +333,16 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
         const std::string targetUtf8 = Utf8FromPath(target);
         if (ExtractEmbeddedBinaryResourceToFile("UNINSTALLER_EXE", targetUtf8)) {
             result.uninstallPath = targetUtf8;
+            // 方案B：内嵌的 uninstaller 不带 RES_ZIP（避免安装器里资源存两份）。此处把安装器自带的
+            // RES_ZIP 注入到刚释放的 uninstall.exe，使磁盘上的卸载器自包含——不依赖任何散落资源文件，
+            // 用户误删资源也不影响卸载界面。注入失败仅告警（卸载仍可进行，只是 GUI 皮肤可能缺失）。
+            const std::vector<uint8_t> resZip = LoadEmbeddedBinaryResource("RES_ZIP");
+            if (!resZip.empty()) {
+                if (!InjectBinaryResourceIntoFile(targetUtf8, "RES_ZIP", resZip)) {
+                    reporter.EmitMessage(InstallServiceEventType::Warning,
+                                         "Failed to inject GUI resources into uninstall.exe");
+                }
+            }
         } else {
             reporter.EmitMessage(InstallServiceEventType::Warning,
                                  "Failed to extract embedded uninstaller.exe");

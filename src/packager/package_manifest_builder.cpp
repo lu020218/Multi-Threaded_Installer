@@ -6,6 +6,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 
 namespace fs = std::filesystem;
 
@@ -49,9 +50,19 @@ PackageHook BuildHook(const HookConfig& cfg, const std::string& configDirectory)
         // 校验阶段已确认脚本存在；此处保持 present=false 视作未配置。
         return hook;
     }
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (content.empty()) {
+        // 空脚本（0 字节占位）视作未配置该 hook：present=false。
+        // 否则会得到 present=true + content 为空的非法 manifest，导致安装器
+        // 运行期校验失败（"hook is marked present but carries no script content"），
+        // 表现为安装器双击/静默都启动失败、弹空白错误框。
+        std::cerr << "WARNING: hook script is empty, treated as no hook: "
+                  << Utf8FromPath(scriptPath) << std::endl;
+        return hook;
+    }
     hook.present = true;
     hook.scriptName = Utf8FromPath(scriptPath.filename());
-    hook.content.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    hook.content.assign(content.begin(), content.end());
     hook.args = cfg.args;
     hook.onFailure = cfg.onFailure;
     hook.timeoutSec = cfg.timeoutSec;

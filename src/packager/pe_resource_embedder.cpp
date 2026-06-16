@@ -86,32 +86,14 @@ bool EmbedInstallerPeResources(const std::filesystem::path& installerTemplateExe
         return false;
     }
 
-    // 2) Build the uninstaller binary carrying its own RES_ZIP PE resource:
-    //    copy template -> temp file -> inject RES_ZIP -> read bytes back.
+    // 2) Read the uninstaller template bytes AS-IS (不再在此注入 RES_ZIP)。
+    //    方案B：RES_ZIP 在安装器里只存一份；磁盘上的 uninstall.exe 由安装器在安装收尾时
+    //    通过 UpdateResource 把 RES_ZIP 注入进去（见 install_finalize），从而保持卸载器自包含，
+    //    同时避免安装器里把同一份 RES_ZIP 嵌两份导致体积翻倍。
     std::vector<uint8_t> uninstallerBytes;
-    {
-        std::error_code ec;
-        const std::filesystem::path tempUninstaller =
-            installerTemplateExe.parent_path() /
-            (installerTemplateExe.filename().wstring() + L".uninst.tmp");
-        std::filesystem::copy_file(uninstallerTemplateExe, tempUninstaller,
-                                   std::filesystem::copy_options::overwrite_existing, ec);
-        if (ec) {
-            error = "copy uninstaller template failed: " + ec.message();
-            return false;
-        }
-
-        std::string innerError;
-        const std::vector<std::pair<std::string, const std::vector<uint8_t>*>> uninstEntries = {
-            {"RES_ZIP", &zipData},
-        };
-        const bool ok = UpdateBinaryResources(tempUninstaller, uninstEntries, innerError) &&
-                        ReadAllBytes(tempUninstaller, uninstallerBytes, innerError);
-        std::filesystem::remove(tempUninstaller, ec);
-        if (!ok || uninstallerBytes.empty()) {
-            error = "uninstaller resource embed failed: " + innerError;
-            return false;
-        }
+    if (!ReadAllBytes(uninstallerTemplateExe, uninstallerBytes, error) || uninstallerBytes.empty()) {
+        error = error.empty() ? "read uninstaller template failed" : error;
+        return false;
     }
 
     // 3) Inject RES_ZIP + UNINSTALLER_EXE into the installer template (single session).

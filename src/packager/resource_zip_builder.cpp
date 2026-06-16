@@ -60,14 +60,6 @@ bool readFileBytes(const std::filesystem::path& path, std::vector<uint8_t>& out)
     return true;
 }
 
-std::string addScaleSuffix(const std::string& fileName, const std::string& suffix) {
-    const size_t dot = fileName.rfind('.');
-    if (dot == std::string::npos) {
-        return fileName + suffix;
-    }
-    return fileName.substr(0, dot) + suffix + fileName.substr(dot);
-}
-
 bool replaceScaleSuffix(const std::string& fileName,
                         const std::string& from,
                         const std::string& to,
@@ -112,13 +104,12 @@ void collectResourceFiles(const std::filesystem::path& resourceDir,
 
     const std::filesystem::path imagesDir = resourceDir / "images";
     if (std::filesystem::exists(imagesDir) && std::filesystem::is_directory(imagesDir)) {
-        auto addImageEntry = [&](const std::string& name, const std::filesystem::path& path) {
-            addEntry("images/" + name, path);
-            addEntry("../images/" + name, path);
-        };
-
-        std::vector<std::pair<std::string, std::filesystem::path>> imageFiles;
-        // 递归遍历，保留相对子目录（如 carousel/zh_CN/1.png），以支持按语言分目录的图片
+        // 每个真实图片文件在 zip 中只存一份，避免体积爆炸。命名规则与 DuiLib 取图一致：
+        //   · 旧式 @1.5x/@2x/@3x 高清图 → 改名为 DuiLib 实际请求的 @150/@200/@300（百分比）；
+        //   · 其余（基图、或已是 @NNN）按原相对名存。
+        // 高 DPI 下 DuiLib 请求 images/x@<scale>.png，命中真高清图即用之；若该尺寸不存在，
+        // DuiLib(AddImage) 会自动去掉 @后缀回退加载基图 images/x.png，故无需再合成 @NNN 副本。
+        // XML 引用统一为 images/...（已确认无 ../images/），故不再生成 ../images/ 别名。
         for (const auto& entry : std::filesystem::recursive_directory_iterator(imagesDir)) {
             if (!entry.is_regular_file()) {
                 continue;
@@ -126,30 +117,19 @@ void collectResourceFiles(const std::filesystem::path& resourceDir,
             std::string relName =
                 Utf8FromPath(std::filesystem::relative(entry.path(), imagesDir));
             std::replace(relName.begin(), relName.end(), '\\', '/');  // zip 内统一用正斜杠
-            imageFiles.emplace_back(relName, entry.path());
-        }
 
-        for (const auto& item : imageFiles) {
-            addImageEntry(item.first, item.second);
-        }
-        for (const auto& item : imageFiles) {
+            std::string storeName;
             std::string alias;
-            if (replaceScaleSuffix(item.first, "@1.5x", "@150", alias)) {
-                addImageEntry(alias, item.second);
-            } else if (replaceScaleSuffix(item.first, "@2x", "@200", alias)) {
-                addImageEntry(alias, item.second);
-            } else if (replaceScaleSuffix(item.first, "@3x", "@300", alias)) {
-                addImageEntry(alias, item.second);
+            if (replaceScaleSuffix(relName, "@1.5x", "@150", alias)) {
+                storeName = alias;
+            } else if (replaceScaleSuffix(relName, "@2x", "@200", alias)) {
+                storeName = alias;
+            } else if (replaceScaleSuffix(relName, "@3x", "@300", alias)) {
+                storeName = alias;
+            } else {
+                storeName = relName;
             }
-        }
-        for (const auto& item : imageFiles) {
-            if (item.first.find('@') != std::string::npos) {
-                continue;
-            }
-            addImageEntry(addScaleSuffix(item.first, "@125"), item.second);
-            addImageEntry(addScaleSuffix(item.first, "@150"), item.second);
-            addImageEntry(addScaleSuffix(item.first, "@200"), item.second);
-            addImageEntry(addScaleSuffix(item.first, "@300"), item.second);
+            addEntry("images/" + storeName, entry.path());
         }
     }
 

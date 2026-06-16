@@ -74,5 +74,36 @@ bool ExtractEmbeddedBinaryResourceToFile(const std::string& name, const std::str
     }
 }
 
+bool InjectBinaryResourceIntoFile(const std::string& filePath,
+                                  const std::string& name,
+                                  const std::vector<uint8_t>& data) {
+    if (data.empty()) {
+        logInstallerError("[RES] InjectBinaryResource: empty data for " + name);
+        return false;
+    }
+    const std::wstring wpath = Utf8ToWide(filePath);
+    // FALSE：保留目标 exe 已有的图标/版本/清单等资源，只新增/替换本资源。
+    HANDLE update = BeginUpdateResourceW(wpath.c_str(), FALSE);
+    if (update == NULL) {
+        logInstallerError("[RES] BeginUpdateResource failed for " + filePath +
+                          " (GetLastError=" + std::to_string(GetLastError()) + ")");
+        return false;
+    }
+    if (!UpdateResourceA(update, "BINARY", name.c_str(),
+                         MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
+                         const_cast<void*>(static_cast<const void*>(data.data())),
+                         static_cast<DWORD>(data.size()))) {
+        EndUpdateResource(update, TRUE);  // discard
+        logInstallerError("[RES] UpdateResource failed for " + name + " in " + filePath);
+        return false;
+    }
+    if (!EndUpdateResource(update, FALSE)) {
+        logInstallerError("[RES] EndUpdateResource failed for " + filePath +
+                          " (GetLastError=" + std::to_string(GetLastError()) + ")");
+        return false;
+    }
+    return true;
+}
+
 } // namespace MultiThreadedInstaller
 

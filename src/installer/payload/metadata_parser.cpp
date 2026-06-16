@@ -77,6 +77,8 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
         std::string validationError;
         if (!ValidatePackageManifest(manifest, validationError)) {
             META_LOG();
+            logInstallerError("[Metadata] ValidatePackageManifest failed: " +
+                              (validationError.empty() ? std::string("(no detail)") : validationError));
             return ExtendedInstallationMetadata{};
         }
         return PackageManifestToExtendedMetadata(manifest);

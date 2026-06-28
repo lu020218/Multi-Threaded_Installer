@@ -262,19 +262,42 @@ PackagePayloadManifest PayloadFromJson(const json& value) {
     return payload;
 }
 
+json BytesToJson(const std::vector<uint8_t>& bytes) {
+    json arr = json::array();
+    for (uint8_t byte : bytes) {
+        arr.push_back(static_cast<unsigned>(byte));
+    }
+    return arr;
+}
+
+void BytesFromJson(const json& value, const char* key, std::vector<uint8_t>& out) {
+    if (value.contains(key) && value[key].is_array()) {
+        out.reserve(value[key].size());
+        for (const auto& byte : value[key]) {
+            out.push_back(static_cast<uint8_t>(byte.get<unsigned>()));
+        }
+    }
+}
+
 json HookToJson(const PackageHook& hook) {
     // 脚本内容以字节数组形式内嵌（脚本通常很小）。
-    json content = json::array();
-    for (uint8_t byte : hook.content) {
-        content.push_back(static_cast<unsigned>(byte));
+    json auxFiles = json::array();
+    for (const auto& aux : hook.auxFiles) {
+        auxFiles.push_back(json{
+            {"relativePath", aux.relativePath},
+            {"content", BytesToJson(aux.content)},
+        });
     }
     return json{
         {"present", hook.present},
         {"scriptName", hook.scriptName},
-        {"content", content},
+        {"content", BytesToJson(hook.content)},
         {"args", hook.args},
         {"onFailure", static_cast<int>(hook.onFailure)},
         {"timeoutSec", hook.timeoutSec},
+        {"auxFiles", auxFiles},
+        {"keep", hook.keep},
+        {"keepDir", hook.keepDir},
     };
 }
 
@@ -282,15 +305,23 @@ PackageHook HookFromJson(const json& value) {
     PackageHook hook;
     hook.present = value.value("present", false);
     hook.scriptName = value.value("scriptName", "");
-    if (value.contains("content") && value["content"].is_array()) {
-        hook.content.reserve(value["content"].size());
-        for (const auto& byte : value["content"]) {
-            hook.content.push_back(static_cast<uint8_t>(byte.get<unsigned>()));
-        }
-    }
+    BytesFromJson(value, "content", hook.content);
     hook.args = value.value("args", "");
     hook.onFailure = static_cast<HookOnFailure>(value.value("onFailure", 0));
     hook.timeoutSec = value.value("timeoutSec", 300u);
+    if (value.contains("auxFiles") && value["auxFiles"].is_array()) {
+        hook.auxFiles.reserve(value["auxFiles"].size());
+        for (const auto& item : value["auxFiles"]) {
+            HookAuxFile aux;
+            aux.relativePath = item.value("relativePath", "");
+            BytesFromJson(item, "content", aux.content);
+            if (!aux.relativePath.empty()) {
+                hook.auxFiles.push_back(std::move(aux));
+            }
+        }
+    }
+    hook.keep = value.value("keep", false);
+    hook.keepDir = value.value("keepDir", "");
     return hook;
 }
 

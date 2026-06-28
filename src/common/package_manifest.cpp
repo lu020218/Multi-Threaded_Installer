@@ -11,6 +11,9 @@ PackageHook HookFromScript(const HookScript& script) {
     hook.args = script.args;
     hook.onFailure = script.onFailure == 1 ? HookOnFailure::CONTINUE : HookOnFailure::ABORT;
     hook.timeoutSec = script.timeoutSec;
+    hook.auxFiles = script.auxFiles;
+    hook.keep = script.keep;
+    hook.keepDir = script.keepDir;
     return hook;
 }
 
@@ -22,6 +25,9 @@ HookScript ScriptFromHook(const PackageHook& hook) {
     script.args = hook.args;
     script.onFailure = hook.onFailure == HookOnFailure::CONTINUE ? 1 : 0;
     script.timeoutSec = hook.timeoutSec;
+    script.auxFiles = hook.auxFiles;
+    script.keep = hook.keep;
+    script.keepDir = hook.keepDir;
     return script;
 }
 

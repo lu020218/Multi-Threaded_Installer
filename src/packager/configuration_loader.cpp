@@ -187,6 +187,17 @@ bool ParseHookEntry(const json& hook, const std::string& label, HookConfig& out,
         }
         out.timeoutSec = static_cast<uint32_t>(timeout);
     }
+    if (hook.contains("keep")) {
+        bool keep = false;
+        if (!JsonValueToBool(hook["keep"], keep)) {
+            lastError = "Invalid field '" + label + ".keep': expected boolean";
+            return false;
+        }
+        out.keep = keep;
+    }
+    if (!GetOptionalString(hook, "keepDir", out.keepDir, lastError)) {
+        return false;
+    }
     return true;
 }
 

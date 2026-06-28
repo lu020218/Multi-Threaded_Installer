@@ -48,6 +48,11 @@ void ValidateHook(const HookConfig& hook,
         result.errors.push_back("ERROR: " + label + " script not found: " + Utf8FromPath(scriptPath));
         result.isValid = false;
     }
+    // keep=true 时必须指定保留目录，否则不知道往哪拷贝。
+    if (hook.keep && hook.keepDir.empty()) {
+        result.errors.push_back("ERROR: " + label + ".keepDir is required when keep is true");
+        result.isValid = false;
+    }
 }
 
 } // namespace

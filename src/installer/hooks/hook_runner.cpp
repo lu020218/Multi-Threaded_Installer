@@ -5,6 +5,9 @@
 #include "common/win32_raii.h"
 #include "installer/hooks/component_launcher.h"
 
+#include <algorithm>
+#include <atomic>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <system_error>
@@ -29,52 +32,158 @@ HookOutcome FailOutcome(const HookScript& hook) {
 
 #ifdef _WIN32
 
-// 把内嵌脚本字节释放到临时目录，返回释放后的 .bat 路径（失败返回空）。
-std::filesystem::path ReleaseHookScript(const HookScript& hook) {
-    wchar_t tempDir[MAX_PATH] = {};
-    DWORD n = GetTempPathW(MAX_PATH, tempDir);
+// 释放结果：临时工作目录 + 主脚本完整路径。dir 为空表示释放失败。
+struct HookBundle {
+    std::filesystem::path dir;
+    std::filesystem::path mainScript;
+};
+
+// 把一段字节写到指定文件（先建父目录）。失败返回 false。
+bool WriteBytesToFile(const std::filesystem::path& path, const std::vector<uint8_t>& bytes) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        return false;
+    }
+    if (!bytes.empty()) {
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+    }
+    out.close();
+    return static_cast<bool>(out);
+}
+
+// 把主脚本及其兄弟文件释放到一个唯一的临时子目录，使主脚本可直接 call/调用同目录脚本。
+// 返回该临时目录与主脚本路径（失败返回空 dir）。
+HookBundle ReleaseHookBundle(const HookScript& hook) {
+    wchar_t tempBase[MAX_PATH] = {};
+    DWORD n = GetTempPathW(MAX_PATH, tempBase);
     if (n == 0 || n > MAX_PATH) {
         return {};
     }
 
-    std::wstring fileName = L"mti_hook_";
-    fileName += std::to_wstring(GetCurrentProcessId());
-    fileName += L"_";
-    // 取配置的脚本名（仅日志用名字）作为可读后缀，去掉路径分隔符。
-    std::string stem = hook.scriptName.empty() ? "hook" : hook.scriptName;
+    // 唯一目录名：mti_hook_<pid>_<递增计数>，避免同一安装多个 hook 之间互相覆盖。
+    static std::atomic<unsigned> counter{0};
+    std::wstring dirName = L"mti_hook_";
+    dirName += std::to_wstring(GetCurrentProcessId());
+    dirName += L"_";
+    dirName += std::to_wstring(counter.fetch_add(1) + 1);
+
+    std::filesystem::path bundleDir = std::filesystem::path(tempBase) / dirName;
+    std::error_code ec;
+    std::filesystem::remove_all(bundleDir, ec);  // 清理可能的同名残留
+    std::filesystem::create_directories(bundleDir, ec);
+    if (ec) {
+        return {};
+    }
+
+    // 主脚本文件名：保留原名（便于 %~dp0 与兄弟脚本互相引用）；去掉路径分隔符。
+    std::string stem = hook.scriptName.empty() ? "hook.bat" : hook.scriptName;
     for (char& c : stem) {
         if (c == '\\' || c == '/' || c == ':') {
             c = '_';
         }
     }
-    fileName += Utf8ToWide(stem);
-    // 保留脚本原扩展名（.bat/.cmd/.ps1），以便按类型选择正确的启动方式
-    //（BuildComponentLaunchCommand 会据扩展名用 cmd / powershell 运行）；
-    // 无法识别的扩展名一律按 .bat 释放。
+    std::wstring mainFileName = Utf8ToWide(stem);
+    // 保留脚本原扩展名（.bat/.cmd/.ps1），以便按类型选择正确的启动方式；无法识别一律按 .bat。
     auto endsWithIgnoreCase = [](const std::wstring& s, const wchar_t* suffix) {
-        const size_t n = wcslen(suffix);
-        return s.size() >= n && _wcsicmp(s.c_str() + s.size() - n, suffix) == 0;
+        const size_t len = wcslen(suffix);
+        return s.size() >= len && _wcsicmp(s.c_str() + s.size() - len, suffix) == 0;
     };
-    if (!endsWithIgnoreCase(fileName, L".bat") &&
-        !endsWithIgnoreCase(fileName, L".cmd") &&
-        !endsWithIgnoreCase(fileName, L".ps1")) {
-        fileName += L".bat";
+    if (!endsWithIgnoreCase(mainFileName, L".bat") &&
+        !endsWithIgnoreCase(mainFileName, L".cmd") &&
+        !endsWithIgnoreCase(mainFileName, L".ps1")) {
+        mainFileName += L".bat";
     }
 
-    std::filesystem::path scriptPath = std::filesystem::path(tempDir) / fileName;
-    std::ofstream out(scriptPath, std::ios::binary | std::ios::trunc);
-    if (!out) {
+    HookBundle bundle;
+    bundle.dir = bundleDir;
+    bundle.mainScript = bundleDir / mainFileName;
+    if (!WriteBytesToFile(bundle.mainScript, hook.content)) {
+        std::filesystem::remove_all(bundleDir, ec);
         return {};
     }
-    if (!hook.content.empty()) {
-        out.write(reinterpret_cast<const char*>(hook.content.data()),
-                  static_cast<std::streamsize>(hook.content.size()));
+
+    // 兄弟文件：按相对路径释放到同一临时目录（保留子目录结构）。
+    for (const auto& aux : hook.auxFiles) {
+        if (aux.relativePath.empty()) {
+            continue;
+        }
+        const std::filesystem::path target = bundleDir / std::filesystem::path(aux.relativePath);
+        if (!WriteBytesToFile(target, aux.content)) {
+            logInstallerWarning("[Hook] Failed to release sibling file: " + aux.relativePath);
+        }
     }
-    out.close();
-    if (!out) {
-        return {};
+    return bundle;
+}
+
+// 展开 keepDir：先把 %INSTALL_DIR% / %VERSION%（引擎注入值，父进程环境里并不存在）
+// 大小写不敏感地替换掉，再用 ExpandEnvironmentStringsW 展开 %ProgramData% 等系统环境变量。
+std::wstring ExpandHookKeepDir(const std::string& keepDir,
+                               const std::string& installDir,
+                               const std::string& version) {
+    auto replaceTokenCI = [](std::wstring text, const std::wstring& token,
+                             const std::wstring& value) {
+        std::wstring lowerToken = token;
+        std::transform(lowerToken.begin(), lowerToken.end(), lowerToken.begin(),
+                       [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+        std::wstring lowerText = text;
+        std::transform(lowerText.begin(), lowerText.end(), lowerText.begin(),
+                       [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+        size_t pos = 0;
+        while ((pos = lowerText.find(lowerToken, pos)) != std::wstring::npos) {
+            text.replace(pos, lowerToken.size(), value);
+            lowerText.replace(pos, lowerToken.size(),
+                              std::wstring(value.size(), L' '));  // 占位避免重复命中
+            pos += value.size();
+        }
+        return text;
+    };
+
+    std::wstring expanded = Utf8ToWide(keepDir);
+    expanded = replaceTokenCI(expanded, L"%INSTALL_DIR%", Utf8ToWide(installDir));
+    expanded = replaceTokenCI(expanded, L"%VERSION%", Utf8ToWide(version));
+
+    DWORD size = ExpandEnvironmentStringsW(expanded.c_str(), nullptr, 0);
+    if (size == 0) {
+        return expanded;
     }
-    return scriptPath;
+    std::wstring out;
+    out.resize(size);
+    DWORD written = ExpandEnvironmentStringsW(expanded.c_str(), out.data(), size);
+    if (written == 0) {
+        return expanded;
+    }
+    if (!out.empty() && out.back() == L'\0') {
+        out.pop_back();
+    }
+    return out;
+}
+
+// 把临时目录（主脚本+兄弟文件）整体拷贝到 keepDir。尽力而为，失败仅记日志。
+void PersistHookBundle(const std::filesystem::path& bundleDir,
+                       const HookScript& hook,
+                       const std::string& installDir,
+                       const std::string& version) {
+    const std::wstring keepDirW = ExpandHookKeepDir(hook.keepDir, installDir, version);
+    if (keepDirW.empty()) {
+        logInstallerWarning("[Hook] keep requested but keepDir is empty; skipped.");
+        return;
+    }
+    const std::filesystem::path keepDir(keepDirW);
+    std::error_code ec;
+    std::filesystem::create_directories(keepDir, ec);
+    std::filesystem::copy(bundleDir, keepDir,
+                          std::filesystem::copy_options::recursive |
+                              std::filesystem::copy_options::overwrite_existing,
+                          ec);
+    if (ec) {
+        logInstallerWarning("[Hook] Failed to keep script bundle to " + Utf8FromPath(keepDir) +
+                            ": " + ec.message());
+    } else {
+        logInstallerInfo("[Hook] Kept script bundle to: " + Utf8FromPath(keepDir));
+    }
 }
 
 // 环境变量集合（大小写不敏感地按名查找/设置，保留首个出现的名字大小写）。
@@ -135,7 +244,8 @@ bool PathContainsDir(const std::wstring& pathValue, const std::wstring& dir) {
 // 构造子进程环境块。解决部分用户机器环境损坏（缺 SystemRoot/PATH/PSModulePath）导致
 // ps1（乃至 cmd）起不来或找不到模块/cmdlet 的问题。
 std::vector<wchar_t> BuildEnvironmentBlock(const std::string& installDir,
-                                           const std::string& version) {
+                                           const std::string& version,
+                                           const std::wstring& scriptDir) {
     EnvVarList env;
     LPWCH existing = GetEnvironmentStringsW();
     if (existing) {
@@ -151,6 +261,11 @@ std::vector<wchar_t> BuildEnvironmentBlock(const std::string& installDir,
             // 跳过将由我们注入的同名变量，避免重复定义。
             if (_wcsicmp(name.c_str(), L"INSTALL_DIR") == 0 ||
                 _wcsicmp(name.c_str(), L"VERSION") == 0) {
+                continue;
+            }
+            // NoDefaultCurrentDirectoryInExePath：若被继承会禁止 cmd 在当前目录查找命令，
+            // 导致主脚本 `call common.bat` 找不到同目录兄弟脚本。剔除它以恢复默认查找。
+            if (_wcsicmp(name.c_str(), L"NoDefaultCurrentDirectoryInExePath") == 0) {
                 continue;
             }
             env.items.emplace_back(name, value);
@@ -201,6 +316,18 @@ std::vector<wchar_t> BuildEnvironmentBlock(const std::string& installDir,
     }
     // PATHEXT：缺失时给常见默认，含 .PS1。
     env.setIfMissing(L"PATHEXT", L".COM;.EXE;.BAT;.CMD;.VBS;.JS;.WSF;.WSH;.MSC;.PS1");
+
+    // 把脚本临时目录加到 PATH 最前，保证主脚本 `call common.bat` 总能解析到兄弟脚本，
+    // 即便目标机设置了 NoDefaultCurrentDirectoryInExePath（禁用 cwd 查找）也不受影响。
+    if (!scriptDir.empty()) {
+        if (auto* pathValue = env.find(L"Path")) {
+            if (!PathContainsDir(*pathValue, scriptDir)) {
+                *pathValue = scriptDir + L";" + *pathValue;
+            }
+        } else {
+            env.set(L"Path", scriptDir);
+        }
+    }
 
     // 注入引擎已知值。
     env.set(L"INSTALL_DIR", Utf8ToWide(installDir));
@@ -276,38 +403,41 @@ HookOutcome RunHook(const HookScript& hook,
 #ifdef _WIN32
     const std::string hookName = hook.scriptName.empty() ? "hook" : hook.scriptName;
 
-    std::filesystem::path scriptPath = ReleaseHookScript(hook);
-    if (scriptPath.empty()) {
+    HookBundle bundle = ReleaseHookBundle(hook);
+    if (bundle.dir.empty()) {
         logInstallerError("[Hook] Failed to release hook script: " + hookName);
         return FailOutcome(hook);
     }
-    // 退出时清理临时脚本。
+    // 退出时清理整个临时目录（主脚本 + 兄弟文件）。
     struct ScopedRemove {
         std::filesystem::path path;
         ~ScopedRemove() {
             std::error_code ec;
-            std::filesystem::remove(path, ec);
+            std::filesystem::remove_all(path, ec);
         }
-    } scopedRemove{scriptPath};
+    } scopedRemove{bundle.dir};
 
     const ComponentLaunchCommand launchCommand =
-        BuildComponentLaunchCommand(scriptPath, hook.args);
+        BuildComponentLaunchCommand(bundle.mainScript, hook.args);
     std::vector<wchar_t> commandLineBuffer(launchCommand.commandLine.begin(),
                                            launchCommand.commandLine.end());
     commandLineBuffer.push_back(L'\0');
 
-    std::vector<wchar_t> environment = BuildEnvironmentBlock(installDir, version);
+    // 工作目录设为临时脚本目录，使主脚本可直接 `call common.bat` / `.\sub\helper.ps1`
+    //（相对路径相对 cwd 解析）。安装目录仍通过 INSTALL_DIR 环境变量提供，不依赖 cwd。
+    const std::wstring workingDirectory = bundle.dir.wstring();
 
-    // preInstall 在解压前运行，此时安装目录可能尚不存在；仅当目录存在时才作为
-    // 工作目录传给 CreateProcess（否则 CreateProcessW 会因 lpCurrentDirectory 无效而失败）。
-    std::wstring workingDirectory;
-    {
-        std::error_code ec;
-        if (!installDir.empty() &&
-            std::filesystem::is_directory(std::filesystem::path(Utf8ToWide(installDir)), ec)) {
-            workingDirectory = Utf8ToWide(installDir);
+    // 环境块额外把脚本目录加进 PATH，并剔除 NoDefaultCurrentDirectoryInExePath，
+    // 双保险让兄弟脚本调用在任何目标机都能解析。
+    std::vector<wchar_t> environment =
+        BuildEnvironmentBlock(installDir, version, workingDirectory);
+
+    // 执行后保留：无论脚本成功失败都把临时目录拷到 keepDir。
+    auto persistIfRequested = [&]() {
+        if (hook.keep) {
+            PersistHookBundle(bundle.dir, hook, installDir, version);
         }
-    }
+    };
 
     // 把脚本的标准输出/标准错误重定向到与安装器日志同目录、以脚本名命名的日志文件
     //（如 pre_install.bat → pre_install.log）。需要把文件句柄设为可继承，并让
@@ -359,16 +489,19 @@ HookOutcome RunHook(const HookScript& hook,
         WaitForSingleObject(process.get(), 2000);
         logInstallerError("[Hook] Hook timed out after " + std::to_string(hook.timeoutSec) +
                           "s: " + hookName);
+        persistIfRequested();
         return FailOutcome(hook);
     }
     if (waitResult != WAIT_OBJECT_0) {
         logInstallerError("[Hook] Failed while waiting for hook: " + hookName);
+        persistIfRequested();
         return FailOutcome(hook);
     }
 
     DWORD exitCode = 1;
     GetExitCodeProcess(process.get(), &exitCode);
 
+    persistIfRequested();
     if (exitCode == 0) {
         logInstallerInfo("[Hook] Hook succeeded: " + hookName);
         return HookOutcome::Success;

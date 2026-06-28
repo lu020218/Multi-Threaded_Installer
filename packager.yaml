@@ -56,6 +56,13 @@ package:
 #
 # preInstall / postInstall 均为「脚本列表」，按声明顺序依次执行，可配置多个；
 # 脚本类型按扩展名识别，支持 .bat / .cmd / .ps1。不需要 hook 时整段删除即可。
+#
+# 兄弟脚本：主脚本所在目录里的其余文件会被「递归内嵌」，运行期与主脚本释放到同一临时
+#   目录，因此主脚本可直接 `call common.bat` / `.\sub\helper.ps1` 或读取同目录数据文件。
+#   建议把每个 hook 的主脚本+其辅助文件放进各自的子目录，避免不同 hook 互相带入对方脚本。
+# keep / keepDir：可选。keep=true 时，脚本执行完（无论成功失败）把主脚本+兄弟文件拷贝到
+#   keepDir；默认 false=释放到临时目录、用完即删。keepDir 支持 %INSTALL_DIR% / %VERSION%
+#   与系统环境变量（如 %ProgramData%）。
 hooks:
   preInstall:
     - path: scripts/pre_install.bat
@@ -72,3 +79,5 @@ hooks:
       args: ""
       onFailure: continue
       timeoutSec: 600
+      keep: true                       # 执行后保留脚本+兄弟文件
+      keepDir: "%INSTALL_DIR%\\scripts"  # 保留到安装目录下的 scripts 子目录

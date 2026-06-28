@@ -101,11 +101,14 @@ struct HookConfig {
     HookOnFailure onFailure; // 失败处理
     uint32_t timeoutSec;     // 超时上限（秒）
     bool present;            // 该 hook 是否在 YAML 中配置
+    bool keep;              // 执行后是否保留脚本+兄弟文件到 keepDir（默认 false=用完即删）
+    std::string keepDir;    // 保留目标目录（keep=true 时必填，支持 %INSTALL_DIR%/%VERSION%/系统环境变量）
 
     HookConfig()
         : onFailure(HookOnFailure::ABORT),
           timeoutSec(300),
-          present(false) {}
+          present(false),
+          keep(false) {}
 };
 
 // preInstall / postInstall 均支持配置多个脚本，按声明顺序依次执行。

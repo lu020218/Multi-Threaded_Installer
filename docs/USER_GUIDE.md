@@ -112,6 +112,8 @@ hooks:                                             # 可选，整段删除即不
       args: ""
       onFailure: continue
       timeoutSec: 600
+      keep: true                                   # 可选，执行后保留脚本+兄弟文件
+      keepDir: "%INSTALL_DIR%\\scripts"            # keep=true 时必填，保留目标目录
 ```
 
 ### 4.1 app（身份）
@@ -144,6 +146,8 @@ hooks:                                             # 可选，整段删除即不
 - 脚本类型按扩展名识别，支持 **`.bat` / `.cmd` / `.ps1`**（ps1 经 `powershell -NoProfile -ExecutionPolicy Bypass -File` 运行）。
 - 也兼容「单个对象」的旧写法（按单元素列表处理）。
 - 同一钩子点内，任一脚本以 `onFailure: abort` 失败会立即中止安装（preInstall 在解压前、postInstall 触发回滚）；`continue` 则记日志后继续后续脚本。
+- **兄弟脚本**：主脚本所在目录里的其余文件会被**递归内嵌**，运行期与主脚本释放到**同一临时目录**，故主脚本可直接 `call common.bat`、`.\sub\helper.ps1` 或读取同目录数据文件（脚本工作目录即该临时目录）。
+- **keep / keepDir**（可选）：`keep: true` 时脚本执行完（**无论成功失败**）把主脚本+兄弟文件拷贝到 `keepDir`；默认 `false` = 释放到临时目录、用完即删。`keepDir` 支持 `%INSTALL_DIR%` / `%VERSION%` 与系统环境变量。
 
 详见下文 [§7 安装脚本契约](#7-安装脚本契约prepost-bat)。
 
@@ -211,6 +215,8 @@ GUI 安装：
 | `args` | 本次构建特有的额外参数 | 字符串，可为空 |
 | `onFailure` | 失败时的处理 | `abort` \| `continue` |
 | `timeoutSec` | 超时上限（秒） | 整数 |
+| `keep` | 执行后是否保留脚本+兄弟文件到 `keepDir` | `true` \| `false`（默认 `false`） |
+| `keepDir` | 保留目标目录（`keep: true` 时必填）；支持 `%INSTALL_DIR%`/`%VERSION%`/系统环境变量 | 字符串 |
 
 ### 7.2 成功 / 失败判据（引擎写死，不可配）
 
@@ -233,26 +239,38 @@ GUI 安装：
 
 ### 7.5 路径与执行
 
-- **打包期**：`path` 相对 `--config` 解析，脚本被读入并内嵌进安装器（保留原扩展名）。
-- **运行期**：安装器临时释放后执行（`.bat/.cmd` 经 `cmd /c`、`.ps1` 经 `powershell -File`），与终端用户机器上是否存在该路径无关。
+- **打包期**：`path` 相对 `--config` 解析，脚本被读入并内嵌进安装器（保留原扩展名）；**主脚本所在目录里的其余文件一并被递归内嵌**为兄弟文件（保留相对结构）。
+- **运行期**：安装器把主脚本+兄弟文件释放到**同一个临时目录**后执行（`.bat/.cmd` 经 `cmd /c`、`.ps1` 经 `powershell -File`），脚本**工作目录即该临时目录**，与终端用户机器上是否存在该路径无关。
 - 同一钩子点内的多个脚本**按声明顺序**执行；任一脚本 `abort` 失败即停止后续脚本并中止安装。
 - preInstall 在解压**之前**运行；此时安装目录可能尚不存在，脚本如需写文件请自行 `mkdir`。
 - postInstall 在收尾**之后**运行，此时安装目录已就绪。
 
-#### 只内嵌脚本自身，不会带入「兄弟脚本」
+#### 支持调用「同目录的兄弟脚本」
 
-打包期只读取 `path` 指向的**那一个**脚本文件并内嵌，**不会**把它在 `--config` 目录下相邻的其他脚本一起打进包；运行期临时目录里也只有这一个脚本。因此「脚本里再调用其他脚本」的支持情况是：
+打包期会把 `path` 主脚本**所在目录下的全部文件递归内嵌**；运行期它们与主脚本一起释放到同一临时目录、且该目录就是脚本的工作目录。因此：
 
-- ❌ **不支持**调用「打包时放在它旁边的兄弟脚本」——例如脚本内 `call common.bat` 或 `.\helper.ps1`。这些文件没有被内嵌，运行期不存在；临时目录里也只有当前脚本，相对路径同样找不到。
+- ✅ **支持**调用「打包时放在主脚本旁边的兄弟脚本/文件」——例如脚本内 `call common.bat`、`.\sub\helper.ps1`，或读取同目录数据/配置文件。
 - ✅ **支持**调用**系统命令 / PATH 上的工具**（`reg`、`powershell`、`sc`、`schtasks`、`msiexec` 等）。
 - ✅ **支持**调用**目标机上已存在的、绝对路径**的程序或脚本。
 - ✅ **支持**调用**作为 payload 安装进去的文件**，但**仅限 postInstall**：此时 payload 已解压，可用 `%INSTALL_DIR%\...\helper.bat` 调用；preInstall 在解压前运行、安装目录尚为空，不可用。
 
-需要多脚本逻辑时，推荐三选一：
+> ⚠️ 兄弟文件按「主脚本所在目录」**递归**内嵌。若多个 hook 共用同一个 `scripts/` 目录，则**每个 hook 都会带入该目录下的全部文件**（含其他 hook 的脚本），既增大安装包、`keepDir` 拷贝也会包含无关文件。**建议把每个 hook 的主脚本与其辅助文件放进各自独立的子目录**（如 `scripts/post/`、`scripts/pre/`）。
 
-1. 把逻辑**内联**进单个 hook 脚本（最简单）；
-2. 把辅助脚本**作为 payload 打包**（放进 `--input` 的某个 folder），由 **postInstall** 经 `%INSTALL_DIR%` 调用；
-3. 在同一钩子点**配置多个脚本**（数组，按声明顺序依次执行）——注意它们各自独立内嵌、依次运行，**并非「一个调用另一个」**。
+#### 执行后保留脚本（keep / keepDir）
+
+默认脚本释放到临时目录、执行完即删。配置 `keep: true` + `keepDir` 后，脚本执行完（**无论成功还是失败/超时**）会把**主脚本+兄弟文件**整体拷贝到 `keepDir`：
+
+```yaml
+- path: scripts/post/post_install.bat
+  onFailure: continue
+  timeoutSec: 600
+  keep: true
+  keepDir: "%INSTALL_DIR%\\scripts"   # 例：保留到安装目录下的 scripts 子目录
+```
+
+- `keepDir` 支持 `%INSTALL_DIR%`（实际安装目录）、`%VERSION%`（本次版本）与系统环境变量（`%ProgramData%` 等）。
+- 临时目录始终在脚本结束后清理；`keep` 只是**额外**拷一份持久副本，不改变执行位置。
+- 注意：postInstall 以 `onFailure: abort` 失败会触发**整体回滚**（删安装目录）；若此时把副本拷进了安装目录，可能随回滚一并被删。需要在失败后仍保留时，`keepDir` 请指向安装目录之外（如 `%ProgramData%\<产品>\scripts`）。
 
 ### 7.6 权限
 
@@ -279,12 +297,13 @@ GUI 安装：
 
 | 现象 | 原因与处理 |
 |------|-----------|
-| `Unsupported package manifest version` | 安装器拒绝读旧 schema 包（manifest VERSION < 24）。请用当前 `packager.exe` 重新打包。 |
+| `Unsupported package manifest version` | 安装器与包的 manifest 版本不一致（旧包或引擎未同步重编）。请用当前 `packager.exe` 重新打包，并确保 packager/installer/uninstaller 三者同版本。 |
 | 打包报「No resource files found for zip packaging」 | `--config` 目录缺少 `resources/`（GUI 皮肤）。补上后重试。 |
 | `package.layout[].source` 找不到 | `source` 相对 `--input` 解析，确认该顶层子目录存在。 |
 | 图标未生效 | `app.icon` 相对 `--config` 解析（除非给绝对路径）。 |
 | preInstall 脚本写文件失败 | preInstall 在解压前运行，安装目录尚不存在；脚本内先 `mkdir`。 |
-| hook 脚本里 `call xxx.bat` 报找不到文件 | 只内嵌脚本自身、不带入兄弟脚本。把逻辑内联，或将辅助脚本作为 payload 由 postInstall 经 `%INSTALL_DIR%` 调用；详见 §7.5。 |
+| hook 脚本里 `call xxx.bat` 报找不到文件 | 兄弟文件按「主脚本所在目录」递归内嵌，确认被调脚本与主脚本在同一目录（或其子目录）下；详见 §7.5。 |
+| `keepDir is required when keep is true` | 配了 `keep: true` 却没给 `keepDir`。补上保留目标目录。 |
 
 ---
 

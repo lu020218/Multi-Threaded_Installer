@@ -35,6 +35,60 @@ std::string ResolveCopyright(const AppConfig& app) {
     return "Copyright (c) " + CurrentYear() + " " + app.publisher;
 }
 
+// 读取单个文件的全部字节。
+bool ReadFileBytes(const fs::path& path, std::vector<uint8_t>& out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    out.assign(content.begin(), content.end());
+    return true;
+}
+
+// 内嵌主脚本所在目录里除主脚本外的全部文件（递归，保留相对结构），作为兄弟文件。
+// 运行期会与主脚本释放到同一临时目录，使主脚本可直接 call/调用它们。
+void EmbedSiblingFiles(const fs::path& scriptPath, PackageHook& hook) {
+    const fs::path scriptDir = scriptPath.parent_path();
+    if (scriptDir.empty()) {
+        return;
+    }
+    std::error_code ec;
+    fs::recursive_directory_iterator it(scriptDir, fs::directory_options::skip_permission_denied, ec);
+    if (ec) {
+        std::cerr << "WARNING: failed to scan hook sibling directory: "
+                  << Utf8FromPath(scriptDir) << " (" << ec.message() << ")" << std::endl;
+        return;
+    }
+    const fs::recursive_directory_iterator end;
+    for (; it != end; it.increment(ec)) {
+        if (ec) {
+            break;
+        }
+        const fs::path& entryPath = it->path();
+        std::error_code statEc;
+        if (!fs::is_regular_file(entryPath, statEc)) {
+            continue;
+        }
+        // 跳过主脚本本身（已作为 content 内嵌）。
+        std::error_code eqEc;
+        if (fs::equivalent(entryPath, scriptPath, eqEc) && !eqEc) {
+            continue;
+        }
+        HookAuxFile aux;
+        aux.relativePath = fs::relative(entryPath, scriptDir, statEc).generic_string();
+        if (statEc || aux.relativePath.empty()) {
+            continue;
+        }
+        if (!ReadFileBytes(entryPath, aux.content)) {
+            std::cerr << "WARNING: failed to read hook sibling file, skipped: "
+                      << Utf8FromPath(entryPath) << std::endl;
+            continue;
+        }
+        hook.auxFiles.push_back(std::move(aux));
+    }
+}
+
 // 读取 hook 脚本字节并内嵌进 manifest。
 PackageHook BuildHook(const HookConfig& cfg, const std::string& configDirectory) {
     PackageHook hook;
@@ -45,12 +99,11 @@ PackageHook BuildHook(const HookConfig& cfg, const std::string& configDirectory)
     if (!scriptPath.is_absolute()) {
         scriptPath = PathFromUtf8(configDirectory) / scriptPath;
     }
-    std::ifstream in(scriptPath, std::ios::binary);
-    if (!in) {
+    std::vector<uint8_t> content;
+    if (!ReadFileBytes(scriptPath, content)) {
         // 校验阶段已确认脚本存在；此处保持 present=false 视作未配置。
         return hook;
     }
-    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     if (content.empty()) {
         // 空脚本（0 字节占位）视作未配置该 hook：present=false。
         // 否则会得到 present=true + content 为空的非法 manifest，导致安装器
@@ -62,10 +115,14 @@ PackageHook BuildHook(const HookConfig& cfg, const std::string& configDirectory)
     }
     hook.present = true;
     hook.scriptName = Utf8FromPath(scriptPath.filename());
-    hook.content.assign(content.begin(), content.end());
+    hook.content = std::move(content);
     hook.args = cfg.args;
     hook.onFailure = cfg.onFailure;
     hook.timeoutSec = cfg.timeoutSec;
+    hook.keep = cfg.keep;
+    hook.keepDir = cfg.keepDir;
+    // 内嵌主脚本同目录的兄弟文件，使运行期可调用同目录脚本。
+    EmbedSiblingFiles(scriptPath, hook);
     return hook;
 }
 

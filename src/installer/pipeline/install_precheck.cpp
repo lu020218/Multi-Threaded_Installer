@@ -31,13 +31,31 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
     error.clear();
     cancelled = false;
 
+    // [R4] 覆盖/升级安装时，旧安装文件占用的空间会在安装过程中被替换释放，可计入"可用"；
+    // 否则同根升级会把"需要 ≈ 新载荷大小"误判为需要额外的整份空间（过度保守）。
+    // 另加一份 staging 余量，覆盖原子替换期间 <file>.__mti_new 与原文件同时存在的瞬时占用。
+    uint64_t reclaimableBytes = 0;
+    if (plan.pathDecision.mode != InstallTargetMode::FreshInstall &&
+        plan.previousInstalledFingerprints) {
+        for (const auto& entry : *plan.previousInstalledFingerprints) {
+            reclaimableBytes += entry.second.size;
+        }
+    }
+    constexpr uint64_t kStagingHeadroomBytes = 64ull * 1024ull * 1024ull;  // 64 MiB
+    const uint64_t grossRequired = plan.totalInstallBytes + kStagingHeadroomBytes;
+    const uint64_t effectiveRequired =
+        grossRequired > reclaimableBytes ? grossRequired - reclaimableBytes : 0;
+
     uint64_t availableBytes = 0;
     if (!checkDiskSpaceForInstall(plan.pathDecision.diskCheckPath,
-                                  plan.totalInstallBytes,
+                                  effectiveRequired,
                                   availableBytes)) {
         error = "Insufficient disk space for installation. required=" +
-                std::to_string(plan.totalInstallBytes) + " available=" +
-                std::to_string(availableBytes);
+                std::to_string(plan.totalInstallBytes) +
+                " stagingHeadroom=" + std::to_string(kStagingHeadroomBytes) +
+                " reclaimable=" + std::to_string(reclaimableBytes) +
+                " effectiveRequired=" + std::to_string(effectiveRequired) +
+                " available=" + std::to_string(availableBytes);
         return false;
     }
     reporter.EmitProgress("", "Disk space precheck", 0.25f);

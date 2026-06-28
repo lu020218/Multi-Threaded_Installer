@@ -2,6 +2,7 @@
 
 #include "installer/pipeline/installer_concurrency_policy.h"
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -33,8 +34,11 @@ struct CleanupDeleteCallbacks {
 /// 通过 submit 分批投递、finish 等待全部完成；删除进展经 CleanupDeleteCallbacks 上报。
 class CleanupDeleteExecutor {
 public:
+    /// @param abortFlag 可选协作式中止标志：置位后，尚未开始的删除项会被快速跳过，
+    ///        使看门狗超时/取消后 finish() 能尽快返回（不能中断已进入的单次删除 syscall）。
     CleanupDeleteExecutor(CleanupDeleteWorkload workload,
-                          CleanupDeleteCallbacks callbacks);
+                          CleanupDeleteCallbacks callbacks,
+                          std::shared_ptr<std::atomic<bool>> abortFlag = nullptr);
     ~CleanupDeleteExecutor();
 
     CleanupDeleteExecutor(const CleanupDeleteExecutor&) = delete;

@@ -12,6 +12,7 @@
 #include "common/version_utils.h"
 #include "installer/app/console_interface.h"
 #include "common/utf8_utils.h"
+#include <cctype>
 #include <iostream>
 #include <filesystem>
 #include <chrono>
@@ -408,7 +409,43 @@ int main(int argc, char* argv[]) {
     timings.compressSec = ElapsedSeconds(compressStart, std::chrono::steady_clock::now());
     
     console.showPackagingProgress("Finalizing", 1.0f);
-    
+
+    // [R6] 跨文件夹目标碰撞检测：若两个载荷文件夹解压后会写到同一目标文件，运行期
+    // 会出现 staging/replace 竞争（安装器多文件夹并行）。这里在打包期用
+    // (target + relativePath) 归一化后建全局集合检测，发现冲突直接打包失败并指明来源，
+    // 从源头杜绝（target 含 %InstallDir%/环境变量时按相同 token 串比较，足以覆盖 layout 误配）。
+    {
+        auto normalizeTargetKey = [](std::string value) {
+            for (char& ch : value) {
+                if (ch == '/') {
+                    ch = '\\';
+                } else {
+                    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                }
+            }
+            return value;
+        };
+        std::unordered_map<std::string, std::string> targetFileOwner;
+        const size_t pairCount = std::min(folders.size(), compressionResults.size());
+        for (size_t i = 0; i < pairCount; ++i) {
+            const std::string targetBase = normalizeTargetKey(folders[i].targetPath);
+            for (const auto& file : compressionResults[i].fileIndex) {
+                if (file.relativePath.empty()) {
+                    continue;
+                }
+                const std::string key = targetBase + "\\" + normalizeTargetKey(file.relativePath);
+                auto existing = targetFileOwner.find(key);
+                if (existing != targetFileOwner.end()) {
+                    console.showError(
+                        "Conflicting install target: folders '" + existing->second + "' and '" +
+                        folders[i].id + "' both install to '" + folders[i].targetPath + "\\" +
+                        file.relativePath + "'. Adjust package.layout so folders do not overlap.");
+                    return 1;
+                }
+                targetFileOwner[key] = folders[i].id;
+            }
+        }
+    }
 
     auto metadataStart = std::chrono::steady_clock::now();
     PackageManifestBuilder manifestBuilder;

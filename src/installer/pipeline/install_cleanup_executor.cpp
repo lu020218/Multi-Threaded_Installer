@@ -152,12 +152,6 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
         reporter.EmitProgress("cleanup", detail, info.progress);
     };
 
-    bool previousManifestReadable = false;
-    if (!plan.previousManifest.empty()) {
-        nlohmann::json previousManifestJson;
-        previousManifestReadable = readManifest(plan.previousManifest, previousManifestJson);
-    }
-
     const std::vector<std::string> keepFiles =
         ResolveSelectedPayloadFileTargets(metadata, plan, pathResolver);
     if (!keepFiles.empty()) {
@@ -165,30 +159,18 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
                          std::to_string(keepFiles.size()));
     }
 
-    UpgradeCleanupResult previousCleanup;
     // [旧版本-清理:文件] 按旧 manifest 的 files[] 删除旧版本文件（带 keepFiles 差异集跳过、
-    // 看门狗超时保护）；缺失清单时的回退策略写死为安全目录清理（需求 §5）。
-    if (!previousManifestReadable) {
-        previousCleanup = runPreviousInstallCleanupWithWatchdog(
-            plan.previousManifest,
-            plan.previousInstallDir,
-            plan.pathDecision.resolvedInstallRoot,
-            ResolveSelectedPayloadTargets(metadata, plan, pathResolver),
-            cleanupProgress,
-            options.cancellationCallback,
-            UpgradeCleanupPolicy{},
-            keepFiles);
-    } else {
-        previousCleanup = runPreviousInstallCleanupWithWatchdog(
-            plan.previousManifest,
-            plan.previousInstallDir,
-            plan.pathDecision.resolvedInstallRoot,
-            ResolveSelectedPayloadTargets(metadata, plan, pathResolver),
-            cleanupProgress,
-            options.cancellationCallback,
-            UpgradeCleanupPolicy{},
-            keepFiles);
-    }
+    // 看门狗超时保护）；缺失/损坏清单时的回退策略（安全目录清理）由
+    // runPreviousInstallCleanupWithWatchdog 内部处理，调用方无需区分。
+    UpgradeCleanupResult previousCleanup = runPreviousInstallCleanupWithWatchdog(
+        plan.previousManifest,
+        plan.previousInstallDir,
+        plan.pathDecision.resolvedInstallRoot,
+        ResolveSelectedPayloadTargets(metadata, plan, pathResolver),
+        cleanupProgress,
+        options.cancellationCallback,
+        UpgradeCleanupPolicy{},
+        keepFiles);
     if (!previousCleanup.success && IsCancellationRequested(options)) {
         cancelled = true;
         error = "Installation cancelled.";

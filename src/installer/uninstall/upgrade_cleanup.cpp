@@ -9,6 +9,7 @@
 #include "installer/state/registry_utils.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
@@ -51,10 +52,17 @@ struct UpgradeCleanupTask {
     // Normalized absolute paths kept in place during difference-set cleanup
     // (files that also exist in the new package).
     std::set<std::string> keepFiles;
+    // Cooperative abort flag (shared with the watchdog): set on timeout/cancel so
+    // queued deletes are skipped and the worker unwinds promptly.
+    std::shared_ptr<std::atomic<bool>> abortFlag;
 };
 
 bool IsCancelled(const std::function<bool()>& cancellationCallback) {
     return cancellationCallback && cancellationCallback();
+}
+
+bool CleanupAborted(const std::shared_ptr<std::atomic<bool>>& abortFlag) {
+    return abortFlag && abortFlag->load(std::memory_order_relaxed);
 }
 
 void EmitProgress(const UpgradeCleanupProgressCallback& progressCallback,
@@ -258,6 +266,7 @@ struct CleanupExecutionState {
     UpgradeCleanupTask task;
     UpgradeCleanupResult result;
     UpgradeCleanupProgressCallback progressCallback;
+    std::shared_ptr<std::atomic<bool>> abortFlag;  // = task.abortFlag（协作式中止）。
     std::unique_ptr<CleanupDeleteExecutor> deleteExecutor;
     std::vector<std::filesystem::path> pendingEmptyDirs;
     std::mutex mutex;
@@ -481,7 +490,8 @@ CleanupDeleteExecutor& EnsureCleanupDeleteExecutor(CleanupExecutionState& state)
     if (!state.deleteExecutor) {
         state.deleteExecutor = std::make_unique<CleanupDeleteExecutor>(
             CleanupDeleteWorkload::Upgrade,
-            BuildCleanupDeleteCallbacks(state));
+            BuildCleanupDeleteCallbacks(state),
+            state.abortFlag);
         state.workerConcurrency = state.deleteExecutor->workerConcurrency();
         logInstallerInfo("[InstallFlow][Cleanup] delete executor start workload=upgrade cleanupWorkers=" +
                          std::to_string(state.workerConcurrency));
@@ -498,6 +508,9 @@ void DeleteFilesParallel(CleanupExecutionState& state,
     std::vector<std::filesystem::path> batch;
     batch.reserve(512);
     for (const auto& file : files) {
+        if (CleanupAborted(state.abortFlag)) {
+            break;
+        }
         batch.push_back(file);
         if (batch.size() >= 512) {
             executor.submit(batch);
@@ -537,6 +550,9 @@ void DeleteQueuedEmptyDirectories(CleanupExecutionState& state) {
     });
     std::set<std::string> seen;
     for (const auto& dir : state.pendingEmptyDirs) {
+        if (CleanupAborted(state.abortFlag)) {
+            break;
+        }
         const std::string key = NormalizePath(dir);
         if (key.empty() || !seen.insert(key).second) {
             continue;
@@ -612,6 +628,9 @@ void DeleteDirectoryContentsSegmented(CleanupExecutionState& state,
     for (std::filesystem::recursive_directory_iterator it(toLongPath(root), options, iterEc), end;
          !iterEc && it != end;
          it.increment(iterEc)) {
+        if (CleanupAborted(state.abortFlag)) {
+            break;
+        }
         const std::filesystem::path entryPath = it->path();
         if (IsReparsePointPath(entryPath)) {
             it.disable_recursion_pending();
@@ -853,6 +872,7 @@ bool RemoveUpgradeCleanupPath(const UninstallCleanupRule& rule,
 UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) {
     CleanupExecutionState state;
     state.task = task;
+    state.abortFlag = task.abortFlag;
     EmitCleanupHeartbeat(state, true);
 
     const std::filesystem::path previousRoot = PathFromUtf8(task.previousInstallDir).lexically_normal();
@@ -895,6 +915,9 @@ UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) 
             children.push_back(it->path());
         }
         for (size_t i = 0; i < children.size(); ++i) {
+            if (CleanupAborted(state.abortFlag)) {
+                break;
+            }
             DeletePathSegmented(state, children[i], true, false, true);
             const float progress = children.empty()
                 ? 0.8f
@@ -964,8 +987,12 @@ UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) 
 UpgradeCleanupResult ExecuteExtraPathsTask(const UpgradeCleanupTask& task) {
     CleanupExecutionState state;
     state.task = task;
+    state.abortFlag = task.abortFlag;
     EmitCleanupHeartbeat(state, true);
     for (size_t i = 0; i < task.extraPaths.size(); ++i) {
+        if (CleanupAborted(state.abortFlag)) {
+            break;
+        }
         const auto& rule = task.extraPaths[i];
         if (rule.path.empty()) {
             MarkSkipped(state);
@@ -1023,6 +1050,10 @@ UpgradeCleanupResult RunTaskWithWatchdog(UpgradeCleanupTask task,
     const std::filesystem::path heartbeatPath = BuildCleanupTempPath(".heartbeat.json");
     task.heartbeatPath = Utf8FromPath(heartbeatPath);
     task.resultPath.clear();
+    // 协作式中止标志：与异步 worker 共享同一原子；超时/取消时由本线程置位，worker 的
+    // 删除循环与删除执行器逐项检查后快速跳过，使下方 wait() 尽快返回（不能中断已进入的单次删除）。
+    auto abortFlag = std::make_shared<std::atomic<bool>>(false);
+    task.abortFlag = abortFlag;
     auto cleanupFuture = std::async(std::launch::async, [task = std::move(task)]() {
         return ExecuteCleanupTask(task);
     });
@@ -1042,6 +1073,7 @@ UpgradeCleanupResult RunTaskWithWatchdog(UpgradeCleanupTask task,
             fallback.success = false;
             fallback.message = "Cleanup cancelled";
             cancelled = true;
+            abortFlag->store(true, std::memory_order_relaxed);
             break;
         }
         if (cleanupFuture.wait_for(std::chrono::milliseconds(250)) == std::future_status::ready) {
@@ -1087,6 +1119,7 @@ UpgradeCleanupResult RunTaskWithWatchdog(UpgradeCleanupTask task,
                                 " processedCount=" + std::to_string(processedCount) +
                                 " lastCompletedAt=" + std::to_string(lastCompletedAt));
             timedOut = true;
+            abortFlag->store(true, std::memory_order_relaxed);
             break;
         }
     }

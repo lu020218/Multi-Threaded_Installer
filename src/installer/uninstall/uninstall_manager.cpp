@@ -11,6 +11,7 @@
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -332,7 +333,13 @@ struct UninstallCleanupTask {
     std::vector<std::string> cleanupRoots;
     std::vector<UninstallCleanupRule> cleanupPaths;
     UninstallCleanupPolicy policy;
+    // 协作式中止标志（与看门狗共享）：超时/取消时置位，排队删除项快速跳过、worker 尽快解绑。
+    std::shared_ptr<std::atomic<bool>> abortFlag;
 };
+
+bool UninstallAborted(const std::shared_ptr<std::atomic<bool>>& abortFlag) {
+    return abortFlag && abortFlag->load(std::memory_order_relaxed);
+}
 
 uint64_t UninstallNowMs() {
     return static_cast<uint64_t>(
@@ -380,6 +387,7 @@ std::filesystem::path BuildUninstallCleanupTempPath(const char* suffix) {
 struct UninstallCleanupExecutionState {
     UninstallCleanupTask task;
     UninstallCleanupResult result;
+    std::shared_ptr<std::atomic<bool>> abortFlag;  // = task.abortFlag（协作式中止）。
     std::mutex mutex;
     std::string currentPath;
     std::string currentAction;
@@ -629,13 +637,17 @@ void DeleteUninstallDirectorySegmented(UninstallCleanupExecutionState& state,
         std::lock_guard<std::mutex> lock(state.mutex);
         MarkUninstallSkipped(state);
     };
-    CleanupDeleteExecutor executor(CleanupDeleteWorkload::Uninstall, std::move(callbacks));
+    CleanupDeleteExecutor executor(CleanupDeleteWorkload::Uninstall, std::move(callbacks),
+                                   state.abortFlag);
     state.workerConcurrency = executor.workerConcurrency();
     std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
     std::error_code iterEc;
     for (std::filesystem::recursive_directory_iterator it(toLongPath(root), options, iterEc), end;
          !iterEc && it != end;
          it.increment(iterEc)) {
+        if (UninstallAborted(state.abortFlag)) {
+            break;
+        }
         const auto path = it->path();
         if (IsReparsePointPath(path)) {
             it.disable_recursion_pending();
@@ -817,6 +829,7 @@ bool IsPathUnderAnyRootLocal(const std::filesystem::path& path,
 UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& task) {
     UninstallCleanupExecutionState state;
     state.task = task;
+    state.abortFlag = task.abortFlag;
     EmitUninstallHeartbeat(state, true);
     const std::string currentExeNorm = normalizePathForCompare(task.currentExePath);
     const auto installRoot = PathFromUtf8(task.installDir).lexically_normal();
@@ -855,6 +868,9 @@ UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& t
         for (std::filesystem::directory_iterator it(toLongPath(installRoot), options, iterEc), end;
              !iterEc && it != end;
              it.increment(iterEc)) {
+            if (UninstallAborted(state.abortFlag)) {
+                break;
+            }
             std::error_code typeEc;
             if (!it->is_directory(typeEc)) {
                 DeleteUninstallSinglePath(state, it->path(), "delete_root_file");
@@ -879,6 +895,14 @@ UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& t
             if (!key.empty() && seen.insert(key).second) {
                 deletedCandidates.push_back(path);
             }
+            // [R5] 一并清理原子替换暂存兄弟文件 <file>.__mti_new（与 tar_stream_extractor 的
+            // BuildStagingPath 对齐）：覆盖"重启替换尚未完成就卸载"或上次升级中断遗留的暂存文件。
+            std::filesystem::path staging = path;
+            staging += ".__mti_new";
+            const std::string stagingKey = normalizePathForCompare(Utf8FromPath(staging));
+            if (!stagingKey.empty() && seen.insert(stagingKey).second) {
+                deletedCandidates.push_back(std::move(staging));
+            }
         };
         for (const auto& file : task.files) {
             addFile(file);
@@ -886,6 +910,9 @@ UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& t
         addFile(task.uninstallPath);
         addFile(task.manifestPath);
         for (const auto& path : deletedCandidates) {
+            if (UninstallAborted(state.abortFlag)) {
+                break;
+            }
             if (normalizePathForCompare(Utf8FromPath(path)) == currentExeNorm) {
                 ++state.result.skippedCount;
                 continue;
@@ -895,6 +922,9 @@ UninstallCleanupResult ExecuteUninstallCleanupTask(const UninstallCleanupTask& t
         DeleteUninstallAffectedEmptyDirs(state, deletedCandidates, task.cleanupRoots, task.currentExePath);
     }
     for (const auto& pending : pendingDirs) {
+        if (UninstallAborted(state.abortFlag)) {
+            break;
+        }
         DeleteUninstallDirectorySegmented(state, pending, true, false);
     }
     if (!installRoot.empty()) {
@@ -945,6 +975,9 @@ UninstallCleanupResult RunUninstallCleanupWithWatchdog(
     const auto heartbeatPath = BuildUninstallCleanupTempPath(".heartbeat.json");
     task.heartbeatPath = Utf8FromPath(heartbeatPath);
     task.resultPath.clear();
+    // 协作式中止标志：与异步 worker 共享；超时/取消时置位，删除循环逐项检查后快速跳过。
+    auto abortFlag = std::make_shared<std::atomic<bool>>(false);
+    task.abortFlag = abortFlag;
     auto cleanupFuture = std::async(std::launch::async, [task = std::move(task)]() {
         return ExecuteUninstallCleanupTask(task);
     });
@@ -963,6 +996,7 @@ UninstallCleanupResult RunUninstallCleanupWithWatchdog(
             fallback.success = false;
             fallback.message = "Uninstall cleanup cancelled";
             cancelled = true;
+            abortFlag->store(true, std::memory_order_relaxed);
             break;
         }
         if (cleanupFuture.wait_for(std::chrono::milliseconds(250)) == std::future_status::ready) {
@@ -1007,6 +1041,7 @@ UninstallCleanupResult RunUninstallCleanupWithWatchdog(
                                 " processedCount=" + std::to_string(processedCount) +
                                 " lastCompletedAt=" + std::to_string(lastCompletedAt));
             timedOut = true;
+            abortFlag->store(true, std::memory_order_relaxed);
             break;
         }
     }

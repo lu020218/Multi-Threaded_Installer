@@ -46,10 +46,12 @@ uint64_t CleanupDeleteNowMs() {
 class CleanupDeleteExecutor::Impl {
 public:
     Impl(CleanupDeleteWorkload workload,
-         CleanupDeleteCallbacks callbacks)
+         CleanupDeleteCallbacks callbacks,
+         std::shared_ptr<std::atomic<bool>> abortFlag)
         : workload_(workload),
           concurrency_(ResolveCleanupDeleteConcurrency(workload)),
-          callbacks_(std::move(callbacks)) {}
+          callbacks_(std::move(callbacks)),
+          abortFlag_(std::move(abortFlag)) {}
 
     ~Impl() {
         finish();
@@ -104,6 +106,10 @@ public:
 
 private:
     void deleteOne(std::filesystem::path path) {
+        // 协作式中止：看门狗超时/取消后置位，剩余排队项快速跳过，使 finish() 尽快返回。
+        if (abortFlag_ && abortFlag_->load(std::memory_order_relaxed)) {
+            return;
+        }
         if (path.empty()) {
             if (callbacks_.onEmptyPathSkipped) {
                 callbacks_.onEmptyPathSkipped();
@@ -135,14 +141,16 @@ private:
     CleanupDeleteWorkload workload_;
     uint32_t concurrency_;
     CleanupDeleteCallbacks callbacks_;
+    std::shared_ptr<std::atomic<bool>> abortFlag_;
     std::mutex startMutex_;
     bool started_ = false;
     std::unique_ptr<InstallerTaskManager> taskManager_;
 };
 
 CleanupDeleteExecutor::CleanupDeleteExecutor(CleanupDeleteWorkload workload,
-                                             CleanupDeleteCallbacks callbacks)
-    : impl_(std::make_unique<Impl>(workload, std::move(callbacks))) {}
+                                             CleanupDeleteCallbacks callbacks,
+                                             std::shared_ptr<std::atomic<bool>> abortFlag)
+    : impl_(std::make_unique<Impl>(workload, std::move(callbacks), std::move(abortFlag))) {}
 
 CleanupDeleteExecutor::~CleanupDeleteExecutor() = default;
 

@@ -291,7 +291,7 @@ GUI 安装：
 - **组件表写死在引擎里**（`src/installer/components/component_registry.cpp`），不在 YAML 声明。每个组件描述：`id`、`relativePath`（相对 `plugins`）、`args`、`timeoutSec`、`successExitCodes`、`rebootExitCodes`、`defaultSelected`、`required`、`onFailureAbort`。
 - **安装程序必须随 payload 落在安装目录下的 `plugins` 子目录**：`<安装目录>\plugins\<relativePath>`。打包时把它放进 `--input/plugins/...`，并在 `package.layout` 把 `plugins` 映射到 `%InstallDir%\plugins`（**不要**映射到 `%ProgramData%` 等别处，否则运行期取不到）。
 - **GUI**：欢迎页用皮肤 `welcome_page.xml` 里的 `<CheckBox userdata="component:<id>">` 勾选框呈现；安装器只安装**被勾选且 id 命中注册表**的组件。注册表里有、但皮肤没有对应勾选框的组件→默认不安装。`required` 组件勾上且禁用。
-- **静默**：无界面，按「注册表 + CLI」选择：缺省 = `defaultSelected ∪ required`；`--all-components` 全选；`--skip-components` 仅 `required`；`--component <id>`（可重复）/ `--components a,b,c` 显式选。
+- **静默**：无界面，按「注册表 + `--components`」选择：不带 `--components` = `defaultSelected ∪ required`；`--components a,b,c` = 该列表（∪ required，仅命中注册表的 id）；`--components ""`（显式空）= 仅 `required`。
 - 退出码：命中 `successExitCodes`（默认 `{0}`）为成功；命中 `rebootExitCodes`（如 `{3010}`）置「需重启」。失败时 `onFailureAbort: true` 中止并回滚，否则记日志继续。组件 stdout/stderr captured 到 `component_<id>.log`（安装器日志同目录），并注入 `INSTALL_DIR`/`VERSION` 环境变量。
 
 ### 增删一个组件（维护流程）

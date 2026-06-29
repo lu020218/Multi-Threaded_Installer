@@ -487,9 +487,10 @@ bool ApplyPreviousOptionsForUpgrade(const ExtendedInstallationMetadata& metadata
     return true;
 }
 
-// 静默模式组件选择（无界面，按"注册表 + CLI 开关"决定）：required 恒选中；
-// --all-components 全选；--skip-components 仅 required；显式 --component(s) 取并集；
-// 否则取注册表 defaultSelected。仅保留命中注册表的 id。
+// 静默模式组件选择（无界面，按"注册表 + --components"决定）：required 恒选中；
+//   · 未指定 --components → 取注册表 defaultSelected；
+//   · 指定 --components a,b → 取该列表（仅命中注册表的 id）；
+//   · 指定但为空（--components ""）→ 仅 required。
 std::vector<std::string> ResolveSilentComponentSelection(const CliSupport::InstallerArgs& args) {
     const auto& registry = GetComponentRegistry();
     std::vector<std::string> selected;
@@ -503,13 +504,7 @@ std::vector<std::string> ResolveSilentComponentSelection(const CliSupport::Insta
             addUnique(spec.id);
         }
     }
-    if (args.allComponents) {
-        for (const auto& spec : registry) {
-            addUnique(spec.id);
-        }
-    } else if (args.skipComponents) {
-        // 仅 required（上面已加）。
-    } else if (!args.selectedComponentIds.empty()) {
+    if (args.componentsSpecified) {
         for (const auto& id : args.selectedComponentIds) {
             if (FindComponentById(id)) {
                 addUnique(id);

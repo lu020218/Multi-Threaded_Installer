@@ -50,9 +50,8 @@ public:
         bool desktopIconSpecified = false;              ///< 是否显式指定桌面图标。
         bool desktopIconEnabled = false;                ///< 桌面图标取值。
         std::string uninstallManifestPath;              ///< --uninstall-manifest 指定清单。
-        bool allComponents = false;                     ///< --all-components 安装全部组件。
-        bool skipComponents = false;                    ///< --skip-components 仅装 required 组件。
-        std::vector<std::string> selectedComponentIds;  ///< --component/--components 显式选中的组件 id。
+        bool componentsSpecified = false;               ///< 是否出现 --components（区分"未指定=默认"与"显式空=仅必装"）。
+        std::vector<std::string> selectedComponentIds;  ///< --components 显式选中的组件 id（逗号分隔）。
         bool showHelp = false;                          ///< 是否请求帮助。
     };
 

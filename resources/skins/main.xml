@@ -7,8 +7,8 @@
     <Font shared="true" id="4" name="Microsoft YaHei" size="20" bold="false" />
     <Font shared="true" id="5" name="Microsoft YaHei" size="14" bold="true" />
 
-    <!-- 竖向滚动条统一样式：隐藏上下箭头，仅扁平圆角灰色滑块（9 宫格竖向拉伸），轨道透明。 -->
-    <Default name="VScrollBar" value="width=&quot;10&quot; showbutton1=&quot;false&quot; showbutton2=&quot;false&quot; thumbnormalimage=&quot;file='images\sb_thumb_normal.png' corner='0,5,0,5'&quot; thumbhotimage=&quot;file='images\sb_thumb_hot.png' corner='0,5,0,5'&quot; thumbpushedimage=&quot;file='images\sb_thumb_pushed.png' corner='0,5,0,5'&quot;" />
+    <!-- 竖向滚动条统一样式：上/下箭头按钮(灰色 caret) + 扁平圆角灰色滑块(9 宫格竖向拉伸)，轨道透明。 -->
+    <Default name="VScrollBar" value="width=&quot;10&quot; button1normalimage=&quot;file='images\sb_up_normal.png'&quot; button1hotimage=&quot;file='images\sb_up_hot.png'&quot; button1pushedimage=&quot;file='images\sb_up_pushed.png'&quot; button2normalimage=&quot;file='images\sb_down_normal.png'&quot; button2hotimage=&quot;file='images\sb_down_hot.png'&quot; button2pushedimage=&quot;file='images\sb_down_pushed.png'&quot; thumbnormalimage=&quot;file='images\sb_thumb_normal.png' corner='0,5,0,5'&quot; thumbhotimage=&quot;file='images\sb_thumb_hot.png' corner='0,5,0,5'&quot; thumbpushedimage=&quot;file='images\sb_thumb_pushed.png' corner='0,5,0,5'&quot;" />
 
     <VerticalLayout bkcolor="#FF0B1020">
         <HorizontalLayout height="35" bkcolor="#000B1020" padding="0,10,0,0">

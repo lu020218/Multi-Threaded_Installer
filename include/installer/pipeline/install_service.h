@@ -75,6 +75,9 @@ struct InstallServiceOptions {
     bool autoStartupEnabled = false;     ///< 覆盖值：开机自启。
     bool overrideDesktopIcons = false;   ///< 是否覆盖桌面快捷方式默认值。
     bool desktopIconsEnabled = false;    ///< 覆盖值：桌面快捷方式。
+    /// 选中的组件 id（GUI 勾选 / 静默 CLI 解析得到）。引擎据此 + 注册表 required 决定装哪些组件；
+    /// 注册表里有、但不在此集合且非 required 的组件跳过。空集合 = 仅装 required 组件。
+    std::vector<std::string> selectedComponentIds;
     std::function<bool()> cancellationCallback;  ///< 取消查询回调（返回 true 表示请求取消）。
 };
 

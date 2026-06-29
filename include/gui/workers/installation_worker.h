@@ -30,7 +30,8 @@ public:
                            bool autoRun,
                            bool desktopIcons,
                            const std::wstring& languageCode,
-                           bool upgradeMode = false);
+                           bool upgradeMode = false,
+                           const std::vector<std::string>& selectedComponentIds = {});
 
     /// 请求取消（worker 在安全点检查并中止）。
     void RequestCancellation();
@@ -48,6 +49,7 @@ private:
     bool m_desktopIcons;           ///< 是否建桌面快捷方式。
     bool m_upgradeMode;            ///< 升级模式。
     std::wstring m_languageCode;   ///< 界面语言。
+    std::vector<std::string> m_selectedComponentIds;  ///< 选中的组件 id。
     std::atomic<uint64_t> m_totalBytes;          ///< 总字节数（进度计算）。
     std::atomic<uint64_t> m_completedBytes;      ///< 已完成字节数。
     std::atomic<uint64_t> m_currentFolderBytes;  ///< 当前 folder 字节数。

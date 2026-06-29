@@ -1,6 +1,7 @@
 #include "installer/pipeline/install_service.h"
 
 #include "common/installer_logger.h"
+#include "installer/components/component_registry.h"
 #include "installer/hooks/component_launcher.h"
 #include "installer/hooks/hook_runner.h"
 #include "installer/pipeline/install_cleanup_executor.h"
@@ -19,6 +20,7 @@
 #include <chrono>
 #include <filesystem>
 #include <sstream>
+#include <unordered_set>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -121,6 +123,92 @@ void RollbackInstalledArtifacts(const ExtendedInstallationMetadata& metadata,
                         pathResolver);
 
     logInstallerInfo("[Rollback] postInstall abort rollback completed.");
+}
+
+// [组件安装] 解压完成后、finalize 前运行。按引擎注册表 + 本次选择集（options.selectedComponentIds
+// ∪ required）依序运行 <installRoot>\plugins\<relativePath> 下的组件安装程序：
+//   · 注册表里有、但未选中且非 required 的组件：跳过；
+//   · 安装程序文件缺失：required/onFailureAbort 视为失败，否则告警跳过；
+//   · 退出码按 spec.successExitCodes 判成败、按 rebootExitCodes 累加 rebootRequired；
+//   · 失败时 onFailureAbort=true → 返回 false（调用方回滚中止），否则记日志继续。
+bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
+                           const InstallServiceOptions& options,
+                           const std::string& installRoot,
+                           InstallProgressReporter& reporter,
+                           bool& rebootRequired,
+                           std::string& error) {
+    const auto& registry = GetComponentRegistry();
+    if (registry.empty()) {
+        return true;
+    }
+    if (installRoot.empty()) {
+        // 没有可解析的安装根就无法定位 plugins；有选中组件则视为失败，否则跳过。
+        for (const auto& spec : registry) {
+            const bool chosen =
+                spec.required ||
+                std::find(options.selectedComponentIds.begin(),
+                          options.selectedComponentIds.end(), spec.id) !=
+                    options.selectedComponentIds.end();
+            if (chosen) {
+                error = "Cannot run components: install root is empty.";
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::unordered_set<std::string> selected(options.selectedComponentIds.begin(),
+                                             options.selectedComponentIds.end());
+    const std::filesystem::path pluginsRoot = PathFromUtf8(installRoot) / "plugins";
+
+    for (const auto& spec : registry) {
+        const bool chosen = spec.required || selected.count(spec.id) > 0;
+        if (!chosen) {
+            reporter.EmitMessage(InstallServiceEventType::Info,
+                                 "Component not selected, skipped: " + spec.id);
+            continue;
+        }
+
+        const std::filesystem::path exe = pluginsRoot / PathFromUtf8(spec.relativePath);
+        std::error_code existsEc;
+        if (!std::filesystem::exists(exe, existsEc)) {
+            const std::string msg =
+                "Component installer not found: " + Utf8FromPath(exe) + " (id=" + spec.id + ")";
+            if (spec.onFailureAbort || spec.required) {
+                error = msg;
+                return false;
+            }
+            reporter.EmitMessage(InstallServiceEventType::Warning, msg + " — skipped");
+            continue;
+        }
+
+        reporter.EmitMessage(InstallServiceEventType::Info, "Installing component: " + spec.id);
+        ComponentInstallRequest req;
+        req.executablePath = exe;
+        req.args = spec.args;
+        req.timeoutSec = spec.timeoutSec;
+        req.hideWindow = true;
+        req.injectInstallDir = installRoot;
+        req.injectVersion = metadata.appVersion;
+        req.logBaseName = "component_" + spec.id;
+
+        const ComponentInstallResult cr = RunComponentInstaller(req);
+        if (cr.started && ComponentExitNeedsReboot(spec, cr.exitCode)) {
+            rebootRequired = true;
+        }
+        const bool ok = cr.started && !cr.timedOut && ComponentExitIsSuccess(spec, cr.exitCode);
+        if (!ok) {
+            const std::string msg = "Component '" + spec.id + "' failed: " + cr.message;
+            if (spec.onFailureAbort) {
+                error = msg;
+                return false;
+            }
+            reporter.EmitMessage(InstallServiceEventType::Warning, msg + " — continuing");
+        } else {
+            reporter.EmitMessage(InstallServiceEventType::Info, "Component installed: " + spec.id);
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -322,29 +410,28 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         result.rebootRequired = executionOutput.rebootRequired;
         result.pendingReplaceFiles = std::move(executionOutput.pendingReplaceFiles);
 
-        // ───────────────────────────────────────────────────────────────────
-        // [组件安装挂钩点] 主载荷已解压完成、安装目录文件就绪，finalize（写注册表/快捷方式/
-        // 卸载入口）尚未开始。此处适合运行随产品一起安装的「组件安装程序」
-        // （如 VC++ 运行库、驱动、第三方 redist 等 exe 安装包或 bat/cmd/ps1/msi 脚本）。
-        //
-        // 用法：用 installer/hooks/component_launcher.h 提供的 RunComponentInstaller，
-        // 它支持 exe/bat/cmd/ps1/msi，按退出码判定成功，可设超时与隐藏窗口。
-        // 组件安装程序通常随载荷解压到安装目录下（result.installRootPath）。
-        //
-        // 在下方按业务需要补充：决定装哪些组件、各自的参数/超时、失败是中止还是继续。
-        // 示例（后续替换为真实业务逻辑）：
-        //
-        //   ComponentInstallRequest req;
-        //   req.executablePath = PathFromUtf8(result.installRootPath) / "redist" / "vc_redist.x64.exe";
-        //   req.args = "/install /quiet /norestart";
-        //   req.timeoutSec = 600;
-        //   req.successExitCode = 0;            // 个别安装器用 3010 表示“需重启”，可另行判定
-        //   ComponentInstallResult cr = RunComponentInstaller(req);
-        //   if (!cr.success) {
-        //       // 中止：markFailed(cr.message, false, true); return finishResult();
-        //       // 或继续：reporter.EmitMessage(InstallServiceEventType::Warning, cr.message);
-        //   }
-        // ───────────────────────────────────────────────────────────────────
+        // [组件安装] 主载荷已解压、安装目录就绪，finalize 尚未开始。按引擎注册表 + 本次选择集
+        // 运行 <installRoot>\plugins 下被勾选/必装的组件安装程序（详见 RunSelectedComponents）。
+        {
+            const std::string componentInstallRoot =
+                result.installRootPath.empty() ? plan.pathDecision.resolvedInstallRoot
+                                                : result.installRootPath;
+            bool componentReboot = false;
+            std::string componentError;
+            if (!RunSelectedComponents(metadata, options, componentInstallRoot, reporter,
+                                       componentReboot, componentError)) {
+                // 组件以 abort 失败：与 postInstall abort 一致，回滚已装产物后判失败。
+                RollbackInstalledArtifacts(metadata, plan, options, result, pathResolver, reporter);
+                markFailed(componentError.empty()
+                               ? "Component installation failed; installation rolled back."
+                               : componentError,
+                           false, true);
+                return finishResult();
+            }
+            if (componentReboot) {
+                result.rebootRequired = true;
+            }
+        }
 
         auto finalizeStart = std::chrono::steady_clock::now();
         if (!ExecuteInstallFinalization(metadata,

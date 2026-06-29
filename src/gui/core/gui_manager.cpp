@@ -14,6 +14,7 @@
 #include "gui/workers/installation_worker.h"
 #include "gui/workers/uninstall_worker.h"
 #include "installer/payload/metadata_parser.h"
+#include "installer/components/component_registry.h"
 #include "installer/state/installed_instance_resolver.h"
 #include "installer/platform/installer_helpers.h"
 #include "installer/platform/gui_resource_loader.h"
@@ -286,11 +287,19 @@ void GUIManager::InitWindow() {
         if (m_pTabPages) {
             m_pTabPages->SelectItem(GetProgressPageIndex());
         }
+        // 自动安装（升级）不经欢迎页交互，组件按注册表默认（defaultSelected ∪ required）选择。
+        std::vector<std::string> autoComponentIds;
+        for (const auto& spec : GetComponentRegistry()) {
+            if (spec.defaultSelected || spec.required) {
+                autoComponentIds.push_back(spec.id);
+            }
+        }
         StartInstallationWithOptions(m_autoStartInstallPath,
                                      m_autoStartAutoRun,
                                      m_autoStartDesktopIcons,
                                      m_autoStartLanguageCode,
-                                     m_autoStartUpgradeMode);
+                                     m_autoStartUpgradeMode,
+                                     autoComponentIds);
     }
 }
 
@@ -349,7 +358,9 @@ void GUIManager::InitControls() {
     if (pShortcut) {
         pShortcut->SetCheck(m_config.desktopIcons);
     }
-    
+
+    ApplyComponentCheckboxDefaults();
+
     GUITextPresenter::BindStaticAppTexts(m_pm, m_config);
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetWelcomePageIndex());
@@ -543,14 +554,33 @@ void GUIManager::OnInstallButtonClick() {
                                  request.autoRun,
                                  request.desktopIcons,
                                  request.languageCode,
-                                 false);
+                                 false,
+                                 request.selectedComponentIds);
+}
+
+void GUIManager::ApplyComponentCheckboxDefaults() {
+    for (const auto& entry : GUIInstallActions::EnumerateComponentCheckboxes(m_pm)) {
+        CCheckBoxUI* chk = entry.second;
+        if (!chk) {
+            continue;
+        }
+        if (const ComponentSpec* spec = FindComponentById(entry.first)) {
+            chk->SetCheck(spec->defaultSelected || spec->required);
+            chk->SetEnabled(!spec->required);  // 必装项勾上且禁用。
+        } else {
+            // 皮肤里有勾选框、但注册表无该组件：取消勾选并禁用，永不安装（与"无注册表则跳过"一致）。
+            chk->SetCheck(false);
+            chk->SetEnabled(false);
+        }
+    }
 }
 
 bool GUIManager::StartInstallationWithOptions(const std::wstring& installPath,
                                               bool autoRun,
                                               bool desktopIcons,
                                               const std::wstring& languageCode,
-                                              bool upgradeMode) {
+                                              bool upgradeMode,
+                                              const std::vector<std::string>& selectedComponentIds) {
     StopProgressTimer();
     m_progressTarget = 0.0f;
     m_progressDisplayed = 0.0f;
@@ -583,7 +613,8 @@ bool GUIManager::StartInstallationWithOptions(const std::wstring& installPath,
                                  autoRun,
                                  desktopIcons,
                                  languageCode,
-                                 upgradeMode);
+                                 upgradeMode,
+                                 selectedComponentIds);
 
     if (m_pTabPages) {
         m_pTabPages->SelectItem(GetProgressPageIndex());

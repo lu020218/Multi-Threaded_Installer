@@ -284,7 +284,27 @@ GUI 安装：
 
 ---
 
-## 8. 增量安装
+## 8. 组件安装（界面勾选）
+
+「组件」= 随产品分发、安装时按需运行的第三方安装程序（浏览器、运行库、驱动等）。它与 §7 的 hook 脚本是两套独立机制。
+
+- **组件表写死在引擎里**（`src/installer/components/component_registry.cpp`），不在 YAML 声明。每个组件描述：`id`、`relativePath`（相对 `plugins`）、`args`、`timeoutSec`、`successExitCodes`、`rebootExitCodes`、`defaultSelected`、`required`、`onFailureAbort`。
+- **安装程序必须随 payload 落在安装目录下的 `plugins` 子目录**：`<安装目录>\plugins\<relativePath>`。打包时把它放进 `--input/plugins/...`，并在 `package.layout` 把 `plugins` 映射到 `%InstallDir%\plugins`（**不要**映射到 `%ProgramData%` 等别处，否则运行期取不到）。
+- **GUI**：欢迎页用皮肤 `welcome_page.xml` 里的 `<CheckBox userdata="component:<id>">` 勾选框呈现；安装器只安装**被勾选且 id 命中注册表**的组件。注册表里有、但皮肤没有对应勾选框的组件→默认不安装。`required` 组件勾上且禁用。
+- **静默**：无界面，按「注册表 + CLI」选择：缺省 = `defaultSelected ∪ required`；`--all-components` 全选；`--skip-components` 仅 `required`；`--component <id>`（可重复）/ `--components a,b,c` 显式选。
+- 退出码：命中 `successExitCodes`（默认 `{0}`）为成功；命中 `rebootExitCodes`（如 `{3010}`）置「需重启」。失败时 `onFailureAbort: true` 中止并回滚，否则记日志继续。组件 stdout/stderr captured 到 `component_<id>.log`（安装器日志同目录），并注入 `INSTALL_DIR`/`VERSION` 环境变量。
+
+### 增删一个组件（维护流程）
+1. 把安装程序放进 `--input/plugins/<...>`（解压后即 `<安装目录>\plugins\<...>`）；
+2. 在 `component_registry.cpp` 的组件表加/删一个 `ComponentSpec` 块；
+3. 在 `welcome_page.xml` 加/删对应的 `<CheckBox userdata="component:<id>" text="...">`（GUI 需要展示时）；
+4. 重新编译 installer（组件表内置，增删需重编）。
+
+> 组件自身的卸载由其自带卸载器负责，本产品卸载不会自动反装组件。
+
+---
+
+## 9. 增量安装
 
 无论 `compression` 如何配置，安装器都会在 `install.manifest.json` 里记录每个文件的内容指纹（FNV-1a）。下次「覆盖/升级」安装时：
 
@@ -293,7 +313,7 @@ GUI 安装：
 
 ---
 
-## 9. 故障排查
+## 10. 故障排查
 
 | 现象 | 原因与处理 |
 |------|-----------|
@@ -307,7 +327,7 @@ GUI 安装：
 
 ---
 
-## 10. 相关文档
+## 11. 相关文档
 
 - [打包器流程图](打包器流程图.md)
 - [安装器流程图](安装器流程图.md)

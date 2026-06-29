@@ -8,6 +8,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -55,6 +56,88 @@ std::wstring ResolvePowerShellExePath() {
 #endif
     return L"powershell.exe";
 }
+
+#ifdef _WIN32
+// 复制当前（安装器）进程环境，注入/覆盖 INSTALL_DIR 与 VERSION，构造子进程环境块。
+// 让组件安装程序能读到安装目录与版本（与 hook 脚本一致）。
+std::vector<wchar_t> BuildComponentEnvBlock(const std::string& installDir,
+                                            const std::string& version) {
+    std::vector<std::pair<std::wstring, std::wstring>> items;
+    LPWCH existing = GetEnvironmentStringsW();
+    if (existing) {
+        for (LPWCH cursor = existing; *cursor != L'\0';) {
+            std::wstring entry(cursor);
+            cursor += entry.size() + 1;
+            const size_t eq = entry.find(L'=');
+            if (eq == std::wstring::npos || eq == 0) {
+                continue;
+            }
+            const std::wstring name = entry.substr(0, eq);
+            if (_wcsicmp(name.c_str(), L"INSTALL_DIR") == 0 ||
+                _wcsicmp(name.c_str(), L"VERSION") == 0) {
+                continue;  // 由下方注入，避免重复。
+            }
+            items.emplace_back(name, entry.substr(eq + 1));
+        }
+        FreeEnvironmentStringsW(existing);
+    }
+    if (!installDir.empty()) {
+        items.emplace_back(L"INSTALL_DIR", Utf8ToWide(installDir));
+    }
+    if (!version.empty()) {
+        items.emplace_back(L"VERSION", Utf8ToWide(version));
+    }
+    std::vector<wchar_t> block;
+    for (const auto& kv : items) {
+        const std::wstring e = kv.first + L"=" + kv.second;
+        block.insert(block.end(), e.begin(), e.end());
+        block.push_back(L'\0');
+    }
+    block.push_back(L'\0');  // 双 NUL 结束
+    return block;
+}
+
+// 创建（覆盖）组件输出日志文件，返回可继承写句柄；与安装器日志同目录、以 logBaseName 命名。
+UniqueHandle CreateComponentLogFile(const std::string& logBaseName) {
+    if (logBaseName.empty()) {
+        return UniqueHandle(INVALID_HANDLE_VALUE);
+    }
+    std::filesystem::path dir;
+    const std::string installerLog = getInstallerLogPath();
+    if (!installerLog.empty()) {
+        dir = PathFromUtf8(installerLog).parent_path();
+    }
+    if (dir.empty()) {
+        wchar_t temp[MAX_PATH] = {};
+        const DWORD n = GetTempPathW(MAX_PATH, temp);
+        if (n > 0 && n <= MAX_PATH) {
+            dir = std::filesystem::path(temp);
+        }
+    }
+    std::string sanitized = logBaseName;
+    for (char& c : sanitized) {
+        if (c == '\\' || c == '/' || c == ':') {
+            c = '_';
+        }
+    }
+    const std::filesystem::path path = dir / (Utf8ToWide(sanitized) + L".log");
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    sa.lpSecurityDescriptor = nullptr;
+    HANDLE handle = CreateFileW(path.c_str(),
+                                GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                &sa,
+                                CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL,
+                                nullptr);
+    if (handle != INVALID_HANDLE_VALUE) {
+        logInstallerInfo("[Component] output redirected to: " + Utf8FromPath(path));
+    }
+    return UniqueHandle(handle);
+}
+#endif // _WIN32
 
 } // namespace
 
@@ -127,10 +210,23 @@ ComponentInstallResult RunComponentInstaller(const ComponentInstallRequest& requ
         }
     }
 
+    // 注入 INSTALL_DIR/VERSION 的子进程环境块；捕获 stdout/stderr 到组件日志文件（可选）。
+    std::vector<wchar_t> environment =
+        BuildComponentEnvBlock(request.injectInstallDir, request.injectVersion);
+    UniqueHandle componentLog = CreateComponentLogFile(request.logBaseName);
+
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(startupInfo);
     startupInfo.dwFlags = STARTF_USESHOWWINDOW;
     startupInfo.wShowWindow = request.hideWindow ? SW_HIDE : SW_SHOWNORMAL;
+    BOOL inheritHandles = FALSE;
+    if (componentLog) {
+        startupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        startupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        startupInfo.hStdOutput = componentLog.get();
+        startupInfo.hStdError = componentLog.get();
+        inheritHandles = TRUE;
+    }
     PROCESS_INFORMATION processInfo{};
 
     DWORD creationFlags = CREATE_UNICODE_ENVIRONMENT;
@@ -138,14 +234,14 @@ ComponentInstallResult RunComponentInstaller(const ComponentInstallRequest& requ
         creationFlags |= CREATE_NO_WINDOW;
     }
 
-    // 继承当前（安装器）进程的环境与管理员权限运行该组件安装程序。
+    // 以安装器的管理员权限运行该组件安装程序；环境注入 INSTALL_DIR/VERSION。
     BOOL started = CreateProcessW(nullptr,
                                   commandLine.data(),
                                   nullptr,
                                   nullptr,
-                                  FALSE,
+                                  inheritHandles,
                                   creationFlags,
-                                  nullptr,
+                                  environment.data(),
                                   workingDir.empty() ? nullptr : workingDir.c_str(),
                                   &startupInfo,
                                   &processInfo);

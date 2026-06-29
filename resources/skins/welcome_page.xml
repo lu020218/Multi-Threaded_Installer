@@ -19,7 +19,7 @@
         <VerticalLayout height="42">
             <HorizontalLayout height="16">
                 <Control width="stretch"/>
-                <CheckBox name="chkChrome" userdata="component:optional_plugins" width="60" font="0" textcolor="0xFFFFFFFF" resourcetext="true" text="msg.pluginInstall" selectedimage="file='images\check_blue.png' dest='0,0,16,16'" normalimage="file='images\check_darkgray.png' dest='0,0,16,16'"/>
+                <CheckBox name="chkChrome" userdata="component:chrome" width="60" font="0" textcolor="0xFFFFFFFF" resourcetext="true" text="msg.pluginInstall" selectedimage="file='images\check_blue.png' dest='0,0,16,16'" normalimage="file='images\check_darkgray.png' dest='0,0,16,16'"/>
                 <Button name="btnChrome" cursor="hand" padding="0,0,0,0" resourcetext="true" text="msg.chromePlugin" showhtml="true" textcolor="#FF0091FF" font="0" width="100" align="left" height="16"/>
                 <Control width="stretch"/>
             </HorizontalLayout>

@@ -102,7 +102,8 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
                                            bool autoRun,
                                            bool desktopIcons,
                                            const std::wstring& languageCode,
-                                           bool upgradeMode) {
+                                           bool upgradeMode,
+                                           const std::vector<std::string>& selectedComponentIds) {
     if (m_running.load()) {
         return;
     }
@@ -114,6 +115,7 @@ void InstallationWorker::StartInstallation(const std::wstring& installPath,
     m_desktopIcons = desktopIcons;
     m_upgradeMode = upgradeMode;
     m_languageCode = languageCode;
+    m_selectedComponentIds = selectedComponentIds;
 
     m_workerThread = std::thread(&InstallationWorker::WorkerThreadFunc, this, installPath);
 }
@@ -299,6 +301,7 @@ if (m_cancellationRequested) {
         serviceOptions.applyRegistryBeforeFinalize = true;
         serviceOptions.preRegistryInstallPath = installPathStr;
         serviceOptions.writeUninstallRegistry = true;
+        serviceOptions.selectedComponentIds = m_selectedComponentIds;
         serviceOptions.cancellationCallback = [this]() {
             return m_cancellationRequested.load();
         };

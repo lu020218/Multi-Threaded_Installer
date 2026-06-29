@@ -204,9 +204,36 @@ CliSupport::InstallerArgs CliSupport::parseInstallerArgs(int argc, char* argv[])
             args.defaultDestination = argv[++i];
         } else if (arg == "--uninstall-manifest" && i + 1 < argc) {
             args.uninstallManifestPath = argv[++i];
+        } else if (arg == "--all-components") {
+            args.allComponents = true;
+        } else if (arg == "--skip-components") {
+            args.skipComponents = true;
+        } else if (arg == "--component" && i + 1 < argc) {
+            std::string id = trim(argv[++i]);
+            if (!id.empty()) {
+                args.selectedComponentIds.push_back(id);
+            }
+        } else if (arg == "--components" && i + 1 < argc) {
+            // 逗号分隔的组件 id 列表。
+            std::string list = argv[++i];
+            size_t start = 0;
+            while (start <= list.size()) {
+                size_t comma = list.find(',', start);
+                if (comma == std::string::npos) {
+                    comma = list.size();
+                }
+                std::string id = trim(list.substr(start, comma - start));
+                if (!id.empty()) {
+                    args.selectedComponentIds.push_back(id);
+                }
+                if (comma == list.size()) {
+                    break;
+                }
+                start = comma + 1;
+            }
         }
     }
-    
+
     return args;
 }
 
@@ -235,6 +262,10 @@ void CliSupport::showInstallerHelp() {
     std::cout << "  --upgrade                      Upgrade mode; requires existing install info" << std::endl;
     std::cout << "  --auto-startup <true|false>    Enable or disable auto startup" << std::endl;
     std::cout << "  --desktop-icon <true|false>    Enable or disable desktop icon" << std::endl;
+    std::cout << "  --components <id1,id2,...>     Install only these components (silent)" << std::endl;
+    std::cout << "  --component <id>               Select one component (repeatable)" << std::endl;
+    std::cout << "  --all-components               Install all registered components" << std::endl;
+    std::cout << "  --skip-components              Install only required components" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;

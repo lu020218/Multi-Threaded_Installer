@@ -1,6 +1,7 @@
 ﻿#include "installer/app/launch_support.h"
 
 #include "installer/app/single_instance.h"
+#include "installer/components/component_registry.h"
 #include "common/engine_defaults.h"
 #include "common/installer_exit_codes.h"
 #include "common/installer_logger.h"
@@ -486,6 +487,44 @@ bool ApplyPreviousOptionsForUpgrade(const ExtendedInstallationMetadata& metadata
     return true;
 }
 
+// 静默模式组件选择（无界面，按"注册表 + CLI 开关"决定）：required 恒选中；
+// --all-components 全选；--skip-components 仅 required；显式 --component(s) 取并集；
+// 否则取注册表 defaultSelected。仅保留命中注册表的 id。
+std::vector<std::string> ResolveSilentComponentSelection(const CliSupport::InstallerArgs& args) {
+    const auto& registry = GetComponentRegistry();
+    std::vector<std::string> selected;
+    auto addUnique = [&selected](const std::string& id) {
+        if (std::find(selected.begin(), selected.end(), id) == selected.end()) {
+            selected.push_back(id);
+        }
+    };
+    for (const auto& spec : registry) {
+        if (spec.required) {
+            addUnique(spec.id);
+        }
+    }
+    if (args.allComponents) {
+        for (const auto& spec : registry) {
+            addUnique(spec.id);
+        }
+    } else if (args.skipComponents) {
+        // 仅 required（上面已加）。
+    } else if (!args.selectedComponentIds.empty()) {
+        for (const auto& id : args.selectedComponentIds) {
+            if (FindComponentById(id)) {
+                addUnique(id);
+            }
+        }
+    } else {
+        for (const auto& spec : registry) {
+            if (spec.defaultSelected) {
+                addUnique(spec.id);
+            }
+        }
+    }
+    return selected;
+}
+
 int RunSilentInstallLikeMode(const LaunchContext& context) {
     CliSupport console;
     InstallerPathResolver pathResolver;
@@ -553,6 +592,7 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
         options.desktopIconsEnabled = context.args.desktopIconEnabled;
     }
     options.writeUninstallRegistry = true;
+    options.selectedComponentIds = ResolveSilentComponentSelection(context.args);
 
     InstallServiceResult result = ExecuteInstallService(
         metadata, parser, pathResolver, options, BuildConsoleServiceCallbacks(console));

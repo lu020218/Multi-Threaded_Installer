@@ -39,7 +39,10 @@ struct ComponentInstallRequest {
     std::filesystem::path workingDirectory;  ///< 工作目录；留空则用 executablePath 所在目录。
     unsigned int timeoutSec = 0;             ///< 超时秒数，0 = 无限等待。
     bool hideWindow = true;                  ///< 是否隐藏子进程窗口。
-    unsigned long successExitCode = 0;       ///< 视为成功的退出码（默认 0）。
+    unsigned long successExitCode = 0;       ///< 视为成功的退出码（默认 0；多码判定由调用方按 result.exitCode 处理）。
+    std::string injectInstallDir;            ///< 注入子进程环境 INSTALL_DIR（空则不注入）。
+    std::string injectVersion;               ///< 注入子进程环境 VERSION（空则不注入）。
+    std::string logBaseName;                 ///< 输出日志文件名（不含扩展名）；空则不捕获子进程输出。
 };
 
 /// 组件安装程序运行结果。

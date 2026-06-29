@@ -3,12 +3,37 @@
 #include "gui/core/gui_helpers.h"
 #include "gui/core/gui_runtime_utils.h"
 #include "installer/platform/installer_helpers.h"
+#include "common/utf8_utils.h"
 
 using namespace DuiLib;
 
 namespace MultiThreadedInstaller::GUIInstallActions {
 
 namespace {
+
+// userdata 前缀约定：组件勾选框写 userdata="component:<id>"。
+const std::wstring kComponentUserDataPrefix = L"component:";
+
+// FindControl 收集回调：把所有 component:<id> 勾选框累积进 pData（始终返回 nullptr 以遍历全部）。
+CControlUI* CALLBACK CollectComponentCheckboxProc(CControlUI* control, LPVOID data) {
+    if (!control || !data) {
+        return nullptr;
+    }
+    DuiLib::CDuiString ud = control->GetUserData();
+    const wchar_t* raw = ud.GetData();
+    if (raw) {
+        std::wstring text(raw);
+        if (text.rfind(kComponentUserDataPrefix, 0) == 0) {
+            const std::wstring idW = text.substr(kComponentUserDataPrefix.size());
+            if (!idW.empty()) {
+                auto* out =
+                    static_cast<std::vector<std::pair<std::string, CCheckBoxUI*>>*>(data);
+                out->emplace_back(WideToUtf8(idW), static_cast<CCheckBoxUI*>(control));
+            }
+        }
+    }
+    return nullptr;
+}
 
 std::wstring ResolveLanguageCode(CPaintManagerUI& manager, const InstallConfig& config) {
     if (auto* langCombo = static_cast<CComboUI*>(manager.FindControl(_T("comboLanguageSelect")))) {
@@ -24,6 +49,25 @@ std::wstring ResolveLanguageCode(CPaintManagerUI& manager, const InstallConfig& 
 }
 
 } // namespace
+
+std::vector<std::pair<std::string, CCheckBoxUI*>> EnumerateComponentCheckboxes(
+    CPaintManagerUI& manager) {
+    std::vector<std::pair<std::string, CCheckBoxUI*>> result;
+    if (CControlUI* root = manager.GetRoot()) {
+        root->FindControl(CollectComponentCheckboxProc, &result, UIFIND_ALL);
+    }
+    return result;
+}
+
+std::vector<std::string> CollectSelectedComponentIds(CPaintManagerUI& manager) {
+    std::vector<std::string> ids;
+    for (const auto& entry : EnumerateComponentCheckboxes(manager)) {
+        if (entry.second && entry.second->GetCheck()) {
+            ids.push_back(entry.first);
+        }
+    }
+    return ids;
+}
 
 bool TryBuildInstallStartRequest(HWND hWnd,
                                  CPaintManagerUI& manager,
@@ -62,6 +106,7 @@ bool TryBuildInstallStartRequest(HWND hWnd,
     }
 
     request.languageCode = ResolveLanguageCode(manager, config);
+    request.selectedComponentIds = CollectSelectedComponentIds(manager);
     return true;
 }
 

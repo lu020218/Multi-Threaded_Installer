@@ -315,6 +315,7 @@ set(INSTALLER_SOURCES
     src/installer/platform/file_system_operator.cpp
     src/installer/hooks/component_launcher.cpp
     src/installer/hooks/hook_runner.cpp
+    src/installer/components/component_registry.cpp
     src/installer/migration/migration.cpp
     src/installer/app/console_interface.cpp
     src/installer/platform/path_resolver.cpp
@@ -357,6 +358,7 @@ set(UNINSTALLER_SOURCES
     src/installer/platform/file_system_operator.cpp
     src/installer/hooks/component_launcher.cpp
     src/installer/hooks/hook_runner.cpp
+    src/installer/components/component_registry.cpp
     src/installer/migration/migration.cpp
     src/installer/app/console_interface.cpp
     src/installer/platform/path_resolver.cpp

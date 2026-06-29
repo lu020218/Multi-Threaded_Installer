@@ -160,11 +160,14 @@ private:
     bool EnsureInstallMetadataLoaded();
 
     void OnInstallButtonClick();
+    /// 应用组件勾选框默认态（按引擎注册表 defaultSelected/required；皮肤有而注册表无的禁用）。
+    void ApplyComponentCheckboxDefaults();
     bool StartInstallationWithOptions(const std::wstring& installPath,
                                       bool autoRun,
                                       bool desktopIcons,
                                       const std::wstring& languageCode,
-                                      bool upgradeMode);
+                                      bool upgradeMode,
+                                      const std::vector<std::string>& selectedComponentIds);
     void OnCancelButtonClick();
     void OnBrowseButtonClick();
     void OnLicenseLinkClick();

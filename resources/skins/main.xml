@@ -7,6 +7,9 @@
     <Font shared="true" id="4" name="Microsoft YaHei" size="20" bold="false" />
     <Font shared="true" id="5" name="Microsoft YaHei" size="14" bold="true" />
 
+    <!-- 竖向滚动条统一样式：隐藏上下箭头，仅扁平圆角灰色滑块（9 宫格竖向拉伸），轨道透明。 -->
+    <Default name="VScrollBar" value="width=&quot;10&quot; showbutton1=&quot;false&quot; showbutton2=&quot;false&quot; thumbnormalimage=&quot;file='images\sb_thumb_normal.png' corner='0,5,0,5'&quot; thumbhotimage=&quot;file='images\sb_thumb_hot.png' corner='0,5,0,5'&quot; thumbpushedimage=&quot;file='images\sb_thumb_pushed.png' corner='0,5,0,5'&quot;" />
+
     <VerticalLayout bkcolor="#FF0B1020">
         <HorizontalLayout height="35" bkcolor="#000B1020" padding="0,10,0,0">
             <Label name="title" visible="true" padding="15,0,0,0" textpadding="20,1,0,0" textcolor="#FFFFFFFF" resourcetext="true" text="msg.title.install" bkimage="file='images\logo3.png' dest='0,0,16,16'" width="295" height="16" font="0" />

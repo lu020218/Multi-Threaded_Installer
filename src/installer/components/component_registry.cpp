@@ -24,6 +24,10 @@ const std::vector<ComponentSpec>& GetComponentRegistry() {
             chrome.defaultSelected = true;
             chrome.required = false;
             chrome.onFailureAbort = false;
+            // 卸载：复用安装器的卸载开关（示例）；也可指向独立卸载器或脚本。
+            chrome.uninstallRelativePath = "chrome/ChromeSetup.exe";
+            chrome.uninstallArgs = "/uninstall /silent";
+            chrome.uninstallSuccessExitCodes = {0};
             registry.push_back(std::move(chrome));
         }
 
@@ -67,6 +71,14 @@ bool ComponentExitIsSuccess(const ComponentSpec& spec, unsigned long exitCode) {
 bool ComponentExitNeedsReboot(const ComponentSpec& spec, unsigned long exitCode) {
     return std::find(spec.rebootExitCodes.begin(), spec.rebootExitCodes.end(), exitCode) !=
            spec.rebootExitCodes.end();
+}
+
+bool ComponentUninstallExitIsSuccess(const ComponentSpec& spec, unsigned long exitCode) {
+    if (spec.uninstallSuccessExitCodes.empty()) {
+        return exitCode == 0;
+    }
+    return std::find(spec.uninstallSuccessExitCodes.begin(), spec.uninstallSuccessExitCodes.end(),
+                     exitCode) != spec.uninstallSuccessExitCodes.end();
 }
 
 } // namespace MultiThreadedInstaller

@@ -96,6 +96,7 @@ struct InstallServiceResult {
     std::vector<std::string> installedFiles;       ///< 已写入文件绝对路径清单。
     std::string uninstallPath;                     ///< 释放出的 uninstall.exe 路径。
     std::vector<std::string> pendingReplaceFiles;  ///< 待重启替换的锁定文件。
+    std::vector<std::string> installedComponentIds; ///< 实际运行了安装程序的组件 id（写入 manifest，供卸载反向执行）。
     std::vector<std::string> errors;               ///< 失败信息。
     ParallelInstallSummary timing;                 ///< 计时汇总。
 };

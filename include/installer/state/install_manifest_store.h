@@ -35,7 +35,8 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
                    const std::string& appPublisher = {},
-                   const InstalledFileFingerprintMap& fileFingerprints = {});
+                   const InstalledFileFingerprintMap& fileFingerprints = {},
+                   const std::vector<std::string>& installedComponentIds = {});
 /// 读取 install.manifest.json 为 JSON 对象。成功返回 true。
 bool readManifest(const std::string& manifestPath, nlohmann::json& outManifest);
 /// 从上次安装 manifest 读出 PreviousInstallOptions（升级时沿用）。缺字段时返回 false + error。

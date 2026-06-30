@@ -136,6 +136,7 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
                            const std::string& installRoot,
                            InstallProgressReporter& reporter,
                            bool& rebootRequired,
+                           std::vector<std::string>& installedComponentIds,
                            std::string& error) {
     const auto& registry = GetComponentRegistry();
     if (registry.empty()) {
@@ -183,6 +184,8 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
         }
 
         reporter.EmitMessage(InstallServiceEventType::Info, "Installing component: " + spec.id);
+        // 记录"已运行其安装程序"的组件（无论退出码），供卸载时反向执行其卸载程序。
+        installedComponentIds.push_back(spec.id);
         ComponentInstallRequest req;
         req.executablePath = exe;
         req.args = spec.args;
@@ -419,7 +422,8 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             bool componentReboot = false;
             std::string componentError;
             if (!RunSelectedComponents(metadata, options, componentInstallRoot, reporter,
-                                       componentReboot, componentError)) {
+                                       componentReboot, result.installedComponentIds,
+                                       componentError)) {
                 // 组件以 abort 失败：与 postInstall abort 一致，回滚已装产物后判失败。
                 RollbackInstalledArtifacts(metadata, plan, options, result, pathResolver, reporter);
                 markFailed(componentError.empty()

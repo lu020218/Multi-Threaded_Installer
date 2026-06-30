@@ -1,5 +1,7 @@
 #include "installer/uninstall/uninstall_manager.h"
 #include "installer/state/install_manifest_store.h"
+#include "installer/components/component_registry.h"
+#include "installer/hooks/component_launcher.h"
 #include "installer/uninstall/self_delete_scheduler.h"
 #include "installer/state/install_state_utils.h"
 #include "installer/state/install_state_store.h"
@@ -1063,6 +1065,47 @@ UninstallCleanupResult RunUninstallCleanupWithWatchdog(
 #endif
 }
 
+// [组件卸载] 对 manifest 记录的"已安装组件"反向执行其卸载程序（位于 <安装目录>\plugins）。
+// best-effort：缺注册表项/缺卸载程序/退出码失败都只记日志，绝不阻断产品卸载。必须在删除
+// 产品文件之前调用（卸载程序文件本身在 plugins 下，会被随后的文件清理删除）。
+static void RunInstalledComponentUninstallers(const std::string& installDir,
+                                              const std::vector<std::string>& componentIds,
+                                              CliSupport& console) {
+    if (componentIds.empty() || installDir.empty()) {
+        return;
+    }
+    const std::filesystem::path pluginsRoot = PathFromUtf8(installDir) / "plugins";
+    for (const auto& id : componentIds) {
+        const ComponentSpec* spec = FindComponentById(id);
+        if (!spec || spec->uninstallRelativePath.empty()) {
+            // 注册表已无此组件（增删过），或该组件未声明卸载步骤 → 跳过。
+            continue;
+        }
+        const std::filesystem::path exe = pluginsRoot / PathFromUtf8(spec->uninstallRelativePath);
+        std::error_code existsEc;
+        if (!std::filesystem::exists(exe, existsEc)) {
+            console.showWarning("Component uninstaller not found, skipped: " + Utf8FromPath(exe) +
+                                " (id=" + id + ")");
+            continue;
+        }
+        console.showInfo("Uninstalling component: " + id);
+        ComponentInstallRequest req;
+        req.executablePath = exe;
+        req.args = spec->uninstallArgs;
+        req.timeoutSec = spec->uninstallTimeoutSec;
+        req.hideWindow = true;
+        req.injectInstallDir = installDir;
+        req.logBaseName = "component_uninstall_" + id;
+        const ComponentInstallResult cr = RunComponentInstaller(req);
+        if (cr.started && !cr.timedOut && ComponentUninstallExitIsSuccess(*spec, cr.exitCode)) {
+            console.showInfo("Component uninstalled: " + id);
+        } else {
+            console.showWarning("Component '" + id + "' uninstall reported failure (continuing): " +
+                                cr.message);
+        }
+    }
+}
+
 bool ResolveUninstallContext(const ExtendedInstallationMetadata* metadata,
                              InstallerPathResolver& resolver,
                              const std::string& explicitManifestPath,
@@ -1312,6 +1355,16 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
         }
     }
     console.showInfo("Manifest files: " + std::to_string(files.size()));
+
+    // 已安装组件 id（供下方在删文件前反向执行各组件卸载程序）。
+    std::vector<std::string> installedComponentIds;
+    if (manifest.contains("installedComponents") && manifest["installedComponents"].is_array()) {
+        for (const auto& item : manifest["installedComponents"]) {
+            if (item.is_string() && !item.get<std::string>().empty()) {
+                installedComponentIds.push_back(item.get<std::string>());
+            }
+        }
+    }
     std::vector<std::string> cleanupRoots;
     const json* rootsNode = nullptr;
     if (manifest.contains("cleanupRoots") && manifest["cleanupRoots"].is_array()) {
@@ -1479,6 +1532,12 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
             }
         }
         completeWorkUnit("Removing custom registry values");
+    }
+
+    // [组件卸载] 在删除产品文件之前，反向执行已装组件的卸载程序（清理其注册表等）。
+    // 进程已在上面结束；卸载程序位于 installDir\plugins，随后才会被文件清理删除。
+    if (!installedComponentIds.empty()) {
+        RunInstalledComponentUninstallers(installDir, installedComponentIds, console);
     }
 
     std::string currentExe = getCurrentExecutablePath();

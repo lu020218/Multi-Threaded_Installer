@@ -34,6 +34,14 @@ struct ComponentSpec {
     bool defaultSelected = true;                 ///< GUI 默认勾选 / 静默默认选中。
     bool required = false;                        ///< 必装：GUI 勾上且禁用；静默强制选中（不受 --skip 影响）。
     bool onFailureAbort = false;                 ///< 失败处理：true=中止安装并回滚；false=记日志继续。
+
+    // ── 卸载（产品卸载时执行；best-effort，失败仅记日志，不阻断产品卸载）──────────
+    // 卸载程序位于 <安装目录>\plugins\<uninstallRelativePath>（与组件文件一同解压）。
+    // 可指向组件自带卸载器，或带卸载开关的安装器，或 bat/cmd/ps1/msi（用于 `reg delete` 等清理）。
+    std::string uninstallRelativePath;           ///< 相对 plugins 的卸载程序路径；空=无卸载步骤。
+    std::string uninstallArgs;                   ///< 卸载参数（如 /uninstall /silent）。
+    unsigned int uninstallTimeoutSec = 600;      ///< 卸载超时（秒），0 = 无限等待。
+    std::vector<unsigned long> uninstallSuccessExitCodes;  ///< 视为成功的退出码；为空时按 {0}。
 };
 
 /// 引擎内置组件表（增删组件只改本函数返回的列表）。
@@ -46,5 +54,7 @@ const ComponentSpec* FindComponentById(const std::string& id);
 bool ComponentExitIsSuccess(const ComponentSpec& spec, unsigned long exitCode);
 /// 退出码是否表示「需重启」。
 bool ComponentExitNeedsReboot(const ComponentSpec& spec, unsigned long exitCode);
+/// 卸载退出码判定（uninstallSuccessExitCodes 为空时按 {0}）。
+bool ComponentUninstallExitIsSuccess(const ComponentSpec& spec, unsigned long exitCode);
 
 } // namespace MultiThreadedInstaller

@@ -385,7 +385,8 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                            result.uninstallPath,
                            languageCode,
                            metadata.appPublisher,
-                           fileFingerprints)) {
+                           fileFingerprints,
+                           result.installedComponentIds)) {
             reporter.EmitMessage(InstallServiceEventType::Warning,
                                  "Failed to write local install manifest");
         }

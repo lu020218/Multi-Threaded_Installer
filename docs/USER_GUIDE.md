@@ -288,11 +288,14 @@ GUI 安装：
 
 「组件」= 随产品分发、安装时按需运行的第三方安装程序（浏览器、运行库、驱动等）。它与 §7 的 hook 脚本是两套独立机制。
 
-- **组件表写死在引擎里**（`src/installer/components/component_registry.cpp`），不在 YAML 声明。每个组件描述：`id`、`relativePath`（相对 `plugins`）、`args`、`timeoutSec`、`successExitCodes`、`rebootExitCodes`、`defaultSelected`、`required`、`onFailureAbort`。
+- **组件表写死在引擎里**（`src/installer/components/component_registry.cpp`），不在 YAML 声明。每个组件描述：
+  - 安装：`id`、`relativePath`（相对 `plugins`）、`args`、`timeoutSec`、`successExitCodes`、`rebootExitCodes`、`defaultSelected`、`required`、`onFailureAbort`；
+  - 卸载：`uninstallRelativePath`（相对 `plugins` 的卸载程序，可指向组件自带卸载器、带卸载开关的安装器、或 `bat/cmd/ps1/msi` 脚本用于 `reg delete` 等清理）、`uninstallArgs`、`uninstallTimeoutSec`、`uninstallSuccessExitCodes`。`uninstallRelativePath` 留空表示该组件无卸载步骤。
 - **安装程序必须随 payload 落在安装目录下的 `plugins` 子目录**：`<安装目录>\plugins\<relativePath>`。打包时把它放进 `--input/plugins/...`，并在 `package.layout` 把 `plugins` 映射到 `%InstallDir%\plugins`（**不要**映射到 `%ProgramData%` 等别处，否则运行期取不到）。
 - **GUI**：欢迎页用皮肤 `welcome_page.xml` 里的 `<CheckBox userdata="component:<id>">` 勾选框呈现；安装器只安装**被勾选且 id 命中注册表**的组件。注册表里有、但皮肤没有对应勾选框的组件→默认不安装。`required` 组件勾上且禁用。
 - **静默**：无界面，按「注册表 + `--components`」选择：不带 `--components` = `defaultSelected ∪ required`；`--components a,b,c` = 该列表（∪ required，仅命中注册表的 id）；`--components ""`（显式空）= 仅 `required`。
 - 退出码：命中 `successExitCodes`（默认 `{0}`）为成功；命中 `rebootExitCodes`（如 `{3010}`）置「需重启」。失败时 `onFailureAbort: true` 中止并回滚，否则记日志继续。组件 stdout/stderr captured 到 `component_<id>.log`（安装器日志同目录），并注入 `INSTALL_DIR`/`VERSION` 环境变量。
+- **卸载**：安装时把实际运行了安装程序的组件 id 记入 `install.manifest.json` 的 `installedComponents`。产品卸载时，**在删除产品文件之前**对这些组件按注册表的 `uninstallRelativePath` 反向执行卸载程序（同样从 `<安装目录>\plugins\` 解析、注入 `INSTALL_DIR`、输出到 `component_uninstall_<id>.log`），用于清理组件自身的注册表/文件。卸载为 **best-effort**：缺卸载程序/退出码失败只记日志，不阻断产品卸载。组件若在安装目录之外另装了文件（如浏览器装到自己的目录），由其卸载程序负责清理。
 
 ### 增删一个组件（维护流程）
 1. 把安装程序放进 `--input/plugins/<...>`（解压后即 `<安装目录>\plugins\<...>`）；

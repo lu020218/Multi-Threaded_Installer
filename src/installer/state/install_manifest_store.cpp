@@ -134,7 +134,8 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
                    const std::string& appPublisher,
-                   const InstalledFileFingerprintMap& fileFingerprints) {
+                   const InstalledFileFingerprintMap& fileFingerprints,
+                   const std::vector<std::string>& installedComponentIds) {
     if (manifestPath.empty()) {
         return false;
     }
@@ -183,6 +184,8 @@ bool writeManifest(const std::string& manifestPath,
         root["desktopShortcutDisplayName"] = EnsureUtf8(desktopShortcutDisplayName);
         root["language"] = EnsureUtf8(languageCode);
         root["killProcesses"] = EnsureUtf8List(killProcesses);
+        // 已安装组件 id：卸载时据此反向执行各组件的卸载程序（清理其注册表等）。
+        root["installedComponents"] = EnsureUtf8List(installedComponentIds);
 
         // 运行时卸载账本：卸载主流程按此撤销已写入的快捷方式/启动项/系统卸载入口。
         json cleanup;

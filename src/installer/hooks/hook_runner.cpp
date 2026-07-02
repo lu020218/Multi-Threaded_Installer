@@ -404,7 +404,12 @@ HookOutcome RunHook(const HookScript& hook,
 #ifdef _WIN32
     const std::string hookName = hook.scriptName.empty() ? "hook" : hook.scriptName;
 
+    // [Perf] 释放阶段耗时（把主脚本+兄弟文件写到临时目录）。
+    const auto prepareStart = std::chrono::steady_clock::now();
     HookBundle bundle = ReleaseHookBundle(hook);
+    const long long prepareMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - prepareStart)
+                                    .count();
     if (bundle.dir.empty()) {
         logInstallerError("[Hook] Failed to release hook script: " + hookName);
         return FailOutcome(hook);
@@ -503,30 +508,39 @@ HookOutcome RunHook(const HookScript& hook,
         WaitForSingleObject(process.get(), 2000);
         logInstallerError("[Hook] Hook timed out after " + std::to_string(hook.timeoutSec) +
                           "s: " + hookName + " type=" + typeLabel +
-                          " elapsedMs=" + std::to_string(hookElapsedMs()));
+                          " prepareMs=" + std::to_string(prepareMs) +
+                          " execMs=" + std::to_string(hookElapsedMs()));
         persistIfRequested();
         return FailOutcome(hook);
     }
     if (waitResult != WAIT_OBJECT_0) {
         logInstallerError("[Hook] Failed while waiting for hook: " + hookName +
-                          " type=" + typeLabel + " elapsedMs=" + std::to_string(hookElapsedMs()));
+                          " type=" + typeLabel + " prepareMs=" + std::to_string(prepareMs) +
+                          " execMs=" + std::to_string(hookElapsedMs()));
         persistIfRequested();
         return FailOutcome(hook);
     }
 
     DWORD exitCode = 1;
     GetExitCodeProcess(process.get(), &exitCode);
-    const long long elapsedMs = hookElapsedMs();
+    const long long execMs = hookElapsedMs();
+
+    // 统一的耗时/规模明细：prepare=释放脚本+兄弟文件, exec=子进程执行, total=两者之和。
+    const std::string stats =
+        " type=" + std::string(typeLabel) +
+        " prepareMs=" + std::to_string(prepareMs) +
+        " execMs=" + std::to_string(execMs) +
+        " totalMs=" + std::to_string(prepareMs + execMs) +
+        " auxFiles=" + std::to_string(hook.auxFiles.size()) +
+        " scriptBytes=" + std::to_string(hook.content.size());
 
     persistIfRequested();
     if (exitCode == 0) {
-        logInstallerInfo("[Hook] Hook succeeded: " + hookName + " type=" + typeLabel +
-                         " elapsedMs=" + std::to_string(elapsedMs));
+        logInstallerInfo("[Hook] Hook succeeded: " + hookName + stats);
         return HookOutcome::Success;
     }
     logInstallerError("[Hook] Hook failed with exit code " + std::to_string(exitCode) +
-                      ": " + hookName + " type=" + typeLabel +
-                      " elapsedMs=" + std::to_string(elapsedMs));
+                      ": " + hookName + stats);
     return FailOutcome(hook);
 #else
     (void)installDir;

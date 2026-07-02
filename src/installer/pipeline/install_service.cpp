@@ -165,9 +165,15 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
                                              options.selectedComponentIds.end());
     const std::filesystem::path pluginsRoot = PathFromUtf8(installRoot) / "plugins";
 
+    // 组件统计明细。
+    const auto componentsStart = std::chrono::steady_clock::now();
+    unsigned runCount = 0, okCount = 0, failCount = 0, skipNotSelected = 0, skipMissing = 0;
+    uint64_t componentsRunMs = 0;
+
     for (const auto& spec : registry) {
         const bool chosen = spec.required || selected.count(spec.id) > 0;
         if (!chosen) {
+            ++skipNotSelected;
             reporter.EmitMessage(InstallServiceEventType::Info,
                                  "Component not selected, skipped: " + spec.id);
             continue;
@@ -182,6 +188,7 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
                 error = msg;
                 return false;
             }
+            ++skipMissing;
             reporter.EmitMessage(InstallServiceEventType::Warning, msg + " — skipped");
             continue;
         }
@@ -204,15 +211,20 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - componentStart)
                 .count());
+        ++runCount;
+        componentsRunMs += componentMs;
         logInstallerInfo("[InstallFlow][Component] id=" + spec.id +
                          " started=" + (cr.started ? "true" : "false") +
+                         " timedOut=" + (cr.timedOut ? "true" : "false") +
                          " exitCode=" + std::to_string(cr.exitCode) +
+                         " onFailureAbort=" + (spec.onFailureAbort ? "true" : "false") +
                          " elapsedMs=" + std::to_string(componentMs));
         if (cr.started && ComponentExitNeedsReboot(spec, cr.exitCode)) {
             rebootRequired = true;
         }
         const bool ok = cr.started && !cr.timedOut && ComponentExitIsSuccess(spec, cr.exitCode);
         if (!ok) {
+            ++failCount;
             const std::string msg = "Component '" + spec.id + "' failed: " + cr.message;
             if (spec.onFailureAbort) {
                 error = msg;
@@ -220,11 +232,24 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
             }
             reporter.EmitMessage(InstallServiceEventType::Warning, msg + " — continuing");
         } else {
+            ++okCount;
             reporter.EmitMessage(InstallServiceEventType::Info,
                                  "Component installed: " + spec.id + " (elapsedMs=" +
                                      std::to_string(componentMs) + ")");
         }
     }
+
+    const uint64_t componentsTotalMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - componentsStart)
+            .count());
+    logInstallerInfo("[InstallFlow][ComponentsSummary] registry=" +
+                     std::to_string(registry.size()) + " run=" + std::to_string(runCount) +
+                     " succeeded=" + std::to_string(okCount) + " failed=" + std::to_string(failCount) +
+                     " skippedNotSelected=" + std::to_string(skipNotSelected) +
+                     " skippedMissing=" + std::to_string(skipMissing) +
+                     " runMs=" + std::to_string(componentsRunMs) +
+                     " totalMs=" + std::to_string(componentsTotalMs));
     return true;
 }
 
@@ -266,6 +291,9 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             << "ms components=" << flowTiming.componentsMs
             << "ms finalize=" << flowTiming.finalizeMs
             << "ms postHook=" << flowTiming.postHookMs << "ms\n"
+            << "  scripts: preInstallHooks=" << metadata.preInstall.size()
+            << " postInstallHooks=" << metadata.postInstall.size()
+            << " selectedComponents=" << options.selectedComponentIds.size() << "\n"
             << "  payload: total=" << flowTiming.payload.totalSec
             << "s read=" << flowTiming.payload.payloadReadSec
             << "s decompress=" << flowTiming.payload.decompressSec

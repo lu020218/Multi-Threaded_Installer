@@ -48,8 +48,11 @@ struct InstallFlowTiming {
     uint64_t planMs = 0;
     uint64_t precheckMs = 0;
     uint64_t cleanupMs = 0;
+    uint64_t preHookMs = 0;      ///< preInstall 全部 hook 合计耗时。
     uint64_t executeMs = 0;
+    uint64_t componentsMs = 0;   ///< 组件安装合计耗时。
     uint64_t finalizeMs = 0;
+    uint64_t postHookMs = 0;     ///< postInstall 全部 hook 合计耗时。
     ParallelInstallSummary payload;
 };
 
@@ -195,7 +198,16 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
         req.injectVersion = metadata.appVersion;
         req.logBaseName = "component_" + spec.id;
 
+        const auto componentStart = std::chrono::steady_clock::now();
         const ComponentInstallResult cr = RunComponentInstaller(req);
+        const uint64_t componentMs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - componentStart)
+                .count());
+        logInstallerInfo("[InstallFlow][Component] id=" + spec.id +
+                         " started=" + (cr.started ? "true" : "false") +
+                         " exitCode=" + std::to_string(cr.exitCode) +
+                         " elapsedMs=" + std::to_string(componentMs));
         if (cr.started && ComponentExitNeedsReboot(spec, cr.exitCode)) {
             rebootRequired = true;
         }
@@ -208,7 +220,9 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
             }
             reporter.EmitMessage(InstallServiceEventType::Warning, msg + " — continuing");
         } else {
-            reporter.EmitMessage(InstallServiceEventType::Info, "Component installed: " + spec.id);
+            reporter.EmitMessage(InstallServiceEventType::Info,
+                                 "Component installed: " + spec.id + " (elapsedMs=" +
+                                     std::to_string(componentMs) + ")");
         }
     }
     return true;
@@ -247,8 +261,11 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             << "  stages: plan=" << flowTiming.planMs
             << "ms precheck=" << flowTiming.precheckMs
             << "ms cleanup=" << flowTiming.cleanupMs
+            << "ms preHook=" << flowTiming.preHookMs
             << "ms execute=" << flowTiming.executeMs
-            << "ms finalize=" << flowTiming.finalizeMs << "ms\n"
+            << "ms components=" << flowTiming.componentsMs
+            << "ms finalize=" << flowTiming.finalizeMs
+            << "ms postHook=" << flowTiming.postHookMs << "ms\n"
             << "  payload: total=" << flowTiming.payload.totalSec
             << "s read=" << flowTiming.payload.payloadReadSec
             << "s decompress=" << flowTiming.payload.decompressSec
@@ -377,8 +394,11 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
 
         // preInstall hooks：在解压前按声明顺序依次执行（需求 §4 时序）；
         // 任一脚本以 onFailure=abort 失败则中止安装。
-        if (RunHooks(metadata.preInstall, hookInstallDir, metadata.appVersion) ==
-            HookOutcome::FailedAbort) {
+        auto preHookStart = std::chrono::steady_clock::now();
+        const HookOutcome preHookOutcome =
+            RunHooks(metadata.preInstall, hookInstallDir, metadata.appVersion);
+        flowTiming.preHookMs = ElapsedMs(preHookStart);
+        if (preHookOutcome == HookOutcome::FailedAbort) {
             markFailed("preInstall hook failed; installation aborted.", false, true);
             return finishResult();
         }
@@ -421,9 +441,13 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
                                                 : result.installRootPath;
             bool componentReboot = false;
             std::string componentError;
-            if (!RunSelectedComponents(metadata, options, componentInstallRoot, reporter,
-                                       componentReboot, result.installedComponentIds,
-                                       componentError)) {
+            auto componentsStart = std::chrono::steady_clock::now();
+            const bool componentsOk =
+                RunSelectedComponents(metadata, options, componentInstallRoot, reporter,
+                                      componentReboot, result.installedComponentIds,
+                                      componentError);
+            flowTiming.componentsMs = ElapsedMs(componentsStart);
+            if (!componentsOk) {
                 // 组件以 abort 失败：与 postInstall abort 一致，回滚已装产物后判失败。
                 RollbackInstalledArtifacts(metadata, plan, options, result, pathResolver, reporter);
                 markFailed(componentError.empty()
@@ -454,8 +478,11 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         // postInstall hooks：在 finalize 后按声明顺序依次执行（需求 §4 时序）。
         const std::string postHookInstallDir =
             result.installRootPath.empty() ? hookInstallDir : result.installRootPath;
-        if (RunHooks(metadata.postInstall, postHookInstallDir, metadata.appVersion) ==
-            HookOutcome::FailedAbort) {
+        auto postHookStart = std::chrono::steady_clock::now();
+        const HookOutcome postHookOutcome =
+            RunHooks(metadata.postInstall, postHookInstallDir, metadata.appVersion);
+        flowTiming.postHookMs = ElapsedMs(postHookStart);
+        if (postHookOutcome == HookOutcome::FailedAbort) {
             RollbackInstalledArtifacts(metadata, plan, options, result, pathResolver, reporter);
             markFailed("postInstall hook failed; installation rolled back.", false, true);
             return finishResult();

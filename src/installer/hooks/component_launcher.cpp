@@ -159,7 +159,7 @@ ComponentLaunchCommand BuildComponentLaunchCommand(const std::filesystem::path& 
         // -NoProfile 不加载可能损坏的用户 profile、-ExecutionPolicy Bypass 放开脚本执行。
         command.commandLine =
             QuoteProcessPath(ResolvePowerShellExePath()) +
-            L" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
+            L" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
             QuoteProcessPath(executableW);
         command.hideByDefault = true;
         command.startFailureMessage = "Failed to start PowerShell component installer.";

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
@@ -463,6 +464,19 @@ HookOutcome RunHook(const HookScript& hook,
     }
     PROCESS_INFORMATION processInfo{};
 
+    // 脚本类型标签（用于耗时日志，尤其关注 ps1 的启动/环境初始化耗时）。
+    const char* typeLabel =
+        launchCommand.type == ComponentLauncherType::PowerShell ? "ps1"
+        : launchCommand.type == ComponentLauncherType::Batch    ? "bat/cmd"
+        : launchCommand.type == ComponentLauncherType::Msi      ? "msi"
+                                                                : "exe";
+    const auto hookStart = std::chrono::steady_clock::now();
+    auto hookElapsedMs = [&hookStart]() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now() - hookStart)
+            .count();
+    };
+
     BOOL started = CreateProcessW(nullptr,
                                   commandLineBuffer.data(),
                                   nullptr,
@@ -488,26 +502,31 @@ HookOutcome RunHook(const HookScript& hook,
         TerminateProcess(process.get(), 1);
         WaitForSingleObject(process.get(), 2000);
         logInstallerError("[Hook] Hook timed out after " + std::to_string(hook.timeoutSec) +
-                          "s: " + hookName);
+                          "s: " + hookName + " type=" + typeLabel +
+                          " elapsedMs=" + std::to_string(hookElapsedMs()));
         persistIfRequested();
         return FailOutcome(hook);
     }
     if (waitResult != WAIT_OBJECT_0) {
-        logInstallerError("[Hook] Failed while waiting for hook: " + hookName);
+        logInstallerError("[Hook] Failed while waiting for hook: " + hookName +
+                          " type=" + typeLabel + " elapsedMs=" + std::to_string(hookElapsedMs()));
         persistIfRequested();
         return FailOutcome(hook);
     }
 
     DWORD exitCode = 1;
     GetExitCodeProcess(process.get(), &exitCode);
+    const long long elapsedMs = hookElapsedMs();
 
     persistIfRequested();
     if (exitCode == 0) {
-        logInstallerInfo("[Hook] Hook succeeded: " + hookName);
+        logInstallerInfo("[Hook] Hook succeeded: " + hookName + " type=" + typeLabel +
+                         " elapsedMs=" + std::to_string(elapsedMs));
         return HookOutcome::Success;
     }
     logInstallerError("[Hook] Hook failed with exit code " + std::to_string(exitCode) +
-                      ": " + hookName);
+                      ": " + hookName + " type=" + typeLabel +
+                      " elapsedMs=" + std::to_string(elapsedMs));
     return FailOutcome(hook);
 #else
     (void)installDir;

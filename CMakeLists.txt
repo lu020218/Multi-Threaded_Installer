@@ -293,6 +293,7 @@ set(PACKAGER_SOURCES
     src/packager/version_info_updater.cpp
     src/packager/template_loader.cpp
     src/packager/pe_resource_embedder.cpp
+    src/packager/pe_resource_session.cpp
     src/packager/resource_zip_builder.cpp
     src/packager/config_value_reader.cpp
     src/packager/configuration_loader.cpp

@@ -2,6 +2,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include "packager/pe_resource_session.h"
 #include "common/utf8_utils.h"
 #include <Windows.h>
 #include <vector>
@@ -155,7 +156,8 @@ static bool ParseVersion(const std::string& text, DWORD& ms, DWORD& ls) {
     return true;
 }
 
-bool UpdateInstallerVersionInfo(const std::string& exePath, const VersionInfoData& info, std::string& error) {
+// 只做 UpdateResource（写入已打开的会话句柄），不 Begin/End。供单会话编排复用。
+bool ApplyInstallerVersionInfoInto(void* update, const VersionInfoData& info, std::string& error) {
     std::vector<std::pair<std::wstring, std::wstring>> entries;
     if (!info.companyName.empty()) entries.emplace_back(L"CompanyName", Utf8ToWide(info.companyName));
     if (!info.fileDescription.empty()) entries.emplace_back(L"FileDescription", Utf8ToWide(info.fileDescription));
@@ -166,7 +168,7 @@ bool UpdateInstallerVersionInfo(const std::string& exePath, const VersionInfoDat
     if (!info.originalFilename.empty()) entries.emplace_back(L"OriginalFilename", Utf8ToWide(info.originalFilename));
 
     if (entries.empty()) {
-        return true;
+        return true;  // 无版本字段可写，视为成功（不写 RT_VERSION）。
     }
 
     DWORD fileMs = 0, fileLs = 0;
@@ -202,64 +204,56 @@ bool UpdateInstallerVersionInfo(const std::string& exePath, const VersionInfoDat
     AlignDword(data);
     EndBlock(data, start);
 
-    std::wstring exePathW = Utf8ToWide(exePath);
-    if (exePathW.empty()) {
-        error = "Invalid installer path: " + exePath;
-        return false;
-    }
-    HANDLE update = BeginUpdateResourceW(exePathW.c_str(), FALSE);
-    if (!update) {
-        error = "BeginUpdateResource failed";
-        return false;
-    }
-    if (!UpdateResource(update,
+    if (!UpdateResource(static_cast<HANDLE>(update),
                         RT_VERSION,
                         MAKEINTRESOURCE(1),
                         MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
                         data.data(),
                         static_cast<DWORD>(data.size()))) {
-        EndUpdateResource(update, TRUE);
         error = "UpdateResource RT_VERSION failed";
-        return false;
-    }
-    if (!EndUpdateResource(update, FALSE)) {
-        error = "EndUpdateResource failed";
         return false;
     }
     return true;
 }
 
-bool UpdateInstallerExecutionLevel(const std::string& exePath, bool requireAdmin, std::string& error) {
+bool ApplyInstallerManifestInto(void* update, bool requireAdmin, std::string& error) {
     const std::string manifest = BuildInstallerManifestXml(requireAdmin);
-    std::wstring exePathW = Utf8ToWide(exePath);
-    if (exePathW.empty()) {
-        error = "Invalid installer path: " + exePath;
-        return false;
-    }
-
-    HANDLE update = BeginUpdateResourceW(exePathW.c_str(), FALSE);
-    if (!update) {
-        error = "BeginUpdateResource failed";
-        return false;
-    }
-
-    if (!UpdateResourceW(update,
-                         MAKEINTRESOURCEW(24),
+    if (!UpdateResourceW(static_cast<HANDLE>(update),
+                         MAKEINTRESOURCEW(24),  // RT_MANIFEST
                          MAKEINTRESOURCEW(1),
                          MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
                          const_cast<char*>(manifest.data()),
                          static_cast<DWORD>(manifest.size()))) {
-        EndUpdateResourceW(update, TRUE);
         error = "UpdateResource RT_MANIFEST failed";
         return false;
     }
+    return true;
+}
 
-    if (!EndUpdateResourceW(update, FALSE)) {
-        error = "EndUpdateResource failed";
+bool UpdateInstallerVersionInfo(const std::string& exePath, const VersionInfoData& info, std::string& error) {
+    const std::wstring exePathW = Utf8ToWide(exePath);
+    if (exePathW.empty()) {
+        error = "Invalid installer path: " + exePath;
         return false;
     }
+    return RunResourceUpdateSession(
+        exePathW,
+        [&info](void* update, std::string& err) { return ApplyInstallerVersionInfoInto(update, info, err); },
+        error);
+}
 
-    return true;
+bool UpdateInstallerExecutionLevel(const std::string& exePath, bool requireAdmin, std::string& error) {
+    const std::wstring exePathW = Utf8ToWide(exePath);
+    if (exePathW.empty()) {
+        error = "Invalid installer path: " + exePath;
+        return false;
+    }
+    return RunResourceUpdateSession(
+        exePathW,
+        [requireAdmin](void* update, std::string& err) {
+            return ApplyInstallerManifestInto(update, requireAdmin, err);
+        },
+        error);
 }
 
 } // namespace MultiThreadedInstaller

@@ -1,4 +1,5 @@
 #include "packager/icon_updater.h"
+#include "packager/pe_resource_session.h"
 #include "common/utf8_utils.h"
 #include <Windows.h>
 #include <fstream>
@@ -51,7 +52,8 @@ static bool ReadFileBytes(const std::string& path, std::vector<uint8_t>& out) {
     return static_cast<bool>(file.read(reinterpret_cast<char*>(out.data()), size));
 }
 
-bool UpdateInstallerIcon(const std::string& exePath, const std::string& iconPath, std::string& error) {
+// 只做 UpdateResource（写入已打开的会话句柄），不 Begin/End。供单会话编排复用。
+bool ApplyInstallerIconInto(void* update, const std::string& iconPath, std::string& error) {
     std::vector<uint8_t> iconData;
     if (!ReadFileBytes(iconPath, iconData)) {
         error = "Failed to read icon file: " + iconPath;
@@ -76,17 +78,7 @@ bool UpdateInstallerIcon(const std::string& exePath, const std::string& iconPath
         return false;
     }
 
-    std::wstring exePathW = Utf8ToWide(exePath);
-    if (exePathW.empty()) {
-        error = "Invalid installer path: " + exePath;
-        return false;
-    }
-    HANDLE update = BeginUpdateResourceW(exePathW.c_str(), FALSE);
-    if (!update) {
-        error = "BeginUpdateResource failed: " + exePath;
-        return false;
-    }
-
+    HANDLE hUpdate = static_cast<HANDLE>(update);
     std::vector<GrpIconDirEntry> groupEntries;
     groupEntries.reserve(header->count);
 
@@ -95,19 +87,17 @@ bool UpdateInstallerIcon(const std::string& exePath, const std::string& iconPath
         size_t imageStart = entry->imageOffset;
         size_t imageEnd = imageStart + entry->bytesInRes;
         if (imageEnd > iconData.size()) {
-            EndUpdateResource(update, TRUE);
             error = "Invalid icon file (image out of range): " + iconPath;
             return false;
         }
 
         WORD iconId = static_cast<WORD>(i + 1);
-        if (!UpdateResource(update,
+        if (!UpdateResource(hUpdate,
                             RT_ICON,
                             MAKEINTRESOURCE(iconId),
                             MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
                             reinterpret_cast<LPVOID>(iconData.data() + imageStart),
                             entry->bytesInRes)) {
-            EndUpdateResource(update, TRUE);
             error = "UpdateResource RT_ICON failed";
             return false;
         }
@@ -134,23 +124,28 @@ bool UpdateInstallerIcon(const std::string& exePath, const std::string& iconPath
            groupEntries.data(),
            sizeof(GrpIconDirEntry) * groupEntries.size());
 
-    if (!UpdateResource(update,
+    if (!UpdateResource(hUpdate,
                         RT_GROUP_ICON,
                         MAKEINTRESOURCE(1),
                         MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
                         groupData.data(),
                         static_cast<DWORD>(groupData.size()))) {
-        EndUpdateResource(update, TRUE);
         error = "UpdateResource RT_GROUP_ICON failed";
         return false;
     }
+    return true;
+}
 
-    if (!EndUpdateResource(update, FALSE)) {
-        error = "EndUpdateResource failed";
+bool UpdateInstallerIcon(const std::string& exePath, const std::string& iconPath, std::string& error) {
+    const std::wstring exePathW = Utf8ToWide(exePath);
+    if (exePathW.empty()) {
+        error = "Invalid installer path: " + exePath;
         return false;
     }
-
-    return true;
+    return RunResourceUpdateSession(
+        exePathW,
+        [&iconPath](void* update, std::string& err) { return ApplyInstallerIconInto(update, iconPath, err); },
+        error);
 }
 
 } // namespace MultiThreadedInstaller

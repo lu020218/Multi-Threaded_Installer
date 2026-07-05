@@ -16,9 +16,14 @@ struct VersionInfoData {
     std::string originalFilename;  ///< 原始文件名。
 };
 
-/// 把版本资源写入安装器 exe 的 PE VERSIONINFO。失败返回 false + error。
+/// 把版本资源写入安装器 exe 的 PE VERSIONINFO（内部走带重试的资源会话）。失败返回 false + error。
 bool UpdateInstallerVersionInfo(const std::string& exePath, const VersionInfoData& info, std::string& error);
-/// 设置安装器 exe 的清单执行级别（requireAdmin=true 写 requireAdministrator）。失败返回 false + error。
+/// 设置安装器 exe 的清单执行级别（requireAdmin=true 写 requireAdministrator，带重试）。失败返回 false + error。
 bool UpdateInstallerExecutionLevel(const std::string& exePath, bool requireAdmin, std::string& error);
+
+/// 仅在「已打开的资源更新会话句柄」上写入版本资源（不 Begin/End），供单会话编排复用。
+bool ApplyInstallerVersionInfoInto(void* update, const VersionInfoData& info, std::string& error);
+/// 仅在「已打开的资源更新会话句柄」上写入清单执行级别（不 Begin/End），供单会话编排复用。
+bool ApplyInstallerManifestInto(void* update, bool requireAdmin, std::string& error);
 
 } // namespace MultiThreadedInstaller

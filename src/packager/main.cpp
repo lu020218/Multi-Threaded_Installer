@@ -136,7 +136,15 @@ void showUsage(const std::string& programName) {
 }
 
 static fs::path makeTempTemplatePath(const fs::path& outputPath) {
-    fs::path baseDir = outputPath.has_parent_path() ? outputPath.parent_path() : fs::path(".");
+    // 临时模板放到系统临时目录（而非输出目录）：所有对模板 exe 的多次资源改写只发生在
+    // %TEMP%，从而避开输出目录上的 Windows 搜索索引器 / OneDrive 同步 / 资源管理器缩略图预览
+    // 等"锁源"；输出目录只在最后由 generateInstaller 写成品 exe 一次。%TEMP% 不可用时回退到
+    // 输出目录（保持原有行为）。
+    std::error_code tempEc;
+    fs::path baseDir = fs::temp_directory_path(tempEc);
+    if (tempEc || baseDir.empty()) {
+        baseDir = outputPath.has_parent_path() ? outputPath.parent_path() : fs::path(".");
+    }
     std::string baseName = Utf8FromPath(outputPath.filename());
 #ifdef _WIN32
     auto pid = static_cast<unsigned long>(GetCurrentProcessId());

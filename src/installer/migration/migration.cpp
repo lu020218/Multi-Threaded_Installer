@@ -1,12 +1,20 @@
 #include "installer/migration/migration.h"
 
 #include "common/installer_logger.h"
+#include "common/utf8_utils.h"
 #include "common/version_utils.h"
 #include "installer/state/registry_utils.h"
 #include "installer/platform/shortcut_startup_utils.h"
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <system_error>
+
+#include <json.hpp>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -105,6 +113,197 @@ void removeLegacyPaths(MigrationContext& ctx, const std::vector<std::string>& pa
 #endif
 }
 
+// ── 旧版本配置迁移原语（改名迁移：UniAssistant → weclaw-desktop）─────────────
+#ifdef _WIN32
+
+// 用「安装器进程环境」展开 %LOCALAPPDATA% / %APPDATA% 等（宽字符，兼容非 ASCII 用户名/路径）。
+// 注意：SYSTEM / 换管理员账户提权时展开的是那个账户的 profile，非当前登录用户（已知局限）。
+std::filesystem::path ExpandEnvToPathW(const wchar_t* raw) {
+    const DWORD needed = ExpandEnvironmentStringsW(raw, nullptr, 0);
+    if (needed == 0) {
+        return std::filesystem::path(raw);
+    }
+    std::wstring buffer(needed, L'\0');
+    const DWORD written = ExpandEnvironmentStringsW(raw, buffer.data(), needed);
+    if (written == 0) {
+        return std::filesystem::path(raw);
+    }
+    if (!buffer.empty() && buffer.back() == L'\0') {
+        buffer.pop_back();
+    }
+    return std::filesystem::path(buffer);
+}
+
+// 宽松解析布尔：接受 JSON bool、数字(非 0=true)、字符串 "true/false/1/0/yes/no/on/off"（大小写不敏感）。
+bool ParseLenientBool(const nlohmann::json& value, bool& out) {
+    if (value.is_boolean()) {
+        out = value.get<bool>();
+        return true;
+    }
+    if (value.is_number_integer() || value.is_number_unsigned()) {
+        out = value.get<long long>() != 0;
+        return true;
+    }
+    if (value.is_number_float()) {
+        out = value.get<double>() != 0.0;
+        return true;
+    }
+    if (value.is_string()) {
+        std::string s = value.get<std::string>();
+        const size_t b = s.find_first_not_of(" \t\r\n");
+        const size_t e = s.find_last_not_of(" \t\r\n");
+        s = (b == std::string::npos) ? std::string() : s.substr(b, e - b + 1);
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (s == "true" || s == "1" || s == "yes" || s == "on") {
+            out = true;
+            return true;
+        }
+        if (s == "false" || s == "0" || s == "no" || s == "off") {
+            out = false;
+            return true;
+        }
+    }
+    return false;
+}
+
+// 读整文件为字符串（失败返回 false）。
+bool ReadTextFile(const std::filesystem::path& path, std::string& out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    return true;
+}
+
+// 原子写 JSON：写临时文件 + MoveFileEx 覆盖替换。失败返回 false（并记具体原因）。
+bool WriteJsonAtomic(const std::filesystem::path& dst, const nlohmann::json& value) {
+    std::error_code ec;
+    std::filesystem::create_directories(dst.parent_path(), ec);
+    if (ec) {
+        logInstallerWarning("[Migration] smartbar: create_directories failed: " + ec.message());
+        return false;
+    }
+    std::filesystem::path tmp = dst;
+    tmp += L".mti_tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            logInstallerWarning("[Migration] smartbar: open temp failed: " + Utf8FromPath(tmp));
+            return false;
+        }
+        const std::string dump = value.dump(2);
+        out.write(dump.data(), static_cast<std::streamsize>(dump.size()));
+        out.close();
+        if (!out) {
+            logInstallerWarning("[Migration] smartbar: temp write failed: " + Utf8FromPath(tmp));
+            std::error_code rmEc;
+            std::filesystem::remove(tmp, rmEc);
+            return false;
+        }
+    }
+    // COPY_ALLOWED：当 %APPDATA% 被重定向/联接到别的卷时，MoveFileEx 会报 ERROR_NOT_SAME_DEVICE(17)，
+    // 加此标志允许回退为「复制+删源」，保证替换可用（best-effort 迁移不苛求纯 rename 的原子性）。
+    if (!MoveFileExW(tmp.c_str(), dst.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
+        const DWORD moveErr = GetLastError();
+        logInstallerWarning("[Migration] smartbar: MoveFileEx failed (code=" +
+                            std::to_string(moveErr) + ") tmp=" + Utf8FromPath(tmp));
+        std::error_code rmEc;
+        std::filesystem::remove(tmp, rmEc);
+        return false;
+    }
+    return true;
+}
+
+// [配置迁移] 把旧版本 %LOCALAPPDATA%\UniAssistant\pedestal\config.json 的 showSmartBar
+// 迁到新版本 %APPDATA%\weclaw-desktop\pedestal\userConfig.json 的 smartbar.enable。
+// 版本门控由迁移表 atVersion="7.0.0" 负责（仅 fromVersion < 7.0.0 升级时执行）。
+// best-effort：任何失败只记警告并返回 true，绝不因配置迁移把安装判失败。
+bool migrateSmartBarConfig(MigrationContext& ctx) {
+    (void)ctx;
+    try {
+        const std::filesystem::path src =
+            ExpandEnvToPathW(L"%LOCALAPPDATA%\\UniAssistant\\pedestal\\config.json");
+        const std::filesystem::path dst =
+            ExpandEnvToPathW(L"%APPDATA%\\weclaw-desktop\\pedestal\\userConfig.json");
+
+        // 1) 载入目标（存在则读）；一次性标记已存在 → 跳过（严格只迁一次）。
+        nlohmann::json target = nlohmann::json::object();
+        std::error_code ec;
+        if (std::filesystem::exists(dst, ec)) {
+            std::string content;
+            if (ReadTextFile(dst, content) && !content.empty()) {
+                target = nlohmann::json::parse(content, nullptr, false);
+                if (target.is_discarded()) {
+                    logInstallerWarning("[Migration] smartbar: target userConfig.json unparsable; skip.");
+                    return true;
+                }
+            }
+        }
+        if (!target.is_object()) {
+            target = nlohmann::json::object();
+        }
+        if (target.contains("_migrations") && target["_migrations"].is_object() &&
+            target["_migrations"].value("uniAssistantSmartBar", false)) {
+            logInstallerInfo("[Migration] smartbar: already migrated; skip.");
+            return true;
+        }
+
+        // 2) 读源 showSmartBar（源缺失/无键/解析不出 → 跳过，不打标记）。
+        if (!std::filesystem::exists(src, ec)) {
+            logInstallerInfo("[Migration] smartbar: source config.json not found (" +
+                             Utf8FromPath(src) + "); nothing to migrate.");
+            return true;
+        }
+        std::string sourceContent;
+        if (!ReadTextFile(src, sourceContent)) {
+            logInstallerWarning("[Migration] smartbar: cannot open source config.json; skip.");
+            return true;
+        }
+        nlohmann::json source = nlohmann::json::parse(sourceContent, nullptr, false);
+        if (source.is_discarded() || !source.is_object() || !source.contains("showSmartBar")) {
+            logInstallerInfo("[Migration] smartbar: source has no valid showSmartBar; skip.");
+            return true;
+        }
+        bool enable = false;
+        if (!ParseLenientBool(source["showSmartBar"], enable)) {
+            logInstallerWarning("[Migration] smartbar: showSmartBar not a recognizable bool; skip.");
+            return true;
+        }
+
+        // 3) 写目标：smartbar.enable + 一次性标记，保留其它键，原子写。旧 config.json 不动。
+        if (!target["smartbar"].is_object()) {
+            target["smartbar"] = nlohmann::json::object();
+        }
+        target["smartbar"]["enable"] = enable;
+        if (!target["_migrations"].is_object()) {
+            target["_migrations"] = nlohmann::json::object();
+        }
+        target["_migrations"]["uniAssistantSmartBar"] = true;
+
+        if (!WriteJsonAtomic(dst, target)) {
+            logInstallerWarning("[Migration] smartbar: failed to write target userConfig.json (" +
+                                Utf8FromPath(dst) + "); skip.");
+            return true;
+        }
+        logInstallerInfo(std::string("[Migration] smartbar: migrated showSmartBar -> smartbar.enable=") +
+                         (enable ? "true" : "false") + " target=" + Utf8FromPath(dst));
+        return true;
+    } catch (const std::exception& e) {
+        logInstallerWarning(std::string("[Migration] smartbar: unexpected error, skip: ") + e.what());
+        return true;
+    } catch (...) {
+        logInstallerWarning("[Migration] smartbar: unexpected error, skip.");
+        return true;
+    }
+}
+
+#else  // !_WIN32
+bool migrateSmartBarConfig(MigrationContext&) { return true; }
+#endif
+
 // ── 首批迁移：承接现 packager.yaml 的 SampleDesktopAppLegacy/1/2 名单 ───────
 //
 // 程序改名但路径未变 → 仅收尾旧名字残留（需求 §6.3 典型场景），不动任何当前路径。
@@ -120,6 +319,9 @@ bool migrate_7_0_0(MigrationContext& ctx) {
     removeLegacyStartup(ctx, {"SampleDesktopAppLegacy"});
     removeLegacyPaths(ctx, {R"(%LocalAppData%\SampleDesktopAppLegacy)",
                             R"(%AppData%\SampleDesktopAppLegacy)"});
+    // 旧版本配置迁移：showSmartBar → smartbar.enable（改名 UniAssistant → weclaw-desktop）。
+    // best-effort，仅 fromVersion < 7.0.0 升级时随本节点执行一次。
+    migrateSmartBarConfig(ctx);
     return true;
 }
 

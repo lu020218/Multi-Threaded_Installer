@@ -3,6 +3,7 @@
 #include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 #include "common/version_utils.h"
+#include "installer/platform/path_resolver.h"
 #include "installer/state/registry_utils.h"
 #include "installer/platform/shortcut_startup_utils.h"
 
@@ -116,22 +117,12 @@ void removeLegacyPaths(MigrationContext& ctx, const std::vector<std::string>& pa
 // ── 旧版本配置迁移原语（改名迁移：UniAssistant → weclaw-desktop）─────────────
 #ifdef _WIN32
 
-// 用「安装器进程环境」展开 %LOCALAPPDATA% / %APPDATA% 等（宽字符，兼容非 ASCII 用户名/路径）。
+// 展开环境变量占位为真实路径：复用现有 InstallerPathResolver::expandEnvironmentVariables
+// （UTF-8，内部走 ExpandEnvironmentStringsW，Unicode 安全）。
 // 注意：SYSTEM / 换管理员账户提权时展开的是那个账户的 profile，非当前登录用户（已知局限）。
-std::filesystem::path ExpandEnvToPathW(const wchar_t* raw) {
-    const DWORD needed = ExpandEnvironmentStringsW(raw, nullptr, 0);
-    if (needed == 0) {
-        return std::filesystem::path(raw);
-    }
-    std::wstring buffer(needed, L'\0');
-    const DWORD written = ExpandEnvironmentStringsW(raw, buffer.data(), needed);
-    if (written == 0) {
-        return std::filesystem::path(raw);
-    }
-    if (!buffer.empty() && buffer.back() == L'\0') {
-        buffer.pop_back();
-    }
-    return std::filesystem::path(buffer);
+std::filesystem::path ExpandEnvToPath(const std::string& raw) {
+    InstallerPathResolver resolver;
+    return PathFromUtf8(resolver.expandEnvironmentVariables(raw));
 }
 
 // 宽松解析布尔：接受 JSON bool、数字(非 0=true)、字符串 "true/false/1/0/yes/no/on/off"（大小写不敏感）。
@@ -225,9 +216,9 @@ bool migrateSmartBarConfig(MigrationContext& ctx) {
     (void)ctx;
     try {
         const std::filesystem::path src =
-            ExpandEnvToPathW(L"%LOCALAPPDATA%\\UniAssistant\\pedestal\\config.json");
+            ExpandEnvToPath("%LOCALAPPDATA%\\UniAssistant\\pedestal\\config.json");
         const std::filesystem::path dst =
-            ExpandEnvToPathW(L"%APPDATA%\\weclaw-desktop\\pedestal\\userConfig.json");
+            ExpandEnvToPath("%APPDATA%\\weclaw-desktop\\pedestal\\userConfig.json");
 
         // 1) 载入目标（存在则读）；一次性标记已存在 → 跳过（严格只迁一次）。
         nlohmann::json target = nlohmann::json::object();

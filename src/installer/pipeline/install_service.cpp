@@ -190,7 +190,15 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
     const std::filesystem::path pluginsRoot = PathFromUtf8(installRoot) / "plugins";
 
     // 逐组件明细统一收集到 outStats，最终由 [InstallFlow][TimingSummary] 展示（不再分散逐条打印）。
+    // 进度：组件阶段按“已处理 idx / 共 total”推进（含跳过项），驱动 GUI 进度条在本段内细分走动。
+    const std::size_t total = registry.size();
+    std::size_t idx = 0;
     for (const auto& spec : registry) {
+        reporter.EmitStatus(InstallServiceStatus::Installing,
+                            InstallServicePhase::Components,
+                            static_cast<float>(idx) / static_cast<float>(total),
+                            "Installing components...");
+        ++idx;
         const bool chosen = spec.required || selected.count(spec.id) > 0;
         if (!chosen) {
             outStats.push_back(ComponentRunStat{spec.id, "skipped(not-selected)", false, false, 0, 0});
@@ -248,6 +256,10 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
             reporter.EmitMessage(InstallServiceEventType::Info, "Component installed: " + spec.id);
         }
     }
+    reporter.EmitStatus(InstallServiceStatus::Installing,
+                        InstallServicePhase::Components,
+                        1.0f,
+                        "Components done.");
     return true;
 }
 
@@ -446,9 +458,24 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         // preInstall hooks：在解压前按声明顺序依次执行（需求 §4 时序）；
         // 任一脚本以 onFailure=abort 失败则中止安装。
         auto preHookStart = std::chrono::steady_clock::now();
+        if (!metadata.preInstall.empty()) {
+            reporter.EmitStatus(InstallServiceStatus::Installing,
+                                InstallServicePhase::PreInstallHook,
+                                0.0f,
+                                "Running pre-install scripts...");
+        }
         const HookOutcome preHookOutcome =
             RunHooks(metadata.preInstall, hookInstallDir, metadata.appVersion,
-                     &flowTiming.preHookStats);
+                     &flowTiming.preHookStats,
+                     [&reporter](std::size_t done, std::size_t total) {
+                         if (total > 0) {
+                             reporter.EmitStatus(
+                                 InstallServiceStatus::Installing,
+                                 InstallServicePhase::PreInstallHook,
+                                 static_cast<float>(done) / static_cast<float>(total),
+                                 "Running pre-install scripts...");
+                         }
+                     });
         flowTiming.preHookMs = ElapsedMs(preHookStart);
         if (preHookOutcome == HookOutcome::FailedAbort) {
             markFailed("preInstall hook failed; installation aborted.", false, true);
@@ -531,9 +558,24 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         const std::string postHookInstallDir =
             result.installRootPath.empty() ? hookInstallDir : result.installRootPath;
         auto postHookStart = std::chrono::steady_clock::now();
+        if (!metadata.postInstall.empty()) {
+            reporter.EmitStatus(InstallServiceStatus::Finalizing,
+                                InstallServicePhase::PostInstallHook,
+                                0.0f,
+                                "Running post-install scripts...");
+        }
         const HookOutcome postHookOutcome =
             RunHooks(metadata.postInstall, postHookInstallDir, metadata.appVersion,
-                     &flowTiming.postHookStats);
+                     &flowTiming.postHookStats,
+                     [&reporter](std::size_t done, std::size_t total) {
+                         if (total > 0) {
+                             reporter.EmitStatus(
+                                 InstallServiceStatus::Finalizing,
+                                 InstallServicePhase::PostInstallHook,
+                                 static_cast<float>(done) / static_cast<float>(total),
+                                 "Running post-install scripts...");
+                         }
+                     });
         flowTiming.postHookMs = ElapsedMs(postHookStart);
         if (postHookOutcome == HookOutcome::FailedAbort) {
             RollbackInstalledArtifacts(metadata, plan, options, result, pathResolver, reporter);
@@ -546,7 +588,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         if (result.rebootRequired) {
             result.success = false;
             reporter.EmitStatus(InstallServiceStatus::RebootRequired,
-                                InstallServicePhase::Finalizing,
+                                InstallServicePhase::PostInstallHook,
                                 1.0f,
                                 "Installation requires a system reboot to finish replacing locked files.");
             reporter.EmitMessage(InstallServiceEventType::Warning,
@@ -561,7 +603,7 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
 
         result.success = true;
         reporter.EmitStatus(InstallServiceStatus::Completed,
-                            InstallServicePhase::Finalizing,
+                            InstallServicePhase::PostInstallHook,
                             1.0f,
                             "Installation completed.");
         logInstallerInfo(std::string("[InstallFlow][Done] success=true cancelled=") +

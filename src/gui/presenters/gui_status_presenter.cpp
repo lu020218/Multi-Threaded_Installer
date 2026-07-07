@@ -19,15 +19,22 @@ void UpdateProgressDisplay(CPaintManagerUI& manager,
                            const std::wstring& progressFolder,
                            float percentage) {
     CLabelUI* currentFolderLabel = static_cast<CLabelUI*>(manager.FindControl(_T("current_folder")));
-    if (currentFolderLabel && !progressFolder.empty()) {
+    if (currentFolderLabel) {
         std::wstring prefix = progressPrefix.empty()
-            ? GUIHelpers::GetLocalizedText(L"msg.progress.processing", L"")
+            ? GUIHelpers::GetLocalizedText(L"msg.progress.stage.processing", L"")
             : progressPrefix;
-        const std::wstring displayPath =
-            FormatProgressPathForDisplay(progressFolder, kProgressPathDisplayMaxChars);
-        currentFolderLabel->SetText(WStringToTStr(prefix + displayPath));
-        currentFolderLabel->SetToolTip(WStringToTStr(prefix + progressFolder));
-        currentFolderLabel->SetToolTipWidth(kProgressTooltipWidth);
+        if (progressFolder.empty()) {
+            // 只显示阶段名（不拼具体文件）。
+            currentFolderLabel->SetText(WStringToTStr(prefix));
+            currentFolderLabel->SetToolTip(WStringToTStr(prefix));
+            currentFolderLabel->SetToolTipWidth(kProgressTooltipWidth);
+        } else {
+            const std::wstring displayPath =
+                FormatProgressPathForDisplay(progressFolder, kProgressPathDisplayMaxChars);
+            currentFolderLabel->SetText(WStringToTStr(prefix + displayPath));
+            currentFolderLabel->SetToolTip(WStringToTStr(prefix + progressFolder));
+            currentFolderLabel->SetToolTipWidth(kProgressTooltipWidth);
+        }
     }
 
     CProgressUI* progressBar = static_cast<CProgressUI*>(manager.FindControl(_T("progress_bar")));
@@ -43,11 +50,12 @@ void UpdateProgressDisplay(CPaintManagerUI& manager,
         progressPercentLabel->SetText(percentText);
     }
 
+    // 精简为“阶段 + 百分比”，隐藏 ETA/预计剩余时间。
     CLabelUI* estimatedTimeLabel =
         static_cast<CLabelUI*>(manager.FindControl(_T("estimated_time")));
     if (estimatedTimeLabel) {
-        std::wstring text = GUIHelpers::GetLocalizedText(L"msg.progress.eta", L"");
-        estimatedTimeLabel->SetText(WStringToTStr(text));
+        estimatedTimeLabel->SetText(_T(""));
+        estimatedTimeLabel->SetVisible(false);
     }
 }
 

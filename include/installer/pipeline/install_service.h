@@ -39,8 +39,11 @@ enum class InstallServicePhase {
     None,
     Precheck,           ///< 预检。
     CleanupOldInstall,  ///< 清理旧安装（升级/覆盖）。
+    PreInstallHook,     ///< 安装前脚本。
     Installing,         ///< 解压。
+    Components,         ///< 组件安装。
     Finalizing,         ///< 收尾。
+    PostInstallHook,    ///< 安装后脚本。
 };
 
 /// 单条安装事件。

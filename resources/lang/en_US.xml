@@ -64,6 +64,14 @@
   <Text id="msg.progress.cleaning_prefix" value="Cleaning: "/>
   <Text id="msg.progress.extracting_prefix" value="Extracting files: "/>
   <Text id="msg.progress.finalizing_prefix" value="Finalizing: "/>
+  <Text id="msg.progress.stage.processing" value="Processing"/>
+  <Text id="msg.progress.stage.precheck" value="Checking environment"/>
+  <Text id="msg.progress.stage.cleanup" value="Cleaning previous version"/>
+  <Text id="msg.progress.stage.prehook" value="Running pre-install scripts"/>
+  <Text id="msg.progress.stage.extract" value="Extracting files"/>
+  <Text id="msg.progress.stage.components" value="Installing components"/>
+  <Text id="msg.progress.stage.finalize" value="Finalizing installation"/>
+  <Text id="msg.progress.stage.posthook" value="Running post-install scripts"/>
   <Text id="msg.progress.eta" value="Estimated time remaining: Calculating..."/>
   <Text id="msg.space.required" value="Required: "/>
   <Text id="msg.space.available" value="Available: "/>

@@ -558,13 +558,19 @@ HookOutcome RunHook(const HookScript& hook,
 HookOutcome RunHooks(const std::vector<HookScript>& hooks,
                      const std::string& installDir,
                      const std::string& version,
-                     std::vector<HookRunStat>* outStats) {
+                     std::vector<HookRunStat>* outStats,
+                     const std::function<void(std::size_t, std::size_t)>& onProgress) {
     if (hooks.empty()) {
         return HookOutcome::NotPresent;
     }
 
+    const std::size_t total = hooks.size();
     bool sawContinueFailure = false;
     for (size_t i = 0; i < hooks.size(); ++i) {
+        // 段内进度按“已完成 i / 共 total”推进：第 i 个开始前上报 i（前 i 个已完成）。
+        if (onProgress) {
+            onProgress(i, total);
+        }
         HookRunStat stat;
         const HookOutcome outcome =
             RunHook(hooks[i], installDir, version, outStats ? &stat : nullptr);
@@ -576,6 +582,9 @@ HookOutcome RunHooks(const std::vector<HookScript>& hooks,
                 // abort 失败立即停止，后续脚本不再执行，交由调用方中止/回滚。
                 logInstallerError("[Hook] Aborting remaining hooks at index " +
                                   std::to_string(i) + " due to abort-failure.");
+                if (onProgress) {
+                    onProgress(total, total);
+                }
                 return HookOutcome::FailedAbort;
             case HookOutcome::FailedContinue:
                 sawContinueFailure = true;  // 记录后继续后续脚本
@@ -584,6 +593,9 @@ HookOutcome RunHooks(const std::vector<HookScript>& hooks,
             case HookOutcome::NotPresent:
                 break;
         }
+    }
+    if (onProgress) {
+        onProgress(total, total);  // 全部完成 → 段内 100%。
     }
     return sawContinueFailure ? HookOutcome::FailedContinue : HookOutcome::Success;
 }

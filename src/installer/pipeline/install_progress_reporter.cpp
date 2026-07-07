@@ -8,14 +8,22 @@ namespace MultiThreadedInstaller {
 
 namespace {
 
+// 全流程按执行顺序划分为 7 段，段内进度线性映射到总区间；单调不回退（见 EmitStatus）。
+// 100% 只在最后一段 PostInstallHook 结束（或最终 Completed 事件）时到达 —— 保证“全部完成才 100%”。
 constexpr float kPrecheckStart = 0.00f;
-constexpr float kPrecheckEnd = 0.15f;
-constexpr float kCleanupStart = 0.15f;
-constexpr float kCleanupEnd = 0.35f;
-constexpr float kInstallStart = 0.35f;
-constexpr float kInstallEnd = 0.92f;
-constexpr float kFinalizeStart = 0.92f;
-constexpr float kFinalizeEnd = 1.00f;
+constexpr float kPrecheckEnd = 0.08f;
+constexpr float kCleanupStart = 0.08f;
+constexpr float kCleanupEnd = 0.18f;
+constexpr float kPreHookStart = 0.18f;
+constexpr float kPreHookEnd = 0.25f;
+constexpr float kInstallStart = 0.25f;
+constexpr float kInstallEnd = 0.70f;
+constexpr float kComponentsStart = 0.70f;
+constexpr float kComponentsEnd = 0.85f;
+constexpr float kFinalizeStart = 0.85f;
+constexpr float kFinalizeEnd = 0.92f;
+constexpr float kPostHookStart = 0.92f;
+constexpr float kPostHookEnd = 1.00f;
 
 float Clamp01(float value) {
     if (value < 0.0f) {
@@ -34,10 +42,16 @@ float ToOverallProgress(InstallServicePhase phase, float phaseProgress) {
             return kPrecheckStart + (kPrecheckEnd - kPrecheckStart) * clamped;
         case InstallServicePhase::CleanupOldInstall:
             return kCleanupStart + (kCleanupEnd - kCleanupStart) * clamped;
+        case InstallServicePhase::PreInstallHook:
+            return kPreHookStart + (kPreHookEnd - kPreHookStart) * clamped;
         case InstallServicePhase::Installing:
             return kInstallStart + (kInstallEnd - kInstallStart) * clamped;
+        case InstallServicePhase::Components:
+            return kComponentsStart + (kComponentsEnd - kComponentsStart) * clamped;
         case InstallServicePhase::Finalizing:
             return kFinalizeStart + (kFinalizeEnd - kFinalizeStart) * clamped;
+        case InstallServicePhase::PostInstallHook:
+            return kPostHookStart + (kPostHookEnd - kPostHookStart) * clamped;
         case InstallServicePhase::None:
         default:
             return 0.0f;
@@ -58,10 +72,16 @@ const char* InstallServicePhaseName(InstallServicePhase phase) {
             return "Precheck";
         case InstallServicePhase::CleanupOldInstall:
             return "CleanupOldInstall";
+        case InstallServicePhase::PreInstallHook:
+            return "PreInstallHook";
         case InstallServicePhase::Installing:
             return "Installing";
+        case InstallServicePhase::Components:
+            return "Components";
         case InstallServicePhase::Finalizing:
             return "Finalizing";
+        case InstallServicePhase::PostInstallHook:
+            return "PostInstallHook";
         case InstallServicePhase::None:
         default:
             return "None";

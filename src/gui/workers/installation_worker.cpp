@@ -34,20 +34,25 @@ namespace MultiThreadedInstaller {
 
 namespace {
 
+// 阶段名（干净、无尾冒号）：界面只显示“阶段名 + 百分比”，不再拼具体文件。
 std::wstring ProgressPrefixForPhase(InstallServicePhase phase) {
     const std::wstring processing =
-        GUIHelpers::GetLocalizedText(L"msg.progress.processing", L"");
-    const std::wstring installing =
-        GUIHelpers::GetLocalizedText(L"msg.progress.installing_prefix", processing);
+        GUIHelpers::GetLocalizedText(L"msg.progress.stage.processing", L"");
     switch (phase) {
         case InstallServicePhase::Precheck:
-            return GUIHelpers::GetLocalizedText(L"msg.progress.prechecking_prefix", processing);
+            return GUIHelpers::GetLocalizedText(L"msg.progress.stage.precheck", processing);
         case InstallServicePhase::CleanupOldInstall:
-            return GUIHelpers::GetLocalizedText(L"msg.progress.cleaning_prefix", processing);
+            return GUIHelpers::GetLocalizedText(L"msg.progress.stage.cleanup", processing);
+        case InstallServicePhase::PreInstallHook:
+            return GUIHelpers::GetLocalizedText(L"msg.progress.stage.prehook", processing);
         case InstallServicePhase::Installing:
-            return GUIHelpers::GetLocalizedText(L"msg.progress.extracting_prefix", installing);
+            return GUIHelpers::GetLocalizedText(L"msg.progress.stage.extract", processing);
+        case InstallServicePhase::Components:
+            return GUIHelpers::GetLocalizedText(L"msg.progress.stage.components", processing);
         case InstallServicePhase::Finalizing:
-            return GUIHelpers::GetLocalizedText(L"msg.progress.finalizing_prefix", installing);
+            return GUIHelpers::GetLocalizedText(L"msg.progress.stage.finalize", processing);
+        case InstallServicePhase::PostInstallHook:
+            return GUIHelpers::GetLocalizedText(L"msg.progress.stage.posthook", processing);
         case InstallServicePhase::None:
         default:
             return processing;
@@ -260,15 +265,9 @@ if (m_cancellationRequested) {
         serviceCallbacks.onEvent = [this](const InstallServiceEvent& event) {
             switch (event.type) {
                 case InstallServiceEventType::Progress: {
-                    std::string detail = !event.currentFile.empty() ? event.currentFile : event.folder;
-                    if (detail.empty()) {
-                        detail = event.message;
-                    }
-                    if (detail.empty()) {
-                        detail = "Installing";
-                    }
+                    // 只显示“阶段名 + 百分比”，不显示具体文件（folder 传空）。
                     const float progress = std::max(0.0f, std::min(100.0f, event.overallProgress * 100.0f));
-                    PostProgressMessage(Utf8ToWide(detail), progress, ProgressPrefixForPhase(event.phase));
+                    PostProgressMessage(std::wstring(), progress, ProgressPrefixForPhase(event.phase));
                     break;
                 }
                 case InstallServiceEventType::Info:
@@ -280,11 +279,16 @@ if (m_cancellationRequested) {
                 case InstallServiceEventType::Error:
                     logInstallerError(std::string("[InstallService] ") + event.message);
                     break;
-                case InstallServiceEventType::Status:
+                case InstallServiceEventType::Status: {
                     if (!event.message.empty()) {
                         logInstallerInfo(std::string("[InstallService][Status] ") + event.message);
                     }
+                    // 阶段切换（含 hook/组件阶段）也驱动进度条：只显示阶段名 + 百分比。
+                    // 单调不回退由 reporter 保证；终态完成页另由 PostCompletionMessage 接管。
+                    const float progress = std::max(0.0f, std::min(100.0f, event.overallProgress * 100.0f));
+                    PostProgressMessage(std::wstring(), progress, ProgressPrefixForPhase(event.phase));
                     break;
+                }
                 default:
                     break;
             }

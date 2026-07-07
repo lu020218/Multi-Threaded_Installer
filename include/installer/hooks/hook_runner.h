@@ -2,6 +2,8 @@
 
 #include "common/archive_types.h"
 
+#include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -41,9 +43,12 @@ HookOutcome RunHook(const HookScript& hook,
 //   FailedContinue 记录后继续后续脚本。聚合结果：
 //   列表为空 → NotPresent；出现过 continue 失败 → FailedContinue；否则 Success。
 // outStats 非空时逐脚本追加其性能/结果明细。
+// onProgress 非空时按“已完成第 done 个 / 共 total 个”回调（total=脚本数），供上层驱动进度条
+// 在脚本阶段内按脚本数细分推进。
 HookOutcome RunHooks(const std::vector<HookScript>& hooks,
                      const std::string& installDir,
                      const std::string& version,
-                     std::vector<HookRunStat>* outStats = nullptr);
+                     std::vector<HookRunStat>* outStats = nullptr,
+                     const std::function<void(std::size_t done, std::size_t total)>& onProgress = {});
 
 } // namespace MultiThreadedInstaller

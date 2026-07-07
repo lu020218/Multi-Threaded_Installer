@@ -396,7 +396,8 @@ UniqueHandle CreateInheritableLogFile(const std::filesystem::path& path) {
 
 HookOutcome RunHook(const HookScript& hook,
                     const std::string& installDir,
-                    const std::string& version) {
+                    const std::string& version,
+                    HookRunStat* outStat) {
     if (!hook.present) {
         return HookOutcome::NotPresent;
     }
@@ -404,15 +405,26 @@ HookOutcome RunHook(const HookScript& hook,
 #ifdef _WIN32
     const std::string hookName = hook.scriptName.empty() ? "hook" : hook.scriptName;
 
+    // 逐步填充本次执行的性能/结果明细，最终由 emit() 写回 outStat。
+    HookRunStat stat;
+    stat.name = hookName;
+    auto emit = [&](HookOutcome oc) -> HookOutcome {
+        stat.outcome = oc;
+        if (outStat) {
+            *outStat = stat;
+        }
+        return oc;
+    };
+
     // [Perf] 释放阶段耗时（把主脚本+兄弟文件写到临时目录）。
     const auto prepareStart = std::chrono::steady_clock::now();
     HookBundle bundle = ReleaseHookBundle(hook);
-    const long long prepareMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::steady_clock::now() - prepareStart)
-                                    .count();
+    stat.prepareMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - prepareStart)
+                         .count();
     if (bundle.dir.empty()) {
         logInstallerError("[Hook] Failed to release hook script: " + hookName);
-        return FailOutcome(hook);
+        return emit(FailOutcome(hook));
     }
     // 退出时清理整个临时目录（主脚本 + 兄弟文件）。
     struct ScopedRemove {
@@ -469,12 +481,13 @@ HookOutcome RunHook(const HookScript& hook,
     }
     PROCESS_INFORMATION processInfo{};
 
-    // 脚本类型标签（用于耗时日志，尤其关注 ps1 的启动/环境初始化耗时）。
+    // 脚本类型标签（用于耗时汇总，尤其关注 ps1 的启动/环境初始化耗时）。
     const char* typeLabel =
         launchCommand.type == ComponentLauncherType::PowerShell ? "ps1"
         : launchCommand.type == ComponentLauncherType::Batch    ? "bat/cmd"
         : launchCommand.type == ComponentLauncherType::Msi      ? "msi"
                                                                 : "exe";
+    stat.type = typeLabel;
     const auto hookStart = std::chrono::steady_clock::now();
     auto hookElapsedMs = [&hookStart]() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -495,7 +508,7 @@ HookOutcome RunHook(const HookScript& hook,
     if (!started) {
         logInstallerError("[Hook] Failed to start hook process: " + hookName +
                           " (GetLastError=" + std::to_string(GetLastError()) + ")");
-        return FailOutcome(hook);
+        return emit(FailOutcome(hook));
     }
     UniqueHandle process(processInfo.hProcess);
     UniqueHandle thread(processInfo.hThread);
@@ -506,45 +519,37 @@ HookOutcome RunHook(const HookScript& hook,
     if (waitResult == WAIT_TIMEOUT) {
         TerminateProcess(process.get(), 1);
         WaitForSingleObject(process.get(), 2000);
+        stat.execMs = hookElapsedMs();
         logInstallerError("[Hook] Hook timed out after " + std::to_string(hook.timeoutSec) +
-                          "s: " + hookName + " type=" + typeLabel +
-                          " prepareMs=" + std::to_string(prepareMs) +
-                          " execMs=" + std::to_string(hookElapsedMs()));
+                          "s: " + hookName);
         persistIfRequested();
-        return FailOutcome(hook);
+        return emit(FailOutcome(hook));
     }
     if (waitResult != WAIT_OBJECT_0) {
-        logInstallerError("[Hook] Failed while waiting for hook: " + hookName +
-                          " type=" + typeLabel + " prepareMs=" + std::to_string(prepareMs) +
-                          " execMs=" + std::to_string(hookElapsedMs()));
+        stat.execMs = hookElapsedMs();
+        logInstallerError("[Hook] Failed while waiting for hook: " + hookName);
         persistIfRequested();
-        return FailOutcome(hook);
+        return emit(FailOutcome(hook));
     }
 
     DWORD exitCode = 1;
     GetExitCodeProcess(process.get(), &exitCode);
-    const long long execMs = hookElapsedMs();
+    stat.execMs = hookElapsedMs();
+    stat.exitCode = exitCode;
 
-    // 统一的耗时/规模明细：prepare=释放脚本+兄弟文件, exec=子进程执行, total=两者之和。
-    const std::string stats =
-        " type=" + std::string(typeLabel) +
-        " prepareMs=" + std::to_string(prepareMs) +
-        " execMs=" + std::to_string(execMs) +
-        " totalMs=" + std::to_string(prepareMs + execMs) +
-        " auxFiles=" + std::to_string(hook.auxFiles.size()) +
-        " scriptBytes=" + std::to_string(hook.content.size());
-
+    // 详细耗时/规模明细统一在 [InstallFlow][TimingSummary] 汇总展示（不再分散在此逐条打印）。
     persistIfRequested();
     if (exitCode == 0) {
-        logInstallerInfo("[Hook] Hook succeeded: " + hookName + stats);
-        return HookOutcome::Success;
+        logInstallerInfo("[Hook] Hook succeeded: " + hookName);
+        return emit(HookOutcome::Success);
     }
     logInstallerError("[Hook] Hook failed with exit code " + std::to_string(exitCode) +
-                      ": " + hookName + stats);
-    return FailOutcome(hook);
+                      ": " + hookName);
+    return emit(FailOutcome(hook));
 #else
     (void)installDir;
     (void)version;
+    (void)outStat;
     logInstallerError("[Hook] Hooks are supported on Windows only.");
     return FailOutcome(hook);
 #endif
@@ -552,14 +557,20 @@ HookOutcome RunHook(const HookScript& hook,
 
 HookOutcome RunHooks(const std::vector<HookScript>& hooks,
                      const std::string& installDir,
-                     const std::string& version) {
+                     const std::string& version,
+                     std::vector<HookRunStat>* outStats) {
     if (hooks.empty()) {
         return HookOutcome::NotPresent;
     }
 
     bool sawContinueFailure = false;
     for (size_t i = 0; i < hooks.size(); ++i) {
-        const HookOutcome outcome = RunHook(hooks[i], installDir, version);
+        HookRunStat stat;
+        const HookOutcome outcome =
+            RunHook(hooks[i], installDir, version, outStats ? &stat : nullptr);
+        if (outStats) {
+            outStats->push_back(std::move(stat));
+        }
         switch (outcome) {
             case HookOutcome::FailedAbort:
                 // abort 失败立即停止，后续脚本不再执行，交由调用方中止/回滚。

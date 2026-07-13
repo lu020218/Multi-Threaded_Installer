@@ -158,7 +158,13 @@ std::string appendPathLeafIfMissing(const std::string& basePath, const std::stri
     std::filesystem::path normalized = PathFromUtf8(basePath).lexically_normal();
     std::filesystem::path leafProbe = normalized;
     while (!leafProbe.empty() && leafProbe.filename().empty() && leafProbe.has_parent_path()) {
-        leafProbe = leafProbe.parent_path();
+        // 根路径（如 "D:\"、"\\server\share\"）的 parent_path() 返回自身且 filename 恒为空，
+        // 不加此判断会死循环（GUI 浏览选择盘符根目录时卡死 UI 线程）。
+        const std::filesystem::path parent = leafProbe.parent_path();
+        if (parent == leafProbe) {
+            break;  // 已到根：currentLeaf 为空 → 走“追加 expectedLeaf”分支（D:\ → D:\<产品名>）
+        }
+        leafProbe = parent;
     }
 
     std::string currentLeaf = Utf8FromPath(leafProbe.filename());

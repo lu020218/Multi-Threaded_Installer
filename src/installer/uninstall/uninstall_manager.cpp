@@ -1129,9 +1129,9 @@ bool ResolveUninstallContext(const ExtendedInstallationMetadata* metadata,
     }
 
     if (metadata) {
-        InstalledInstanceInfo installedInstance;
-        std::string detectError;
-        if (resolveInstalledInstanceFromInstallState(*metadata, resolver, installedInstance, &detectError)) {
+        const InstalledInstanceInfo installedInstance =
+            GetInstalledInstanceSnapshot(*metadata, resolver);
+        if (installedInstance.found) {
             context.detectSource = installedInstance.detectSource;
             if (TryLoadManifestIntoContext(installedInstance.manifestPath, context, false)) {
                 return context.manifestReadable;

@@ -363,10 +363,9 @@ std::string ResolveInstallPathForSilentRun(const ExtendedInstallationMetadata& m
         return context.args.defaultDestination;
     }
 
-    InstalledInstanceInfo installedInstance;
-    if (resolveInstalledInstanceFromInstallState(metadata, pathResolver, installedInstance, nullptr) &&
-        installedInstance.found &&
-        !installedInstance.installDir.empty()) {
+    const InstalledInstanceInfo installedInstance =
+        GetInstalledInstanceSnapshot(metadata, pathResolver);
+    if (installedInstance.found && !installedInstance.installDir.empty()) {
         existingManifest = installedInstance.manifestPath;
         return installedInstance.installDir;
     }
@@ -414,9 +413,8 @@ std::string ResolveUninstallManifestPath(const ExtendedInstallationMetadata* met
     if (!metadata) {
         return {};
     }
-    InstalledInstanceInfo installedInstance;
-    if (resolveInstalledInstanceFromInstallState(*metadata, resolver, installedInstance, nullptr) &&
-        !installedInstance.manifestPath.empty()) {
+    const InstalledInstanceInfo installedInstance = GetInstalledInstanceSnapshot(*metadata, resolver);
+    if (installedInstance.found && !installedInstance.manifestPath.empty()) {
         return installedInstance.manifestPath;
     }
     return {};
@@ -558,10 +556,9 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
             return INSTALLER_EXIT_FAILED;
         }
     } else {
-        InstalledInstanceInfo installedInstance;
-        const bool hasInstalledInstance =
-            resolveInstalledInstanceFromInstallState(metadata, pathResolver, installedInstance, nullptr) &&
-            installedInstance.found;
+        const InstalledInstanceInfo installedInstance =
+            GetInstalledInstanceSnapshot(metadata, pathResolver);
+        const bool hasInstalledInstance = installedInstance.found;
 
         if (hasInstalledInstance) {
             const int versionOrder =
@@ -673,10 +670,9 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
         }
         overwriteMode = true;
     } else {
-        InstalledInstanceInfo installedInstance;
-        overwriteMode =
-            resolveInstalledInstanceFromInstallState(metadata, pathResolver, installedInstance, nullptr) &&
-            installedInstance.found;
+        const InstalledInstanceInfo installedInstance =
+            GetInstalledInstanceSnapshot(metadata, pathResolver);
+        overwriteMode = installedInstance.found;
         if (overwriteMode && !installedInstance.installDir.empty()) {
             upgradeInstallDir = installedInstance.installDir;
         }

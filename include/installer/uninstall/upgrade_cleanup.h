@@ -67,6 +67,9 @@ UpgradeCleanupResult runUpgradeExtraPathCleanupWithWatchdog(
 
 /// 升级系统级收尾：重构后改为调用引擎迁移表（migration::RunPending）承接旧名单清理
 /// （旧注册表/快捷方式/卸载入口/路径残留），而非读 YAML legacy 名单。
+/// fromVersionHint：调用方在计划期抓取的旧版本号快照（注册表优先）。非空时直接作为迁移
+/// fromVersion（此时旧 manifest 往往已被文件清理删除，注册表也可能已被覆盖，快照是唯一可靠来源）；
+/// 为空时按 注册表 Version → 旧 manifest appVersion 的优先级现场读取。
 bool cleanupUpgradeSystemArtifacts(
     const std::string& manifestPath,
     const std::string& previousInstallDir,
@@ -75,6 +78,7 @@ bool cleanupUpgradeSystemArtifacts(
     CliSupport& console,
     const UpgradeCleanupProgressCallback& progressCallback = {},
     const std::function<bool()>& cancellationCallback = {},
-    bool cleanupExtraPaths = true);
+    bool cleanupExtraPaths = true,
+    const std::string& fromVersionHint = {});
 
 } // namespace MultiThreadedInstaller

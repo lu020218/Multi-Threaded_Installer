@@ -266,6 +266,11 @@ bool loadPreviousInstallFileFingerprints(const std::string& manifestPath,
     if (!readManifest(manifestPath, manifest)) {
         return false;
     }
+    return loadPreviousInstallFileFingerprints(manifest, out);
+}
+
+bool loadPreviousInstallFileFingerprints(const json& manifest, InstalledFileFingerprintMap& out) {
+    out.clear();
     if (!manifest.contains("fileFingerprints") || !manifest["fileFingerprints"].is_array()) {
         return false;
     }

@@ -4,6 +4,7 @@
 #include "installer/platform/path_resolver.h"
 #include "installer/state/registry_utils.h"
 #include "common/engine_defaults.h"
+#include "common/installer_logger.h"
 #include "common/utf8_utils.h"
 
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include <json.hpp>
 #include <algorithm>
 #include <cctype>
+#include <mutex>
 #include <vector>
 
 namespace MultiThreadedInstaller {
@@ -147,6 +149,8 @@ bool resolveInstallDirFromInstallStateStore(const ExtendedInstallationMetadata& 
 
 // [旧版本-发现安装路径] 对外封装：发现旧安装目录 + 旧 manifest 路径 + 旧版本号，
 // 打包成 InstalledInstanceInfo 供安装计划/卸载判定覆盖安装与升级目标。
+// 版本号优先级：产品注册表 Version → 旧 manifest appVersion（注册表由安装收尾统一写入，
+// 是权威来源；manifest 仅作注册表值缺失/损坏时的兜底）。
 bool resolveInstalledInstanceFromInstallState(const ExtendedInstallationMetadata& metadata,
                                               InstallerPathResolver& resolver,
                                               InstalledInstanceInfo& instanceInfo,
@@ -157,6 +161,7 @@ bool resolveInstalledInstanceFromInstallState(const ExtendedInstallationMetadata
     std::string manifestPath;
     std::string detectSource;
     if (!resolveInstallDirFromInstallStateStore(metadata, resolver, installDir, manifestPath, detectSource, localError)) {
+        instanceInfo.detectError = localError;
         if (error) {
             *error = localError;
         }
@@ -167,13 +172,45 @@ bool resolveInstalledInstanceFromInstallState(const ExtendedInstallationMetadata
     instanceInfo.installDir = installDir;
     instanceInfo.manifestPath = manifestPath;
     instanceInfo.detectSource = detectSource;
-    if (!manifestPath.empty()) {
+
+    std::string registryVersion;
+    if (readRegistryStringValue(EngineDefaults::RegistryPath(metadata.appProductName),
+                                "Version", registryVersion) &&
+        !TrimAsciiCopy(registryVersion).empty()) {
+        instanceInfo.installedVersion = TrimAsciiCopy(registryVersion);
+    } else if (!manifestPath.empty()) {
         instanceInfo.installedVersion = ReadManifestAppVersionFast(manifestPath);
     }
     if (error) {
         error->clear();
     }
     return true;
+}
+
+// [旧版本-发现安装路径] 进程级快照：首次调用做一次真实探测并缓存（含"未检出"结果），
+// 后续直接复用。安装/卸载单次运行内旧安装状态不应在探测点之间变化，快照消除了
+// 重复注册表/磁盘/manifest 读取与多次探测间的不一致。
+InstalledInstanceInfo GetInstalledInstanceSnapshot(const ExtendedInstallationMetadata& metadata,
+                                                   InstallerPathResolver& resolver) {
+    static std::mutex snapshotMutex;
+    static bool snapshotTaken = false;
+    static std::string snapshotProduct;
+    static InstalledInstanceInfo snapshot;
+
+    std::lock_guard<std::mutex> lock(snapshotMutex);
+    if (!snapshotTaken || snapshotProduct != metadata.appProductName) {
+        InstalledInstanceInfo fresh;
+        resolveInstalledInstanceFromInstallState(metadata, resolver, fresh, nullptr);
+        snapshot = std::move(fresh);
+        snapshotProduct = metadata.appProductName;
+        snapshotTaken = true;
+        logInstallerInfo(std::string("[InstalledInstance] snapshot taken found=") +
+                         (snapshot.found ? "true" : "false") +
+                         " installDir=" + snapshot.installDir +
+                         " version=" + snapshot.installedVersion +
+                         " manifest=" + (snapshot.manifestPath.empty() ? "<none>" : snapshot.manifestPath));
+    }
+    return snapshot;
 }
 
 }  // namespace MultiThreadedInstaller

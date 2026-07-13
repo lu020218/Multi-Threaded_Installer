@@ -201,7 +201,8 @@ bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
                                       console,
                                       cleanupProgress,
                                       options.cancellationCallback,
-                                      false)) {
+                                      false,
+                                      plan.previousVersion)) {
         if (IsCancellationRequested(options)) {
             cancelled = true;
             error = "Installation cancelled.";

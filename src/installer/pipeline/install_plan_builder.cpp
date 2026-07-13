@@ -68,14 +68,15 @@ void AppendShortcutNameCandidate(std::vector<std::string>& target,
     }
 }
 
-std::vector<std::string> CollectLegacyDesktopShortcutCandidates(const std::string& previousManifest) {
+// 从已解析的旧 manifest 提取待清理的桌面快捷方式名（复用调用方的同一次 DOM 解析）。
+std::vector<std::string> CollectLegacyDesktopShortcutCandidates(const nlohmann::json* previousManifest) {
     std::vector<std::string> candidates;
     std::unordered_set<std::string> seen;
     seen.reserve(2);
 
-    nlohmann::json manifest;
-    if (readManifest(previousManifest, manifest)) {
-        AppendShortcutNameCandidate(candidates, seen, manifest.value("desktopShortcutDisplayName", ""));
+    if (previousManifest) {
+        AppendShortcutNameCandidate(candidates, seen,
+                                    previousManifest->value("desktopShortcutDisplayName", ""));
     }
 
     return candidates;
@@ -128,7 +129,7 @@ std::string ResolveDesktopShortcutDisplayName(const ExtendedInstallationMetadata
 }
 
 // [旧版本-发现安装路径] 升级模式入口：必须先发现机器上已存在的旧安装目录与旧 manifest，
-// 否则升级无目标可言 → 发现失败即升级失败。
+// 否则升级无目标可言 → 发现失败即升级失败。复用进程级探测快照（全流程只探测一次）。
 bool ResolveUpgradeInstallFromInstallStateDetect(const ExtendedInstallationMetadata& metadata,
                                                  InstallerPathResolver& pathResolver,
                                                  std::string& installDir,
@@ -138,11 +139,15 @@ bool ResolveUpgradeInstallFromInstallStateDetect(const ExtendedInstallationMetad
     manifestPath.clear();
     error.clear();
 
-    std::string detectSource;
-    if (!resolveInstallDirFromInstallStateStore(metadata, pathResolver, installDir, manifestPath, detectSource, error)) {
+    const InstalledInstanceInfo instance = GetInstalledInstanceSnapshot(metadata, pathResolver);
+    if (!instance.found) {
+        error = instance.detectError.empty()
+                    ? "Failed to resolve installDir from installState registry"
+                    : instance.detectError;
         return false;
     }
-
+    installDir = instance.installDir;
+    manifestPath = instance.manifestPath;
     return true;
 }
 
@@ -154,27 +159,27 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
     plan = InstallExecutionPlan{};
     error.clear();
 
-    InstalledInstanceInfo installedInstance;
+    // [旧版本-发现安装路径] 全流程唯一探测来源：进程级快照（GUI 启动/静默门控已抓取过则直接复用）。
+    const InstalledInstanceInfo installedInstance =
+        GetInstalledInstanceSnapshot(metadata, pathResolver);
     // 数据目录/注册表键统一用产品名，不再单列 id/directoryName（需求 §5）。
     plan.effectiveAppId = metadata.appProductName;
     plan.effectiveDirectoryName = metadata.appProductName;
     if (options.upgradeMode) {
-        if (!ResolveUpgradeInstallFromInstallStateDetect(metadata,
-                                                         pathResolver,
-                                                         plan.previousInstallDir,
-                                                         plan.previousManifest,
-                                                         error)) {
+        // 升级模式：必须已存在旧安装，否则升级失败。
+        if (!installedInstance.found) {
+            error = installedInstance.detectError.empty()
+                        ? "Failed to resolve installDir from installState registry"
+                        : installedInstance.detectError;
             return false;
         }
+        plan.previousInstallDir = installedInstance.installDir;
+        plan.previousManifest = installedInstance.manifestPath;
         plan.hasPreviousInstall = true;
         plan.pathDecision = ResolveUpgradePathDecision(plan.previousInstallDir);
     } else {
-        // [旧版本-发现安装路径] 非升级（普通/覆盖安装）：探测是否已存在旧版本；命中则记录
-        // 旧目录与旧 manifest，用于后续覆盖安装的旧版本清理。
-        plan.hasPreviousInstall = resolveInstalledInstanceFromInstallState(metadata,
-                                                                          pathResolver,
-                                                                          installedInstance,
-                                                                          nullptr);
+        // 非升级（普通/覆盖安装）：命中旧版本则记录旧目录与旧 manifest，用于覆盖安装的旧版本清理。
+        plan.hasPreviousInstall = installedInstance.found;
         if (plan.hasPreviousInstall) {
             plan.previousManifest = installedInstance.manifestPath;
             plan.previousInstallDir = installedInstance.installDir;
@@ -185,17 +190,25 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
                                                        plan.hasPreviousInstall,
                                                        plan.previousInstallDir);
     }
+    // 旧版本号快照（注册表优先，manifest 兜底）：趁旧注册表/manifest 还没被本次安装
+    // 清理或覆盖，先行捕获，供迁移 fromVersion 等后续阶段消费。
+    plan.previousVersion = installedInstance.installedVersion;
+
+    // 旧 manifest 只做一次全量 DOM 解析，快捷方式候选与文件指纹共用同一份解析结果
+    // （此前两处各自 readManifest，全量解析两遍）。cleanup 阶段会删除旧 manifest，
+    // 因此这是抓取"零读跳过"指纹数据（方案A）的唯一时机。
+    nlohmann::json previousManifestJson;
+    const bool hasPreviousManifestJson =
+        plan.hasPreviousInstall && !plan.previousManifest.empty() &&
+        readManifest(plan.previousManifest, previousManifestJson);
 
     plan.legacyDesktopShortcutCandidates =
-        CollectLegacyDesktopShortcutCandidates(plan.previousManifest);
+        CollectLegacyDesktopShortcutCandidates(hasPreviousManifestJson ? &previousManifestJson
+                                                                       : nullptr);
 
-    // Capture the previous install's per-file fingerprints now, while its
-    // manifest still exists. The cleanup phase deletes the old manifest before
-    // extraction runs, so this is the only point at which the zero-read skip
-    // data (Scheme A) can be read.
-    if (plan.hasPreviousInstall && !plan.previousManifest.empty()) {
+    if (hasPreviousManifestJson) {
         auto fingerprints = std::make_shared<InstalledFileFingerprintMap>();
-        if (loadPreviousInstallFileFingerprints(plan.previousManifest, *fingerprints)) {
+        if (loadPreviousInstallFileFingerprints(previousManifestJson, *fingerprints)) {
             plan.previousInstalledFingerprints = std::move(fingerprints);
         }
     }

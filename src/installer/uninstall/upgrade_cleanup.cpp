@@ -1266,13 +1266,8 @@ bool cleanupUpgradeSystemArtifacts(
     CliSupport& console,
     const UpgradeCleanupProgressCallback& progressCallback,
     const std::function<bool()>& cancellationCallback,
-    bool cleanupExtraPaths) {
-    json manifest;
-    const bool hasManifest = ReadManifestJson(manifestPath, manifest);
-    if (!hasManifest && !manifestPath.empty()) {
-        console.showWarning("Upgrade cleanup: failed to read previous manifest for system cleanup.");
-    }
-
+    bool cleanupExtraPaths,
+    const std::string& fromVersionHint) {
     EmitProgress(progressCallback, 0.0f, "Preparing upgrade system cleanup");
     if (IsCancelled(cancellationCallback)) {
         console.showWarning("Upgrade system cleanup cancelled before start.");
@@ -1288,13 +1283,21 @@ bool cleanupUpgradeSystemArtifacts(
     ctx.installDir = previousInstallDir;
     ctx.productName = metadata.appProductName;
     ctx.toVersion = metadata.appVersion;
-    ctx.fromVersion = hasManifest ? manifest.value("appVersion", std::string{}) : std::string{};
+    // fromVersion 优先级：计划期快照（注册表优先抓取，见 plan.previousVersion）→
+    // 现场读注册表 Version → 旧 manifest appVersion。注意走到这里时文件清理往往已
+    // 删除旧 manifest，且后续 ApplyInstallState 会用新版本覆盖注册表——快照是权威来源。
+    ctx.fromVersion = fromVersionHint;
     if (ctx.fromVersion.empty()) {
-        // 清单缺失时退回读引擎写死的产品注册表版本。
         std::string registryVersion;
         if (readRegistryStringValue(EngineDefaults::RegistryPath(metadata.appProductName),
                                     "Version", registryVersion)) {
             ctx.fromVersion = registryVersion;
+        }
+    }
+    if (ctx.fromVersion.empty()) {
+        json manifest;
+        if (ReadManifestJson(manifestPath, manifest)) {
+            ctx.fromVersion = manifest.value("appVersion", std::string{});
         }
     }
 

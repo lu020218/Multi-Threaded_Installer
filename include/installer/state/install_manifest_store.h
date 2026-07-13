@@ -47,5 +47,8 @@ bool loadPreviousInstallOptions(const std::string& manifestPath,
 /// 用于升级时"零读跳过"未变文件（方案A）。manifest 不可读或无指纹时返回 false。
 bool loadPreviousInstallFileFingerprints(const std::string& manifestPath,
                                          InstalledFileFingerprintMap& out);
+/// 同上，但从已解析好的 manifest JSON 提取（供调用方复用同一次 DOM 解析，避免重复全量解析）。
+bool loadPreviousInstallFileFingerprints(const nlohmann::json& manifest,
+                                         InstalledFileFingerprintMap& out);
 
 } // namespace MultiThreadedInstaller

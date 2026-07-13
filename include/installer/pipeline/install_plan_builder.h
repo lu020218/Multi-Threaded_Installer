@@ -35,6 +35,9 @@ struct InstallExecutionPlan {
     bool hasPreviousInstall = false;       ///< 是否检出旧安装。
     std::string previousManifest;          ///< 旧 install.manifest.json 路径。
     std::string previousInstallDir;        ///< 旧安装目录。
+    /// 旧版本号快照（优先注册表 Version，兜底 manifest appVersion）。在旧 manifest/注册表
+    /// 被清理或覆盖前抓取，供迁移 fromVersion 等后续阶段消费，消除时序耦合。
+    std::string previousVersion;
     /// 在旧 manifest 被清理前抓取的逐文件指纹，供解压时"零读跳过"未变文件（方案A），可空。
     std::shared_ptr<const InstalledFileFingerprintMap> previousInstalledFingerprints;
     InstallPathDecision pathDecision;      ///< 路径决策。

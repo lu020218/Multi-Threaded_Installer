@@ -76,10 +76,6 @@ std::vector<std::string> EnsureUtf8List(const std::vector<std::string>& values) 
     return safeValues;
 }
 
-json UninstallEntryScopeToJson(UninstallEntryScope scope) {
-    return static_cast<int>(scope);
-}
-
 json NamedEntriesToManifestJson(const std::vector<NamedCleanupEntry>& entries) {
     json out = json::array();
     for (const auto& entry : entries) {
@@ -90,14 +86,12 @@ json NamedEntriesToManifestJson(const std::vector<NamedCleanupEntry>& entries) {
     return out;
 }
 
+// 卸载入口账本只记名字；删除时按名字推导键精确删除（deleteSystemUninstallEntry）。
 json UninstallEntriesToManifestJson(const std::vector<UninstallEntryCleanup>& entries) {
     json out = json::array();
     for (const auto& entry : entries) {
         if (!entry.name.empty()) {
-            out.push_back({
-                {"name", EnsureUtf8(entry.name)},
-                {"scope", UninstallEntryScopeToJson(entry.scope)}
-            });
+            out.push_back({{"name", EnsureUtf8(entry.name)}});
         }
     }
     return out;

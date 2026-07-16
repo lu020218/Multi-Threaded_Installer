@@ -27,19 +27,18 @@ void applyRegistryEntries(const std::vector<RegistryEntry>& entries,
 std::string sanitizeRegistryKeyName(const std::string& name);
 /// 读一个字符串型注册表值（REG_SZ/REG_EXPAND_SZ，后者自动展开环境变量）。成功置 value 返回 true。
 bool readRegistryStringValue(const std::string& path, const std::string& key, std::string& value);
-/// 写系统"程序和功能"卸载入口（DisplayName/Version/InstallLocation/UninstallString/Publisher 等）。
-/// @param perMachine true 写 HKLM（全机），false 写 HKCU（当前用户）。
-bool writeUninstallRegistryEntry(const std::string& appName,
-                                 const std::string& displayName,
-                                 const std::string& version,
-                                 const std::string& installDir,
-                                 const std::string& uninstallExePath,
-                                 bool perMachine,
-                                 const std::string& publisher = "");
-/// 删除本产品的系统卸载入口（按 appName 派生的键名）。
-bool deleteUninstallRegistryEntry(const std::string& appName, bool perMachine);
-/// 按 DisplayName 删除系统卸载入口（用于清理改名前的旧入口）。scope 决定 hive/视图范围。
-bool deleteSystemUninstallEntryByDisplayName(const std::string& displayName,
-                                             UninstallEntryScope scope);
+// ── 系统「程序和功能」卸载入口：全工程唯一读写口 ──────────────────────────────
+// 键路径唯一推导规则：HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\<sanitize(appName)>，
+// 写与删完全对称、只做精确键名删除（不做 DisplayName 扫描/多视图/HKCU 等推导）。
+// 后期要改写入字段 → 只改 writeSystemUninstallEntry；要改删除行为 → 只改 deleteSystemUninstallEntry。
+
+/// 写本产品的系统卸载入口（DisplayName=appName、DisplayVersion/InstallLocation/UninstallString/Publisher 等）。
+bool writeSystemUninstallEntry(const std::string& appName,
+                               const std::string& version,
+                               const std::string& installDir,
+                               const std::string& uninstallExePath,
+                               const std::string& publisher = "");
+/// 删除 appName 对应的系统卸载入口（与写入同一推导键，精确删除）。
+bool deleteSystemUninstallEntry(const std::string& appName);
 
 } // namespace MultiThreadedInstaller

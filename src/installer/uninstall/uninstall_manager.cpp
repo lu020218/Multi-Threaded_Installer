@@ -100,8 +100,6 @@ static std::vector<UninstallEntryCleanup> GetManifestUninstallEntries(const json
         }
         UninstallEntryCleanup entry;
         entry.name = item.value("name", "");
-        entry.scope = static_cast<UninstallEntryScope>(
-            item.value("scope", static_cast<int>(UninstallEntryScope::ANY)));
         if (!entry.name.empty()) {
             entries.push_back(std::move(entry));
         }
@@ -295,11 +293,6 @@ static bool TrySetFallbackContext(const std::string& installDir,
     return true;
 }
 
-#ifdef _WIN32
-static bool DeleteUninstallEntryByScope(const UninstallEntryCleanup& entry) {
-    return deleteSystemUninstallEntryByDisplayName(entry.name, entry.scope);
-}
-#endif
 
 
 struct UninstallCleanupPolicy {
@@ -1189,8 +1182,8 @@ static bool ExecuteFallbackUninstall(const UninstallContext& context,
         deleteDesktopShortcut(displayName);
         deleteStartMenuShortcut(displayName);
 #ifdef _WIN32
-        // 系统卸载入口写死按产品名（DisplayName）删除。
-        deleteSystemUninstallEntryByDisplayName(displayName, UninstallEntryScope::ANY);
+        // 系统卸载入口按产品名推导键精确删除（与写入对称）。
+        deleteSystemUninstallEntry(displayName);
 #endif
     }
 
@@ -1514,7 +1507,7 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
 #ifdef _WIN32
     if (!uninstallCleanup.uninstallEntries.empty()) {
         for (const auto& entry : uninstallCleanup.uninstallEntries) {
-            const bool removed = DeleteUninstallEntryByScope(entry);
+            const bool removed = deleteSystemUninstallEntry(entry.name);
             if (!removed) {
                 console.showWarning("Failed to remove system uninstall entry: " + entry.name);
             }

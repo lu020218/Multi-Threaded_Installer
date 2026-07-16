@@ -28,15 +28,6 @@ enum class RegistryValueType {
     EXPAND_STRING
 };
 
-// 系统卸载入口所在 hive——引擎写/清卸载入口时使用的原语，不来自 YAML。
-enum class UninstallEntryScope : uint8_t {
-    CURRENT_USER = 0,
-    LOCAL_MACHINE = 1,
-    WOW6432 = 2,
-    ANY = 3,
-    BOTH = 4
-};
-
 // 打包期扫描到的一个待打包目录。
 struct FolderInfo {
     std::string id;

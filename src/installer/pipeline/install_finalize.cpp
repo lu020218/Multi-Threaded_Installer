@@ -114,20 +114,14 @@ void WriteConfiguredSystemUninstallEntries(const ExtendedInstallationMetadata& m
     if (result.uninstallPath.empty()) {
         return;
     }
-    const std::string uninstallKeyName = metadata.appProductName;
-    const std::string uninstallDisplayName = metadata.appProductName;
-
-    const bool wroteAny = writeUninstallRegistryEntry(uninstallKeyName,
-                                                      uninstallDisplayName,
-                                                      metadata.appVersion,
-                                                      result.installRootPath,
-                                                      result.uninstallPath,
-                                                      /*perMachine=*/true,
-                                                      metadata.appPublisher);
+    const bool wroteAny = writeSystemUninstallEntry(metadata.appProductName,
+                                                    metadata.appVersion,
+                                                    result.installRootPath,
+                                                    result.uninstallPath,
+                                                    metadata.appPublisher);
     if (wroteAny) {
         UninstallEntryCleanup entry;
-        entry.name = uninstallDisplayName;
-        entry.scope = UninstallEntryScope::LOCAL_MACHINE;
+        entry.name = metadata.appProductName;
         manifestCleanup.uninstallEntries.push_back(std::move(entry));
     } else {
         reporter.EmitMessage(InstallServiceEventType::Warning,

@@ -31,10 +31,9 @@ struct RegistryLookupEntry {
     std::string key;
 };
 
-// 一条系统卸载入口收尾项（按 DisplayName 在指定 hive 删除）。
+// 一条系统卸载入口收尾项（按产品名推导键精确删除，见 deleteSystemUninstallEntry）。
 struct UninstallEntryCleanup {
     std::string name;
-    UninstallEntryScope scope = UninstallEntryScope::ANY;
 };
 
 // 仅带名字的清理项（进程名 / 快捷方式名 / 启动项名）。

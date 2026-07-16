@@ -30,7 +30,8 @@ namespace {
 
 // ── 迁移可复用的收尾原语 ───────────────────────────────────────────────────
 
-// [旧版本-清理:系统卸载入口] 按 DisplayName 删除「程序和功能」里的旧版本卸载入口。
+// [旧版本-清理:系统卸载入口] 按旧产品名推导键精确删除「程序和功能」里的旧版本卸载入口
+// （与本引擎写入规则同一推导，见 deleteSystemUninstallEntry）。
 void cleanupLegacyUninstallEntries(MigrationContext& ctx,
                                    const std::vector<std::string>& displayNames) {
     (void)ctx;
@@ -38,7 +39,7 @@ void cleanupLegacyUninstallEntries(MigrationContext& ctx,
         if (name.empty()) {
             continue;
         }
-        if (deleteSystemUninstallEntryByDisplayName(name, UninstallEntryScope::ANY)) {
+        if (deleteSystemUninstallEntry(name)) {
             logInstallerInfo("[Migration] Removed legacy uninstall entry: " + name);
         }
     }

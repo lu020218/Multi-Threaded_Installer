@@ -139,10 +139,8 @@ void RollbackInstalledArtifacts(const ExtendedInstallationMetadata& metadata,
         }
     }
 
-    // 3) 删产品注册表 + 系统卸载入口。
-    deleteUninstallRegistryEntry(metadata.appProductName, /*perMachine=*/true);
-    deleteUninstallRegistryEntry(metadata.appProductName, /*perMachine=*/false);
-    deleteSystemUninstallEntryByDisplayName(metadata.appProductName, UninstallEntryScope::ANY);
+    // 3) 删产品注册表 + 系统卸载入口（与 finalize 写入同一推导键，精确删除）。
+    deleteSystemUninstallEntry(metadata.appProductName);
 
     // 4) 删 install-state（HKLM\Software\<product> + install-state.json）。
     CleanupInstallState(BuildServiceInstallStateContext(metadata, plan, options, "uninstalled"),

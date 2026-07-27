@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -199,17 +200,57 @@ CompressionResult FolderPayloadCompressor::compressFolder(const FolderInfo& fold
     return compressWithXzLzma2(folder);
 }
 
+// ── 分帧策略常量（引擎写死，无外部配置）─────────────────────────────────────
+// 小文件独立成帧会失去跨文件压缩字典（实测真实包体积 +13.9%），因此小于阈值的文件按扫描
+// 顺序聚合进同一"批帧"压缩，帧内以 entry.offset 记录各文件在解压后缓冲中的偏移；
+// 大文件仍独立成帧（升级跳过粒度最优）。批帧目标大小兼顾压缩比与"帧内任一文件变化则
+// 整帧重解压"的放大代价。
+constexpr uint64_t kSmallFileFrameThreshold = 4ull * 1024ull * 1024ull;  // < 4MB 走聚合
+constexpr uint64_t kBatchFrameTargetBytes = 32ull * 1024ull * 1024ull;   // 批帧目标 ~32MB（重解压一帧 ~0.3s 级）
+constexpr size_t kFrameCompressWorkersCap = 16;                          // 帧级并行压缩上限
+
 CompressionResult FolderPayloadCompressor::compressFolderFramed(const FolderInfo& folder) const {
     CompressionResult result;
     result.algorithm = currentAlgorithm;
     result.framed = true;
 
-    std::vector<uint8_t> payload;
-    std::vector<FileIndexEntry> fileIndex;
-    fileIndex.reserve(folder.files.size());
-    uint64_t totalOriginal = 0;
-
     const size_t sourcePrefixLength = folder.sourcePath.size();
+    auto toRelative = [&](const std::string& filePath) {
+        std::string relativePath = filePath;
+        if (relativePath.compare(0, sourcePrefixLength, folder.sourcePath) == 0) {
+            relativePath = relativePath.substr(sourcePrefixLength);
+            if (!relativePath.empty() && (relativePath[0] == '/' || relativePath[0] == '\\')) {
+                relativePath = relativePath.substr(1);
+            }
+        }
+        return relativePath;
+    };
+
+    // 1) 预扫尺寸，按策略切分帧任务：大文件独帧；小文件按序聚合到 ~kBatchFrameTargetBytes。
+    struct MemberPlan {
+        std::string filePath;
+        std::string relativePath;
+        uint64_t size = 0;
+    };
+    struct FrameJob {
+        std::vector<MemberPlan> members;
+        uint64_t totalSize = 0;
+        // 压缩产物（并行阶段填写）
+        std::vector<uint8_t> frame;
+        std::vector<uint64_t> memberHashes;
+        std::vector<uint64_t> memberOffsets;
+        bool failed = false;
+        std::string error;
+    };
+
+    std::vector<FrameJob> jobs;
+    FrameJob batch;
+    auto closeBatch = [&]() {
+        if (!batch.members.empty()) {
+            jobs.push_back(std::move(batch));
+            batch = FrameJob{};
+        }
+    };
     for (const auto& filePath : folder.files) {
         std::error_code sizeError;
         const uint64_t fileSize64 = std::filesystem::file_size(PathFromUtf8(filePath), sizeError);
@@ -222,66 +263,140 @@ CompressionResult FolderPayloadCompressor::compressFolderFramed(const FolderInfo
             std::cerr << "File too large for payload entry format: " << filePath << std::endl;
             return CompressionResult{};
         }
-
-        std::vector<uint8_t> content(static_cast<size_t>(fileSize64));
-        if (fileSize64 > 0) {
-            std::ifstream file(PathFromUtf8(filePath), std::ios::binary);
-            if (!file) {
-                std::cerr << "Failed to open file: " << filePath << std::endl;
-                return CompressionResult{};
-            }
-            file.read(reinterpret_cast<char*>(content.data()),
-                      static_cast<std::streamsize>(fileSize64));
-            if (!file) {
-                std::cerr << "Failed to read file: " << filePath << std::endl;
-                return CompressionResult{};
-            }
+        MemberPlan member{filePath, toRelative(filePath), fileSize64};
+        if (fileSize64 >= kSmallFileFrameThreshold) {
+            closeBatch();
+            FrameJob solo;
+            solo.totalSize = fileSize64;
+            solo.members.push_back(std::move(member));
+            jobs.push_back(std::move(solo));
+            continue;
         }
-
-        std::string relativePath = filePath;
-        if (relativePath.compare(0, sourcePrefixLength, folder.sourcePath) == 0) {
-            relativePath = relativePath.substr(sourcePrefixLength);
-            if (!relativePath.empty() && (relativePath[0] == '/' || relativePath[0] == '\\')) {
-                relativePath = relativePath.substr(1);
-            }
+        batch.totalSize += fileSize64;
+        batch.members.push_back(std::move(member));
+        if (batch.totalSize >= kBatchFrameTargetBytes) {
+            closeBatch();
         }
+    }
+    closeBatch();
 
-        std::vector<uint8_t> frame;
-        if (currentAlgorithm == CompressionAlgorithm::ZSTD) {
+    // 2) 帧级并行压缩：每个任务读入成员文件到连续缓冲（记录帧内偏移与逐成员哈希）后整帧压缩。
+    const size_t workerCount = std::min<size_t>(
+        {jobs.empty() ? size_t{1} : jobs.size(),
+         static_cast<size_t>(ResolveCompressionThreads(threadCount)),
+         kFrameCompressWorkersCap});
+    std::atomic<size_t> nextJob{0};
+    std::atomic<bool> anyFailed{false};
+    auto compressWorker = [&]() {
+        for (;;) {
+            const size_t index = nextJob.fetch_add(1);
+            if (index >= jobs.size() || anyFailed.load()) {
+                return;
+            }
+            FrameJob& job = jobs[index];
+            std::vector<uint8_t> content;
+            content.reserve(static_cast<size_t>(job.totalSize));
+            job.memberOffsets.reserve(job.members.size());
+            job.memberHashes.reserve(job.members.size());
+            for (const auto& member : job.members) {
+                job.memberOffsets.push_back(static_cast<uint64_t>(content.size()));
+                const size_t before = content.size();
+                if (member.size > 0) {
+                    std::ifstream file(PathFromUtf8(member.filePath), std::ios::binary);
+                    if (!file) {
+                        job.failed = true;
+                        job.error = "Failed to open file: " + member.filePath;
+                        anyFailed.store(true);
+                        return;
+                    }
+                    content.resize(before + static_cast<size_t>(member.size));
+                    file.read(reinterpret_cast<char*>(content.data() + before),
+                              static_cast<std::streamsize>(member.size));
+                    if (!file) {
+                        job.failed = true;
+                        job.error = "Failed to read file: " + member.filePath;
+                        anyFailed.store(true);
+                        return;
+                    }
+                }
+                job.memberHashes.push_back(
+                    ComputeContentHash64(content.data() + before, content.size() - before));
+            }
+
+            if (currentAlgorithm == CompressionAlgorithm::ZSTD) {
 #ifdef ZSTD_FOUND
-            frame = CompressBufferToZstd(content.data(), content.size(), compressionLevel);
+                job.frame = CompressBufferToZstd(content.data(), content.size(), compressionLevel);
 #else
-            std::cerr << "ZSTD support not compiled in" << std::endl;
-            return CompressionResult{};
+                job.failed = true;
+                job.error = "ZSTD support not compiled in";
+                anyFailed.store(true);
+                return;
 #endif
-        } else {
+            } else {
 #ifdef LibLZMA_FOUND
-            frame = CompressBufferToXz(content.data(), content.size(), compressionLevel);
+                job.frame = CompressBufferToXz(content.data(), content.size(), compressionLevel);
 #else
-            frame = content; // stub: store uncompressed when no codec
+                job.frame = content; // stub: store uncompressed when no codec
 #endif
+            }
+            if (job.frame.empty() && !content.empty()) {
+                job.failed = true;
+                job.error = "Failed to compress frame (first member: " +
+                            job.members.front().filePath + ")";
+                anyFailed.store(true);
+                return;
+            }
         }
-        if (frame.empty()) {
-            std::cerr << "Failed to compress frame for file: " << filePath << std::endl;
+    };
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+    for (size_t i = 0; i < workerCount; ++i) {
+        workers.emplace_back(compressWorker);
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+    for (const auto& job : jobs) {
+        if (job.failed) {
+            std::cerr << job.error << std::endl;
             return CompressionResult{};
         }
+    }
 
-        FileIndexEntry entry;
-        entry.relativePath = relativePath;
-        entry.offset = 0;  // uncompressed offset is unused for framed payloads
-        entry.size = fileSize64;
-        entry.contentHash = ComputeContentHash64(content.data(), content.size());
-        entry.frameOffset = static_cast<uint64_t>(payload.size());
-        entry.frameCompressedSize = static_cast<uint64_t>(frame.size());
-        payload.insert(payload.end(), frame.begin(), frame.end());
-        fileIndex.push_back(std::move(entry));
-        totalOriginal += fileSize64;
+    // 3) 按任务顺序串行拼装载荷与 fileIndex（frameOffset 依赖前序帧大小，必须顺序累计）。
+    std::vector<uint8_t> payload;
+    std::vector<FileIndexEntry> fileIndex;
+    fileIndex.reserve(folder.files.size());
+    uint64_t totalOriginal = 0;
+    size_t batchFrameCount = 0;
+    for (auto& job : jobs) {
+        const uint64_t frameOffset = static_cast<uint64_t>(payload.size());
+        const uint64_t frameCompressedSize = static_cast<uint64_t>(job.frame.size());
+        if (job.members.size() > 1) {
+            ++batchFrameCount;
+        }
+        for (size_t m = 0; m < job.members.size(); ++m) {
+            FileIndexEntry entry;
+            entry.relativePath = job.members[m].relativePath;
+            entry.offset = job.memberOffsets[m];  // 帧内偏移（解压后缓冲中的位置）
+            entry.size = job.members[m].size;
+            entry.contentHash = job.memberHashes[m];
+            entry.frameOffset = frameOffset;
+            entry.frameCompressedSize = frameCompressedSize;
+            fileIndex.push_back(std::move(entry));
+            totalOriginal += job.members[m].size;
+        }
+        payload.insert(payload.end(), job.frame.begin(), job.frame.end());
+        job.frame.clear();
+        job.frame.shrink_to_fit();
     }
 
     std::cout << "[Packager][Payload] folder=" << folder.sourcePath
               << " algorithm=" << (currentAlgorithm == CompressionAlgorithm::ZSTD ? "ZSTD" : "XZ/LZMA2")
-              << " mode=per-file-frames"
-              << " files=" << fileIndex.size()
+              << " mode=per-file-frames files=" << fileIndex.size()
+              << " frames=" << jobs.size()
+              << " batchFrames=" << batchFrameCount
+              << " workers=" << workerCount
               << " originalSize=" << totalOriginal
               << " compressedSize=" << payload.size()
               << std::endl;

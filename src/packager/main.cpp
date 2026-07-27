@@ -275,8 +275,10 @@ int main(int argc, char* argv[]) {
     }
     
 
-    // 增量优化策略归引擎写死；当前关闭按文件分帧。
-    const bool perFileFrames = false;
+    // 增量优化策略归引擎写死：启用按文件分帧（含小文件聚合帧，见 folder_payload_compressor）。
+    // 收益：升级时未变文件连帧都不读不解压（实测真实包升级 12.4s→1.2s）；
+    // 代价由配套优化消化：聚合帧控体积、安装/打包侧帧级并行控耗时。
+    const bool perFileFrames = true;
 
     CompressionModule compressor;
     compressor.setPerFileFrames(perFileFrames);

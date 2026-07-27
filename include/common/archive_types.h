@@ -171,8 +171,9 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;
+    // 27 = 按文件分帧默认开启 + 小文件聚合帧(entry.offset=帧内偏移,多成员共享 frameOffset)。
     // 26 = 身份新增 appName(主 exe 程序名)/appId(产品唯一 id)。安装器只读等于该值的包。
-    constexpr uint32_t VERSION = 26;
+    constexpr uint32_t VERSION = 27;
 
     constexpr int DEFAULT_LZMA_LEVEL = 9;
     constexpr int DEFAULT_ZSTD_LEVEL = 3;

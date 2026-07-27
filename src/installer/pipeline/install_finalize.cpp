@@ -226,14 +226,8 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
         reporter.EmitProgress("finalize", detail, progress);
     };
 
-    // [安装收尾-注册表写入] 写通用注册表名单 effectiveRegistry（解压前阶段）。
-    // 重构后该名单已为空（YAML registry 名单删除），保留挂钩点以兼容个别需要预写的场景。
-    if (options.applyRegistryBeforeFinalize && !effectiveRegistry.empty()) {
-        std::string prePath = options.preRegistryInstallPath.empty()
-                                  ? options.installPath
-                                  : options.preRegistryInstallPath;
-        applyRegistryEntries(effectiveRegistry, prePath, metadata.appVersion, metadata.appProductName);
-    }
+    // 自定义注册表名单只在解压后写一次（见下方 applyRegistryAfterInstall 分支）；
+    // 原“finalize 前预写”双写挂钩已删除。
     advanceFinalize(0.15f, "Applying registry entries");
 
     if ((effectiveAutoStartup || effectiveDesktopIcons) && result.installRootPath.empty()) {

@@ -302,8 +302,6 @@ if (m_cancellationRequested) {
         serviceOptions.overrideDesktopIcons = true;
         serviceOptions.desktopIconsEnabled = m_desktopIcons;
         serviceOptions.languageCode = WideToUtf8(m_languageCode);
-        serviceOptions.applyRegistryBeforeFinalize = true;
-        serviceOptions.preRegistryInstallPath = installPathStr;
         serviceOptions.writeUninstallRegistry = true;
         serviceOptions.selectedComponentIds = m_selectedComponentIds;
         serviceOptions.cancellationCallback = [this]() {

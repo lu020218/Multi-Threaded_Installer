@@ -70,8 +70,6 @@ struct InstallServiceOptions {
     bool upgradeMode = false;            ///< 升级模式（沿用旧安装目录 + 触发迁移）。
     int threadCount = 0;                 ///< 解压线程数；0 = 按 CPU 自动。
     std::string languageCode;            ///< 界面/快捷方式语言。
-    bool applyRegistryBeforeFinalize = false;  ///< 是否在 finalize 前预写注册表。
-    std::string preRegistryInstallPath;        ///< 预写注册表时用的安装路径。
     bool applyRegistryAfterInstall = true;     ///< 是否在安装后写注册表。
     bool writeUninstallRegistry = false;       ///< 是否写系统卸载入口。
     bool overrideAutoStartup = false;    ///< 是否覆盖开机自启默认值。

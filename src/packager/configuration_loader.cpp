@@ -85,6 +85,8 @@ bool ParseAppConfig(const json& root, AppConfig& out, std::string& lastError) {
         return false;
     }
     if (!GetRequiredString(app, "productName", out.productName, lastError) ||
+        !GetRequiredString(app, "appName", out.appName, lastError) ||
+        !GetRequiredString(app, "appId", out.appId, lastError) ||
         !GetRequiredString(app, "publisher", out.publisher, lastError) ||
         !GetRequiredString(app, "version", out.version, lastError) ||
         !GetOptionalString(app, "defaultDir", out.defaultDir, lastError) ||

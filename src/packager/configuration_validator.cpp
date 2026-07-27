@@ -71,6 +71,24 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
         result.errors.push_back("ERROR: Invalid app.productName: contains illegal character");
         result.isValid = false;
     }
+    // appName = 主 exe 程序名（不含 .exe）：不允许路径分隔符等非法文件名字符与 .exe 后缀。
+    if (config.app.appName.empty()) {
+        result.errors.push_back("ERROR: Missing required field 'app.appName'");
+        result.isValid = false;
+    } else if (HasIllegalNameChar(config.app.appName)) {
+        result.errors.push_back("ERROR: Invalid app.appName: contains illegal character");
+        result.isValid = false;
+    } else {
+        const std::string lowered = ToLowerCopy(config.app.appName);
+        if (lowered.size() >= 4 && lowered.compare(lowered.size() - 4, 4, ".exe") == 0) {
+            result.errors.push_back("ERROR: Invalid app.appName: must not end with '.exe' (program name only)");
+            result.isValid = false;
+        }
+    }
+    if (config.app.appId.empty()) {
+        result.errors.push_back("ERROR: Missing required field 'app.appId'");
+        result.isValid = false;
+    }
     if (config.app.publisher.empty()) {
         result.errors.push_back("ERROR: Missing required field 'app.publisher'");
         result.isValid = false;

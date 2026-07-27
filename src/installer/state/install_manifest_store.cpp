@@ -114,9 +114,11 @@ json RegistryEntriesToManifestJson(const std::vector<RegistryEntry>& entries) {
 }  // namespace
 
 bool writeManifest(const std::string& manifestPath,
+                   const std::string& productName,
+                   const std::string& appName,
                    const std::string& appId,
-                   const std::string& displayName,
                    const std::string& appVersion,
+                   const std::string& appPublisher,
                    const std::string& installDir,
                    const std::vector<std::string>& cleanupRoots,
                    const UninstallCleanupConfig& actualCleanupSnapshot,
@@ -127,7 +129,6 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& desktopShortcutDisplayName,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
-                   const std::string& appPublisher,
                    const InstalledFileFingerprintMap& fileFingerprints,
                    const std::vector<std::string>& installedComponentIds) {
     if (manifestPath.empty()) {
@@ -137,15 +138,19 @@ bool writeManifest(const std::string& manifestPath,
     try {
         json root;
         root["version"] = "1.0";
-        root["manifestVersion"] = 3;
-        root["appId"] = EnsureUtf8(appId);
-        root["displayName"] = EnsureUtf8(displayName);
-        root["appName"] = EnsureUtf8(displayName);
-        root["appVersion"] = EnsureUtf8(appVersion);
+        // manifestVersion 4：app 身份收进顶层 "app" 对象（字段名与 packager.yaml 一一对应），
+        // 删除旧顶层 appId/displayName/appName/appVersion/publisher。读取侧新→旧双读兼容存量。
+        root["manifestVersion"] = 4;
+        root["app"] = {
+            {"productName", EnsureUtf8(productName)},
+            {"appName", EnsureUtf8(appName)},
+            {"appId", EnsureUtf8(appId)},
+            {"version", EnsureUtf8(appVersion)},
+            {"publisher", EnsureUtf8(appPublisher)},
+        };
         root["installDir"] = EnsureUtf8(installDir);
         root["uninstallPath"] = EnsureUtf8(uninstallPath);
         root["cleanupRoots"] = EnsureUtf8List(cleanupRoots);
-        root["publisher"] = EnsureUtf8(appPublisher);
 
         std::vector<std::string> safeFiles;
         safeFiles.reserve(filePaths.size());
@@ -210,6 +215,18 @@ bool writeManifest(const std::string& manifestPath,
         logInstallerError(std::string("[UNINSTALL] Failed to write manifest: ") + e.what());
         return false;
     }
+}
+
+std::string readManifestAppField(const json& manifest,
+                                 const char* appKey,
+                                 const char* legacyKey) {
+    if (manifest.contains("app") && manifest["app"].is_object()) {
+        std::string value = manifest["app"].value(appKey, "");
+        if (!value.empty()) {
+            return value;
+        }
+    }
+    return legacyKey ? manifest.value(legacyKey, "") : std::string{};
 }
 
 bool readManifest(const std::string& manifestPath, json& outManifest) {

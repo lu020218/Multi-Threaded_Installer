@@ -6,6 +6,7 @@
 #include "installer/uninstall/cleanup_delete_executor.h"
 #include "installer/platform/installer_helpers.h"
 #include "installer/migration/migration.h"
+#include "installer/state/install_manifest_store.h"
 #include "installer/state/registry_utils.h"
 
 #include <algorithm>
@@ -1297,7 +1298,7 @@ bool cleanupUpgradeSystemArtifacts(
     if (ctx.fromVersion.empty()) {
         json manifest;
         if (ReadManifestJson(manifestPath, manifest)) {
-            ctx.fromVersion = manifest.value("appVersion", std::string{});
+            ctx.fromVersion = readManifestAppField(manifest, "version", "appVersion");
         }
     }
 

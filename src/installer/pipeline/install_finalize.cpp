@@ -266,7 +266,7 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
         }
 
         std::filesystem::path exePath =
-            findPrimaryExecutable(PathFromUtf8(result.installRootPath), metadata.appProductName);
+            findPrimaryExecutable(PathFromUtf8(result.installRootPath), metadata.appName);
         if ((effectiveAutoStartup || effectiveDesktopIcons) && exePath.empty()) {
             reporter.EmitMessage(InstallServiceEventType::Warning,
                                  "No executable found for installAutoStartup/installDesktopIcon");
@@ -359,9 +359,11 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
         const InstalledFileFingerprintMap fileFingerprints =
             BuildInstalledFileFingerprints(metadata, plan, pathResolver);
         if (!writeManifest(Utf8FromPath(localPath),
-                           plan.effectiveAppId,
                            metadata.appProductName,
+                           metadata.appName,
+                           metadata.appId,
                            metadata.appVersion,
+                           metadata.appPublisher,
                            result.installRootPath,
                            result.installedRoots,
                            manifestCleanup,
@@ -372,7 +374,6 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                            desktopShortcutDisplayName,
                            result.uninstallPath,
                            languageCode,
-                           metadata.appPublisher,
                            fileFingerprints,
                            result.installedComponentIds)) {
             reporter.EmitMessage(InstallServiceEventType::Warning,

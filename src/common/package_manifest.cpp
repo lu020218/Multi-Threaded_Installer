@@ -38,6 +38,8 @@ PackageManifest PackageManifestFromExtendedMetadata(const ExtendedInstallationMe
     manifest.version = metadata.version;
 
     manifest.identity.productName = metadata.appProductName;
+    manifest.identity.appName = metadata.appName;
+    manifest.identity.appId = metadata.appId;
     manifest.identity.publisher = metadata.appPublisher;
     manifest.identity.version = metadata.appVersion;
     manifest.identity.defaultDir = metadata.appDefaultDir;
@@ -78,6 +80,10 @@ ExtendedInstallationMetadata PackageManifestToExtendedMetadata(const PackageMani
     metadata.totalPayloadCompressedSize = manifest.payload.totalCompressedSize;
 
     metadata.appProductName = manifest.identity.productName;
+    // appName 为空回退产品名（防御：正常打包链路下必填）。
+    metadata.appName = manifest.identity.appName.empty() ? manifest.identity.productName
+                                                         : manifest.identity.appName;
+    metadata.appId = manifest.identity.appId;
     metadata.appPublisher = manifest.identity.publisher;
     metadata.appVersion = manifest.identity.version;
     metadata.appDefaultDir = manifest.identity.defaultDir;

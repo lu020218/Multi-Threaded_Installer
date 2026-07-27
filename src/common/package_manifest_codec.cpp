@@ -395,6 +395,8 @@ std::vector<uint8_t> SerializePackageManifest(const PackageManifest& manifest) {
     std::vector<std::pair<SectionType, std::vector<uint8_t>>> sections;
     AddSection(sections, SectionType::Identity, {
         {"productName", manifest.identity.productName},
+        {"appName", manifest.identity.appName},
+        {"appId", manifest.identity.appId},
         {"publisher", manifest.identity.publisher},
         {"version", manifest.identity.version},
         {"defaultDir", manifest.identity.defaultDir},
@@ -537,6 +539,8 @@ bool DeserializePackageManifest(const std::vector<uint8_t>& input,
 
     manifest.version = header.version;
     manifest.identity.productName = identity.value("productName", "");
+    manifest.identity.appName = identity.value("appName", "");
+    manifest.identity.appId = identity.value("appId", "");
     manifest.identity.publisher = identity.value("publisher", "");
     manifest.identity.version = identity.value("version", "");
     manifest.identity.defaultDir = identity.value("defaultDir", "");

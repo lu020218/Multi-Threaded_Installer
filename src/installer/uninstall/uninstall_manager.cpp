@@ -43,14 +43,9 @@ char ToLowerAsciiChar(unsigned char value) {
 
 } // namespace
 
+// app 身份统一走 readManifestAppField：新 "app" 对象（与 packager.yaml 同名）→ 旧顶层字段回退。
 static std::string GetManifestAppId(const json& manifest) {
-    if (manifest.contains("app") && manifest["app"].is_object()) {
-        std::string appId = manifest["app"].value("id", "");
-        if (!appId.empty()) {
-            return appId;
-        }
-    }
-    std::string appId = manifest.value("appId", "");
+    std::string appId = readManifestAppField(manifest, "appId", "appId");
     if (!appId.empty()) {
         return appId;
     }
@@ -58,13 +53,7 @@ static std::string GetManifestAppId(const json& manifest) {
 }
 
 static std::string GetManifestDisplayName(const json& manifest) {
-    if (manifest.contains("app") && manifest["app"].is_object()) {
-        std::string appName = manifest["app"].value("name", "");
-        if (!appName.empty()) {
-            return appName;
-        }
-    }
-    std::string displayName = manifest.value("displayName", "");
+    std::string displayName = readManifestAppField(manifest, "productName", "displayName");
     if (!displayName.empty()) {
         return displayName;
     }
@@ -1410,7 +1399,11 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
     for (const auto& process : uninstallCleanup.processes) {
         explicitProcessNames.push_back(process.name);
     }
-    std::vector<std::string> killTargets = buildKillProcessList(displayName, installKillProcesses);
+    // 主进程名优先取 app.appName（新 schema）；旧 manifest 回退顶层 appName（=当时的产品名）。
+    const std::string primaryProcessName =
+        readManifestAppField(manifest, "appName", "appName");
+    std::vector<std::string> killTargets = buildKillProcessList(
+        primaryProcessName.empty() ? displayName : primaryProcessName, installKillProcesses);
     for (const auto& processName : explicitProcessNames) {
         killTargets.push_back(normalizeProcessName(processName));
     }
@@ -1480,7 +1473,7 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
     }
 
     ApplyInstallState(BuildUninstallInstallStateContext(installDir,
-                                                        manifest.value("appVersion", ""),
+                                                        readManifestAppField(manifest, "version", "appVersion"),
                                                         displayName,
                                                         appId,
                                                         "uninstalling"),
@@ -1560,7 +1553,7 @@ static bool uninstallFromManifestImpl(const std::string& manifestPath,
     completeWorkUnit("Cleaning installed files");
 
     CleanupInstallState(BuildUninstallInstallStateContext(installDir,
-                                                          manifest.value("appVersion", ""),
+                                                          readManifestAppField(manifest, "version", "appVersion"),
                                                           displayName,
                                                           appId,
                                                           "uninstalled"),

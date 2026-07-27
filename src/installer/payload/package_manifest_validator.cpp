@@ -45,7 +45,8 @@ bool ValidatePackageManifest(const PackageManifest& manifest, std::string& error
         error = "Unsupported package manifest version.";
         return false;
     }
-    if (manifest.identity.productName.empty() || manifest.identity.version.empty()) {
+    if (manifest.identity.productName.empty() || manifest.identity.version.empty() ||
+        manifest.identity.appName.empty() || manifest.identity.appId.empty()) {
         error = "Package manifest identity is incomplete.";
         return false;
     }

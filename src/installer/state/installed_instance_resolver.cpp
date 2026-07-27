@@ -30,17 +30,37 @@ std::string ReadManifestAppVersionFast(const std::string& manifestPath) {
         return {};
     }
 
+    // 新 schema(manifestVersion 4+)读顶层 "app" 对象的 "version"；旧 schema 读顶层
+    // "appVersion"。两种命中任一即中止解析（同一 manifest 只会存在其中一种）。
     struct AppVersionSax : public nlohmann::json_sax<nlohmann::json> {
         int depth = 0;
+        int appObjectDepth = 0;   // 顶层 "app" 对象的深度（0=未进入）
+        bool pendingAppObject = false;
         bool expectValue = false;
         std::string version;
 
-        bool start_object(std::size_t) override { ++depth; expectValue = false; return true; }
-        bool end_object() override { --depth; return true; }
-        bool start_array(std::size_t) override { ++depth; expectValue = false; return true; }
+        bool start_object(std::size_t) override {
+            ++depth;
+            if (pendingAppObject) {
+                appObjectDepth = depth;
+                pendingAppObject = false;
+            }
+            expectValue = false;
+            return true;
+        }
+        bool end_object() override {
+            if (appObjectDepth == depth) {
+                appObjectDepth = 0;
+            }
+            --depth;
+            return true;
+        }
+        bool start_array(std::size_t) override { ++depth; pendingAppObject = false; expectValue = false; return true; }
         bool end_array() override { --depth; return true; }
         bool key(string_t& val) override {
-            expectValue = (depth == 1 && val == "appVersion");
+            pendingAppObject = (depth == 1 && val == "app");
+            expectValue = (depth == 1 && val == "appVersion") ||
+                          (appObjectDepth != 0 && depth == appObjectDepth && val == "version");
             return true;
         }
         bool string(string_t& val) override {
@@ -48,14 +68,15 @@ std::string ReadManifestAppVersionFast(const std::string& manifestPath) {
                 version = val;
                 return false;  // 命中即中止解析
             }
+            pendingAppObject = false;
             return true;
         }
-        bool null() override { expectValue = false; return true; }
-        bool boolean(bool) override { expectValue = false; return true; }
-        bool number_integer(number_integer_t) override { expectValue = false; return true; }
-        bool number_unsigned(number_unsigned_t) override { expectValue = false; return true; }
-        bool number_float(number_float_t, const string_t&) override { expectValue = false; return true; }
-        bool binary(binary_t&) override { expectValue = false; return true; }
+        bool null() override { expectValue = false; pendingAppObject = false; return true; }
+        bool boolean(bool) override { expectValue = false; pendingAppObject = false; return true; }
+        bool number_integer(number_integer_t) override { expectValue = false; pendingAppObject = false; return true; }
+        bool number_unsigned(number_unsigned_t) override { expectValue = false; pendingAppObject = false; return true; }
+        bool number_float(number_float_t, const string_t&) override { expectValue = false; pendingAppObject = false; return true; }
+        bool binary(binary_t&) override { expectValue = false; pendingAppObject = false; return true; }
         bool parse_error(std::size_t, const std::string&,
                          const nlohmann::detail::exception&) override {
             return false;

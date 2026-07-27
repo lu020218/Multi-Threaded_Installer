@@ -93,7 +93,7 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
 
 #ifdef _WIN32
     std::vector<std::string> processNames = buildKillProcessList(
-        metadata.appProductName,
+        metadata.appName,
         plan.effectiveKillProcesses);
     if (!processNames.empty()) {
         std::vector<std::string> running = getRunningProcessesByName(processNames);

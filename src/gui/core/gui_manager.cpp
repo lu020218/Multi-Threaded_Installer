@@ -600,8 +600,8 @@ bool GUIManager::StartInstallationWithOptions(const std::wstring& installPath,
     const ExtendedInstallationMetadata& metadata = m_installMetadata;
 
     std::vector<std::string> processNames = buildKillProcessList(
-        metadata.appProductName,
-        {metadata.appProductName + ".exe"});
+        metadata.appName,
+        {metadata.appName + ".exe"});
     if (!HandleRunningApplicationDialog(m_hWnd, processNames)) {
         return false;
     }

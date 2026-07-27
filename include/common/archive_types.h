@@ -123,6 +123,8 @@ struct HookScript {
 struct ExtendedInstallationMetadata : public InstallationMetadata {
     // 身份（其余版本资源字段在打包期已写入 exe PE 资源，运行期无需携带）。
     std::string appProductName;
+    std::string appName;    ///< 主 exe 程序名（不含 .exe）；为空时回退 appProductName。
+    std::string appId;      ///< 产品唯一 id（如 com.comp.myapp）；落 install.manifest.json。
     std::string appPublisher;
     std::string appVersion;
     std::string appDefaultDir;
@@ -169,8 +171,8 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 namespace Constants {
     constexpr uint32_t MAGIC_NUMBER = 0x4D544950;
     constexpr uint32_t DATA_MAGIC_NUMBER = 0x4D544450;
-    // 25 = 钩子支持兄弟文件内嵌(auxFiles) + 执行后保留(keep/keepDir)。安装器只读等于该值的包。
-    constexpr uint32_t VERSION = 25;
+    // 26 = 身份新增 appName(主 exe 程序名)/appId(产品唯一 id)。安装器只读等于该值的包。
+    constexpr uint32_t VERSION = 26;
 
     constexpr int DEFAULT_LZMA_LEVEL = 9;
     constexpr int DEFAULT_ZSTD_LEVEL = 3;

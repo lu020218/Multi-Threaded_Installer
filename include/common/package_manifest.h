@@ -8,6 +8,8 @@ namespace MultiThreadedInstaller {
 // 由引擎从 version/publisher 在打包期派生并写入 exe PE 资源，不进 manifest。
 struct PackageIdentity {
     std::string productName;  ///< 用户可见产品名；数据目录/注册表键统一用它。
+    std::string appName;      ///< 主 exe 程序名（不含 .exe）；主程序定位/杀进程/立即运行用。
+    std::string appId;        ///< 产品唯一 id（如 com.comp.myapp）；随 install.manifest.json 落盘。
     std::string publisher;    ///< 发布者；同时作为版本资源 CompanyName。
     std::string version;      ///< 版本号（可含 -beta 等预发布后缀）。
     std::string defaultDir;   ///< GUI 默认安装目录（支持 %ProgramFiles% 等环境变量）。

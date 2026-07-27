@@ -135,6 +135,8 @@ PackageManifest PackageManifestBuilder::build(const std::vector<CompressionResul
     PackageManifest manifest;
 
     manifest.identity.productName = config.app.productName;
+    manifest.identity.appName = config.app.appName;
+    manifest.identity.appId = config.app.appId;
     manifest.identity.publisher = config.app.publisher;
     manifest.identity.version = config.app.version;
     manifest.identity.defaultDir = config.app.defaultDir;

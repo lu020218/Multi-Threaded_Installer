@@ -45,6 +45,8 @@ struct FolderInfo {
 // ── app —— 本次构建的身份与取值 ──────────────────────────────────────────
 struct AppConfig {
     std::string productName;   // 用户可见产品名
+    std::string appName;       // 主 exe 程序名（不含 .exe），用于主程序定位/杀进程/立即运行
+    std::string appId;         // 产品唯一 id（如 com.comp.myapp），随包与 install.manifest.json 传递
     std::string publisher;     // 发布者/公司名（同时用作版本资源 CompanyName）
     std::string version;       // 版本号，每次发版必改（可含 -beta 等预发布后缀）
     std::string defaultDir;    // GUI 默认安装目录，支持 %ProgramFiles% 等环境变量

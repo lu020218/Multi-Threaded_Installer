@@ -264,7 +264,8 @@ InstallConfig CreateInstallConfigFromMetadata(const ExtendedInstallationMetadata
     config.version = Utf8ToWide(metadata.appVersion);
     config.defaultInstallPath = Utf8ToWide(metadata.appDefaultDir);
     config.webPageUrl = std::wstring();
-    config.executableName = Utf8ToWide(metadata.appProductName + ".exe");
+    // 完成页“立即运行”的主 exe = app.appName（主 exe 程序名）。
+    config.executableName = Utf8ToWide(metadata.appName + ".exe");
     config.autoStartup = EngineDefaults::kDefaultAutoStartup;
     config.desktopIcons = EngineDefaults::kDefaultDesktopShortcut;
     config.overwriteMode = false;
@@ -425,8 +426,12 @@ InstallConfig BuildUninstallConfigFromManifest(const std::string& manifestPath) 
     config.applicationName = L"Application";
     nlohmann::json manifest;
     if (readManifest(manifestPath, manifest)) {
-        const std::string appName = manifest.value("appName", "");
-        const std::string appId = manifest.value("appId", appName);
+        // 显示名=app.productName（新 schema）→ 旧顶层 appName 回退；appId 同理双读。
+        const std::string appName = readManifestAppField(manifest, "productName", "appName");
+        std::string appId = readManifestAppField(manifest, "appId", "appId");
+        if (appId.empty()) {
+            appId = appName;
+        }
         const std::string lang = manifest.value("language", "");
         if (!appName.empty()) {
             config.applicationName = Utf8ToWide(appName);

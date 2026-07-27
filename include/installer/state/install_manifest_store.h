@@ -20,10 +20,14 @@ struct PreviousInstallOptions {
 // 写运行时安装清单 install.manifest.json：记录已装文件 + 运行时卸载账本
 // （actualCleanupSnapshot），卸载时据此撤销。清理规则/系统卸载入口由引擎写死，
 // 不再来自 YAML——因此签名收窄，去掉了 installState/uninstallerCleanup/systemUninstallEntry 等配置型。
+// app 身份统一写入顶层 "app" 对象，字段名与 packager.yaml 的 app 节一一对应：
+//   { productName, appName, appId, version, publisher }
 bool writeManifest(const std::string& manifestPath,
+                   const std::string& productName,
+                   const std::string& appName,
                    const std::string& appId,
-                   const std::string& displayName,
                    const std::string& appVersion,
+                   const std::string& appPublisher,
                    const std::string& installDir,
                    const std::vector<std::string>& cleanupRoots,
                    const UninstallCleanupConfig& actualCleanupSnapshot,
@@ -34,11 +38,15 @@ bool writeManifest(const std::string& manifestPath,
                    const std::string& desktopShortcutDisplayName,
                    const std::string& uninstallPath,
                    const std::string& languageCode,
-                   const std::string& appPublisher = {},
                    const InstalledFileFingerprintMap& fileFingerprints = {},
                    const std::vector<std::string>& installedComponentIds = {});
 /// 读取 install.manifest.json 为 JSON 对象。成功返回 true。
 bool readManifest(const std::string& manifestPath, nlohmann::json& outManifest);
+/// 读 manifest 的 app 身份字段：优先顶层 "app" 对象（manifestVersion 4+，字段名与
+/// packager.yaml 对应），缺失时回退旧顶层字段名 legacyKey（兼容存量旧 manifest）。
+std::string readManifestAppField(const nlohmann::json& manifest,
+                                 const char* appKey,
+                                 const char* legacyKey);
 /// 从上次安装 manifest 读出 PreviousInstallOptions（升级时沿用）。缺字段时返回 false + error。
 bool loadPreviousInstallOptions(const std::string& manifestPath,
                                 PreviousInstallOptions& options,

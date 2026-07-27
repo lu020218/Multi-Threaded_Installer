@@ -217,8 +217,8 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
     // 注册表写入由引擎在 finalize 阶段统一处理（产品注册表 + 系统卸载入口），
     // 不再有 YAML 驱动的通用 registry 名单（需求 §4.6）。
     plan.effectiveRegistry.clear();
-    // killProcesses 由产品名派生主进程名（需求 §5）；特殊进程随迁移处理。
-    plan.effectiveKillProcesses = {metadata.appProductName + ".exe"};
+    // killProcesses 由主 exe 程序名（app.appName）派生；特殊进程随迁移处理。
+    plan.effectiveKillProcesses = {metadata.appName + ".exe"};
     plan.effectiveAutoStartup = options.overrideAutoStartup
                                     ? options.autoStartupEnabled
                                     : EngineDefaults::kDefaultAutoStartup;

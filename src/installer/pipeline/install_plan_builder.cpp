@@ -121,16 +121,16 @@ std::string ResolveLanguageCode(const std::string& preferredLanguage) {
     }
 }
 
-std::string ResolveDesktopShortcutDisplayName(const ExtendedInstallationMetadata& metadata,
+std::string ResolveDesktopShortcutDisplayName(const PackageManifest& metadata,
                                               const std::string& languageCode) {
     // 快捷方式名写死为产品名（需求 §5：UI 文案/绑定下沉引擎+skin，不进 manifest）。
     (void)languageCode;
-    return metadata.appProductName;
+    return metadata.identity.productName;
 }
 
 // [旧版本-发现安装路径] 升级模式入口：必须先发现机器上已存在的旧安装目录与旧 manifest，
 // 否则升级无目标可言 → 发现失败即升级失败。复用进程级探测快照（全流程只探测一次）。
-bool ResolveUpgradeInstallFromInstallStateDetect(const ExtendedInstallationMetadata& metadata,
+bool ResolveUpgradeInstallFromInstallStateDetect(const PackageManifest& metadata,
                                                  InstallerPathResolver& pathResolver,
                                                  std::string& installDir,
                                                  std::string& manifestPath,
@@ -151,7 +151,7 @@ bool ResolveUpgradeInstallFromInstallStateDetect(const ExtendedInstallationMetad
     return true;
 }
 
-bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
+bool BuildInstallExecutionPlan(const PackageManifest& metadata,
                                InstallerPathResolver& pathResolver,
                                const InstallServiceOptions& options,
                                InstallExecutionPlan& plan,
@@ -163,8 +163,8 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
     const InstalledInstanceInfo installedInstance =
         GetInstalledInstanceSnapshot(metadata, pathResolver);
     // 数据目录/注册表键统一用产品名，不再单列 id/directoryName（需求 §5）。
-    plan.effectiveAppId = metadata.appProductName;
-    plan.effectiveDirectoryName = metadata.appProductName;
+    plan.effectiveAppId = metadata.identity.productName;
+    plan.effectiveDirectoryName = metadata.identity.productName;
     if (options.upgradeMode) {
         // 升级模式：必须已存在旧安装，否则升级失败。
         if (!installedInstance.found) {
@@ -218,7 +218,7 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
     // 不再有 YAML 驱动的通用 registry 名单（需求 §4.6）。
     plan.effectiveRegistry.clear();
     // killProcesses 由主 exe 程序名（app.appName）派生；特殊进程随迁移处理。
-    plan.effectiveKillProcesses = {metadata.appName + ".exe"};
+    plan.effectiveKillProcesses = {metadata.identity.appName + ".exe"};
     plan.effectiveAutoStartup = options.overrideAutoStartup
                                     ? options.autoStartupEnabled
                                     : EngineDefaults::kDefaultAutoStartup;
@@ -226,7 +226,7 @@ bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
                                      ? options.desktopIconsEnabled
                                      : EngineDefaults::kDefaultDesktopShortcut;
 
-    for (const auto& mapping : metadata.extendedPayloadMappings) {
+    for (const auto& mapping : metadata.payload.folders) {
         plan.selectedEmbeddedFolders.push_back(mapping.folderId);
         plan.totalInstallBytes += mapping.originalSize;
     }

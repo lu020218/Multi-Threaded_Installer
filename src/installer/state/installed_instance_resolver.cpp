@@ -94,13 +94,13 @@ struct DetectCandidate {
     std::string registryKey;
 };
 
-std::vector<DetectCandidate> BuildDetectCandidates(const ExtendedInstallationMetadata& metadata) {
+std::vector<DetectCandidate> BuildDetectCandidates(const PackageManifest& metadata) {
     // [旧版本-发现安装路径] 构造探测候选：读引擎写死的 HKLM\Software\<product>\InstallDir
     // 作为唯一来源，用来发现机器上已存在的旧版本安装目录（需求 §5）。
     std::vector<DetectCandidate> candidates;
-    if (!metadata.appProductName.empty()) {
+    if (!metadata.identity.productName.empty()) {
         candidates.push_back({"installState",
-                              EngineDefaults::RegistryPath(metadata.appProductName),
+                              EngineDefaults::RegistryPath(metadata.identity.productName),
                               "InstallDir"});
     }
     return candidates;
@@ -110,7 +110,7 @@ std::vector<DetectCandidate> BuildDetectCandidates(const ExtendedInstallationMet
 
 // [旧版本-发现安装路径] 核心实现：从 installState 注册表读出旧 InstallDir，校验目录存在，
 // 再在该目录下定位 install.manifest.json（卸载/升级清理要消费的旧版本快照）。
-bool resolveInstallDirFromInstallStateStore(const ExtendedInstallationMetadata& metadata,
+bool resolveInstallDirFromInstallStateStore(const PackageManifest& metadata,
                                             InstallerPathResolver& resolver,
                                             std::string& installDir,
                                             std::string& manifestPath,
@@ -172,7 +172,7 @@ bool resolveInstallDirFromInstallStateStore(const ExtendedInstallationMetadata& 
 // 打包成 InstalledInstanceInfo 供安装计划/卸载判定覆盖安装与升级目标。
 // 版本号优先级：产品注册表 Version → 旧 manifest appVersion（注册表由安装收尾统一写入，
 // 是权威来源；manifest 仅作注册表值缺失/损坏时的兜底）。
-bool resolveInstalledInstanceFromInstallState(const ExtendedInstallationMetadata& metadata,
+bool resolveInstalledInstanceFromInstallState(const PackageManifest& metadata,
                                               InstallerPathResolver& resolver,
                                               InstalledInstanceInfo& instanceInfo,
                                               std::string* error) {
@@ -195,7 +195,7 @@ bool resolveInstalledInstanceFromInstallState(const ExtendedInstallationMetadata
     instanceInfo.detectSource = detectSource;
 
     std::string registryVersion;
-    if (readRegistryStringValue(EngineDefaults::RegistryPath(metadata.appProductName),
+    if (readRegistryStringValue(EngineDefaults::RegistryPath(metadata.identity.productName),
                                 "Version", registryVersion) &&
         !TrimAsciiCopy(registryVersion).empty()) {
         instanceInfo.installedVersion = TrimAsciiCopy(registryVersion);
@@ -211,7 +211,7 @@ bool resolveInstalledInstanceFromInstallState(const ExtendedInstallationMetadata
 // [旧版本-发现安装路径] 进程级快照：首次调用做一次真实探测并缓存（含"未检出"结果），
 // 后续直接复用。安装/卸载单次运行内旧安装状态不应在探测点之间变化，快照消除了
 // 重复注册表/磁盘/manifest 读取与多次探测间的不一致。
-InstalledInstanceInfo GetInstalledInstanceSnapshot(const ExtendedInstallationMetadata& metadata,
+InstalledInstanceInfo GetInstalledInstanceSnapshot(const PackageManifest& metadata,
                                                    InstallerPathResolver& resolver) {
     static std::mutex snapshotMutex;
     static bool snapshotTaken = false;
@@ -219,11 +219,11 @@ InstalledInstanceInfo GetInstalledInstanceSnapshot(const ExtendedInstallationMet
     static InstalledInstanceInfo snapshot;
 
     std::lock_guard<std::mutex> lock(snapshotMutex);
-    if (!snapshotTaken || snapshotProduct != metadata.appProductName) {
+    if (!snapshotTaken || snapshotProduct != metadata.identity.productName) {
         InstalledInstanceInfo fresh;
         resolveInstalledInstanceFromInstallState(metadata, resolver, fresh, nullptr);
         snapshot = std::move(fresh);
-        snapshotProduct = metadata.appProductName;
+        snapshotProduct = metadata.identity.productName;
         snapshotTaken = true;
         logInstallerInfo(std::string("[InstalledInstance] snapshot taken found=") +
                          (snapshot.found ? "true" : "false") +

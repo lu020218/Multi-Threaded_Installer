@@ -1262,7 +1262,7 @@ UpgradeCleanupResult runUpgradeExtraPathCleanupWithWatchdog(
 bool cleanupUpgradeSystemArtifacts(
     const std::string& manifestPath,
     const std::string& previousInstallDir,
-    const ExtendedInstallationMetadata& metadata,
+    const PackageManifest& metadata,
     InstallerPathResolver& resolver,
     CliSupport& console,
     const UpgradeCleanupProgressCallback& progressCallback,
@@ -1282,15 +1282,15 @@ bool cleanupUpgradeSystemArtifacts(
 
     migration::MigrationContext ctx;
     ctx.installDir = previousInstallDir;
-    ctx.productName = metadata.appProductName;
-    ctx.toVersion = metadata.appVersion;
+    ctx.productName = metadata.identity.productName;
+    ctx.toVersion = metadata.identity.version;
     // fromVersion 优先级：计划期快照（注册表优先抓取，见 plan.previousVersion）→
     // 现场读注册表 Version → 旧 manifest appVersion。注意走到这里时文件清理往往已
     // 删除旧 manifest，且后续 ApplyInstallState 会用新版本覆盖注册表——快照是权威来源。
     ctx.fromVersion = fromVersionHint;
     if (ctx.fromVersion.empty()) {
         std::string registryVersion;
-        if (readRegistryStringValue(EngineDefaults::RegistryPath(metadata.appProductName),
+        if (readRegistryStringValue(EngineDefaults::RegistryPath(metadata.identity.productName),
                                     "Version", registryVersion)) {
             ctx.fromVersion = registryVersion;
         }

@@ -21,7 +21,7 @@ namespace {
 struct FolderDispatch {
     std::string folderName;
     std::string targetPath;
-    ExtendedFolderMapping mapping;
+    PackagePayloadFolder mapping;
 };
 
 std::string ReplaceAll(std::string value, const std::string& token, const std::string& replacement) {
@@ -38,7 +38,7 @@ std::string ReplaceAll(std::string value, const std::string& token, const std::s
 
 } // namespace
 
-ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& metadata,
+ParallelInstallResult RunParallelInstall(const PackageManifest& metadata,
                                          FolderPayloadReader& payloadReader,
                                          InstallerPathResolver& pathResolver,
                                          const std::string& userSelectedPath,
@@ -76,9 +76,9 @@ ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& met
     }
 
     std::vector<FolderDispatch> dispatches;
-    dispatches.reserve(metadata.extendedPayloadMappings.size());
+    dispatches.reserve(metadata.payload.folders.size());
 
-    for (const auto& mapping : metadata.extendedPayloadMappings) {
+    for (const auto& mapping : metadata.payload.folders) {
         if (cancellationCallback && cancellationCallback()) {
             result.cancelled = true;
             result.errors.push_back("Installation cancelled.");

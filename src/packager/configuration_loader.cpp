@@ -79,7 +79,8 @@ bool ParseCompressionAlgorithmValue(const std::string& raw,
     return false;
 }
 
-bool ParseAppConfig(const json& root, AppConfig& out, std::string& lastError) {
+bool ParseAppConfig(const json& root, PackageIdentity& out, std::string& appIcon,
+                    std::string& lastError) {
     json app;
     if (!GetRequiredObject(root, "app", app, lastError)) {
         return false;
@@ -90,7 +91,7 @@ bool ParseAppConfig(const json& root, AppConfig& out, std::string& lastError) {
         !GetRequiredString(app, "publisher", out.publisher, lastError) ||
         !GetRequiredString(app, "version", out.version, lastError) ||
         !GetOptionalString(app, "defaultDir", out.defaultDir, lastError) ||
-        !GetOptionalString(app, "icon", out.icon, lastError) ||
+        !GetOptionalString(app, "icon", appIcon, lastError) ||
         !GetOptionalString(app, "copyright", out.copyright, lastError)) {
         return false;
     }
@@ -312,7 +313,7 @@ std::optional<PackagerConfiguration> ConfigurationLoader::parseConfigObject(cons
     }
 
     PackagerConfiguration config;
-    if (!ParseAppConfig(configObject, config.app, lastError_) ||
+    if (!ParseAppConfig(configObject, config.app, config.appIcon, lastError_) ||
         !ParsePackageConfig(configObject, config.package, lastError_) ||
         !ParseHooksConfig(configObject, config.hooks, lastError_)) {
         return std::nullopt;

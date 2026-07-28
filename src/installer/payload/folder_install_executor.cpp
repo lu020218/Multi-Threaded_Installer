@@ -51,7 +51,7 @@ bool InstallFramedFolder(const FolderInstallRequest& request,
                          FolderInstallResult& result,
                          const std::function<void(const std::string&)>& logError) {
     (void)decompressionEngine;  // worker 各持私有引擎实例（并发安全）
-    const ExtendedFolderMapping& mapping = request.mapping;
+    const PackagePayloadFolder& mapping = request.mapping;
     const InstalledFileFingerprintMap* oldFingerprints = request.oldInstalledFingerprints.get();
 
     // 1) 按 frameOffset 聚合帧组（同帧成员在 fileIndex 中天然连续，稳妥起见仍按键归组）。

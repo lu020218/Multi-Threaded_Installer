@@ -79,15 +79,15 @@ struct InstallFlowTiming {
     ParallelInstallSummary payload;
 };
 
-InstallStateContext BuildServiceInstallStateContext(const ExtendedInstallationMetadata& metadata,
+InstallStateContext BuildServiceInstallStateContext(const PackageManifest& metadata,
                                                     const InstallExecutionPlan& plan,
                                                     const InstallServiceOptions& options,
                                                     const std::string& state) {
     InstallStateContext context;
     context.installDir = plan.pathDecision.resolvedInstallRoot;
-    context.version = metadata.appVersion;
-    context.appName = metadata.appProductName;
-    context.appId = plan.effectiveAppId.empty() ? metadata.appProductName : plan.effectiveAppId;
+    context.version = metadata.identity.version;
+    context.appName = metadata.identity.productName;
+    context.appId = plan.effectiveAppId.empty() ? metadata.identity.productName : plan.effectiveAppId;
     context.installSource = getCurrentExecutablePath();
     context.state = state;
     context.userName = GetCurrentUserNameForInstallState();
@@ -100,7 +100,7 @@ InstallStateContext BuildServiceInstallStateContext(const ExtendedInstallationMe
 // postInstall 钩子以 abort 失败时，本次安装在 finalize 之后被判失败 —— 需把"已装好"的
 // 产物撤销，恢复到安装前状态，让 abort 在 post 阶段也名副其实（与 §6.2 一致）。
 // 尽力而为：逐项删除并记日志，单项失败不阻断其余清理。
-void RollbackInstalledArtifacts(const ExtendedInstallationMetadata& metadata,
+void RollbackInstalledArtifacts(const PackageManifest& metadata,
                                 const InstallExecutionPlan& plan,
                                 const InstallServiceOptions& options,
                                 const InstallServiceResult& result,
@@ -140,7 +140,7 @@ void RollbackInstalledArtifacts(const ExtendedInstallationMetadata& metadata,
     }
 
     // 3) 删产品注册表 + 系统卸载入口（与 finalize 写入同一推导键，精确删除）。
-    deleteSystemUninstallEntry(metadata.appProductName);
+    deleteSystemUninstallEntry(metadata.identity.productName);
 
     // 4) 删 install-state（HKLM\Software\<product> + install-state.json）。
     CleanupInstallState(BuildServiceInstallStateContext(metadata, plan, options, "uninstalled"),
@@ -155,7 +155,7 @@ void RollbackInstalledArtifacts(const ExtendedInstallationMetadata& metadata,
 //   · 安装程序文件缺失：required/onFailureAbort 视为失败，否则告警跳过；
 //   · 退出码按 spec.successExitCodes 判成败、按 rebootExitCodes 累加 rebootRequired；
 //   · 失败时 onFailureAbort=true → 返回 false（调用方回滚中止），否则记日志继续。
-bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
+bool RunSelectedComponents(const PackageManifest& metadata,
                            const InstallServiceOptions& options,
                            const std::string& installRoot,
                            InstallProgressReporter& reporter,
@@ -228,7 +228,7 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
         req.timeoutSec = spec.timeoutSec;
         req.hideWindow = true;
         req.injectInstallDir = installRoot;
-        req.injectVersion = metadata.appVersion;
+        req.injectVersion = metadata.identity.version;
         req.logBaseName = "component_" + spec.id;
 
         const auto componentStart = std::chrono::steady_clock::now();
@@ -263,7 +263,7 @@ bool RunSelectedComponents(const ExtendedInstallationMetadata& metadata,
 
 } // namespace
 
-InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& metadata,
+InstallServiceResult ExecuteInstallService(const PackageManifest& metadata,
                                            MetadataParser& parser,
                                            InstallerPathResolver& pathResolver,
                                            const InstallServiceOptions& options,
@@ -299,8 +299,8 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
             << "ms components=" << flowTiming.componentsMs
             << "ms finalize=" << flowTiming.finalizeMs
             << "ms postHook=" << flowTiming.postHookMs << "ms\n"
-            << "  scripts: preInstallHooks=" << metadata.preInstall.size()
-            << " postInstallHooks=" << metadata.postInstall.size()
+            << "  scripts: preInstallHooks=" << metadata.hooks.preInstall.size()
+            << " postInstallHooks=" << metadata.hooks.postInstall.size()
             << " selectedComponents=" << options.selectedComponentIds.size() << "\n";
         // 逐 hook 明细（统一在此展示，不再分散在各处日志）。
         auto dumpHooks = [&oss](const char* label, const std::vector<HookRunStat>& hooks) {
@@ -456,14 +456,14 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         // preInstall hooks：在解压前按声明顺序依次执行（需求 §4 时序）；
         // 任一脚本以 onFailure=abort 失败则中止安装。
         auto preHookStart = std::chrono::steady_clock::now();
-        if (!metadata.preInstall.empty()) {
+        if (!metadata.hooks.preInstall.empty()) {
             reporter.EmitStatus(InstallServiceStatus::Installing,
                                 InstallServicePhase::PreInstallHook,
                                 0.0f,
                                 "Running pre-install scripts...");
         }
         const HookOutcome preHookOutcome =
-            RunHooks(metadata.preInstall, hookInstallDir, metadata.appVersion,
+            RunHooks(metadata.hooks.preInstall, hookInstallDir, metadata.identity.version,
                      &flowTiming.preHookStats,
                      [&reporter](std::size_t done, std::size_t total) {
                          if (total > 0) {
@@ -556,14 +556,14 @@ InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& m
         const std::string postHookInstallDir =
             result.installRootPath.empty() ? hookInstallDir : result.installRootPath;
         auto postHookStart = std::chrono::steady_clock::now();
-        if (!metadata.postInstall.empty()) {
+        if (!metadata.hooks.postInstall.empty()) {
             reporter.EmitStatus(InstallServiceStatus::Finalizing,
                                 InstallServicePhase::PostInstallHook,
                                 0.0f,
                                 "Running post-install scripts...");
         }
         const HookOutcome postHookOutcome =
-            RunHooks(metadata.postInstall, postHookInstallDir, metadata.appVersion,
+            RunHooks(metadata.hooks.postInstall, postHookInstallDir, metadata.identity.version,
                      &flowTiming.postHookStats,
                      [&reporter](std::size_t done, std::size_t total) {
                          if (total > 0) {

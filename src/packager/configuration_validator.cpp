@@ -114,8 +114,8 @@ ConfigurationValidator::ValidationResult ConfigurationValidator::validate(
     }
 
     // icon
-    if (!config.app.icon.empty()) {
-        fs::path iconPath = PathFromUtf8(config.app.icon);
+    if (!config.appIcon.empty()) {
+        fs::path iconPath = PathFromUtf8(config.appIcon);
         if (!iconPath.is_absolute()) {
             iconPath = PathFromUtf8(configDirectory) / iconPath;
         }

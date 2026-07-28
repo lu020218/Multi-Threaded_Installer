@@ -20,7 +20,7 @@ std::string FormatWindowsVersion(uint16_t major, uint16_t minor, uint32_t build)
 
 } // namespace
 
-bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
+bool ExecuteInstallPrecheck(const PackageManifest& metadata,
                             const InstallExecutionPlan& plan,
                             const InstallServiceOptions& options,
                             InstallProgressReporter& reporter,
@@ -93,7 +93,7 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
 
 #ifdef _WIN32
     std::vector<std::string> processNames = buildKillProcessList(
-        metadata.appName,
+        metadata.identity.appName,
         plan.effectiveKillProcesses);
     if (!processNames.empty()) {
         std::vector<std::string> running = getRunningProcessesByName(processNames);
@@ -139,7 +139,7 @@ bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
     if (EngineDefaults::kUseMutex) {
         reporter.EmitMessage(InstallServiceEventType::Info, "Acquiring install mutex...");
         installMutex = acquireInstallMutex(EngineDefaults::kUseMutex,
-                                           EngineDefaults::MutexName(metadata.appProductName));
+                                           EngineDefaults::MutexName(metadata.identity.productName));
     }
 
     reporter.EmitProgress("", "Precheck completed", 1.0f);

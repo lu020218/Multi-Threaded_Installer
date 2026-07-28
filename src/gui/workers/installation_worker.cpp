@@ -221,7 +221,7 @@ void InstallationWorker::WorkerThreadFunc(const std::wstring& installPath) {
     bool success = false;
     bool rebootRequired = false;
     std::wstring errorMessage;
-    ExtendedInstallationMetadata metadata;
+    PackageManifest metadata;
     InstallerPathResolver pathResolver;
     auto startTime = std::chrono::steady_clock::now();
     auto logElapsed = [startTime](const char* label) {
@@ -246,8 +246,8 @@ PostProgressMessage(
             throw std::runtime_error(WideToUtf8(
                 GUIHelpers::GetLocalizedText(L"msg.error.metadata_invalid", L"")));
         }
-        logInstallerInfo(std::string("[GUI] Metadata loaded. App=") + metadata.appProductName +
-                         " folders=" + std::to_string(metadata.folderCount));
+        logInstallerInfo(std::string("[GUI] Metadata loaded. App=") + metadata.identity.productName +
+                         " folders=" + std::to_string(metadata.payload.folders.size()));
         logElapsed("metadata_loaded");
 
         std::string installPathStr = WideToUtf8(installPath);

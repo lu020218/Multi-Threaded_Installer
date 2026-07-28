@@ -73,7 +73,7 @@ UpgradeCleanupResult runUpgradeExtraPathCleanupWithWatchdog(
 bool cleanupUpgradeSystemArtifacts(
     const std::string& manifestPath,
     const std::string& previousInstallDir,
-    const ExtendedInstallationMetadata& metadata,
+    const PackageManifest& metadata,
     InstallerPathResolver& resolver,
     CliSupport& console,
     const UpgradeCleanupProgressCallback& progressCallback = {},

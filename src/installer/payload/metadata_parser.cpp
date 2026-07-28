@@ -24,11 +24,11 @@ namespace {
 
 } // namespace
 
-ExtendedInstallationMetadata MetadataParser::parseExtendedEmbeddedMetadata(bool deferFileIndex) {
+PackageManifest MetadataParser::parseExtendedEmbeddedMetadata(bool deferFileIndex) {
     std::vector<uint8_t> embeddedData = dataPackagePath_.empty() ? readEmbeddedData() : readExternalMetadata();
     if (embeddedData.empty()) {
         META_LOG();
-        return ExtendedInstallationMetadata{};
+        return PackageManifest{};
     }
 
     return deserializeExtendedMetadata(embeddedData, deferFileIndex);
@@ -69,7 +69,7 @@ std::vector<uint8_t> MetadataParser::readEmbeddedData() {
     return metadata;
 }
 
-ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const std::vector<uint8_t>& data,
+PackageManifest MetadataParser::deserializeExtendedMetadata(const std::vector<uint8_t>& data,
                                                                          bool deferFileIndex) {
     PackageManifest manifest;
     std::string manifestError;
@@ -79,12 +79,16 @@ ExtendedInstallationMetadata MetadataParser::deserializeExtendedMetadata(const s
             META_LOG();
             logInstallerError("[Metadata] ValidatePackageManifest failed: " +
                               (validationError.empty() ? std::string("(no detail)") : validationError));
-            return ExtendedInstallationMetadata{};
+            return PackageManifest{};
         }
-        return PackageManifestToExtendedMetadata(manifest);
+        // appName 为空回退产品名（防御：正常打包链路下必填）。
+        if (manifest.identity.appName.empty()) {
+            manifest.identity.appName = manifest.identity.productName;
+        }
+        return manifest;
     }
     logInstallerError("[Metadata] Unsupported package manifest format: " + manifestError);
-    return ExtendedInstallationMetadata{};
+    return PackageManifest{};
 }
 
 std::vector<uint8_t> MetadataParser::readExternalMetadata() {
@@ -113,9 +117,9 @@ std::vector<uint8_t> MetadataParser::readExternalMetadata() {
     return metadata;
 }
 
-bool MetadataParser::validateMetadata(const ExtendedInstallationMetadata& metadata) {
+bool MetadataParser::validateMetadata(const PackageManifest& metadata) {
     std::string error;
-    if (!ValidateExtendedInstallationMetadata(metadata, error)) {
+    if (!ValidatePackageManifest(metadata, error)) {
         META_LOG();
         if (!error.empty()) {
             logInstallerError("[Metadata] Validation failed: " + error);

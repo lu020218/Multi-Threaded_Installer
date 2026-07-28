@@ -54,10 +54,10 @@ const char* InstallTargetModeName(InstallTargetMode mode);  ///< 模式枚举 �
 /// 解析生效语言：preferredLanguage 非空则用之，否则按系统 UI 语言推断。
 std::string ResolveLanguageCode(const std::string& preferredLanguage);
 /// 解析桌面快捷方式显示名（重构后写死为产品名）。
-std::string ResolveDesktopShortcutDisplayName(const ExtendedInstallationMetadata& metadata,
+std::string ResolveDesktopShortcutDisplayName(const PackageManifest& metadata,
                                               const std::string& languageCode);
 /// 升级模式下，从引擎写死的产品注册表探测旧安装目录与 manifest 路径。
-bool ResolveUpgradeInstallFromInstallStateDetect(const ExtendedInstallationMetadata& metadata,
+bool ResolveUpgradeInstallFromInstallStateDetect(const PackageManifest& metadata,
                                                  InstallerPathResolver& pathResolver,
                                                  std::string& installDir,
                                                  std::string& manifestPath,
@@ -65,7 +65,7 @@ bool ResolveUpgradeInstallFromInstallStateDetect(const ExtendedInstallationMetad
 
 /// 构建安装执行计划：探测旧安装、决定路径模式、抓旧指纹、定全装 folder 集、派生注册表/进程/
 /// 开机自启等生效值。失败返回 false + error。
-bool BuildInstallExecutionPlan(const ExtendedInstallationMetadata& metadata,
+bool BuildInstallExecutionPlan(const PackageManifest& metadata,
                                InstallerPathResolver& pathResolver,
                                const InstallServiceOptions& options,
                                InstallExecutionPlan& plan,

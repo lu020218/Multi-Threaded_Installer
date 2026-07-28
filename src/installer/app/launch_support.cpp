@@ -256,22 +256,22 @@ private:
     HRESULT hr_;
 };
 
-InstallConfig CreateInstallConfigFromMetadata(const ExtendedInstallationMetadata& metadata) {
+InstallConfig CreateInstallConfigFromMetadata(const PackageManifest& metadata) {
     InstallConfig config;
-    config.applicationName = Utf8ToWide(metadata.appProductName);
-    config.appId = Utf8ToWide(metadata.appProductName);
-    config.directoryName = Utf8ToWide(metadata.appProductName);
-    config.version = Utf8ToWide(metadata.appVersion);
-    config.defaultInstallPath = Utf8ToWide(metadata.appDefaultDir);
+    config.applicationName = Utf8ToWide(metadata.identity.productName);
+    config.appId = Utf8ToWide(metadata.identity.productName);
+    config.directoryName = Utf8ToWide(metadata.identity.productName);
+    config.version = Utf8ToWide(metadata.identity.version);
+    config.defaultInstallPath = Utf8ToWide(metadata.identity.defaultDir);
     config.webPageUrl = std::wstring();
     // 完成页“立即运行”的主 exe = app.appName（主 exe 程序名）。
-    config.executableName = Utf8ToWide(metadata.appName + ".exe");
+    config.executableName = Utf8ToWide(metadata.identity.appName + ".exe");
     config.autoStartup = EngineDefaults::kDefaultAutoStartup;
     config.desktopIcons = EngineDefaults::kDefaultDesktopShortcut;
     config.overwriteMode = false;
 
     uint64_t totalSize = 0;
-    for (const auto& mapping : metadata.extendedPayloadMappings) {
+    for (const auto& mapping : metadata.payload.folders) {
         totalSize += mapping.originalSize;
     }
     config.requiredDiskSpace = totalSize;
@@ -356,7 +356,7 @@ int RunGuiWindow(GUIManager& frame,
     return 0;
 }
 
-std::string ResolveInstallPathForSilentRun(const ExtendedInstallationMetadata& metadata,
+std::string ResolveInstallPathForSilentRun(const PackageManifest& metadata,
                                            InstallerPathResolver& pathResolver,
                                            const LaunchContext& context,
                                            std::string& existingManifest) {
@@ -370,7 +370,7 @@ std::string ResolveInstallPathForSilentRun(const ExtendedInstallationMetadata& m
         existingManifest = installedInstance.manifestPath;
         return installedInstance.installDir;
     }
-    return pathResolver.expandEnvironmentVariables(metadata.appDefaultDir);
+    return pathResolver.expandEnvironmentVariables(metadata.identity.defaultDir);
 }
 
 InstallServiceCallbacks BuildConsoleServiceCallbacks(CliSupport& console) {
@@ -404,7 +404,7 @@ InstallServiceCallbacks BuildConsoleServiceCallbacks(CliSupport& console) {
     return callbacks;
 }
 
-std::string ResolveUninstallManifestPath(const ExtendedInstallationMetadata* metadata,
+std::string ResolveUninstallManifestPath(const PackageManifest* metadata,
                                          InstallerPathResolver& resolver) {
     const std::string exePath = getCurrentExecutablePath();
     const std::string localManifest = getLocalManifestPath(exePath);
@@ -446,7 +446,7 @@ InstallConfig BuildUninstallConfigFromManifest(const std::string& manifestPath) 
     return config;
 }
 
-bool ApplyPreviousOptionsForUpgrade(const ExtendedInstallationMetadata& metadata,
+bool ApplyPreviousOptionsForUpgrade(const PackageManifest& metadata,
                                     InstallerPathResolver& resolver,
                                     InstallServiceOptions& options,
                                     std::string& installDir,
@@ -527,18 +527,18 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
     CliSupport console;
     InstallerPathResolver pathResolver;
     MetadataParser parser;
-    ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
+    PackageManifest metadata = parser.parseExtendedEmbeddedMetadata();
     if (!parser.validateMetadata(metadata)) {
         console.showError("Invalid or corrupted installer metadata");
         return INSTALLER_EXIT_FAILED;
     }
 
-    SetInstallerAppNameEnv(metadata.appProductName);
+    SetInstallerAppNameEnv(metadata.identity.productName);
     EnsureInstallerLoggingInitialized();
 
     // 单例：已有安装器实例在运行时，本静默进程直接退出（如已有 GUI 实例则先置顶其窗口）。
     // 静默模式无 UI，不弹提示；用专用退出码让调用方区分“被跳过”而非“安装成功”。
-    SingleInstanceGuard instanceGuard(metadata.appProductName + "|installer");
+    SingleInstanceGuard instanceGuard(metadata.identity.productName + "|installer");
     if (!instanceGuard.acquired()) {
         instanceGuard.activateExistingWindow();
         console.showError("Another installer instance is already running; this run was skipped.");
@@ -567,7 +567,7 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
 
         if (hasInstalledInstance) {
             const int versionOrder =
-                compareSemanticVersion(metadata.appVersion, installedInstance.installedVersion);
+                compareSemanticVersion(metadata.identity.version, installedInstance.installedVersion);
             if (versionOrder <= 0) {
                 console.showError("Silent install only supports upgrading to a higher version.");
                 return INSTALLER_EXIT_FAILED;
@@ -622,7 +622,7 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     const auto tParseStart = PerfClock::now();
     MetadataParser parser;
     // GUI 启动只需文件夹/标量元数据；跳过 37641 条 fileIndex（安装 worker 会自行全量重解析）。
-    ExtendedInstallationMetadata metadata =
+    PackageManifest metadata =
         parser.parseExtendedEmbeddedMetadata(/*deferFileIndex=*/true);
     const auto tParseEnd = PerfClock::now();
     logInstallerInfo("[GUI][Perf] parseExtendedEmbeddedMetadata=" +
@@ -636,7 +636,7 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
 
     // 单例：已有安装器实例在运行时本进程退出。若已有实例为 GUI 则置顶其窗口；
     // 若已有实例为静默安装（无窗口可置顶），则弹提示框告知用户后退出。
-    const std::string instanceKey = metadata.appProductName + "|installer";
+    const std::string instanceKey = metadata.identity.productName + "|installer";
     SingleInstanceGuard instanceGuard(instanceKey);
     if (!instanceGuard.acquired()) {
         if (!instanceGuard.activateExistingWindow()) {
@@ -702,7 +702,7 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
     }
 
     // Deferred: only needed by child processes spawned during installation.
-    SetInstallerAppNameEnv(metadata.appProductName);
+    SetInstallerAppNameEnv(metadata.identity.productName);
 
     GuiResourceContext resources;
     const auto tZipStart = PerfClock::now();
@@ -746,8 +746,8 @@ int RunSilentUninstallMode(const LaunchContext& context) {
     CliSupport console;
     InstallerPathResolver resolver;
     MetadataParser parser;
-    ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
-    const ExtendedInstallationMetadata* metadataPtr = parser.validateMetadata(metadata) ? &metadata : nullptr;
+    PackageManifest metadata = parser.parseExtendedEmbeddedMetadata();
+    const PackageManifest* metadataPtr = parser.validateMetadata(metadata) ? &metadata : nullptr;
 
     UninstallContext uninstallContext;
     ResolveUninstallContext(metadataPtr, resolver, context.args.uninstallManifestPath, uninstallContext);
@@ -775,7 +775,7 @@ int RunSilentUninstallMode(const LaunchContext& context) {
 
     // 单例：放在提权 relaunch 之后，确保只有最终（已提权）实例持有互斥量，避免父子进程互相误判。
     const std::string uninstallProduct =
-        metadataPtr ? metadataPtr->appProductName : uninstallContext.appName;
+        metadataPtr ? metadataPtr->identity.productName : uninstallContext.appName;
     SingleInstanceGuard instanceGuard(uninstallProduct + "|uninstaller");
     if (!instanceGuard.acquired()) {
         instanceGuard.activateExistingWindow();
@@ -797,8 +797,8 @@ int RunGuiUninstallMode(HINSTANCE hInstance, const LaunchContext& context) {
 
     InstallerPathResolver resolver;
     MetadataParser parser;
-    ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
-    const ExtendedInstallationMetadata* metadataPtr = parser.validateMetadata(metadata) ? &metadata : nullptr;
+    PackageManifest metadata = parser.parseExtendedEmbeddedMetadata();
+    const PackageManifest* metadataPtr = parser.validateMetadata(metadata) ? &metadata : nullptr;
 
     UninstallContext uninstallContext;
     ResolveUninstallContext(metadataPtr, resolver, context.args.uninstallManifestPath, uninstallContext);
@@ -830,7 +830,7 @@ int RunGuiUninstallMode(HINSTANCE hInstance, const LaunchContext& context) {
 
     // 单例：放在提权 relaunch 之后。已有卸载器实例在运行时退出（如为 GUI 则先置顶其窗口）。
     const std::string uninstallInstanceKey =
-        (metadataPtr ? metadataPtr->appProductName : uninstallContext.appName) + "|uninstaller";
+        (metadataPtr ? metadataPtr->identity.productName : uninstallContext.appName) + "|uninstaller";
     SingleInstanceGuard instanceGuard(uninstallInstanceKey);
     if (!instanceGuard.acquired()) {
         if (!instanceGuard.activateExistingWindow()) {

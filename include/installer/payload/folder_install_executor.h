@@ -13,7 +13,7 @@ namespace MultiThreadedInstaller {
 /// 描述一个 folder 载荷的安装单元：mapping 指向单个压缩载荷，执行器把它装到 resolvedTargetPath。
 struct FolderInstallRequest {
     std::string folderName;            ///< folder 名（日志/进度用）。
-    ExtendedFolderMapping mapping;     ///< 载荷映射（offset/size/checksum/算法/fileIndex）。
+    PackagePayloadFolder mapping;     ///< 载荷映射（offset/size/checksum/算法/fileIndex）。
     std::string resolvedTargetPath;    ///< 已解析的安装目标（%InstallDir%/环境变量已展开）。
     unsigned int schedulerConcurrencyHint = 1;  ///< 并发提示（影响解压线程预算）。
     /// 上次安装的逐文件指纹，用于"零读跳过"未变文件（方案A），可空。

@@ -19,7 +19,7 @@ class InstallerPathResolver;
 /// @param error        出参：失败原因。
 /// @param cancelled    出参：是否因用户取消而中止。
 /// @return 全部通过返回 true；否则 false（error/cancelled 指明原因）。
-bool ExecuteInstallPrecheck(const ExtendedInstallationMetadata& metadata,
+bool ExecuteInstallPrecheck(const PackageManifest& metadata,
                             const InstallExecutionPlan& plan,
                             const InstallServiceOptions& options,
                             InstallProgressReporter& reporter,

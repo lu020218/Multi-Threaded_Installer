@@ -102,7 +102,7 @@ std::string getLocalManifestPath(const std::string& exePath);
 bool isRunningAsAdmin();
 /// 本次安装是否需要管理员权限（重构后写死为 EngineDefaults::kRequireAdmin）。
 bool requiresAdminForInstall(const std::string& installPath,
-                             const ExtendedInstallationMetadata& metadata,
+                             const PackageManifest& metadata,
                              InstallerPathResolver& resolver);
 /// 以管理员权限重启自身（ShellExecute runas）。
 bool relaunchSelfAsAdmin();

@@ -181,7 +181,7 @@ void GUIManager::SetInstallConfig(const InstallConfig& config) {
     m_overwriteMode = config.overwriteMode;
 }
 
-void GUIManager::SetInstallMetadata(const ExtendedInstallationMetadata& metadata) {
+void GUIManager::SetInstallMetadata(const PackageManifest& metadata) {
     m_installMetadata = metadata;
     // UI 链接绑定已下沉 skin，不再来自 metadata（需求 §4.4）。
     m_uiLinks.clear();
@@ -377,7 +377,7 @@ bool GUIManager::EnsureInstallMetadataLoaded() {
 
     try {
         MetadataParser parser;
-        ExtendedInstallationMetadata metadata = parser.parseExtendedEmbeddedMetadata();
+        PackageManifest metadata = parser.parseExtendedEmbeddedMetadata();
         if (!parser.validateMetadata(metadata)) {
             return false;
         }
@@ -597,11 +597,11 @@ bool GUIManager::StartInstallationWithOptions(const std::wstring& installPath,
             GUIHelpers::GetLocalizedText(L"msg.dialog.metadata_read_failed", L""));
         return false;
     }
-    const ExtendedInstallationMetadata& metadata = m_installMetadata;
+    const PackageManifest& metadata = m_installMetadata;
 
     std::vector<std::string> processNames = buildKillProcessList(
-        metadata.appName,
-        {metadata.appName + ".exe"});
+        metadata.identity.appName,
+        {metadata.identity.appName + ".exe"});
     if (!HandleRunningApplicationDialog(m_hWnd, processNames)) {
         return false;
     }

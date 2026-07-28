@@ -32,13 +32,13 @@ struct UninstallContext {
 
 /// 解析卸载上下文：依次尝试显式清单路径 → exe 同目录清单 → 注册表探测 → 安全目录兜底。
 /// @return manifest 可读时返回 true 并填充 context；否则按 fallbackAllowed/errorMessage 指示。
-bool ResolveUninstallContext(const ExtendedInstallationMetadata* metadata,
+bool ResolveUninstallContext(const PackageManifest* metadata,
                              InstallerPathResolver& resolver,
                              const std::string& explicitManifestPath,
                              UninstallContext& context);
 /// 按已解析的上下文执行卸载（清单可读走清单驱动，否则走安全目录兜底）。
 bool ExecuteUninstallFromContext(const UninstallContext& context,
-                                 const ExtendedInstallationMetadata* metadata,
+                                 const PackageManifest* metadata,
                                  InstallerPathResolver& resolver,
                                  CliSupport& console,
                                  const UninstallProgressCallback& progressCallback = {},

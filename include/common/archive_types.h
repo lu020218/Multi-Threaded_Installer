@@ -56,72 +56,33 @@ struct CompressionResult {
           algorithm(CompressionAlgorithm::LZMA2_XZ) {}
 };
 
-struct FolderMapping {
-    std::string folderId;
-    std::string folderName;
-    std::string targetPath;
-    // Payload location and size in the package data area.
-    uint64_t offset;
-    uint64_t compressedSize;
-    uint64_t originalSize;
-    uint32_t checksum;
-    CompressionAlgorithm algorithm;
+// ── 载荷（打包产出 / 包内序列化 / 运行期解压 三层共用同一结构体）────────────────
 
-    FolderMapping()
-        : offset(0),
-          compressedSize(0),
-          originalSize(0),
-          checksum(0),
-          algorithm(CompressionAlgorithm::LZMA2_XZ) {}
+/// 一个待安装目录（folder）的载荷描述：身份 + 在数据包中的位置 + 落点。
+struct PackagePayloadFolder {
+    std::string folderId;     ///< 唯一标识（取自 --input 顶层子目录名）。
+    std::string folderName;   ///< 显示名。
+    std::string source;       ///< 打包期源目录（运行期仅日志）。
+    std::string target;       ///< 安装目标（支持 %InstallDir% 与环境变量）。
+    bool required = false;    ///< 是否必装（单产品单载荷下恒为全装）。
+    uint64_t offset = 0;          ///< 在数据区中的字节偏移。
+    uint64_t compressedSize = 0;  ///< 压缩后字节数。
+    uint64_t originalSize = 0;    ///< 原始字节数。
+    uint32_t checksum = 0;        ///< 校验和（落盘后校验；分帧模式恒 0，逐文件 contentHash 兜底）。
+    CompressionAlgorithm algorithm = CompressionAlgorithm::LZMA2_XZ;  ///< 压缩算法。
+    bool framed = false;          ///< 是否按文件分帧（支持逐文件跳过解压）。
+    std::vector<FileIndexEntry> fileIndex;  ///< 文件清单（指纹/分帧定位/账本）。
 };
 
-struct ExtendedFolderMapping : public FolderMapping {
-    std::string target;
-    // When true the payload is per-file framed (see CompressionResult::framed).
-    bool framed = false;
-    // File manifest for logging, validation, and post-install bookkeeping only.
-    std::vector<FileIndexEntry> fileIndex;
-
-    ExtendedFolderMapping()
-        : FolderMapping() {}
-};
-
-struct InstallationMetadata {
-    uint32_t version;
-    uint32_t folderCount;
-    std::vector<FolderMapping> payloadMappings;
-    uint64_t totalPayloadCompressedSize;
-
-    InstallationMetadata() : version(1), folderCount(0), totalPayloadCompressedSize(0) {}
+/// 全部载荷的汇总。
+struct PackagePayloadManifest {
+    uint64_t totalCompressedSize = 0;            ///< 数据区总压缩字节数。
+    std::vector<PackagePayloadFolder> folders;   ///< 各 folder 载荷。
 };
 
 // HookAuxFile / HookScript / PackageHooks 已收敛到 config_types.h（三层共用）。
-
-// 构建期 → 运行期唯一的桥，收窄为：身份 + 载荷 + 钩子。
-// 其余安装行为默认值、清理规则、跨版本兼容等全部写死/实现在引擎内。
-struct ExtendedInstallationMetadata : public InstallationMetadata {
-    // 身份（其余版本资源字段在打包期已写入 exe PE 资源，运行期无需携带）。
-    std::string appProductName;
-    std::string appName;    ///< 主 exe 程序名（不含 .exe）；为空时回退 appProductName。
-    std::string appId;      ///< 产品唯一 id（如 com.comp.myapp）；落 install.manifest.json。
-    std::string appPublisher;
-    std::string appVersion;
-    std::string appDefaultDir;
-
-    // 载荷。
-    std::vector<ExtendedFolderMapping> extendedPayloadMappings;
-
-    // 钩子：每个钩子点可挂多个脚本，按顺序依次执行（支持 bat/cmd/ps1）。
-    std::vector<HookScript> preInstall;
-    std::vector<HookScript> postInstall;
-
-    ExtendedInstallationMetadata()
-        : InstallationMetadata(),
-          appProductName("MyApplication"),
-          appPublisher(""),
-          appVersion("1.0"),
-          appDefaultDir("%ProgramFiles%") {}
-};
+// 旧的 FolderMapping/PackagePayloadFolder/InstallationMetadata/PackageManifest
+// 已删除：全工程统一消费 package_manifest.h 的 PackageManifest（唯一元数据根）。
 
 struct DecompressionTask {
     std::vector<uint8_t> compressedData;
@@ -157,6 +118,17 @@ namespace Constants {
     constexpr int DEFAULT_LZMA_LEVEL = 9;
     constexpr int DEFAULT_ZSTD_LEVEL = 3;
 }
+
+/// 全工程唯一的元数据根：打包器构建它、codec 序列化/反序列化它、
+/// 安装器与卸载器直接消费它（不再有平行的运行期元数据结构）。
+/// 组成部件三层共用：PackageIdentity/HookScript/PackageHooks 见 config_types.h，
+/// PackagePayloadFolder/PackagePayloadManifest/FileIndexEntry 见本文件上方。
+struct PackageManifest {
+    uint32_t version = Constants::VERSION;  ///< manifest 二进制版本（codec 用，拒读旧包）。
+    PackageIdentity identity;               ///< 产品身份。
+    PackagePayloadManifest payload;         ///< 载荷。
+    PackageHooks hooks;                     ///< 钩子。
+};
 
 struct DataPackageHeader {
     uint32_t magic;

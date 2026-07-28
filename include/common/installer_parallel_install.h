@@ -60,7 +60,7 @@ using CancellationCallback = std::function<bool()>;
 /// @param threadCount       工作线程数；0 = 按 CPU 自动。
 /// @param oldInstalledFingerprints 上次安装的逐文件指纹，用于"零读跳过"未变文件（方案A），可空。
 /// @return 解压结果（成功/取消/重启需求 + 已装文件/根 + 计时）。
-ParallelInstallResult RunParallelInstall(const ExtendedInstallationMetadata& metadata,
+ParallelInstallResult RunParallelInstall(const PackageManifest& metadata,
                                          FolderPayloadReader& payloadReader,
                                          InstallerPathResolver& pathResolver,
                                          const std::string& userSelectedPath,

@@ -254,7 +254,7 @@ static bool TryLoadManifestIntoContext(const std::string& manifestPath,
 }
 
 static bool TrySetFallbackContext(const std::string& installDir,
-                                  const ExtendedInstallationMetadata* metadata,
+                                  const PackageManifest* metadata,
                                   UninstallContext& context,
                                   const std::string& manifestPath = {}) {
     if (installDir.empty()) {
@@ -275,8 +275,8 @@ static bool TrySetFallbackContext(const std::string& installDir,
     context.manifestReadable = false;
     context.fallbackAllowed = true;
     if (metadata) {
-        context.appId = metadata->appProductName;
-        context.appName = metadata->appProductName;
+        context.appId = metadata->identity.productName;
+        context.appName = metadata->identity.productName;
     }
     context.errorMessage = "Uninstall manifest missing; safe fallback uninstall will be used.";
     return true;
@@ -1088,7 +1088,7 @@ static void RunInstalledComponentUninstallers(const std::string& installDir,
     }
 }
 
-bool ResolveUninstallContext(const ExtendedInstallationMetadata* metadata,
+bool ResolveUninstallContext(const PackageManifest* metadata,
                              InstallerPathResolver& resolver,
                              const std::string& explicitManifestPath,
                              UninstallContext& context) {
@@ -1144,7 +1144,7 @@ bool ResolveUninstallContext(const ExtendedInstallationMetadata* metadata,
 }
 
 static bool ExecuteFallbackUninstall(const UninstallContext& context,
-                                     const ExtendedInstallationMetadata* metadata,
+                                     const PackageManifest* metadata,
                                      InstallerPathResolver& resolver,
                                      CliSupport& console,
                                      const UninstallProgressCallback& progressCallback,
@@ -1165,7 +1165,7 @@ static bool ExecuteFallbackUninstall(const UninstallContext& context,
     const std::string fallbackPolicy = "safedirectoryfallback";
 
     const std::string displayName =
-        !context.appName.empty() ? context.appName : (metadata ? metadata->appProductName : std::string());
+        !context.appName.empty() ? context.appName : (metadata ? metadata->identity.productName : std::string());
     if (!displayName.empty()) {
         removeAutoStartup(displayName);
         deleteDesktopShortcut(displayName);
@@ -1208,7 +1208,7 @@ static bool ExecuteFallbackUninstall(const UninstallContext& context,
 }
 
 bool ExecuteUninstallFromContext(const UninstallContext& context,
-                                 const ExtendedInstallationMetadata* metadata,
+                                 const PackageManifest* metadata,
                                  InstallerPathResolver& resolver,
                                  CliSupport& console,
                                  const UninstallProgressCallback& progressCallback,

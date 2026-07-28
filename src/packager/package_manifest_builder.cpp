@@ -28,7 +28,7 @@ std::string CurrentYear() {
     return std::to_string(1900 + tm.tm_year);
 }
 
-std::string ResolveCopyright(const AppConfig& app) {
+std::string ResolveCopyright(const PackageIdentity& app) {
     if (!app.copyright.empty()) {
         return app.copyright;
     }
@@ -130,12 +130,7 @@ PackageManifest PackageManifestBuilder::build(const std::vector<CompressionResul
                                               const std::string& configDirectory) const {
     PackageManifest manifest;
 
-    manifest.identity.productName = config.app.productName;
-    manifest.identity.appName = config.app.appName;
-    manifest.identity.appId = config.app.appId;
-    manifest.identity.publisher = config.app.publisher;
-    manifest.identity.version = config.app.version;
-    manifest.identity.defaultDir = config.app.defaultDir;
+    manifest.identity = config.app;  // 三层共用 PackageIdentity，整结构体沿用
     manifest.identity.copyright = ResolveCopyright(config.app);
 
     uint64_t offset = 0;

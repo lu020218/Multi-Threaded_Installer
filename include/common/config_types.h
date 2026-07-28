@@ -42,19 +42,16 @@ struct FolderInfo {
         : sourcePath(source), targetPath(target), totalSize(0) {}
 };
 
-// ── app —— 本次构建的身份与取值 ──────────────────────────────────────────
-struct AppConfig {
-    std::string productName;   // 用户可见产品名
-    std::string appName;       // 主 exe 程序名（不含 .exe），用于主程序定位/杀进程/立即运行
+// ── app —— 产品身份（yaml 声明 / 包内嵌 / 运行期 三层共用同一结构体）──────────
+// 加字段只需：此处 1 行 + configuration_loader 解析 1 行 + codec 序列化/反序列化各 1 行。
+struct PackageIdentity {
+    std::string productName;   // 用户可见产品名；数据目录/注册表键/快捷方式名统一用它
+    std::string appName;       // 主 exe 程序名（不含 .exe）：主程序定位/杀进程/立即运行
     std::string appId;         // 产品唯一 id（如 com.comp.myapp），随包与 install.manifest.json 传递
     std::string publisher;     // 发布者/公司名（同时用作版本资源 CompanyName）
     std::string version;       // 版本号，每次发版必改（可含 -beta 等预发布后缀）
-    std::string defaultDir;    // GUI 默认安装目录，支持 %ProgramFiles% 等环境变量
-    std::string icon;          // 安装器 exe 图标，路径相对 --config 目录解析
+    std::string defaultDir = "%ProgramFiles%";  // GUI 默认安装目录，支持环境变量
     std::string copyright;     // 可空；缺省时引擎用 publisher + 构建年份生成
-
-    AppConfig()
-        : defaultDir("%ProgramFiles%") {}
 };
 
 // ── package —— 打包基础参数 ──────────────────────────────────────────────
@@ -118,9 +115,10 @@ struct PackageHooks {
     std::vector<HookScript> postInstall;
 };
 
-// 根配置：仅三块。
+// 根配置：身份 + 打包参数 + 钩子（+打包期独有的图标路径）。
 struct PackagerConfiguration {
-    AppConfig app;
+    PackageIdentity app;       // yaml app 节（三层共用的身份结构体）
+    std::string appIcon;       // yaml app.icon：安装器 exe 图标，打包期独有，不进包元数据
     PackageConfig package;
     PackageHooks hooks;
 };

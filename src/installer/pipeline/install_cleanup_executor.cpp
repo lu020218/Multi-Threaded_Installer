@@ -20,18 +20,18 @@ bool IsCancellationRequested(const InstallServiceOptions& options) {
     return options.cancellationCallback && options.cancellationCallback();
 }
 
-std::vector<std::string> ResolveSelectedPayloadTargets(const ExtendedInstallationMetadata& metadata,
+std::vector<std::string> ResolveSelectedPayloadTargets(const PackageManifest& metadata,
                                                        const InstallExecutionPlan& plan,
                                                        InstallerPathResolver& pathResolver) {
     std::unordered_set<std::string> selected(plan.selectedEmbeddedFolders.begin(),
                                              plan.selectedEmbeddedFolders.end());
     std::vector<std::string> targets;
     std::unordered_set<std::string> seen;
-    for (const auto& mapping : metadata.extendedPayloadMappings) {
+    for (const auto& mapping : metadata.payload.folders) {
         if (selected.find(mapping.folderId) == selected.end()) {
             continue;
         }
-        std::string target = mapping.target.empty() ? mapping.targetPath : mapping.target;
+        std::string target = mapping.target;
         const std::string token = "%InstallDir%";
         size_t pos = 0;
         while ((pos = target.find(token, pos)) != std::string::npos) {
@@ -73,21 +73,21 @@ std::vector<std::string> ResolveSelectedPayloadTargets(const ExtendedInstallatio
 // the extractor can skip unchanged files instead of them being deleted and
 // rewritten. Folders without a per-file index contribute nothing (fail-safe:
 // their files fall back to the normal delete-then-rewrite path).
-std::vector<std::string> ResolveSelectedPayloadFileTargets(const ExtendedInstallationMetadata& metadata,
+std::vector<std::string> ResolveSelectedPayloadFileTargets(const PackageManifest& metadata,
                                                            const InstallExecutionPlan& plan,
                                                            InstallerPathResolver& pathResolver) {
     std::unordered_set<std::string> selected(plan.selectedEmbeddedFolders.begin(),
                                              plan.selectedEmbeddedFolders.end());
     std::vector<std::string> files;
     std::unordered_set<std::string> seen;
-    for (const auto& mapping : metadata.extendedPayloadMappings) {
+    for (const auto& mapping : metadata.payload.folders) {
         if (selected.find(mapping.folderId) == selected.end()) {
             continue;
         }
         if (mapping.fileIndex.empty()) {
             continue;
         }
-        std::string target = mapping.target.empty() ? mapping.targetPath : mapping.target;
+        std::string target = mapping.target;
         const std::string token = "%InstallDir%";
         size_t pos = 0;
         while ((pos = target.find(token, pos)) != std::string::npos) {
@@ -118,7 +118,7 @@ std::vector<std::string> ResolveSelectedPayloadFileTargets(const ExtendedInstall
 
 // [旧版本-清理] 总入口：发现存在旧版本（plan.hasPreviousInstall）时，先删旧文件，
 // 再清理旧版本的系统痕迹（注册表/开机自启/快捷方式/系统卸载入口，经迁移表）。
-bool ExecuteInstallCleanup(const ExtendedInstallationMetadata& metadata,
+bool ExecuteInstallCleanup(const PackageManifest& metadata,
                            const InstallExecutionPlan& plan,
                            const InstallServiceOptions& options,
                            InstallerPathResolver& pathResolver,

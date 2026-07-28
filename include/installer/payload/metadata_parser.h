@@ -5,7 +5,7 @@
 
 namespace MultiThreadedInstaller {
 
-/// 从安装器自身（内嵌）或外部数据包读取并反序列化运行期元数据 ExtendedInstallationMetadata。
+/// 从安装器自身（内嵌）或外部数据包读取并反序列化运行期元数据 PackageManifest。
 class MetadataParser {
 public:
     MetadataParser() = default;
@@ -13,13 +13,13 @@ public:
 
     /// 解析内嵌元数据。deferFileIndex=true 时跳过逐文件 fileIndex（仅填文件夹/标量元数据），
     /// 供 GUI 启动关键路径加速；安装 worker 会以 deferFileIndex=false 重解析以取得 fileIndex。
-    ExtendedInstallationMetadata parseExtendedEmbeddedMetadata(bool deferFileIndex = false);
+    PackageManifest parseExtendedEmbeddedMetadata(bool deferFileIndex = false);
 
     /// 校验元数据（委托 package_manifest_validator）。无效返回 false 并记日志。
-    bool validateMetadata(const ExtendedInstallationMetadata& metadata);
+    bool validateMetadata(const PackageManifest& metadata);
 
     /// 把一段元数据字节反序列化为运行期元数据（含 manifest 解码 + 校验）。
-    ExtendedInstallationMetadata deserializeExtendedMetadata(const std::vector<uint8_t>& data,
+    PackageManifest deserializeExtendedMetadata(const std::vector<uint8_t>& data,
                                                              bool deferFileIndex = false);
 
     /// 设置外部数据包路径（为空表示读当前 exe 内嵌数据）。

@@ -103,18 +103,4 @@ bool ValidatePackageManifest(const PackageManifest& manifest, std::string& error
     return true;
 }
 
-bool ValidateExtendedInstallationMetadata(const ExtendedInstallationMetadata& metadata,
-                                          std::string& error) {
-    PackageManifest manifest = PackageManifestFromExtendedMetadata(metadata);
-    if (!ValidatePackageManifest(manifest, error)) {
-        return false;
-    }
-    if (metadata.extendedPayloadMappings.size() != metadata.folderCount ||
-        metadata.payloadMappings.size() != metadata.folderCount) {
-        error = "Package manifest folder count mismatch.";
-        return false;
-    }
-    return true;
-}
-
 } // namespace MultiThreadedInstaller

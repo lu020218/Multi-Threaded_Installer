@@ -32,7 +32,7 @@ struct InstallExecutionOutput {
 
 /// 解压执行阶段：把（全部）payload 解压落地到安装目录，填充 InstallExecutionOutput。
 /// 单产品单载荷下不再有组件执行；原"额外动作"由 hooks 承担（在 install_service 层调度）。
-bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
+bool ExecuteInstallExecution(const PackageManifest& metadata,
                              MetadataParser& parser,
                              const InstallExecutionPlan& plan,
                              const InstallServiceOptions& options,

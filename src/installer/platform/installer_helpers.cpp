@@ -532,7 +532,7 @@ bool isRunningAsAdmin() {
 }
 
 bool requiresAdminForInstall(const std::string& installPath,
-                             const ExtendedInstallationMetadata& metadata,
+                             const PackageManifest& metadata,
                              InstallerPathResolver& resolver) {
     // 引擎写死要求管理员（需求 §5：requireAdmin 默认 true，统一写 HKLM 与系统卸载入口）。
     (void)installPath;

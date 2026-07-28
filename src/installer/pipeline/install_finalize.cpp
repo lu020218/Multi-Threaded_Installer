@@ -83,7 +83,7 @@ void AppendNamedCleanupEntry(std::vector<NamedCleanupEntry>& entries, const std:
 // 说明：产品状态注册表（HKLM\Software\<product> 的 Version/InstallDir/InstallState 等）已由
 // ApplyInstallState 写死处理、系统卸载入口由 WriteConfiguredSystemUninstallEntries 处理，二者
 // 不需在此重复；此处仅放“本产品额外需要写死的注册表项”。
-std::vector<RegistryEntry> BuildPostInstallRegistryEntries(const ExtendedInstallationMetadata& metadata) {
+std::vector<RegistryEntry> BuildPostInstallRegistryEntries(const PackageManifest& metadata) {
     std::vector<RegistryEntry> entries;
     (void)metadata;
 
@@ -91,7 +91,7 @@ std::vector<RegistryEntry> BuildPostInstallRegistryEntries(const ExtendedInstall
     // 注意：在此写入的每一项都会被记入卸载账本(manifest cleanup.registry)，卸载时按 path+key
     //       对称删除，不会残留。
     //   RegistryEntry e;
-    //   e.path  = "HKLM\\Software\\" + metadata.appProductName;  // 注册表键路径
+    //   e.path  = "HKLM\\Software\\" + metadata.identity.productName;  // 注册表键路径
     //   e.key   = "DataDir";                                     // 值名
     //   e.value = "%InstallDir%";                                // 值（支持 %InstallDir% 等占位符）
     //   e.type  = RegistryValueType::EXPAND_STRING;              // STRING / DWORD / EXPAND_STRING
@@ -102,7 +102,7 @@ std::vector<RegistryEntry> BuildPostInstallRegistryEntries(const ExtendedInstall
 
 // [安装收尾-系统卸载入口] 实现：系统卸载入口写死（需求 §5）：displayName=产品名、
 // publisher=publisher、scope=machine（perMachine=true），写入「程序和功能」列表。
-void WriteConfiguredSystemUninstallEntries(const ExtendedInstallationMetadata& metadata,
+void WriteConfiguredSystemUninstallEntries(const PackageManifest& metadata,
                                            const InstallExecutionPlan& plan,
                                            const std::string& desktopShortcutDisplayName,
                                            const InstallServiceResult& result,
@@ -114,14 +114,14 @@ void WriteConfiguredSystemUninstallEntries(const ExtendedInstallationMetadata& m
     if (result.uninstallPath.empty()) {
         return;
     }
-    const bool wroteAny = writeSystemUninstallEntry(metadata.appProductName,
-                                                    metadata.appVersion,
+    const bool wroteAny = writeSystemUninstallEntry(metadata.identity.productName,
+                                                    metadata.identity.version,
                                                     result.installRootPath,
                                                     result.uninstallPath,
-                                                    metadata.appPublisher);
+                                                    metadata.identity.publisher);
     if (wroteAny) {
         UninstallEntryCleanup entry;
-        entry.name = metadata.appProductName;
+        entry.name = metadata.identity.productName;
         manifestCleanup.uninstallEntries.push_back(std::move(entry));
     } else {
         reporter.EmitMessage(InstallServiceEventType::Warning,
@@ -137,16 +137,16 @@ void WriteConfiguredSystemUninstallEntries(const ExtendedInstallationMetadata& m
 #endif
 }
 
-InstallStateContext BuildInstallStateContext(const ExtendedInstallationMetadata& metadata,
+InstallStateContext BuildInstallStateContext(const PackageManifest& metadata,
                                              const InstallExecutionPlan& plan,
                                              const InstallServiceOptions& options,
                                              const std::string& installDir,
                                              const std::string& state) {
     InstallStateContext context;
     context.installDir = installDir;
-    context.version = metadata.appVersion;
-    context.appName = metadata.appProductName;
-    context.appId = plan.effectiveAppId.empty() ? metadata.appProductName : plan.effectiveAppId;
+    context.version = metadata.identity.version;
+    context.appName = metadata.identity.productName;
+    context.appId = plan.effectiveAppId.empty() ? metadata.identity.productName : plan.effectiveAppId;
     context.installSource = getCurrentExecutablePath();
     context.state = state;
     context.userName = GetCurrentUserNameForInstallState();
@@ -159,17 +159,17 @@ InstallStateContext BuildInstallStateContext(const ExtendedInstallationMetadata&
 // Resolves the per-file content fingerprints of the newly installed payload to
 // absolute target paths so they can be recorded in install.manifest.json. The
 // next upgrade uses these for the zero-read skip decision (Scheme A).
-InstalledFileFingerprintMap BuildInstalledFileFingerprints(const ExtendedInstallationMetadata& metadata,
+InstalledFileFingerprintMap BuildInstalledFileFingerprints(const PackageManifest& metadata,
                                                            const InstallExecutionPlan& plan,
                                                            InstallerPathResolver& pathResolver) {
     InstalledFileFingerprintMap fingerprints;
     std::unordered_set<std::string> selected(plan.selectedEmbeddedFolders.begin(),
                                              plan.selectedEmbeddedFolders.end());
-    for (const auto& mapping : metadata.extendedPayloadMappings) {
+    for (const auto& mapping : metadata.payload.folders) {
         if (selected.find(mapping.folderId) == selected.end() || mapping.fileIndex.empty()) {
             continue;
         }
-        std::string target = mapping.target.empty() ? mapping.targetPath : mapping.target;
+        std::string target = mapping.target;
         const std::string token = "%InstallDir%";
         size_t pos = 0;
         while ((pos = target.find(token, pos)) != std::string::npos) {
@@ -201,7 +201,7 @@ InstalledFileFingerprintMap BuildInstalledFileFingerprints(const ExtendedInstall
 
 } // namespace
 
-bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
+bool ExecuteInstallFinalization(const PackageManifest& metadata,
                                 const InstallExecutionPlan& plan,
                                 const InstallServiceOptions& options,
                                 InstallerPathResolver& pathResolver,
@@ -266,7 +266,7 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
         }
 
         std::filesystem::path exePath =
-            findPrimaryExecutable(PathFromUtf8(result.installRootPath), metadata.appName);
+            findPrimaryExecutable(PathFromUtf8(result.installRootPath), metadata.identity.appName);
         if ((effectiveAutoStartup || effectiveDesktopIcons) && exePath.empty()) {
             reporter.EmitMessage(InstallServiceEventType::Warning,
                                  "No executable found for installAutoStartup/installDesktopIcon");
@@ -274,9 +274,9 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
             // [安装收尾-开机自启] 设置开机自启动（写 HKCU\...\Run\<产品名> = 主 exe），
             // 并把该项记入 manifest 的 startup 清理账本，卸载时据此移除。
             if (effectiveAutoStartup) {
-                if (setAutoStartup(metadata.appProductName, exePath)) {
+                if (setAutoStartup(metadata.identity.productName, exePath)) {
                     reporter.EmitMessage(InstallServiceEventType::Info, "installAutoStartup enabled");
-                    AppendNamedCleanupEntry(manifestCleanup.startup, metadata.appProductName);
+                    AppendNamedCleanupEntry(manifestCleanup.startup, metadata.identity.productName);
                 } else {
                     reporter.EmitMessage(InstallServiceEventType::Warning,
                                          "Failed to enable installAutoStartup");
@@ -296,7 +296,7 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
                                          "Failed to create desktop icon");
                 }
                 // [安装收尾-开始菜单快捷方式] 在开始菜单创建同名快捷方式。
-                if (createStartMenuShortcut(desktopShortcutDisplayName, exePath, metadata.appProductName)) {
+                if (createStartMenuShortcut(desktopShortcutDisplayName, exePath, metadata.identity.productName)) {
                     reporter.EmitMessage(InstallServiceEventType::Info, "Start menu shortcut created");
                     AppendNamedCleanupEntry(manifestCleanup.shortcuts, desktopShortcutDisplayName);
                 } else {
@@ -359,11 +359,11 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
         const InstalledFileFingerprintMap fileFingerprints =
             BuildInstalledFileFingerprints(metadata, plan, pathResolver);
         if (!writeManifest(Utf8FromPath(localPath),
-                           metadata.appProductName,
-                           metadata.appName,
-                           metadata.appId,
-                           metadata.appVersion,
-                           metadata.appPublisher,
+                           metadata.identity.productName,
+                           metadata.identity.appName,
+                           metadata.identity.appId,
+                           metadata.identity.version,
+                           metadata.identity.publisher,
                            result.installRootPath,
                            result.installedRoots,
                            manifestCleanup,
@@ -386,8 +386,8 @@ bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
     if (options.applyRegistryAfterInstall && !effectiveRegistry.empty()) {
         applyRegistryEntries(effectiveRegistry,
                              result.installRootPath,
-                             metadata.appVersion,
-                             metadata.appProductName);
+                             metadata.identity.version,
+                             metadata.identity.productName);
     }
 
     advanceFinalize(0.90f, "Registry finalization complete");

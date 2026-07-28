@@ -98,7 +98,7 @@ public:
     
 
     void SetInstallConfig(const InstallConfig& config);
-    void SetInstallMetadata(const ExtendedInstallationMetadata& metadata);
+    void SetInstallMetadata(const PackageManifest& metadata);
     void SetUninstallContext(const UninstallContext& context);
     void SetUninstallManifestPath(const std::string& manifestPath);
     void SetAutoStartInstallRequest(const std::wstring& installPath,
@@ -144,7 +144,7 @@ private:
     int m_baseClientWidth;                ///< 基准客户区宽度。
     int m_expandedClientHeight;           ///< 展开"更多"后的高度。
     int m_baseWindowWidth;                ///< 基准窗口宽度。
-    ExtendedInstallationMetadata m_installMetadata;  ///< 运行期元数据。
+    PackageManifest m_installMetadata;  ///< 运行期元数据。
     bool m_installMetadataLoaded;         ///< 元数据是否已加载。
     std::unordered_map<std::string, std::wstring> m_uiLinks;  ///< 控件名→外链 URL。
     UninstallContext m_uninstallContext;  ///< 卸载上下文（卸载模式用）。

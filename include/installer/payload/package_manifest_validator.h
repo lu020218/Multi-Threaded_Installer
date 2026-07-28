@@ -10,7 +10,5 @@ namespace MultiThreadedInstaller {
 /// hook 配置自洽。失败返回 false 并填充 error。
 bool ValidatePackageManifest(const PackageManifest& manifest, std::string& error);
 /// 校验运行期元数据：先转成 manifest 校验，再核对 folderCount 与载荷数组一致。
-bool ValidateExtendedInstallationMetadata(const ExtendedInstallationMetadata& metadata,
-                                          std::string& error);
 
 } // namespace MultiThreadedInstaller

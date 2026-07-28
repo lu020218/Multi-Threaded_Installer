@@ -27,7 +27,7 @@ float Clamp01(float value) {
 
 // 单产品单载荷：执行期只负责把全部 payload 解压到安装目录。原 local/download 组件的
 // "额外安装动作"能力已由 hooks（install_service 在解压前后调度）替代，不再在此处理。
-bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
+bool ExecuteInstallExecution(const PackageManifest& metadata,
                              MetadataParser& parser,
                              const InstallExecutionPlan& plan,
                              const InstallServiceOptions& options,
@@ -45,7 +45,7 @@ bool ExecuteInstallExecution(const ExtendedInstallationMetadata& metadata,
     std::unordered_map<std::string, float> folderProgress;
     folderSizes.reserve(plan.selectedEmbeddedFolders.size());
     folderProgress.reserve(plan.selectedEmbeddedFolders.size());
-    for (const auto& mapping : metadata.extendedPayloadMappings) {
+    for (const auto& mapping : metadata.payload.folders) {
         folderSizes[mapping.folderName] = mapping.originalSize;
         folderProgress[mapping.folderName] = 0.0f;
     }

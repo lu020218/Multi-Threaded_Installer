@@ -494,7 +494,7 @@ int main(int argc, char* argv[]) {
     // 安装器图标路径（此处只解析绝对路径，实际写入放到下面的「单会话」里统一做）。
     std::string iconForInstaller;  // 空 = 不改图标
     {
-        const std::string icon = config.app.icon;
+        const std::string icon = config.appIcon;
         if (!icon.empty()) {
             fs::path iconPath = PathFromUtf8(icon);
             if (!iconPath.is_absolute()) {

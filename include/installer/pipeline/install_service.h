@@ -105,7 +105,7 @@ struct InstallServiceResult {
 /// 安装主流程编排入口：预检 → 清理旧装 → 写"installing"状态 → preInstall hook →
 /// 解压 → finalize（注册表/快捷方式/卸载入口/manifest）→ postInstall hook。
 /// 任一致命失败走 markFailed（postInstall abort 还会回滚已装产物）。全程通过 callbacks 上报。
-InstallServiceResult ExecuteInstallService(const ExtendedInstallationMetadata& metadata,
+InstallServiceResult ExecuteInstallService(const PackageManifest& metadata,
                                            MetadataParser& parser,
                                            InstallerPathResolver& pathResolver,
                                            const InstallServiceOptions& options,

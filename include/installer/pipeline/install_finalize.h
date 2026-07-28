@@ -20,7 +20,7 @@ class InstallerPathResolver;
 /// 额外注册表写入项由本函数内写死（BuildPostInstallRegistryEntries），不再外部透传。
 /// @param result 入参带解压结果，出参补全 uninstallPath/installedFiles 等。
 /// @return 成功返回 true。
-bool ExecuteInstallFinalization(const ExtendedInstallationMetadata& metadata,
+bool ExecuteInstallFinalization(const PackageManifest& metadata,
                                 const InstallExecutionPlan& plan,
                                 const InstallServiceOptions& options,
                                 InstallerPathResolver& pathResolver,

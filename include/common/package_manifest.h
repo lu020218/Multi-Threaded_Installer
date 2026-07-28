@@ -38,24 +38,7 @@ struct PackagePayloadManifest {
     std::vector<PackagePayloadFolder> folders;   ///< 各 folder 载荷。
 };
 
-// 一个 pre/post 钩子，脚本内容在打包期内嵌。
-struct PackageHook {
-    bool present = false;                ///< 该 hook 是否配置。
-    std::string scriptName;              ///< 脚本名（仅日志用）。
-    std::vector<uint8_t> content;        ///< 内嵌的脚本字节，运行期临时释放后执行。
-    std::string args;                    ///< 本次构建特有的额外参数。
-    HookOnFailure onFailure = HookOnFailure::ABORT;  ///< 失败处理：中止回滚 / 记日志继续。
-    uint32_t timeoutSec = 300;           ///< 超时上限（秒），到点 kill 按失败处理。
-    std::vector<HookAuxFile> auxFiles;   ///< 主脚本同目录的兄弟文件（递归内嵌），随主脚本一同释放。
-    bool keep = false;                   ///< 执行后是否把脚本+兄弟文件保留到 keepDir。
-    std::string keepDir;                 ///< 保留目标目录（支持 %INSTALL_DIR%/%VERSION%/系统环境变量）。
-};
-
-/// 安装前/后两个固定钩子点；每个钩子点可挂多个脚本，按声明顺序依次执行。
-struct PackageHooks {
-    std::vector<PackageHook> preInstall;   ///< 解压前依次执行。
-    std::vector<PackageHook> postInstall;  ///< finalize 后依次执行。
-};
+// 钩子结构（HookScript/PackageHooks）已收敛到 config_types.h，三层共用。
 
 /// 构建期 → 运行期的唯一桥（精简后）：身份 + 载荷 + 钩子 + manifest 版本号。
 struct PackageManifest {

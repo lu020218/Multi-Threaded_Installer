@@ -1,37 +1,8 @@
 #include "common/package_manifest.h"
 
 namespace MultiThreadedInstaller {
-namespace {
 
-PackageHook HookFromScript(const HookScript& script) {
-    PackageHook hook;
-    hook.present = script.present;
-    hook.scriptName = script.scriptName;
-    hook.content = script.content;
-    hook.args = script.args;
-    hook.onFailure = script.onFailure == 1 ? HookOnFailure::CONTINUE : HookOnFailure::ABORT;
-    hook.timeoutSec = script.timeoutSec;
-    hook.auxFiles = script.auxFiles;
-    hook.keep = script.keep;
-    hook.keepDir = script.keepDir;
-    return hook;
-}
-
-HookScript ScriptFromHook(const PackageHook& hook) {
-    HookScript script;
-    script.present = hook.present;
-    script.scriptName = hook.scriptName;
-    script.content = hook.content;
-    script.args = hook.args;
-    script.onFailure = hook.onFailure == HookOnFailure::CONTINUE ? 1 : 0;
-    script.timeoutSec = hook.timeoutSec;
-    script.auxFiles = hook.auxFiles;
-    script.keep = hook.keep;
-    script.keepDir = hook.keepDir;
-    return script;
-}
-
-} // namespace
+// 钩子三层共用 HookScript 后，桥接不再需要逐字段转换，直接整 vector 拷贝。
 
 PackageManifest PackageManifestFromExtendedMetadata(const ExtendedInstallationMetadata& metadata) {
     PackageManifest manifest;
@@ -62,14 +33,8 @@ PackageManifest PackageManifestFromExtendedMetadata(const ExtendedInstallationMe
         manifest.payload.folders.push_back(std::move(folder));
     }
 
-    manifest.hooks.preInstall.reserve(metadata.preInstall.size());
-    for (const auto& script : metadata.preInstall) {
-        manifest.hooks.preInstall.push_back(HookFromScript(script));
-    }
-    manifest.hooks.postInstall.reserve(metadata.postInstall.size());
-    for (const auto& script : metadata.postInstall) {
-        manifest.hooks.postInstall.push_back(HookFromScript(script));
-    }
+    manifest.hooks.preInstall = metadata.preInstall;
+    manifest.hooks.postInstall = metadata.postInstall;
     return manifest;
 }
 
@@ -117,14 +82,8 @@ ExtendedInstallationMetadata PackageManifestToExtendedMetadata(const PackageMani
         metadata.payloadMappings.push_back(std::move(base));
     }
 
-    metadata.preInstall.reserve(manifest.hooks.preInstall.size());
-    for (const auto& hook : manifest.hooks.preInstall) {
-        metadata.preInstall.push_back(ScriptFromHook(hook));
-    }
-    metadata.postInstall.reserve(manifest.hooks.postInstall.size());
-    for (const auto& hook : manifest.hooks.postInstall) {
-        metadata.postInstall.push_back(ScriptFromHook(hook));
-    }
+    metadata.preInstall = manifest.hooks.preInstall;
+    metadata.postInstall = manifest.hooks.postInstall;
     return metadata;
 }
 

@@ -24,10 +24,8 @@
 namespace MultiThreadedInstaller {
 namespace {
 
-constexpr uint8_t kOnFailureContinue = 1;  // HookScript::onFailure: 0=abort, 1=continue
-
 HookOutcome FailOutcome(const HookScript& hook) {
-    return hook.onFailure == kOnFailureContinue ? HookOutcome::FailedContinue
+    return hook.onFailure == HookOnFailure::CONTINUE ? HookOutcome::FailedContinue
                                                 : HookOutcome::FailedAbort;
 }
 

@@ -82,39 +82,47 @@ struct PackageConfig {
     std::vector<LayoutFolderTarget> layout;
 };
 
-// ── hooks —— 安装前/后脚本 ───────────────────────────────────────────────
+// ── hooks —— 安装前/后脚本（yaml 声明 / 包内嵌 / 运行期 三层共用同一结构体）────
 enum class HookOnFailure {
     ABORT,     // 中止安装并回滚
     CONTINUE   // 记录日志后继续
 };
 
-struct HookConfig {
-    std::string path;        // 脚本路径，相对 --config 目录解析
-    std::string args;        // 本次构建特有的额外参数，可为空
-    HookOnFailure onFailure; // 失败处理
-    uint32_t timeoutSec;     // 超时上限（秒）
-    bool present;            // 该 hook 是否在 YAML 中配置
-    bool keep;              // 执行后是否保留脚本+兄弟文件到 keepDir（默认 false=用完即删）
-    std::string keepDir;    // 保留目标目录（keep=true 时必填，支持 %INSTALL_DIR%/%VERSION%/系统环境变量）
-
-    HookConfig()
-        : onFailure(HookOnFailure::ABORT),
-          timeoutSec(300),
-          present(false),
-          keep(false) {}
+// 与主钩子脚本同目录的「兄弟文件」（脚本/数据等），随包内嵌，运行期与主脚本释放到
+// 同一临时目录，使主脚本可 `call common.bat`、`.\sub\helper.ps1` 或读取同目录数据文件。
+struct HookAuxFile {
+    std::string relativePath;      // 相对主脚本所在目录（generic '/'），如 "common.bat"、"sub/helper.ps1"
+    std::vector<uint8_t> content;  // 打包期读入内嵌的文件字节
 };
 
-// preInstall / postInstall 均支持配置多个脚本，按声明顺序依次执行。
-struct HooksConfig {
-    std::vector<HookConfig> preInstall;
-    std::vector<HookConfig> postInstall;
+// 一个 pre/post 钩子脚本。同一对象贯穿三个阶段：
+//   yaml 解析 → 填 sourcePath/args/onFailure/timeoutSec/keep/keepDir；
+//   打包内嵌 → 就地读入 content/auxFiles、置 present/scriptName；
+//   运行期   → hook_runner 释放 content 到临时目录执行（sourcePath 仅留作日志）。
+struct HookScript {
+    bool present = false;
+    std::string sourcePath;          // yaml 声明的脚本路径（相对 --config 目录；打包期用，运行期仅日志）
+    std::string scriptName;          // 脚本文件名，如 pre_install.bat（日志/释放命名用）
+    std::vector<uint8_t> content;    // 打包期读入内嵌的脚本字节
+    std::string args;                // 本次构建特有的额外参数
+    HookOnFailure onFailure = HookOnFailure::ABORT;  // 失败处理
+    uint32_t timeoutSec = 300;       // 超时上限（秒），到点 kill 按失败处理
+    std::vector<HookAuxFile> auxFiles;  // 主脚本同目录的兄弟文件（递归内嵌），随主脚本一同释放
+    bool keep = false;               // 执行后是否把脚本+兄弟文件保留到 keepDir（默认用完即删）
+    std::string keepDir;             // 保留目标目录（keep=true 必填，支持 %INSTALL_DIR%/%VERSION%/系统环境变量）
+};
+
+// 安装前/后两个固定钩子点；每点可挂多个脚本，按声明顺序依次执行。三层共用。
+struct PackageHooks {
+    std::vector<HookScript> preInstall;
+    std::vector<HookScript> postInstall;
 };
 
 // 根配置：仅三块。
 struct PackagerConfiguration {
     AppConfig app;
     PackageConfig package;
-    HooksConfig hooks;
+    PackageHooks hooks;
 };
 
 } // namespace MultiThreadedInstaller

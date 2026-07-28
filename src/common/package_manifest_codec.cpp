@@ -279,7 +279,7 @@ void BytesFromJson(const json& value, const char* key, std::vector<uint8_t>& out
     }
 }
 
-json HookToJson(const PackageHook& hook) {
+json HookToJson(const HookScript& hook) {
     // 脚本内容以字节数组形式内嵌（脚本通常很小）。
     json auxFiles = json::array();
     for (const auto& aux : hook.auxFiles) {
@@ -301,13 +301,14 @@ json HookToJson(const PackageHook& hook) {
     };
 }
 
-PackageHook HookFromJson(const json& value) {
-    PackageHook hook;
+HookScript HookFromJson(const json& value) {
+    HookScript hook;
     hook.present = value.value("present", false);
     hook.scriptName = value.value("scriptName", "");
     BytesFromJson(value, "content", hook.content);
     hook.args = value.value("args", "");
-    hook.onFailure = static_cast<HookOnFailure>(value.value("onFailure", 0));
+    hook.onFailure = value.value("onFailure", 0) == 1 ? HookOnFailure::CONTINUE
+                                                       : HookOnFailure::ABORT;
     hook.timeoutSec = value.value("timeoutSec", 300u);
     if (value.contains("auxFiles") && value["auxFiles"].is_array()) {
         hook.auxFiles.reserve(value["auxFiles"].size());
@@ -550,7 +551,7 @@ bool DeserializePackageManifest(const std::vector<uint8_t>& input,
 
     // preInstall / postInstall 为脚本数组（按顺序执行）。向后兼容单对象写法：
     // 若该字段是对象而非数组，按单元素列表解析。
-    auto parseHookList = [](const json& node, std::vector<PackageHook>& out) {
+    auto parseHookList = [](const json& node, std::vector<HookScript>& out) {
         if (node.is_array()) {
             out.reserve(node.size());
             for (const auto& item : node) {

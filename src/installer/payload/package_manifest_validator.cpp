@@ -17,7 +17,7 @@ bool IsValidHookOnFailure(HookOnFailure onFailure) {
            onFailure == HookOnFailure::CONTINUE;
 }
 
-bool ValidateHook(const PackageHook& hook, std::string& error) {
+bool ValidateHook(const HookScript& hook, std::string& error) {
     if (!hook.present) {
         return true;
     }

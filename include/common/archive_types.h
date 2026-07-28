@@ -95,28 +95,7 @@ struct InstallationMetadata {
     InstallationMetadata() : version(1), folderCount(0), totalPayloadCompressedSize(0) {}
 };
 
-// 与主钩子脚本同目录的「兄弟文件」（脚本/数据等），随包内嵌，运行期与主脚本释放到
-// 同一临时目录，使主脚本可 `call common.bat`、`.\sub\helper.ps1` 或读取同目录数据文件。
-struct HookAuxFile {
-    std::string relativePath;        // 相对主脚本所在目录（generic '/'），如 "common.bat"、"sub/helper.ps1"
-    std::vector<uint8_t> content;    // 打包期读入内嵌的文件字节
-};
-
-// 一个内嵌的 pre/post 钩子脚本，随安装器一同打包，运行期临时释放后执行。
-struct HookScript {
-    bool present = false;
-    std::string scriptName;          // 仅日志用，如 pre_install.bat
-    std::vector<uint8_t> content;    // 打包期读入内嵌的脚本字节
-    std::string args;                // 本次构建特有参数
-    uint8_t onFailure = 0;           // 0 = abort（中止回滚），1 = continue（记日志继续）
-    uint32_t timeoutSec = 300;       // 超时上限（秒）
-    // 主脚本所在目录内的其余文件（递归内嵌），运行期与主脚本释放到同一临时目录。
-    std::vector<HookAuxFile> auxFiles;
-    // 执行后保留：true 时把主脚本+兄弟文件拷贝到 keepDir（无论脚本成功失败都拷贝）。
-    bool keep = false;
-    // 保留目标目录，支持 %INSTALL_DIR% / %VERSION% 与系统环境变量（如 %INSTALL_DIR%\scripts）。
-    std::string keepDir;
-};
+// HookAuxFile / HookScript / PackageHooks 已收敛到 config_types.h（三层共用）。
 
 // 构建期 → 运行期唯一的桥，收窄为：身份 + 载荷 + 钩子。
 // 其余安装行为默认值、清理规则、跨版本兼容等全部写死/实现在引擎内。

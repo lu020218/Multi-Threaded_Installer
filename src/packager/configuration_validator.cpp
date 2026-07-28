@@ -28,19 +28,19 @@ bool HasIllegalNameChar(const std::string& name) {
     return false;
 }
 
-void ValidateHook(const HookConfig& hook,
+void ValidateHook(const HookScript& hook,
                   const std::string& label,
                   const std::string& configDirectory,
                   ConfigurationValidator::ValidationResult& result) {
     if (!hook.present) {
         return;
     }
-    if (hook.path.empty()) {
+    if (hook.sourcePath.empty()) {
         result.errors.push_back("ERROR: " + label + ".path is required");
         result.isValid = false;
         return;
     }
-    fs::path scriptPath = PathFromUtf8(hook.path);
+    fs::path scriptPath = PathFromUtf8(hook.sourcePath);
     if (!scriptPath.is_absolute()) {
         scriptPath = PathFromUtf8(configDirectory) / scriptPath;
     }

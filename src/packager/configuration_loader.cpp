@@ -160,13 +160,13 @@ bool ParseOnFailureValue(const std::string& raw, HookOnFailure& out, std::string
 }
 
 // 解析单个 hook 对象（path/args/onFailure/timeoutSec）。path 支持 .bat/.cmd/.ps1。
-bool ParseHookEntry(const json& hook, const std::string& label, HookConfig& out,
+bool ParseHookEntry(const json& hook, const std::string& label, HookScript& out,
                     std::string& lastError) {
     if (!hook.is_object()) {
         lastError = "Invalid '" + label + "': expected a mapping with at least 'path'";
         return false;
     }
-    if (!GetRequiredString(hook, "path", out.path, lastError)) {
+    if (!GetRequiredString(hook, "path", out.sourcePath, lastError)) {
         lastError = "Missing required field '" + label + ".path'";
         return false;
     }
@@ -205,7 +205,7 @@ bool ParseHookEntry(const json& hook, const std::string& label, HookConfig& out,
 
 // 解析一个 hook 列表：hooks.<key> 可写成数组（多个脚本，按序执行），
 // 也兼容单个对象（按单元素列表处理）。整段缺省即无脚本。
-bool ParseHookList(const json& hooks, const char* key, std::vector<HookConfig>& out,
+bool ParseHookList(const json& hooks, const char* key, std::vector<HookScript>& out,
                    std::string& lastError) {
     if (!hooks.contains(key) || hooks[key].is_null()) {
         return true;  // 该 hook 点可选
@@ -215,7 +215,7 @@ bool ParseHookList(const json& hooks, const char* key, std::vector<HookConfig>& 
     if (node.is_array()) {
         out.reserve(node.size());
         for (size_t i = 0; i < node.size(); ++i) {
-            HookConfig entry;
+            HookScript entry;
             if (!ParseHookEntry(node[i], label + "[" + std::to_string(i) + "]", entry, lastError)) {
                 return false;
             }
@@ -224,7 +224,7 @@ bool ParseHookList(const json& hooks, const char* key, std::vector<HookConfig>& 
         return true;
     }
     // 兼容单对象写法。
-    HookConfig entry;
+    HookScript entry;
     if (!ParseHookEntry(node, label, entry, lastError)) {
         return false;
     }
@@ -232,7 +232,7 @@ bool ParseHookList(const json& hooks, const char* key, std::vector<HookConfig>& 
     return true;
 }
 
-bool ParseHooksConfig(const json& root, HooksConfig& out, std::string& lastError) {
+bool ParseHooksConfig(const json& root, PackageHooks& out, std::string& lastError) {
     json hooks;
     if (!GetOptionalObject(root, "hooks", hooks)) {
         return true;  // hooks 整块可选

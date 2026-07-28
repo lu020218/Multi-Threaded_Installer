@@ -48,7 +48,7 @@ bool ReadFileBytes(const fs::path& path, std::vector<uint8_t>& out) {
 
 // 内嵌主脚本所在目录里除主脚本外的全部文件（递归，保留相对结构），作为兄弟文件。
 // 运行期会与主脚本释放到同一临时目录，使主脚本可直接 call/调用它们。
-void EmbedSiblingFiles(const fs::path& scriptPath, PackageHook& hook) {
+void EmbedSiblingFiles(const fs::path& scriptPath, HookScript& hook) {
     const fs::path scriptDir = scriptPath.parent_path();
     if (scriptDir.empty()) {
         return;
@@ -89,13 +89,13 @@ void EmbedSiblingFiles(const fs::path& scriptPath, PackageHook& hook) {
     }
 }
 
-// 读取 hook 脚本字节并内嵌进 manifest。
-PackageHook BuildHook(const HookConfig& cfg, const std::string& configDirectory) {
-    PackageHook hook;
+// 读取 hook 脚本字节并内嵌进 manifest（同一 HookScript 对象由声明形态就地长成内嵌形态）。
+HookScript BuildHook(const HookScript& cfg, const std::string& configDirectory) {
+    HookScript hook;
     if (!cfg.present) {
         return hook;
     }
-    fs::path scriptPath = PathFromUtf8(cfg.path);
+    fs::path scriptPath = PathFromUtf8(cfg.sourcePath);
     if (!scriptPath.is_absolute()) {
         scriptPath = PathFromUtf8(configDirectory) / scriptPath;
     }
@@ -113,14 +113,10 @@ PackageHook BuildHook(const HookConfig& cfg, const std::string& configDirectory)
                   << Utf8FromPath(scriptPath) << std::endl;
         return hook;
     }
+    hook = cfg;  // 声明字段(sourcePath/args/onFailure/timeoutSec/keep/keepDir)整体沿用
     hook.present = true;
     hook.scriptName = Utf8FromPath(scriptPath.filename());
     hook.content = std::move(content);
-    hook.args = cfg.args;
-    hook.onFailure = cfg.onFailure;
-    hook.timeoutSec = cfg.timeoutSec;
-    hook.keep = cfg.keep;
-    hook.keepDir = cfg.keepDir;
     // 内嵌主脚本同目录的兄弟文件，使运行期可调用同目录脚本。
     EmbedSiblingFiles(scriptPath, hook);
     return hook;
@@ -168,11 +164,11 @@ PackageManifest PackageManifestBuilder::build(const std::vector<CompressionResul
     }
 
     // preInstall / postInstall 各支持多个脚本，按声明顺序内嵌（脚本字节随包携带）。
-    auto buildHookList = [&](const std::vector<HookConfig>& configs,
-                             std::vector<PackageHook>& out) {
+    auto buildHookList = [&](const std::vector<HookScript>& configs,
+                             std::vector<HookScript>& out) {
         out.reserve(configs.size());
         for (const auto& cfg : configs) {
-            PackageHook hook = BuildHook(cfg, configDirectory);
+            HookScript hook = BuildHook(cfg, configDirectory);
             if (hook.present) {
                 out.push_back(std::move(hook));
             }

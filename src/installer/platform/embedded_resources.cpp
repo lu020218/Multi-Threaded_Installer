@@ -23,7 +23,9 @@ std::vector<uint8_t> ReadEmbeddedResourceFromCurrentModule(const std::string& na
                 DWORD dwResourceSize = SizeofResource(hModule, hResource);
                 if (dwResourceSize > 0) {
                     std::vector<uint8_t> data(dwResourceSize);
-                    memcpy(data.data(), pLockedResource, dwResourceSize);
+                    if (memcpy_s(data.data(), data.size(), pLockedResource, dwResourceSize) != 0) {
+                        return {};
+                    }
                     return data;
                 }
             }

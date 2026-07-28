@@ -120,9 +120,13 @@ bool ApplyInstallerIconInto(void* update, const std::string& iconPath, std::stri
     groupHeader->reserved = 0;
     groupHeader->type = 1;
     groupHeader->count = static_cast<WORD>(groupEntries.size());
-    memcpy(groupData.data() + sizeof(IconDirHeader),
-           groupEntries.data(),
-           sizeof(GrpIconDirEntry) * groupEntries.size());
+    if (memcpy_s(groupData.data() + sizeof(IconDirHeader),
+                 groupData.size() - sizeof(IconDirHeader),
+                 groupEntries.data(),
+                 sizeof(GrpIconDirEntry) * groupEntries.size()) != 0) {
+        error = "Failed to assemble icon group data";
+        return false;
+    }
 
     if (!UpdateResource(hUpdate,
                         RT_GROUP_ICON,

@@ -590,14 +590,20 @@ std::vector<uint8_t> FolderPayloadCompressor::createTarData(
             entryStart + sizeof(uint32_t) + sizeof(uint32_t) + pathLength;
         tarData.resize(payloadOffset + fileSize);
 
-        std::memcpy(tarData.data() + entryStart, &pathLength, sizeof(pathLength));
-        std::memcpy(
-            tarData.data() + entryStart + sizeof(uint32_t), &fileSize, sizeof(fileSize));
-        if (pathLength > 0) {
-            std::memcpy(
-                tarData.data() + entryStart + sizeof(uint32_t) + sizeof(uint32_t),
-                relativePath.data(),
-                pathLength);
+        const size_t tarRemaining = tarData.size() - entryStart;
+        if (memcpy_s(tarData.data() + entryStart, tarRemaining, &pathLength,
+                     sizeof(pathLength)) != 0 ||
+            memcpy_s(tarData.data() + entryStart + sizeof(uint32_t),
+                     tarRemaining - sizeof(uint32_t), &fileSize, sizeof(fileSize)) != 0) {
+            std::cerr << "Failed to write tar entry header for file: " << filePath << std::endl;
+            return {};
+        }
+        if (pathLength > 0 &&
+            memcpy_s(tarData.data() + entryStart + sizeof(uint32_t) + sizeof(uint32_t),
+                     tarRemaining - sizeof(uint32_t) * 2, relativePath.data(),
+                     pathLength) != 0) {
+            std::cerr << "Failed to write tar entry path for file: " << filePath << std::endl;
+            return {};
         }
 
         if (fileSize > 0) {

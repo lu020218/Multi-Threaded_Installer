@@ -475,7 +475,10 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                     return true;
                 }
                 
-                std::memcpy(&pathLength_, bufferData(), sizeof(uint32_t));
+                if (memcpy_s(&pathLength_, sizeof(pathLength_), bufferData(), sizeof(uint32_t)) != 0) {
+                    logInstallerError("[DECOMP][PayloadWrite] failed to read path length targetRoot=" + targetRoot_);
+                    return false;
+                }
                 if (!validatePathLength(pathLength_)) {
                     logInstallerError("[DECOMP][PayloadWrite] invalid path length=" +
                                       std::to_string(pathLength_) +
@@ -491,7 +494,10 @@ bool TarStreamExtractor::write(const uint8_t* data, size_t size) {
                     return true;
                 }
                 
-                std::memcpy(&fileSize_, bufferData(), sizeof(uint32_t));
+                if (memcpy_s(&fileSize_, sizeof(fileSize_), bufferData(), sizeof(uint32_t)) != 0) {
+                    logInstallerError("[DECOMP][PayloadWrite] failed to read file size targetRoot=" + targetRoot_);
+                    return false;
+                }
                 if (!validateFileSize(fileSize_)) {
                     logInstallerError("[DECOMP][PayloadWrite] invalid file size=" +
                                       std::to_string(fileSize_) +

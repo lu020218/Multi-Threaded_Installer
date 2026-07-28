@@ -53,7 +53,9 @@ bool ReadPod(const std::vector<uint8_t>& data, size_t& offset, T& out) {
     if (offset + sizeof(T) > data.size()) {
         return false;
     }
-    std::memcpy(&out, data.data() + offset, sizeof(T));
+    if (memcpy_s(&out, sizeof(T), data.data() + offset, sizeof(T)) != 0) {
+        return false;
+    }
     offset += sizeof(T);
     return true;
 }
@@ -365,7 +367,9 @@ bool TryDecompressMetaBlob(const std::vector<uint8_t>& input,
         return false;
     }
     uint32_t magic = 0;
-    std::memcpy(&magic, input.data(), sizeof(magic));
+    if (memcpy_s(&magic, sizeof(magic), input.data(), sizeof(magic)) != 0) {
+        return false;
+    }
     if (magic != kCompressedMetaMagic) {
         return false;
     }
@@ -375,7 +379,10 @@ bool TryDecompressMetaBlob(const std::vector<uint8_t>& input,
         return false;
     }
     uint64_t rawSize = 0;
-    std::memcpy(&rawSize, input.data() + 4, sizeof(rawSize));
+    if (memcpy_s(&rawSize, sizeof(rawSize), input.data() + 4, sizeof(rawSize)) != 0) {
+        error = "Compressed metadata header is unreadable.";
+        return false;
+    }
     out.resize(static_cast<size_t>(rawSize));
     const size_t produced = ZSTD_decompress(out.data(), out.size(),
                                             input.data() + 12, input.size() - 12);
@@ -440,8 +447,10 @@ std::vector<uint8_t> SerializePackageManifest(const PackageManifest& manifest) {
         out.insert(out.end(), section.second.begin(), section.second.end());
         offset += section.second.size();
     }
-    std::memcpy(out.data() + directoryStart, directory.data(),
-                directory.size() * sizeof(PackageManifestSectionEntry));
+    if (memcpy_s(out.data() + directoryStart, out.size() - directoryStart, directory.data(),
+                 directory.size() * sizeof(PackageManifestSectionEntry)) != 0) {
+        return {};  // 空向量 = 序列化失败，调用方按嵌入失败处理
+    }
     // 内嵌前整体压缩（zstd），显著减小元数据（尤其逐文件 fileIndex）的未压缩占用。
     return MaybeCompressMetaBlob(out);
 }
@@ -458,7 +467,10 @@ bool DeserializePackageManifest(const std::vector<uint8_t>& input,
     const std::vector<uint8_t>* effective = &input;
     if (input.size() >= sizeof(uint32_t)) {
         uint32_t magic = 0;
-        std::memcpy(&magic, input.data(), sizeof(magic));
+        if (memcpy_s(&magic, sizeof(magic), input.data(), sizeof(magic)) != 0) {
+            error = "Package metadata header is unreadable.";
+            return false;
+        }
         if (magic == kCompressedMetaMagic) {
             if (!TryDecompressMetaBlob(input, decompressed, error)) {
                 return false;

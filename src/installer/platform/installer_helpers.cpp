@@ -235,8 +235,9 @@ std::string ReadEnvironmentPath(const char* name) {
     value.resize(written);
     return value;
 #else
-    const char* value = std::getenv(name);
-    return value ? std::string(value) : std::string();
+    // 非 Windows 为占位实现（本项目仅 MSVC 构建；规范禁用 getenv）。
+    (void)name;
+    return {};
 #endif
 }
 
@@ -309,7 +310,11 @@ uint64_t resolveLogicalPeEnd(std::ifstream& file, uint64_t fileSize) {
     }
 
     uint16_t optionalMagic = 0;
-    std::memcpy(&optionalMagic, optionalHeader.data(), sizeof(optionalMagic));
+    if (optionalHeader.size() < sizeof(optionalMagic) ||
+        memcpy_s(&optionalMagic, sizeof(optionalMagic), optionalHeader.data(),
+                 sizeof(optionalMagic)) != 0) {
+        return fileSize;
+    }
 
     size_t directoryOffset = 0;
     if (optionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
@@ -327,9 +332,10 @@ uint64_t resolveLogicalPeEnd(std::ifstream& file, uint64_t fileSize) {
     }
 
     IMAGE_DATA_DIRECTORY securityDir{};
-    std::memcpy(&securityDir,
-                optionalHeader.data() + securityDirOffset,
-                sizeof(securityDir));
+    if (memcpy_s(&securityDir, sizeof(securityDir),
+                 optionalHeader.data() + securityDirOffset, sizeof(securityDir)) != 0) {
+        return fileSize;
+    }
 
     uint64_t certificateOffset = static_cast<uint64_t>(securityDir.VirtualAddress);
     uint64_t certificateSize = static_cast<uint64_t>(securityDir.Size);
@@ -444,7 +450,10 @@ bool scanEmbeddedDataLocatorNearEnd(std::ifstream& file,
     const uint32_t magic = Constants::MAGIC_NUMBER;
     for (size_t pos = tail.size() - sizeof(uint32_t); ; --pos) {
         uint32_t candidateMagic = 0;
-        std::memcpy(&candidateMagic, tail.data() + pos, sizeof(candidateMagic));
+        if (memcpy_s(&candidateMagic, sizeof(candidateMagic), tail.data() + pos,
+                     sizeof(candidateMagic)) != 0) {
+            candidateMagic = 0;  // 读取失败按未命中处理，继续向前扫描
+        }
         if (candidateMagic == magic) {
             const uint64_t candidateTrailerEnd =
                 scanStart + static_cast<uint64_t>(pos) + sizeof(uint32_t);

@@ -69,7 +69,9 @@ bool SingleInstanceGuard::activateExistingWindow() const {
     void* view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, sizeof(uint64_t));
     if (view != nullptr) {
         uint64_t raw = 0;
-        std::memcpy(&raw, view, sizeof(raw));
+        if (memcpy_s(&raw, sizeof(raw), view, sizeof(raw)) != 0) {
+            raw = 0;
+        }
         hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(raw));
         UnmapViewOfFile(view);
     }
@@ -102,9 +104,12 @@ void PublishGuiInstanceWindow(const std::string& instanceKey, HWND hwnd) {
     void* view = MapViewOfFile(g_windowMapping, FILE_MAP_WRITE, 0, 0, sizeof(uint64_t));
     if (view != nullptr) {
         const uint64_t raw = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd));
-        std::memcpy(view, &raw, sizeof(raw));
+        if (memcpy_s(view, sizeof(uint64_t), &raw, sizeof(raw)) == 0) {
+            logInstallerInfo("[SingleInstance] Published GUI window handle for key=" + instanceKey);
+        } else {
+            logInstallerWarning("[SingleInstance] Failed to publish window handle. key=" + instanceKey);
+        }
         UnmapViewOfFile(view);
-        logInstallerInfo("[SingleInstance] Published GUI window handle for key=" + instanceKey);
     }
 }
 

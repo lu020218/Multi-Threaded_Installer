@@ -277,6 +277,8 @@ struct CleanupExecutionState {
     uint64_t lastHeartbeatMs = 0;
     uint64_t processedSinceHeartbeat = 0;
     uint64_t processedCount = 0;
+    // 并行删除的 UI 进度总项数：随心跳落盘，由看门狗线程换算真实比例上报 UI。
+    uint64_t progressTotalItems = 0;
     uint32_t workerConcurrency = 1;
     uint32_t activeWorkers = 0;
     uint64_t lastCompletedAtMs = 0;
@@ -310,6 +312,7 @@ void EmitCleanupHeartbeat(CleanupExecutionState& state, bool force) {
         {"failedCount", state.result.failedCount},
         {"skippedCount", state.result.skippedCount},
         {"processedCount", state.processedCount},
+        {"progressTotalItems", state.progressTotalItems},
         {"workerConcurrency", state.workerConcurrency},
         {"activeWorkers", state.activeWorkers},
         {"slowestCurrentItem", state.slowestCurrentItem},
@@ -970,6 +973,7 @@ UpgradeCleanupResult ExecutePreviousInstallTask(const UpgradeCleanupTask& task) 
     addFile(previousRoot / "uninstall.exe");
     addFile(previousRoot / "install.manifest.json");
 
+    state.progressTotalItems = filesToDelete.size();
     DeleteFilesParallel(state, filesToDelete);
     FinishParallelDeletes(state);
     EmitCleanupProgress(state, 0.8f, "Removing old files");
@@ -1096,7 +1100,17 @@ UpgradeCleanupResult RunTaskWithWatchdog(UpgradeCleanupTask task,
             if (progressCallback) {
                 UpgradeCleanupProgressInfo info;
                 info.currentItem = lastPath.empty() ? "Cleaning previous installation" : lastPath;
-                info.progress = 0.5f;
+                const uint64_t progressTotal = heartbeat.value("progressTotalItems", 0ull);
+                if (progressTotal > 0) {
+                    double fraction = static_cast<double>(processedCount) /
+                                      static_cast<double>(progressTotal);
+                    if (fraction > 1.0) {
+                        fraction = 1.0;
+                    }
+                    info.progress = static_cast<float>(0.8 * fraction);
+                } else {
+                    info.progress = 0.5f;
+                }
                 progressCallback(info);
             }
         }

@@ -183,6 +183,7 @@ ParallelInstallResult RunParallelInstall(const PackageManifest& metadata,
             request.schedulerConcurrencyHint = static_cast<unsigned int>(workerCount);
             request.oldInstalledFingerprints = oldInstalledFingerprints;
             request.cancellationCallback = cancellationCallback;
+            request.progressCallback = progressCallback;
             request.infoCallback = infoCallback;
             request.errorCallback = errorCallback;
 

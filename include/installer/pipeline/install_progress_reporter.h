@@ -2,6 +2,7 @@
 
 #include "installer/pipeline/install_service.h"
 
+#include <mutex>
 #include <string>
 
 namespace MultiThreadedInstaller {
@@ -34,6 +35,7 @@ public:
 
 private:
     const InstallServiceCallbacks& callbacks_;  ///< 事件回调（外部持有）。
+    std::mutex mutex_;  ///< 并行解压/删除的多 worker 会并发上报，保护进度状态的单调更新。
     InstallServiceStatus currentStatus_ = InstallServiceStatus::Preparing;  ///< 当前状态。
     InstallServicePhase currentPhase_ = InstallServicePhase::None;          ///< 当前阶段。
     float currentPhaseProgress_ = 0.0f;   ///< 当前阶段进度 [0..1]。

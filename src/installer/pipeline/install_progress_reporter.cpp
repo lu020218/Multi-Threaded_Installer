@@ -3,6 +3,7 @@
 #include "common/installer_logger.h"
 
 #include <algorithm>
+#include <mutex>
 
 namespace MultiThreadedInstaller {
 
@@ -118,6 +119,7 @@ void InstallProgressReporter::EmitStatus(InstallServiceStatus status,
                                          InstallServicePhase phase,
                                          float phaseProgress,
                                          const std::string& message) {
+    std::lock_guard<std::mutex> lock(mutex_);
     currentStatus_ = status;
     currentPhase_ = phase;
     currentPhaseProgress_ = Clamp01(phaseProgress);
@@ -149,6 +151,7 @@ void InstallProgressReporter::EmitMessage(InstallServiceEventType type, const st
     if (message.empty()) {
         return;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
 
     InstallServiceEvent event;
     event.type = type;
@@ -164,6 +167,7 @@ void InstallProgressReporter::EmitMessage(InstallServiceEventType type, const st
 void InstallProgressReporter::EmitProgress(const std::string& folder,
                                            const std::string& currentFile,
                                            float phaseProgress) {
+    std::lock_guard<std::mutex> lock(mutex_);
     currentPhaseProgress_ = std::max(currentPhaseProgress_, Clamp01(phaseProgress));
     float overall = ToOverallProgress(currentPhase_, currentPhaseProgress_);
     if (overall < lastOverallProgress_) {

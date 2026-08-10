@@ -62,6 +62,7 @@ bool InstallFramedFolder(const FolderInstallRequest& request,
         std::vector<const FileIndexEntry*> members;
     };
     std::vector<FrameGroup> groups;
+    uint64_t totalOriginalBytes = 0;
     for (const auto& entry : mapping.fileIndex) {
         if (entry.relativePath.empty()) {
             continue;
@@ -80,7 +81,27 @@ bool InstallFramedFolder(const FolderInstallRequest& request,
         FrameGroup& group = groups.back();
         group.members.push_back(&entry);
         group.decompressedSize = (std::max)(group.decompressedSize, entry.offset + entry.size);
+        totalOriginalBytes += entry.size;
     }
+
+    // 段内进度：按“已完成帧的原始字节 / 总原始字节”上报（含整帧跳过的），
+    // 多 worker 用原子累计保证单调；帧数通常几十到几百个，粒度足够平滑。
+    std::atomic<uint64_t> completedOriginalBytes{0};
+    auto reportGroupDone = [&](const FrameGroup& group) {
+        if (!request.progressCallback || totalOriginalBytes == 0) {
+            return;
+        }
+        uint64_t groupBytes = 0;
+        for (const FileIndexEntry* entry : group.members) {
+            groupBytes += entry->size;
+        }
+        const uint64_t done = completedOriginalBytes.fetch_add(groupBytes) + groupBytes;
+        const float fraction =
+            static_cast<float>(static_cast<double>(done) / static_cast<double>(totalOriginalBytes));
+        request.progressCallback(request.folderName,
+                                 group.members.front()->relativePath,
+                                 fraction > 1.0f ? 1.0f : fraction);
+    };
 
     // 2) worker 池并行处理帧组。共享聚合状态一律加锁合并；私有 extractor/engine 免锁。
     struct SharedState {
@@ -139,6 +160,7 @@ bool InstallFramedFolder(const FolderInstallRequest& request,
                 }
             }
             if (toWrite.empty()) {
+                reportGroupDone(group);  // 整帧跳过也计入进度
                 continue;
             }
 
@@ -226,6 +248,7 @@ bool InstallFramedFolder(const FolderInstallRequest& request,
             if (groupFailed) {
                 break;
             }
+            reportGroupDone(group);
         }
         writer.flush();
 

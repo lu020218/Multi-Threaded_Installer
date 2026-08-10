@@ -19,6 +19,9 @@ struct FolderInstallRequest {
     /// 上次安装的逐文件指纹，用于"零读跳过"未变文件（方案A），可空。
     std::shared_ptr<const InstalledFileFingerprintMap> oldInstalledFingerprints;
     std::function<bool()> cancellationCallback;             ///< 取消查询。
+    /// 段内进度回调 (folderName, currentFile, progress[0..1])：分帧安装按
+    /// “已完成帧的原始字节 / folder 总原始字节”逐帧上报（含整帧跳过）。可空。
+    ProgressCallback progressCallback;
     std::function<void(const std::string&)> infoCallback;   ///< 信息日志回调。
     std::function<void(const std::string&)> errorCallback;  ///< 错误日志回调。
 };

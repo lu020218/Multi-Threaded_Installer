@@ -119,7 +119,17 @@ bool GUIHelpers::ShowFolderBrowserDialog(
     const std::wstring& title,
     const std::wstring& initialPath,
     std::wstring& selectedPath) {
-    
+    // [自动化测试驱动] 设置 MTI_AUTOTEST_BROWSE_RESULT 时直接把该路径作为用户的选择结果
+    // 返回、不弹原生对话框，使"浏览选目录"链路（含 ResolveSelectedInstallPath 的
+    // 盘符根处理）可被自动化测试覆盖。仅测试环境设置该变量；正常运行无行为变化。
+    {
+        wchar_t preset[1024] = {};
+        DWORD presetLen = GetEnvironmentVariableW(L"MTI_AUTOTEST_BROWSE_RESULT", preset, 1024);
+        if (presetLen > 0 && presetLen < 1024) {
+            selectedPath.assign(preset, presetLen);
+            return true;
+        }
+    }
 
     bool needUninitialize = false;
     if (!g_comInitialized) {

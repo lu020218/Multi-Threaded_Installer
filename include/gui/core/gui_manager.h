@@ -123,6 +123,15 @@ protected:
     virtual LRESULT HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
     
 private:
+    // [自动化测试驱动] MTI_AUTOTEST_SCRIPT 指向脚本文件时，窗口就绪后按定时器逐条执行
+    // 其中的控件操作命令（settext/setcheck/click/wait），用于 GUI 自动化测试。
+    // 仅测试环境设置该变量；正常运行零行为变化。实现见 gui_manager.cpp。
+    void InitAutotestIfRequested();
+    void ExecuteNextAutotestStep();
+    std::vector<std::wstring> m_autotestSteps;   ///< 逐行命令。
+    size_t m_autotestIndex = 0;                  ///< 下一条待执行命令下标。
+    ULONGLONG m_autotestResumeTick = 0;          ///< wait 命令的恢复时间戳（GetTickCount64）。
+
     // DuiLib 控件指针（由 DuiLib 框架管理生命周期，InitWindow 时 FindControl 取得，不手工 delete）。
     DuiLib::CTabLayoutUI* m_pTabPages;        ///< 页面容器（欢迎/许可/进度/完成）。
     DuiLib::CEditUI* m_pInstallPathEdit;      ///< 安装路径编辑框。

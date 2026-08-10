@@ -301,6 +301,114 @@ void GUIManager::InitWindow() {
                                      m_autoStartUpgradeMode,
                                      autoComponentIds);
     }
+
+    InitAutotestIfRequested();
+}
+
+// ── [自动化测试驱动] ─────────────────────────────────────────────────────────
+// 仅当环境变量 MTI_AUTOTEST_SCRIPT 指向脚本文件时激活；正常运行零行为变化。
+// 脚本为逐行命令（UTF-8）：
+//   wait <毫秒>                     等待
+//   settext <控件名> <文本>         设置编辑框文本并补发 textchanged 通知
+//   setcheck <控件名> <0|1>         设置勾选状态并补发 selectchanged 通知
+//   click <控件名>                  对控件发送 click 通知（等价用户点击）
+// 命令由 UI 线程定时器逐条执行，走与真实交互相同的 DuiLib 通知路由。
+static constexpr UINT_PTR kAutotestTimerId = 1003;
+static constexpr UINT kAutotestTimerIntervalMs = 300;
+
+void GUIManager::InitAutotestIfRequested() {
+    wchar_t scriptPath[1024] = {};
+    DWORD n = GetEnvironmentVariableW(L"MTI_AUTOTEST_SCRIPT", scriptPath, 1024);
+    if (n == 0 || n >= 1024) {
+        return;
+    }
+    std::ifstream in(std::filesystem::path(scriptPath), std::ios::binary);
+    if (!in) {
+        logInstallerWarning("[Autotest] Failed to open script: " + WideToUtf8(scriptPath));
+        return;
+    }
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::wstring wide = Utf8ToWide(content);
+    std::wstring line;
+    for (wchar_t ch : wide) {
+        if (ch == L'\n') {
+            while (!line.empty() && (line.back() == L'\r' || line.back() == L' ')) {
+                line.pop_back();
+            }
+            if (!line.empty()) {
+                m_autotestSteps.push_back(line);
+            }
+            line.clear();
+        } else {
+            line.push_back(ch);
+        }
+    }
+    if (!line.empty()) {
+        m_autotestSteps.push_back(line);
+    }
+    if (m_autotestSteps.empty()) {
+        return;
+    }
+    logInstallerInfo("[Autotest] Script loaded, steps=" + std::to_string(m_autotestSteps.size()));
+    ::SetTimer(m_hWnd, kAutotestTimerId, kAutotestTimerIntervalMs, nullptr);
+}
+
+void GUIManager::ExecuteNextAutotestStep() {
+    if (m_autotestIndex >= m_autotestSteps.size()) {
+        ::KillTimer(m_hWnd, kAutotestTimerId);
+        logInstallerInfo("[Autotest] Script finished.");
+        return;
+    }
+    if (m_autotestResumeTick != 0 && ::GetTickCount64() < m_autotestResumeTick) {
+        return;  // wait 尚未到期
+    }
+    m_autotestResumeTick = 0;
+
+    const std::wstring step = m_autotestSteps[m_autotestIndex++];
+    logInstallerInfo("[Autotest] step: " + WideToUtf8(step));
+
+    // 切出最多三段：命令、控件名、剩余全部作为值（值可含空格）。
+    auto splitOnce = [](const std::wstring& text, std::wstring& head, std::wstring& rest) {
+        const size_t space = text.find(L' ');
+        if (space == std::wstring::npos) {
+            head = text;
+            rest.clear();
+        } else {
+            head = text.substr(0, space);
+            rest = text.substr(space + 1);
+        }
+    };
+    std::wstring command;
+    std::wstring remainder;
+    splitOnce(step, command, remainder);
+
+    if (command == L"wait") {
+        const unsigned long ms = wcstoul(remainder.c_str(), nullptr, 10);
+        m_autotestResumeTick = ::GetTickCount64() + ms;
+        return;
+    }
+
+    std::wstring controlName;
+    std::wstring value;
+    splitOnce(remainder, controlName, value);
+    CControlUI* control = m_pm.FindControl(controlName.c_str());
+    if (!control) {
+        logInstallerWarning("[Autotest] control not found: " + WideToUtf8(controlName));
+        return;
+    }
+
+    if (command == L"settext") {
+        control->SetText(value.c_str());
+        m_pm.SendNotify(control, DUI_MSGTYPE_TEXTCHANGED, 0, 0, true);
+    } else if (command == L"setcheck") {
+        auto* checkbox = static_cast<CCheckBoxUI*>(control);
+        checkbox->Selected(value == L"1", false);
+        m_pm.SendNotify(control, DUI_MSGTYPE_SELECTCHANGED, 0, 0, true);
+    } else if (command == L"click") {
+        m_pm.SendNotify(control, DUI_MSGTYPE_CLICK, 0, 0, true);
+    } else {
+        logInstallerWarning("[Autotest] unknown command: " + WideToUtf8(command));
+    }
 }
 
 void GUIManager::InitControls() {
@@ -473,6 +581,10 @@ LRESULT GUIManager::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
     if (uMsg == WM_DESTROY) {
         PostQuitMessage(0);
+        return 0;
+    }
+    if (uMsg == WM_TIMER && wParam == kAutotestTimerId) {
+        ExecuteNextAutotestStep();
         return 0;
     }
     if (uMsg == WM_TIMER && wParam == kProgressTimerId) {

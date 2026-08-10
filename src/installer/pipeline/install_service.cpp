@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <future>
 #include <filesystem>
 #include <sstream>
 #include <unordered_set>
@@ -231,8 +232,25 @@ bool RunSelectedComponents(const PackageManifest& metadata,
         req.injectVersion = metadata.identity.version;
         req.logBaseName = "component_" + spec.id;
 
+        // 组件安装器在后台线程执行；本线程每 500ms 以时间脉冲推进段内进度
+        // （p = t/(t+30s)，上限 0.95），组件结束后落到真实边界，避免分钟级组件冻结进度条。
+        constexpr double kComponentPulseTauSec = 30.0;
+        constexpr float kComponentPulseCap = 0.95f;
         const auto componentStart = std::chrono::steady_clock::now();
-        const ComponentInstallResult cr = RunComponentInstaller(req);
+        std::future<ComponentInstallResult> componentFuture =
+            std::async(std::launch::async, [&req]() { return RunComponentInstaller(req); });
+        while (componentFuture.wait_for(std::chrono::milliseconds(500)) !=
+               std::future_status::ready) {
+            const double t = std::chrono::duration<double>(
+                                 std::chrono::steady_clock::now() - componentStart).count();
+            const float pulse = (std::min)(
+                kComponentPulseCap, static_cast<float>(t / (t + kComponentPulseTauSec)));
+            reporter.EmitStatus(InstallServiceStatus::Installing,
+                                InstallServicePhase::Components,
+                                (static_cast<float>(idx - 1) + pulse) / static_cast<float>(total),
+                                "Installing components...");
+        }
+        const ComponentInstallResult cr = componentFuture.get();
         const uint64_t componentMs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - componentStart)
@@ -465,14 +483,11 @@ InstallServiceResult ExecuteInstallService(const PackageManifest& metadata,
         const HookOutcome preHookOutcome =
             RunHooks(metadata.hooks.preInstall, hookInstallDir, metadata.identity.version,
                      &flowTiming.preHookStats,
-                     [&reporter](std::size_t done, std::size_t total) {
-                         if (total > 0) {
-                             reporter.EmitStatus(
-                                 InstallServiceStatus::Installing,
-                                 InstallServicePhase::PreInstallHook,
-                                 static_cast<float>(done) / static_cast<float>(total),
-                                 "Running pre-install scripts...");
-                         }
+                     [&reporter](float fraction) {
+                         reporter.EmitStatus(InstallServiceStatus::Installing,
+                                             InstallServicePhase::PreInstallHook,
+                                             fraction,
+                                             "Running pre-install scripts...");
                      });
         flowTiming.preHookMs = ElapsedMs(preHookStart);
         if (preHookOutcome == HookOutcome::FailedAbort) {
@@ -565,14 +580,11 @@ InstallServiceResult ExecuteInstallService(const PackageManifest& metadata,
         const HookOutcome postHookOutcome =
             RunHooks(metadata.hooks.postInstall, postHookInstallDir, metadata.identity.version,
                      &flowTiming.postHookStats,
-                     [&reporter](std::size_t done, std::size_t total) {
-                         if (total > 0) {
-                             reporter.EmitStatus(
-                                 InstallServiceStatus::Finalizing,
-                                 InstallServicePhase::PostInstallHook,
-                                 static_cast<float>(done) / static_cast<float>(total),
-                                 "Running post-install scripts...");
-                         }
+                     [&reporter](float fraction) {
+                         reporter.EmitStatus(InstallServiceStatus::Finalizing,
+                                             InstallServicePhase::PostInstallHook,
+                                             fraction,
+                                             "Running post-install scripts...");
                      });
         flowTiming.postHookMs = ElapsedMs(postHookStart);
         if (postHookOutcome == HookOutcome::FailedAbort) {

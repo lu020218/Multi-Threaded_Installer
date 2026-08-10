@@ -11,6 +11,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <system_error>
 #include <vector>
 
@@ -553,11 +554,17 @@ HookOutcome RunHook(const HookScript& hook,
 #endif
 }
 
+// 时间脉冲参数（引擎写死）：单脚本执行期间进度按 p = t/(t+τ) 渐近推进，
+// τ=10s 时 10s≈50%、20s≈67%、60s≈86%；上限 0.95，脚本结束落到真实边界。
+constexpr double kHookPulseTauSec = 10.0;
+constexpr float kHookPulseCap = 0.95f;
+constexpr std::chrono::milliseconds kHookPulsePollInterval{500};
+
 HookOutcome RunHooks(const std::vector<HookScript>& hooks,
                      const std::string& installDir,
                      const std::string& version,
                      std::vector<HookRunStat>* outStats,
-                     const std::function<void(std::size_t, std::size_t)>& onProgress) {
+                     const std::function<void(float)>& onProgress) {
     if (hooks.empty()) {
         return HookOutcome::NotPresent;
     }
@@ -565,13 +572,27 @@ HookOutcome RunHooks(const std::vector<HookScript>& hooks,
     const std::size_t total = hooks.size();
     bool sawContinueFailure = false;
     for (size_t i = 0; i < hooks.size(); ++i) {
-        // 段内进度按“已完成 i / 共 total”推进：第 i 个开始前上报 i（前 i 个已完成）。
+        // 段内基线：第 i 个开始前上报 i/total（前 i 个已完成）。
         if (onProgress) {
-            onProgress(i, total);
+            onProgress(static_cast<float>(i) / static_cast<float>(total));
         }
         HookRunStat stat;
-        const HookOutcome outcome =
-            RunHook(hooks[i], installDir, version, outStats ? &stat : nullptr);
+        // 脚本在后台线程执行；本线程每 500ms 以时间脉冲推进段内进度，
+        // 使耗时十几/二十几秒的脚本不再表现为进度条冻结。
+        std::future<HookOutcome> hookFuture = std::async(std::launch::async, [&]() {
+            return RunHook(hooks[i], installDir, version, outStats ? &stat : nullptr);
+        });
+        const auto hookStart = std::chrono::steady_clock::now();
+        while (hookFuture.wait_for(kHookPulsePollInterval) != std::future_status::ready) {
+            if (onProgress) {
+                const double t = std::chrono::duration<double>(
+                                     std::chrono::steady_clock::now() - hookStart).count();
+                const float pulse = (std::min)(
+                    kHookPulseCap, static_cast<float>(t / (t + kHookPulseTauSec)));
+                onProgress((static_cast<float>(i) + pulse) / static_cast<float>(total));
+            }
+        }
+        const HookOutcome outcome = hookFuture.get();
         if (outStats) {
             outStats->push_back(std::move(stat));
         }
@@ -581,7 +602,7 @@ HookOutcome RunHooks(const std::vector<HookScript>& hooks,
                 logInstallerError("[Hook] Aborting remaining hooks at index " +
                                   std::to_string(i) + " due to abort-failure.");
                 if (onProgress) {
-                    onProgress(total, total);
+                    onProgress(1.0f);
                 }
                 return HookOutcome::FailedAbort;
             case HookOutcome::FailedContinue:
@@ -593,7 +614,7 @@ HookOutcome RunHooks(const std::vector<HookScript>& hooks,
         }
     }
     if (onProgress) {
-        onProgress(total, total);  // 全部完成 → 段内 100%。
+        onProgress(1.0f);  // 全部完成 → 段内 100%。
     }
     return sawContinueFailure ? HookOutcome::FailedContinue : HookOutcome::Success;
 }

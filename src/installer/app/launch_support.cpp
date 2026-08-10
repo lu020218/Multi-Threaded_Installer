@@ -392,11 +392,14 @@ InstallServiceCallbacks BuildConsoleServiceCallbacks(CliSupport& console) {
             case InstallServiceEventType::Error:
                 console.showError(event.message);
                 break;
-            case InstallServiceEventType::Status:
-                if (!event.message.empty()) {
-                    console.showInfo(event.message);
-                }
+            case InstallServiceEventType::Status: {
+                // 阶段切换与时间脉冲都经 Status 事件驱动进度；CLI 与 GUI 对齐，
+                // 以进度条形式呈现（\r 原位刷新，不刷屏）。
+                const float progress = (std::max)(0.0f, (std::min)(1.0f, event.overallProgress));
+                console.showInstallationProgress(
+                    event.message.empty() ? "..." : event.message, progress);
                 break;
+            }
             default:
                 break;
         }

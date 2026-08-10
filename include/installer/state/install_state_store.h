@@ -16,6 +16,7 @@ struct InstallStateContext {
     std::string installSource;
     std::string state;
     std::string userName;
+    std::string language;  ///< 界面/快捷方式语言（如 zh_CN）；非空时写产品注册表 Language。
 };
 
 // 写产品注册表 + install-state.json（落点由引擎按产品名拼，不来自 YAML）。

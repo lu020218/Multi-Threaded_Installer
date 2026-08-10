@@ -92,6 +92,7 @@ InstallStateContext BuildServiceInstallStateContext(const PackageManifest& metad
     context.installSource = getCurrentExecutablePath();
     context.state = state;
     context.userName = GetCurrentUserNameForInstallState();
+    context.language = ResolveLanguageCode(options.languageCode);
     if (context.installDir.empty()) {
         context.installDir = options.installPath;
     }

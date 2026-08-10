@@ -563,6 +563,10 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
             console.showError(upgradeError.empty() ? "Upgrade mode requires an existing installation." : upgradeError);
             return INSTALLER_EXIT_FAILED;
         }
+        // --language 显式指定时覆盖从旧 manifest 恢复的语言。
+        if (context.args.languageSpecified) {
+            options.languageCode = context.args.languageCode;
+        }
     } else {
         const InstalledInstanceInfo installedInstance =
             GetInstalledInstanceSnapshot(metadata, pathResolver);
@@ -590,6 +594,9 @@ int RunSilentInstallLikeMode(const LaunchContext& context) {
         options.autoStartupEnabled = context.args.autoStartupEnabled;
         options.overrideDesktopIcons = context.args.desktopIconSpecified;
         options.desktopIconsEnabled = context.args.desktopIconEnabled;
+        if (context.args.languageSpecified) {
+            options.languageCode = context.args.languageCode;
+        }
     }
     options.writeUninstallRegistry = true;
     options.selectedComponentIds = ResolveSilentComponentSelection(context.args);
@@ -675,6 +682,11 @@ int RunGuiInstallLikeMode(HINSTANCE hInstance, const LaunchContext& context) {
                                                        ? "Upgrade mode requires an existing installation."
                                                        : upgradeError));
             return 1;
+        }
+        // --language 显式指定时覆盖从旧 manifest 恢复的语言（随后 restoredPreviousOptions
+        // 推导会因 languageCode 非空而生效，界面与自启安装语言一并跟随）。
+        if (context.args.languageSpecified) {
+            upgradeOptions.languageCode = context.args.languageCode;
         }
         overwriteMode = true;
     } else {

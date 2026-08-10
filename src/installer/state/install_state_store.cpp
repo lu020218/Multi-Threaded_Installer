@@ -86,6 +86,10 @@ bool ApplyInstallState(const InstallStateContext& context, InstallerPathResolver
     WriteProductRegistryValue(registryPath, "InstallSource", context.installSource);
     WriteProductRegistryValue(registryPath, "InstallState", context.state);
     WriteProductRegistryValue(registryPath, "InstalledBy", context.userName);
+    // 语言设置（--language / GUI 选择 / 系统推断）：写产品注册表，供应用与后续升级读取。
+    if (!context.language.empty()) {
+        WriteProductRegistryValue(registryPath, "Language", context.language);
+    }
 
     // 文件：%ProgramData%\<product>\install-state.json。
     const std::string filePath =
@@ -97,6 +101,7 @@ bool ApplyInstallState(const InstallStateContext& context, InstallerPathResolver
     root["installSource"] = context.installSource;
     root["state"] = context.state;
     root["installedBy"] = context.userName;
+    root["language"] = context.language;
     return WriteInstallStateFile(filePath, root);
 }
 

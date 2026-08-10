@@ -188,6 +188,18 @@ CliSupport::InstallerArgs CliSupport::parseInstallerArgs(int argc, char* argv[])
             args.upgrade = true;
         } else if (arg == "-s" || arg == "--silent") {
             args.silent = true;
+        } else if (arg == "--language" && i + 1 < argc) {
+            // 语言码宽松归一：trim + '-' 转 '_'（zh-CN → zh_CN）；资源缺失时运行期回退。
+            std::string lang = trim(argv[++i]);
+            for (char& c : lang) {
+                if (c == '-') {
+                    c = '_';
+                }
+            }
+            if (!lang.empty()) {
+                args.languageSpecified = true;
+                args.languageCode = lang;
+            }
         } else if (arg == "--auto-startup" && i + 1 < argc) {
             bool parsed = false;
             if (parseBoolValue(trim(argv[++i]), parsed)) {
@@ -254,6 +266,8 @@ void CliSupport::showInstallerHelp() {
     std::cout << "  --upgrade                      Upgrade mode; requires existing install info" << std::endl;
     std::cout << "  --auto-startup <true|false>    Enable or disable auto startup" << std::endl;
     std::cout << "  --desktop-icon <true|false>    Enable or disable desktop icon" << std::endl;
+    std::cout << "  --language <code>              UI/shortcut language (e.g. zh_CN, en_US);" << std::endl;
+    std::cout << "                                 written to product registry as Language" << std::endl;
     std::cout << "  --components <id1,id2,...>     Install only these components (silent;" << std::endl;
     std::cout << "                                 omit = registry defaults; empty = required only)" << std::endl;
     std::cout << "  -h, --help                     Show this help message" << std::endl;
